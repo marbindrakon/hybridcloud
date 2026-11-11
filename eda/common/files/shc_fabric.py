@@ -1192,10 +1192,17 @@ def service_check(real):
             errors.append(f"realization service.hubEndpoints[{i}].prefix {n} is not inside infrastructure.hub")
         _ports((ep or {}).get("ports") if isinstance(ep, dict) else None, f"service.hubEndpoints[{i}].ports", errors)
     rows = [(n, purpose, rule, "") for key, n, purpose, rule, site in range_rows(real) if not site]
+    if not sv.get("attachableRanges"):
+        errors.append("realization service.attachableRanges is required with service.enabled: the IPv4 ranges a "
+                      "cluster's prefixes must lie in, announced to the hub's network (0.0.0.0/0 admits every range "
+                      "the other checks admit)")
     for i, v in enumerate(sv.get("attachableRanges") or []):
         n = _net(v)
         if n is None or n.version != 4:
             errors.append(f"realization service.attachableRanges[{i}] {v!r} is not an IPv4 network")
+            continue
+        if n.prefixlen == 0:
+            # everything, written explicitly: each prefix is still checked against the reserved ranges
             continue
         clash = range_clash(n, rows)
         if clash is not None:
@@ -1245,11 +1252,12 @@ def service_status_off():
 
 
 def network_space4(n):
-    """A HybridNetwork object's IPv4 address space: spec.prefixes and status.addressSpace."""
+    """A HybridNetwork object's IPv4 address space: status.addressSpace (what the network job accepted), spec.prefixes
+    only while the status holds none (a prefix the tenant wrote but the job refused never counts)."""
     out = []
     st = n.get("status") or {}
-    for c in ((n.get("spec") or {}).get("prefixes") or []) + [a.get("prefix") for a in st.get("addressSpace") or []
-                                                              if isinstance(a, dict)]:
+    held = [a.get("prefix") for a in st.get("addressSpace") or [] if isinstance(a, dict)]
+    for c in (held or ((n.get("spec") or {}).get("prefixes") or [])):
         x = _net(c) if c is not None else None
         if x is not None and x.version == 4 and x not in out:
             out.append(x)
@@ -1419,7 +1427,7 @@ def service_plan(req):
                                                str(pool)) if _net(c) is not None and _net(c).version == 4] \
         + [le32(p) for p in all_prefixes]
     accept = [le32(h) for h in cfg["hub"]]
-    attach = [le32(a) for a in cfg["attachable"]] or ["0.0.0.0/0 le 32"]
+    attach = [le32(a) for a in cfg["attachable"]]
     policy = hashlib.sha1(json.dumps([deny, accept, all_prefixes, attach], sort_keys=True).encode()).hexdigest()[:12]
     st_circuits = [{"circuit": c["circuit"], "vlan": c["vlan"], "nodes": sorted(c["nodes"]), "rev": c.get("rev", ""),
                     "policy": policy, "device": c["device"]} for c in circuits]
@@ -1756,8 +1764,8 @@ def check_platform_circuit(req):
     realization (service, infrastructure), family?: [4|6]}. Refused (errors, reason): outside the fabric's namespace
     (NotPlatformNamespace), without the service VRF (ServiceNotOffered), with accept entries (InvalidSpec: a platform
     circuit accepts the hub's ranges only), with IPv6 (FamilyUnavailable). ceConfig: advertisedRanges (each
-    service.attachableRanges entry 'le 32', or 'any' when there is none) and acceptedRanges (each IPv4
-    infrastructure.hub range 'le 32'); notes: routing.advertise is not used."""
+    service.attachableRanges entry 'le 32': the routes the platform may announce, never more) and acceptedRanges
+    (each IPv4 infrastructure.hub range 'le 32'); notes: routing.advertise is not used."""
     real = req.get("realization") or {}
     sv = real.get("service") or {}
     out = {"errors": [], "familyErrors": [], "notes": [], "acceptsDefault": False, "acceptsDefault6": False,
@@ -1780,7 +1788,7 @@ def check_platform_circuit(req):
         out["notes"].append("routing.advertise is not used: a platform circuit announces the clusters' prefixes only")
     hub4 = sorted(ipaddress.collapse_addresses(hub_nets(real, 4)), key=lambda n: (int(n.network_address), n.prefixlen))
     att = [n for n in (_net(v) for v in sv.get("attachableRanges") or []) if n is not None and n.version == 4]
-    out["ceConfig"] = {"advertisedRanges": [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in att] or ["any"],
+    out["ceConfig"] = {"advertisedRanges": [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in att],
                        "acceptedRanges": [entry_text(n, le=32) if n.prefixlen < 32 else str(n) for n in hub4]}
     return out
 

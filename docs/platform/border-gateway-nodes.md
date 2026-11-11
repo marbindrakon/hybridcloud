@@ -234,6 +234,16 @@ to the nodes. The service VRF's sessions announce the accepted addresses only, a
 `service.attachableRanges`; they accept the hub's ranges only, and never a default route, the link pools, the core
 pools or an accepted address.
 
+`service.attachableRanges` is required with `service.enabled` (an empty list fails the fabric with `InvalidSpec`,
+naming the setting): there is no implicit "any". Each platform edge connection's `status.ceConfig.advertisedRanges`
+lists exactly these ranges as `<range> le 32` for the hub's network team, so the hub's router can accept the
+platform's routes with a fixed filter and a maximum prefix length of 32. A deployment that wants every range writes
+`0.0.0.0/0`: the hub's router then accepts any route inside its tenants' address spaces that the reserved ranges do
+not cover, including more-specific routes of its own networks outside `infrastructure.hub`, which it would then send
+into a tenant network. What is announced is bounded further per cluster: an OpenStack cluster's addresses are /32s
+(its floating IPs and its router's gateway), an AWS or Google Cloud cluster's the subnet of its placement on the
+network, each inside the network's accepted address space; anything else is refused on the network's prefix row.
+
 The table `ip shc_service`, loaded before FRR takes the service VRF and replaced whole on every run, filters what
 crosses it, statelessly (the two directions may cross different nodes): from the hub's ranges TCP on
 `service.ports` and ICMP echo to a network's accepted addresses only; from those addresses TCP to

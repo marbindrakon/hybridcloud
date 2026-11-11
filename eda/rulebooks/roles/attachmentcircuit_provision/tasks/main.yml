@@ -511,7 +511,7 @@
       when: not (ac_platform | default(false) | bool)
 
     # a platform circuit: in the service routing domain (no network, no VPN target); it accepts the hub's IPv4 ranges
-    # and advertises the clusters' prefixes inside service.attachableRanges (any, when the list is empty). The hub's
+    # and advertises the clusters' prefixes inside service.attachableRanges (required with the service). The hub's
     # router can install the two lists of status.ceConfig as fixed filters
     - name: The platform circuit's realization and the hub router's parameters
       vars:
@@ -542,7 +542,7 @@
               'mtu': _mtu | int,
               'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
               'bfd': ac_bgp.bfd | default(false) | bool,
-              'advertisedRanges': _advertise if _advertise | length > 0 else ['any'], 'acceptedRanges': _accept} }}
+              'advertisedRanges': _advertise, 'acceptedRanges': _accept} }}
       when: ac_platform | default(false) | bool
 
     # a circuit with IPv6 accept entries: the IPv6 link, the CE's and each node's address on it, and the second

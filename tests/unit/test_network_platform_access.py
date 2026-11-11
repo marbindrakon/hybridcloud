@@ -308,7 +308,7 @@ class PlatformAccessTasks(unittest.TestCase):
     """platform_access.yml with the API calls replaced by facts."""
 
     def run_tasks(self, clusters=(), ledger=None, fabric_status=None, spec=None, st=None, ledger_fails=False,
-                  real=None, hub=None, overlaps=None):
+                  real=None, hub=None, overlaps=None, placements=None):
         tasks = replaced(tasks_of(os.path.join(HN, "platform_access.yml")), {
             "List the clusters of the namespace": {"ansible.builtin.set_fact": {"_hn_clusters": {"resources": list(clusters)}}},
             "Read the fabric's ledger": {"ansible.builtin.set_fact": {
@@ -332,7 +332,12 @@ class PlatformAccessTasks(unittest.TestCase):
              "hn_fabric": {"status": fabric_status if fabric_status is not None else
                            {"realization": {"service": CIRCUITS}, "reservedRanges": RESERVED}},
              "hn_fabric_name": "fab", "hn_space": [{"prefix": "10.20.0.0/16"}], "hn_hub": HUB if hub is None else hub,
-             "hn_hub_check": {"refused": [], "overlaps": overlaps or []}}
+             "hn_hub_check": {"refused": [], "overlaps": overlaps or []},
+             "_hn_placements": {"resources": placements if placements is not None else [
+                 {"spec": {"network": "net"}, "status": {"subnets": [{"prefix": "10.20.2.0/24", "family": 4},
+                                                                     {"prefix": "2001:db8:2::/64", "family": 6}]}},
+                 {"spec": {"network": "net"}, "status": {"prefixes": ["10.20.3.0/24", "2001:db8:3::/64"]}},
+                 {"spec": {"network": "other"}, "status": {"prefixes": ["10.20.9.0/24"]}}]}}
         return run_play(tasks + [write_out(
             "{'access': hn_access, 'cond': hn_access_condition, 'hold': hn_service_hold | bool, "
             "'wake': hn_access_result.wakeFabric | bool, 'carried': hn_service_carried, "
@@ -375,6 +380,18 @@ class PlatformAccessTasks(unittest.TestCase):
         self.assertTrue(out["wake"])
         self.assertTrue(out["ledger_read"])
         self.assertEqual(out["cond"]["reason"], "AttachPending")
+
+    def test_each_provider_announces_only_its_shape(self):
+        # an OpenStack cluster: /32s only; AWS and Google Cloud: exactly a subnet of the network's placements
+        cs = [self.poc("os1", "net", ["10.20.1.0/30"]), self.poc("aws1", "net", ["10.20.2.0/25"], kind="aws"),
+              self.poc("gcp1", "net", ["10.20.9.0/24"], kind="gcp"), self.poc("x1", "net", ["10.20.4.4/32"], kind="other")]
+        out = self.run_tasks(cs)
+        rows = {r["cluster"]: r for r in out["access"]["prefixes"]}
+        self.assertEqual({k: (r["state"], r["reason"]) for k, r in rows.items()},
+                         {k: ("refused", "InvalidSpec") for k in ("os1", "aws1", "gcp1", "x1")})
+        self.assertIn("/32", rows["os1"]["message"])
+        self.assertIn("placement's subnet", rows["aws1"]["message"])
+        self.assertEqual(out["recorded"], [])
 
     def test_a_ledger_error_never_fails_the_network(self):
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], ledger_fails=True)

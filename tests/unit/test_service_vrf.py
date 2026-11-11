@@ -366,7 +366,7 @@ class ServiceTemplate(unittest.TestCase):
         led = copy.deepcopy(LEDGER)
         led["servicePrefix"] = {"HybridNetwork/acme/core/10.60.1.15/32": 1}
         real, (egp, att, vrfs, svc) = service_setup(nets=nets, ledger=led)
-        real["service"]["attachableRanges"] = []
+        real["service"]["attachableRanges"] = ["0.0.0.0/0"]
         egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
         out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
         # one vrf stanza: the default to the egress and the hub over the service link

@@ -295,14 +295,31 @@ class Plan(unittest.TestCase):
         self.assertEqual(by["10.1.0.5/32"]["reason"], "OutsideAddressSpace")
         self.assertEqual(by["2001:db8::1/128"]["reason"], "FamilyUnavailable")
         self.assertEqual(out["status"]["networks"][0]["prefixes"], ["192.0.2.15/32"])
-        # without attachable ranges any prefix that passes the other checks
+        # without attachable ranges nothing is planned (check-fabric names the setting: no implicit "any"); every
+        # range is written explicitly, and then any prefix that passes the other checks
         r = real(service={"attachableRanges": []})
+        out = plan(r, nets, alloc)
+        self.assertEqual(out["errors"], ["realization service.attachableRanges is required with service.enabled: the "
+                                         "IPv4 ranges a cluster's prefixes must lie in, announced to the hub's network "
+                                         "(0.0.0.0/0 admits every range the other checks admit)"])
+        self.assertEqual(out["nodes"], {})
+        r = real(service={"attachableRanges": ["0.0.0.0/0"]})
         alloc["servicePrefix"]["HybridNetwork/acme/n1/100.64.10.5/32"] = 2
         out = plan(r, nets, alloc)
         self.assertEqual(out["status"]["networks"][0]["prefixes"], ["100.64.10.5/32", "192.0.2.15/32"])
         self.assertEqual(out["nodes"]["bgw-1"]["attachable"], ["0.0.0.0/0 le 32"])
         self.assertTrue(set(out["status"]["refused"][0].keys()) >= {"network", "prefix", "reason"})
         self.assertTrue(all(r["reason"] in F.SERVICE_PREFIX_REASONS for r in out["status"]["refused"]))
+
+    def test_only_the_accepted_address_space_counts(self):
+        # a prefix the tenant wrote into spec.prefixes but the network job did not accept (status.addressSpace) does
+        # not make a cluster prefix inside it the network's
+        nets = [network("n1", ["192.0.2.0/24", "203.0.113.0/24"], [("203.0.113.15/32", {})])]
+        nets[0]["status"]["addressSpace"] = [{"prefix": "192.0.2.0/24", "family": 4}]
+        alloc = ledger({("acme/n1", "203.0.113.15/32"): 1}, {"acme/n1": 10005}, {"acme/n1": 0})
+        out = plan(real(), nets, alloc)
+        self.assertEqual([(r["prefix"], r["reason"]) for r in out["status"]["refused"]],
+                         [("203.0.113.15/32", "OutsideAddressSpace")])
 
     def test_pending(self):
         nets = [network("n1", ["192.0.2.0/24"], [("192.0.2.15/32", {})]),

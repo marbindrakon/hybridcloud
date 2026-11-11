@@ -39,11 +39,24 @@
         {%- if ty and (sp[ty] | default({}, true)).network | default('', true) == fab_name
               and not (st.deletionComplete | default(false, true) | bool) -%}
           {%- set _ = out.append({'name': c.metadata.name, 'prefixes': st.platformPrefixes | default([], true),
-                                  'deleting': c.metadata.deletionTimestamp is defined}) -%}
+                                  'deleting': c.metadata.deletionTimestamp is defined, 'type': ty}) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ out }}
     hn_service_real: "{{ fab_real.service | default({}, true) }}"
+    # the IPv4 subnets of the network's placements: an AWS or Google Cloud cluster's prefix is one of them
+    hn_placement_subnets: >-
+      {%- set out = [] -%}
+      {%- for p in _hn_placements.resources | default([], true) if (p.spec | default({}, true)).network | default('') == fab_name -%}
+        {%- set ps = p.status | default({}, true) -%}
+        {%- for r in ps.subnets | default([], true) if (r.family | default(0) | int) == 4 and r.prefix | default('', true) -%}
+          {%- set _ = out.append(r.prefix) -%}
+        {%- endfor -%}
+        {%- for x in ps.prefixes | default([], true) if x is string and ':' not in x -%}
+          {%- set _ = out.append(x) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out | unique | list }}
     hn_service_status: >-
       {{ ((hn_fabric.status | default({}, true)).realization | default({}, true)).service | default({}, true) }}
 
@@ -84,7 +97,7 @@
                       'attachableRanges': hn_service_real.attachableRanges | default([], true)},
           'serviceStatus': hn_service_status,
           'reserved': (hn_fabric.status | default({}, true)).reservedRanges | default([], true),
-          'clusters': hn_clusters, 'ledger': hn_service_ledger} | to_json }}
+          'clusters': hn_clusters, 'placements': hn_placement_subnets, 'ledger': hn_service_ledger} | to_json }}
   register: _hn_access
   changed_when: false
 

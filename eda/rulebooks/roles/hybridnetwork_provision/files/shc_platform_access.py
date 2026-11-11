@@ -22,7 +22,10 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       service        the realization's service keys {enabled, ports, attachableRanges}
       serviceStatus  HybridFabric status.realization.service {circuits, networks, refused}
       reserved       HybridFabric status.reservedRanges rows {prefix, purpose, rule, site?}; site rows do not apply
-      clusters       [{name, prefixes, deleting}] the PlatformOpenshifts that name the network (not fully deleted)
+      clusters       [{name, prefixes, deleting, type?}] the PlatformOpenshifts that name the network (not fully
+                     deleted); with type (spec.type), each prefix has the shape its provider gives: openstack /32s
+                     (floating IPs, the router's gateway), aws and gcp a subnet of the network's placements
+      placements     the IPv4 subnets of the network's placements (status.subnets, status.prefixes)
       ledger         the fabric ledger's servicePrefix allocations {owner: value}
       fabric         the fabric's name (messages)
     A prefix is accepted when the network is eligible and the prefix is IPv4, inside the network's space, inside
@@ -123,6 +126,22 @@ def reserved_rows(req):
     return rows
 
 
+def prefix_shape(cluster, n, subnets):
+    """"" when the prefix has the shape the cluster's provider gives it, else why not (nothing more specific or wider
+    than the platform announces for that provider): openstack /32 addresses; aws and gcp exactly a placement subnet of
+    the network. A cluster without a type (a request that does not say) is not judged."""
+    if "type" not in cluster:
+        return ""
+    ty = str(cluster.get("type") or "")
+    if ty == "openstack":
+        return "" if n.prefixlen == 32 else (f"{n}: the platform reaches an OpenStack cluster at its addresses (/32: the "
+                                             "floating IPs and the router's gateway) only")
+    if ty in ("aws", "gcp"):
+        return "" if n in subnets else (f"{n}: the platform reaches an Internal {ty.upper()} cluster at its placement's "
+                                        "subnet on the network only")
+    return f"{n}: the platform reaches clusters on OpenStack, AWS and Google Cloud only"
+
+
 def platform_access(req):
     key = str(req.get("network") or "")
     fabric = str(req.get("fabric") or "")
@@ -186,6 +205,7 @@ def platform_access(req):
             if not any(n == e.get("network") and r == q for n, r, _ in others):
                 others.append((e.get("network"), q, -1))
 
+    subnets = [n for n in nets(req.get("placements")) if n.version == 4]
     kept = []  # accepted before (a ledger entry), not now for a reason that keeps the place
 
     def keep(row, n):
@@ -213,6 +233,10 @@ def platform_access(req):
                 continue
             if not any(n.subnet_of(s) for s in space4):
                 row.update(reason="OutsideAddressSpace", message=f"{n} is outside the network's address space")
+                continue
+            shape = prefix_shape(c, n, subnets)
+            if shape:
+                row.update(reason="InvalidSpec", message=shape)
                 continue
             # first come first served, settled by the ledger whether or not the platform reaches the network now
             mine_rank = int(ledger[owner(key, str(n))]) if owner(key, str(n)) in ledger else float("inf")

@@ -282,8 +282,11 @@ fabric_realization_defaults:
     # API). Empty = none: the clusters reach the hub by their network's own outbound path
     hubEndpoints: []
     # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF; the platform circuit announces nothing
-    # outside them, so the hub's network can accept them with a fixed filter. Empty = any range that passes the other
-    # checks
+    # outside them, and its status.ceConfig gives them to the hub's network ("<range> le 32") to accept with a fixed
+    # filter. Required with service.enabled (check-fabric names it when empty): there is no implicit "any". A
+    # deployment that wants every range writes 0.0.0.0/0, and then the hub's network accepts any route inside its
+    # tenants' address spaces that the reserved ranges do not cover (more-specifics of its own networks outside
+    # infrastructure.hub included)
     attachableRanges: []
   # attachment circuits (AttachmentCircuit on a ProviderEdge of platform frr): each circuit gets a VLAN from vlanPool
   # on its bearer and the next /linkPrefixLength of linkPool (node i takes host address i+1, the CE the next one);

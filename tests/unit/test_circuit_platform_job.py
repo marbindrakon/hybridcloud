@@ -184,10 +184,14 @@ class Record(unittest.TestCase):
         self.assertEqual(ce["authentication"], {"type": "md5", "secretName": "hub-a-bgp"})
         self.assertNotIn("address6", ce)
 
-    def test_any_when_the_ranges_are_not_limited(self):
+    def test_never_any(self):
+        # the hub's router is told exactly what the platform may announce: no implicit "any" (an empty list fails
+        # check-fabric; every range is written as 0.0.0.0/0)
         out = self.record(load(os.path.join(AC, "main.yml")), record_vars(service=dict(SERVICE, attachableRanges=[])))
-        self.assertEqual(out["ce"]["advertisedRanges"], ["any"])
-        self.assertEqual(out["real"]["advertise"], [])
+        self.assertEqual((out["ce"]["advertisedRanges"], out["real"]["advertise"]), ([], []))
+        out = self.record(load(os.path.join(AC, "main.yml")),
+                          record_vars(service=dict(SERVICE, attachableRanges=["0.0.0.0/0"])))
+        self.assertEqual((out["ce"]["advertisedRanges"], out["real"]["advertise"]), (["0.0.0.0/0 le 32"],) * 2)
 
     def test_a_customer_circuit_records_what_the_release_did(self):
         text = base_text("eda/rulebooks/roles/attachmentcircuit_provision/tasks/main.yml")
