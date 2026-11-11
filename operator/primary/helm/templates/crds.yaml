@@ -884,7 +884,10 @@ spec:
             refused; a default route from the CE is accepted only while the network has no provider
             internet egress of that address family. Accept entries may be IPv4 and IPv6: with at least
             one IPv6 entry the circuit also gets an IPv6 link subnet and a second BGP session over
-            IPv6 from every node.
+            IPv6 from every node. A circuit of ceKind platform (only in the platform's namespace) connects
+            the router of the network the platform's management runs on instead, with no network: it
+            accepts the platform's management ranges and advertises the addresses of the clusters the
+            platform builds on networks (status.ceConfig acceptedRanges and advertisedRanges).
           type: object
           required:
             - spec
@@ -898,13 +901,21 @@ spec:
             spec:
               description: Desired state of this object.
               type: object
-              required: [network, edgeRef, routing]
+              required: [edgeRef, routing]
+              x-kubernetes-validations:
+                - rule: (self.ceKind == 'platform') != has(self.network)
+                  message: spec.network is required for ceKind customer and not allowed for ceKind platform
+                - rule: self.ceKind != 'platform' || !has(self.routing.accept)
+                  message: >-
+                    a platform circuit accepts the platform's infrastructure ranges; routing.accept is not allowed
               properties:
                 network:
                   type: string
                   minLength: 1
                   maxLength: 253
-                  description: The HybridNetwork (this namespace) to connect. Immutable.
+                  description: >-
+                    The HybridNetwork (this namespace) to connect. Required for ceKind customer, not allowed for
+                    ceKind platform. Immutable.
                   x-kubernetes-validations:
                     - rule: self == oldSelf
                       message: spec.network is immutable
@@ -930,8 +941,11 @@ spec:
                       maxLength: 63
                 ceKind:
                   type: string
-                  description: The kind of router at the other end. customer = a router the tenant operates. Immutable.
-                  enum: [customer]
+                  description: >-
+                    The kind of router at the other end. customer: a router the tenant operates, connected to
+                    spec.network. platform: the router of the network the platform's management runs on, connected
+                    to the platform's service routing domain; only in the platform namespace. Immutable.
+                  enum: [customer, platform]
                   default: customer
                   x-kubernetes-validations:
                     - rule: self == oldSelf
@@ -941,8 +955,8 @@ spec:
                   type: object
                   required: [protocol]
                   x-kubernetes-validations:
-                    - rule: self.protocol != 'bgp' || (has(self.bgp) && has(self.accept) && size(self.accept) > 0)
-                      message: protocol bgp needs routing.bgp and at least one routing.accept entry
+                    - rule: self.protocol != 'bgp' || has(self.bgp)
+                      message: protocol bgp needs routing.bgp
                   properties:
                     protocol:
                       type: string
@@ -1010,7 +1024,8 @@ spec:
                     accept:
                       type: array
                       description: >-
-                        Routes accepted from the CE, as prefix-list entries "<prefix>[ ge <n>][ le <n>]" of either
+                        Routes accepted from the CE (ceKind customer: at least one entry; not allowed for ceKind
+                        platform), as prefix-list entries "<prefix>[ ge <n>][ le <n>]" of either
                         address family (e.g. "10.50.0.0/16 le 24", "2001:db8:50::/48 le 64"); ge and le are at most
                         32 for an IPv4 prefix and 128 for an IPv6 prefix. Everything else from the CE is dropped. With
                         at least one IPv6 entry the circuit also carries IPv6: an IPv6 link subnet and a second BGP
@@ -1048,7 +1063,7 @@ spec:
                             message: ge must not exceed le
                     advertise:
                       type: object
-                      description: What the network advertises to the CE.
+                      description: What the network advertises to the CE. Does not apply to ceKind platform.
                       properties:
                         networkPrefixes:
                           type: boolean
@@ -1109,8 +1124,23 @@ spec:
                   type: object
                   description: >-
                     What the CE needs to configure. With IPv6 accept entries also address6, secondAddress6 and
-                    neighbors6.
+                    neighbors6; for ceKind platform also advertisedRanges and acceptedRanges.
                   properties:
+                    advertisedRanges:
+                      type: array
+                      description: >-
+                        ceKind platform: the routes the platform advertises over the circuit, as prefix-list entries
+                        the router at the other end can accept with a fixed filter ("any" when the platform does not
+                        limit them).
+                      items:
+                        type: string
+                    acceptedRanges:
+                      type: array
+                      description: >-
+                        ceKind platform: the routes the platform accepts from the router at the other end (the
+                        ranges the platform's management connects from), as prefix-list entries.
+                      items:
+                        type: string
                     address6:
                       type: string
                       description: The CE's address on the circuit's IPv6 link subnet (with its length).
@@ -2596,7 +2626,10 @@ spec:
                     externalNetwork:
                       type: string
                       maxLength: 255
-                      description: External Neutron network for tenant floating IPs.
+                      description: >-
+                        The site's default external network (a Neutron network that every project may use as
+                        external). It must exist and be external; OpenShift clusters that name no network of
+                        their own use it.
                 openshift:
                   type: object
                   description: >-
@@ -2756,6 +2789,28 @@ spec:
                     version:
                       type: string
                       description: Platform version where the API reports one (OpenShift version).
+                    externalNetworks:
+                      type: array
+                      description: >-
+                        OpenStack sites: the external networks every project of the site may use (networks
+                        external for some projects only are not listed), refreshed on every probe.
+                      items:
+                        type: object
+                        properties:
+                          name:
+                            type: string
+                            description: The network's name.
+                          id:
+                            type: string
+                            description: The network's id.
+                          families:
+                            type: array
+                            description: The address families of its subnets (4, 6).
+                            items:
+                              type: integer
+                          default:
+                            type: boolean
+                            description: True for the network spec.openstack.externalNetwork names.
                   x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
@@ -2990,7 +3045,7 @@ spec:
                   description: >-
                     The platform CloudInfrastructure (type openstack, namespace sovereign-cloud) the project is
                     created on. It supplies the infrastructure credential and every site setting (projectDomain,
-                    externalNetwork, DNS, region); with a cloudRef in effect those spec fields below are ignored.
+                    DNS, region); with a cloudRef in effect those spec fields below are ignored.
                     Default: the installation's default site. Immutable once set.
                   required: [name]
                   x-kubernetes-validations:
@@ -3020,7 +3075,9 @@ spec:
                   description: "Keystone domain for the project. Ignored with a cloudRef in effect. Default: the installation default."
                 externalNetwork:
                   type: string
-                  description: "External Neutron network for the floating IPs. Ignored with a cloudRef in effect. Default: the installation default."
+                  description: >-
+                    No effect: the environment holds no floating IPs; each OpenShift cluster chooses its own network
+                    (PlatformOpenshift spec.openstack).
                 regionName:
                   type: string
                   description: "OpenStack region. Default: the account's clouds.yaml region."
@@ -3077,16 +3134,6 @@ spec:
                   type: string
                 route53ZoneId:
                   description: Hosted zone of the environment when its DNS is on Route 53.
-                  type: string
-                apiVIP:
-                  description: Floating IP reserved for the API of a cluster in this environment.
-                  type: string
-                ingressVIP:
-                  description: >-
-                    Floating IP reserved for the applications of a cluster in this environment.
-                  type: string
-                externalNetwork:
-                  description: External network of the environment's floating IPs.
                   type: string
                 billingId:
                   description: The tenant's billing identifier.
@@ -4620,6 +4667,39 @@ spec:
                   description: Free numbers per pool.
                   additionalProperties:
                     type: integer
+                reservedRanges:
+                  description: >-
+                    The address ranges tenants may not use on this fabric, with what the platform uses them for.
+                    The tenants' profiles publish the same list.
+                  type: array
+                  maxItems: 512
+                  x-kubernetes-list-type: atomic
+                  items:
+                    description: One range.
+                    type: object
+                    required:
+                      - prefix
+                      - purpose
+                      - rule
+                    properties:
+                      prefix:
+                        description: The address range (IPv4 or IPv6).
+                        type: string
+                        maxLength: 43
+                      purpose:
+                        description: What the platform uses the range for, in plain words.
+                        type: string
+                        maxLength: 256
+                      rule:
+                        description: >-
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
+                          SteppedAround (inside a network prefix, never allocated to a placement).
+                        type: string
+                        enum: [Refused, SteppedAround]
+                      site:
+                        description: The site the range applies to; absent when it applies everywhere.
+                        type: string
+                        maxLength: 63
                 realization:
                   type: object
                   description: How the platform realized the fabric (informational; depends on the platform).
@@ -4712,15 +4792,17 @@ spec:
                                   type: string
                                   description: >-
                                     The area: Reachability, Start (the configuration's start at boot), Service,
-                                    RoutingDaemon, Configuration (the node differs from its configuration) or
-                                    SiteSessions.
+                                    RoutingDaemon, Configuration (the node differs from its configuration),
+                                    SiteSessions or ServiceSessions.
                                 reason:
                                   type: string
                                   description: >-
                                     NodeUnreachable, ReadFailed (the node answered, its check did not complete),
                                     StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
                                     RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
-                                    routing configuration the node does not take) or SiteSessionsDown.
+                                    routing configuration the node does not take), SiteSessionsDown or
+                                    ServiceSessionsDown (no session with the platform's router for clusters on
+                                    networks).
                                 message:
                                   type: string
                                 since:
@@ -5029,6 +5111,16 @@ spec:
                         network without IPv4 reaches IPv4-only destinations by translation where the platform offers
                         it. The platform's private address ranges are not reachable this way. Leave it off when the
                         network's default route comes from your own edge router. Can be changed at any time.
+                platformAccess:
+                  type: boolean
+                  default: true
+                  description: >-
+                    The platform's management may open connections into this network, to the API and ingress
+                    addresses of the OpenShift clusters the platform builds on it (status.platformAccess.prefixes),
+                    from its own addresses (status.platformAccess.sources) on its service ports, and those clusters
+                    may reach the platform's service endpoints. Needed by such clusters. Nothing is reserved or
+                    routed for the network until a cluster is built on it. Turning it off waits while such a cluster
+                    exists. Default true.
                 prefixes:
                   type: array
                   description: >-
@@ -5252,6 +5344,60 @@ spec:
                           site:
                             type: string
                             description: The site (CloudInfrastructure) of the placement's environment.
+                platformAccess:
+                  type: object
+                  description: >-
+                    Whether the platform's management can reach the OpenShift clusters it builds on this network
+                    (spec.platformAccess); the condition PlatformReachable says the same with a reason.
+                  properties:
+                    state:
+                      type: string
+                      description: >-
+                        off (spec.platformAccess is off), unavailable (the network cannot host such clusters now; see
+                        reason), attachable (it can; no cluster is connected yet) or attached (the platform reaches
+                        clusters on it).
+                    sources:
+                      type: array
+                      description: >-
+                        The IPv4 ranges the platform's management connects from, for the tenant's own firewalls.
+                      items:
+                        type: string
+                    ports:
+                      type: array
+                      description: The TCP ports the platform's management opens toward the clusters.
+                      items:
+                        type: integer
+                    prefixes:
+                      type: array
+                      description: >-
+                        The addresses the platform reaches for the clusters on this network, one row per cluster
+                        and prefix.
+                      items:
+                        type: object
+                        properties:
+                          prefix:
+                            type: string
+                            description: The address prefix, for example an API floating IP as a /32.
+                          cluster:
+                            type: string
+                            description: The PlatformOpenshift (this namespace) that asks for it.
+                          state:
+                            type: string
+                            description: >-
+                              ready (reached), pending (being connected or waiting for the platform) or refused
+                              (see reason).
+                          reason:
+                            type: string
+                            description: One-word reason when not ready.
+                          message:
+                            type: string
+                            description: What the reason means for this prefix, in plain words.
+                    reason:
+                      type: string
+                      description: One-word reason when the state is off or unavailable, or a prefix is being connected.
+                    message:
+                      type: string
+                      description: What the state means for this network, in plain words.
                 mtu:
                   type: integer
                   description: Effective MTU.
@@ -5771,6 +5917,12 @@ spec:
                     : (!has(self.ipv6.prefixLength) || self.ipv6.prefixLength == 64)
                       && (!has(self.ipv6.prefix) || !isCIDR(self.ipv6.prefix) || cidr(self.ipv6.prefix).prefixLength() == 64))
                   message: the IPv6 subnet must be a /64 (a /56 or /60 on CloudAWS)
+                - rule: "!has(self.use) || self.use.virtualMachines || self.use.routerAttachments"
+                  message: spec.use needs virtualMachines, routerAttachments or both
+                - rule: >-
+                    !has(self.use) || self.backend.kind == 'CloudOSO'
+                    || (self.use.virtualMachines && !self.use.routerAttachments)
+                  message: spec.use is offered only on CloudOSO; other environments use the defaults
               properties:
                 network:
                   type: string
@@ -5879,6 +6031,26 @@ spec:
                         site's default applies; status reports the result.
                       type: string
                       enum: [Network, Provider]
+                use:
+                  type: object
+                  description: >-
+                    How the environment may use the placed network. Offered on CloudOSO; other environment kinds
+                    take the defaults. Can be changed at any time; turning a use off waits while the environment
+                    still uses it that way.
+                  properties:
+                    virtualMachines:
+                      type: boolean
+                      default: true
+                      description: >-
+                        The environment's virtual machines and ports attach directly to the network. Default true.
+                    routerAttachments:
+                      type: boolean
+                      default: false
+                      description: >-
+                        The environment's routers may set their external gateway on the network and allocate
+                        floating IPs from its IPv4 subnet, for this environment only. Floating IPs are reachable
+                        from the network's other placements only where the site advertises them (a site
+                        requirement). Needed by an OpenShift cluster that names this network. Default false.
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -5978,6 +6150,39 @@ spec:
                           description: >-
                             The IPv4 address translated traffic leaves from on the internet (path Provider, once the
                             provider reports it).
+                use:
+                  type: object
+                  description: >-
+                    How the environment uses the placed network (CloudOSO), one entry per use of spec.use: state
+                    ready (allowed for the environment), pending, removing (turned off, waiting while the
+                    environment still uses it; the message names what) or off.
+                  properties:
+                    virtualMachines:
+                      type: object
+                      description: The use for virtual machines and ports.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending, removing or off.
+                        reason:
+                          type: string
+                          description: One-word reason when not ready or off (InUse while removing).
+                        message:
+                          type: string
+                          description: What the state means for this placement, in plain words.
+                    routerAttachments:
+                      type: object
+                      description: The use for router gateways and floating IPs.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending, removing or off.
+                        reason:
+                          type: string
+                          description: One-word reason when not ready or off (InUse while removing).
+                        message:
+                          type: string
+                          description: What the state means for this placement, in plain words.
                 namespaces:
                   type: array
                   description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).
@@ -6838,6 +7043,26 @@ spec:
             spec:
               description: The cluster.
               type: object
+              x-kubernetes-validations:
+                - rule: >-
+                    !has(self.openstack) || !(has(self.openstack.network) && has(self.openstack.externalNetwork))
+                  message: spec.openstack names a hybrid network or an external network, not both
+                - rule: >-
+                    (has(self.openstack) && has(self.openstack.network))
+                    == (has(oldSelf.openstack) && has(oldSelf.openstack.network))
+                  message: the cluster's network cannot be added, removed or changed
+                - rule: >-
+                    (has(self.openstack) && has(self.openstack.externalNetwork))
+                    == (has(oldSelf.openstack) && has(oldSelf.openstack.externalNetwork))
+                  message: the cluster's network cannot be added, removed or changed
+                - rule: has(self.networking) == has(oldSelf.networking)
+                  message: spec.networking cannot be added, removed or changed
+                - rule: >-
+                    !has(self.networking) || !has(self.networking.machineNetwork) || !has(self.type)
+                    || self.type == 'openstack'
+                    || (self.type == 'aws' ? !(has(self.aws) && has(self.aws.network))
+                        : !(has(self.gcp) && has(self.gcp.network)))
+                  message: spec.networking.machineNetwork is the placement's subnet when the cluster names a network
               properties:
                 deletionProtection:
                   type: boolean
@@ -6855,6 +7080,20 @@ spec:
                     environment:
                       type: string
                       description: Name of the OpenStack environment (CloudOSO) in this namespace.
+                    network:
+                      type: string
+                      minLength: 1
+                      maxLength: 253
+                      description: >-
+                        HybridNetwork (this namespace) the cluster is published on. The environment needs a ready
+                        NetworkPlacement of it with router attachments on (spec.use.routerAttachments) and an IPv4
+                        subnet, and the network's condition PlatformReachable must be True. The cluster keeps its own
+                        machine network behind its own router; the router's external gateway and the API and ingress
+                        floating IPs are on the network, so the API and applications are reachable from the network
+                        and from the platform only. Excludes externalNetwork. Immutable.
+                      x-kubernetes-validations:
+                        - rule: self == oldSelf
+                          message: spec.openstack.network is immutable
                     controlPlaneCount:
                       type: integer
                       description: >-
@@ -6877,8 +7116,15 @@ spec:
                         OpenStack flavor of the worker nodes. Default: the installation's default.
                     externalNetwork:
                       type: string
+                      maxLength: 255
                       description: >-
-                        External network of the cluster's floating IPs. Default: the environment's.
+                        An external network of the environment's site that every project may use (the site's
+                        status lists them; TenantProfile sites[].externalNetworks). The cluster's router and floating
+                        IPs are on it. When neither this nor network is set, the site's default external network
+                        applies; a site without one refuses the cluster (NetworkChoiceRequired). Immutable.
+                      x-kubernetes-validations:
+                        - rule: self == oldSelf
+                          message: spec.openstack.externalNetwork is immutable
                     ocpImageSet:
                       type: string
                       description: >-
@@ -6945,10 +7191,12 @@ spec:
                       type: integer
                       description: "Control plane node count"
                       default: 3
+                      minimum: 1
                     workerCount:
                       type: integer
-                      description: "Worker node count"
+                      description: "Worker node count; 0 makes a compact cluster"
                       default: 2
+                      minimum: 0
                     controllerFlavor:
                       type: string
                       description: "AWS instance type for control plane"
@@ -6985,10 +7233,12 @@ spec:
                       type: integer
                       description: "Control plane node count"
                       default: 3
+                      minimum: 1
                     workerCount:
                       type: integer
-                      description: "Worker node count"
+                      description: "Worker node count; 0 makes a compact cluster"
                       default: 2
+                      minimum: 0
                     controllerFlavor:
                       type: string
                       description: "Machine type for control plane"
@@ -6997,6 +7247,69 @@ spec:
                       type: string
                       description: "Machine type for workers"
                       default: n2-standard-4
+                networking:
+                  type: object
+                  description: >-
+                    Address ranges of the cluster's own networks. Each must stay clear of the others, of the
+                    address space of the hybrid network the cluster is on, and of the ranges reserved by the platform
+                    (TenantProfile status.reservedRanges); the platform refuses the cluster before building it
+                    otherwise. Unset fields take the installation's defaults. Immutable.
+                  x-kubernetes-validations:
+                    - rule: self == oldSelf
+                      message: spec.networking is immutable
+                    - rule: >-
+                        !has(self.hostPrefix) || !has(self.clusterNetwork) || !isCIDR(self.clusterNetwork)
+                        || self.hostPrefix > cidr(self.clusterNetwork).prefixLength()
+                      message: spec.networking.hostPrefix must be longer than the clusterNetwork prefix
+                  properties:
+                    clusterNetwork:
+                      type: string
+                      maxLength: 18
+                      description: >-
+                        IPv4 range of the cluster's pods, /8 to /22. Default: the installation's (OpenShift's
+                        default is 10.128.0.0/14).
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: >-
+                            spec.networking.clusterNetwork must be an IPv4 network prefix in canonical form (host bits
+                            zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 8 && cidr(self).prefixLength() <= 22)"
+                          message: spec.networking.clusterNetwork must be /8 to /22
+                    hostPrefix:
+                      type: integer
+                      minimum: 16
+                      maximum: 28
+                      description: >-
+                        Prefix length of each node's share of clusterNetwork, 16 to 28 and longer than the
+                        clusterNetwork prefix. Default: the installation's (OpenShift's default is 23).
+                    serviceNetwork:
+                      type: string
+                      maxLength: 18
+                      description: >-
+                        IPv4 range of the cluster's services, /12 to /24. Default: the installation's (OpenShift's
+                        default is 172.30.0.0/16).
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: >-
+                            spec.networking.serviceNetwork must be an IPv4 network prefix in canonical form (host bits
+                            zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 12 && cidr(self).prefixLength() <= 24)"
+                          message: spec.networking.serviceNetwork must be /12 to /24
+                    machineNetwork:
+                      type: string
+                      maxLength: 18
+                      description: >-
+                        IPv4 range of the cluster's nodes, /16 to /27. On OpenStack the cluster's own network behind
+                        its own router; on AWS and Google Cloud only for a cluster without a network (with one, the
+                        nodes use the placement's subnet). Default: the installation's (OpenShift's default is
+                        10.0.0.0/16).
+                      x-kubernetes-validations:
+                        - rule: isCIDR(self) && cidr(self).ip().family() == 4 && string(cidr(self).masked()) == self
+                          message: >-
+                            spec.networking.machineNetwork must be an IPv4 network prefix in canonical form (host bits
+                            zero)
+                        - rule: "!isCIDR(self) || (cidr(self).prefixLength() >= 16 && cidr(self).prefixLength() <= 27)"
+                          message: spec.networking.machineNetwork must be /16 to /27
                 toolRbac:
                   description: >-
                     Access on the new cluster. Each field lists access groups (Rbac names in this
@@ -7121,6 +7434,70 @@ spec:
                 gcpRegion:
                   description: Google Cloud region of the cluster.
                   type: string
+                buildName:
+                  description: >-
+                    Name of the cluster's build on the platform (its management namespace, release and managed
+                    cluster). The OpenShift cluster itself keeps the object's name.
+                  type: string
+                network:
+                  description: HybridNetwork the cluster is on; empty for a cluster with a network of its own.
+                  type: string
+                externalNetwork:
+                  description: >-
+                    OpenStack cluster without a hybrid network: the site's external network its router and floating
+                    IPs are on.
+                  type: string
+                placement:
+                  description: NetworkPlacement (namespace/name) the cluster's network reaches the environment through.
+                  type: string
+                publish:
+                  description: >-
+                    How the cluster's API and ingress are published: External or Internal (reachable from its network
+                    and the platform only).
+                  type: string
+                machineNetwork:
+                  description: IPv4 range of the cluster's nodes.
+                  type: string
+                clusterNetwork:
+                  description: IPv4 range of the cluster's pods.
+                  type: string
+                serviceNetwork:
+                  description: IPv4 range of the cluster's services.
+                  type: string
+                platformPrefixes:
+                  description: >-
+                    The cluster's addresses the platform's management reaches through the hybrid network (the
+                    network lists their state in status.platformAccess.prefixes).
+                  type: array
+                  items:
+                    type: string
+                floatingIPs:
+                  description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."
+                  type: object
+                  properties:
+                    network:
+                      description: Identifier of the network the floating IPs are on.
+                      type: string
+                    api:
+                      description: Floating IP of the cluster's API.
+                      type: object
+                      properties:
+                        address:
+                          description: The address.
+                          type: string
+                        id:
+                          description: Identifier of the floating IP.
+                          type: string
+                    ingress:
+                      description: Floating IP of the cluster's applications (ingress).
+                      type: object
+                      properties:
+                        address:
+                          description: The address.
+                          type: string
+                        id:
+                          description: Identifier of the floating IP.
+                          type: string
                 status:
                   type: string
                   description: Short state word written by the platform's automation.
@@ -7687,12 +8064,15 @@ spec:
                         pattern: '^[a-z0-9]([-a-z0-9]*[a-z0-9])?$'
                       ceKinds:
                         type: array
-                        description: The kinds of customer edge this bearer accepts.
+                        description: >-
+                          The kinds of router this bearer accepts at the other end of a circuit (AttachmentCircuit
+                          spec.ceKind): customer (a router a tenant operates) or platform (the router of the network
+                          the platform's management runs on).
                         minItems: 1
                         x-kubernetes-list-type: set
                         items:
                           type: string
-                          enum: [customer]
+                          enum: [customer, platform]
                       description:
                         description: >-
                           What the bearer is, in a few words, for the people ordering circuits.
@@ -9261,7 +9641,8 @@ spec:
           description: >-
             A tenant profile: the read-only summary of a tenant for the tenant's own users, with its
             display name, the contacts its users ask about access, the sites its environments may use
-            and the platform IPv6 address space its networks can ask for. The platform writes it; one object named shc exists in each tenant namespace and goes
+            the platform IPv6 address space its networks can ask for and the address ranges its networks
+            cannot use. The platform writes it; one object named shc exists in each tenant namespace and goes
             away with it.
           type: object
           x-kubernetes-validations:
@@ -9370,6 +9751,39 @@ spec:
                           type: string
                           enum: [Virtualization, HybridNetworking, DNS, IPv6, IPv6Only, IPv6NetworkSource,
                                  IPv6ProviderSource, IPv6Translation]
+                      externalNetworks:
+                        description: >-
+                          External networks of an OpenStack site that every project may use: an OpenShift cluster's
+                          router and floating IPs can be on one of them (PlatformOpenshift
+                          spec.openstack.externalNetwork).
+                        type: array
+                        maxItems: 64
+                        x-kubernetes-list-type: atomic
+                        items:
+                          description: One external network.
+                          type: object
+                          required:
+                            - name
+                          properties:
+                            name:
+                              description: Name of the network, the value of spec.openstack.externalNetwork.
+                              type: string
+                              maxLength: 255
+                            id:
+                              description: The network's identifier on the site.
+                              type: string
+                              maxLength: 64
+                            families:
+                              description: The address families of its subnets (4, 6).
+                              type: array
+                              maxItems: 2
+                              x-kubernetes-list-type: set
+                              items:
+                                type: integer
+                                enum: [4, 6]
+                            default:
+                              description: True for the site's default external network.
+                              type: boolean
                       storageClasses:
                         description: >-
                           Storage classes (OpenShift) or volume types (OpenStack) an environment on the
@@ -9418,6 +9832,52 @@ spec:
                       type: integer
                       minimum: 1
                       maximum: 128
+                reservedRanges:
+                  description: >-
+                    Address ranges the platform keeps for itself on the tenant's fabric. A range with rule Refused
+                    cannot be used: a network prefix, an edge connection's accepted route or a cluster network
+                    overlapping it is refused. A range with rule SteppedAround may lie inside a network prefix; the
+                    platform never allocates a placement subnet from it (at the site named, when a site is named).
+                    Absent when the platform reserves none or the tenant's fabric is not known.
+                  type: array
+                  maxItems: 512
+                  x-kubernetes-list-type: atomic
+                  items:
+                    description: One range.
+                    type: object
+                    required:
+                      - prefix
+                      - purpose
+                      - rule
+                    properties:
+                      prefix:
+                        description: The address range (IPv4 or IPv6).
+                        type: string
+                        maxLength: 43
+                      purpose:
+                        description: What the platform uses the range for, in plain words.
+                        type: string
+                        maxLength: 256
+                      rule:
+                        description: >-
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
+                          SteppedAround (inside a network prefix, never allocated to a placement).
+                        type: string
+                        enum: [Refused, SteppedAround]
+                      site:
+                        description: The site the range applies to; absent when it applies everywhere.
+                        type: string
+                        maxLength: 63
+                managedClusterRanges:
+                  description: >-
+                    The IPv4 ranges a network's addresses must lie in to host OpenShift clusters the platform builds
+                    and manages on it. Absent when any range not reserved will do.
+                  type: array
+                  maxItems: 64
+                  x-kubernetes-list-type: atomic
+                  items:
+                    type: string
+                    maxLength: 18
                 observedEntityGeneration:
                   description: The metadata.generation of the tenant that this profile describes.
                   type: integer
