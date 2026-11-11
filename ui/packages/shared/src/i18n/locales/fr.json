@@ -836,7 +836,8 @@
     "cliGet": "oc get {{resource}} {{name}}",
     "cliGetTitle": "Lire cet objet en ligne de commande",
     "conditionEvent": "Événement {{id}}",
-    "placementUses": "Utilisations"
+    "placementUses": "Utilisations",
+    "tenantDescription": "Description du locataire"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1183,8 +1184,8 @@
     "deleting": "Suppression en cours",
     "waitsFor": "La suppression attend :",
     "changeNotApplied": "Changement non appliqué : {{reason}}",
-    "platformActs": "L'équipe plateforme s'en occupe.",
-    "youAct": "Vous pouvez corriger : modifiez l'objet ou ce qu'il référence.",
+    "platformActs": "L'équipe plateforme doit corriger cela.",
+    "youAct": "Vous pouvez corriger : la raison et son message indiquent quoi modifier.",
     "tenantDelayedTitle": "Les modifications de ce locataire sont retardées",
     "tenantDelayed": "Les modifications de ce locataire sont retardées. L'équipe plateforme est prévenue ; rien de ce que vous avez créé n'est perdu."
   },

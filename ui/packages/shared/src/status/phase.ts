@@ -273,6 +273,36 @@ export function summaryOf(item: PhaseSubject | null | undefined): string {
   return PHASE_SUMMARIES[phase] ?? '';
 }
 
+/** The longest detail line the callout shows (the API caps condition messages at 1000 characters). */
+export const DETAIL_MAX = 1000;
+
+/**
+ * The deciding condition's own message (which network, which range, which
+ * field), shown under the summary where the tenant looks first. Undefined when
+ * the object is Ready or being deleted, when the message is a request message,
+ * or when it says no more than the summary.
+ */
+export function detailOf(item: PhaseSubject | null | undefined): string | undefined {
+  const phase = phaseOf(item);
+  if (phase === 'Ready' || phase === 'Deleting' || phase === 'Paused') return undefined;
+  const reason = reasonOf(item);
+  const failing = (type: string, bad: 'True' | 'False') => {
+    const c = findCondition(item, type);
+    return c && condStatus(c.status) === bad && typeof c.message === 'string' && c.message.trim() ? c : undefined;
+  };
+  const candidates = [
+    phase === 'Failed' ? failing('Stalled', 'True') : undefined,
+    phase === 'Degraded' ? failing('Degraded', 'True') : undefined,
+    failing('Preflight', 'False'),
+    failing('Ready', 'False'),
+  ].filter((c): c is PhaseCondition => !!c);
+  const cond = candidates.find((c) => !reason || c.reason === reason) ?? candidates[0];
+  const msg = (cond?.message ?? '').trim();
+  if (!msg || requestMessage(msg, cond?.reason)) return undefined;
+  if (msg === summaryOf(item) || msg === reasonEntry(reason)?.summary) return undefined;
+  return msg.length > DETAIL_MAX ? `${msg.slice(0, DETAIL_MAX - 1).trimEnd()}…` : msg;
+}
+
 /** Who acts next for the deciding reason (A automatic, T the tenant, P the platform team). */
 export function actorOf(item: PhaseSubject | null | undefined): 'A' | 'T' | 'P' | undefined {
   return reasonEntry(reasonOf(item))?.actor;

@@ -147,8 +147,10 @@ REASONS = {
     "CircuitNotDeployed": _r("P", FAILED, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
     "HubEndpointNotAdmitted": _r("P", FAILED, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
     # the site's router advertisement service did not hold the floating IPs' advertisement on a placed network: a
-    # placement stays usable (condition Degraded, router attachments pending); a cluster's preflight refuses the build
-    "RouterAdvertisementFailed": _r("P", FAILED, "The site did not confirm that floating IPs on this network are reachable from outside it. The platform team is looking at it."),
+    # placement stays usable (condition Degraded, router attachments pending); a cluster's preflight refuses the build.
+    # Nothing alerts the platform team: the placement is Degraded, so it is listed among the failed objects of the
+    # platform overview, and the summary says only that the platform team has to fix it
+    "RouterAdvertisementFailed": _r("P", FAILED, "The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this."),
     # an OpenShift cluster whose recorded build is marked on the platform for another uid (an object restored from a
     # backup or moved gets a new uid): condition Preflight and the teardown's Warning event; never adopted
     "BuildOwnerMismatch": _r("P", FAILED, "The cluster's build on the platform is marked for another copy of this cluster (a restored copy). The platform team checks it."),

@@ -836,7 +836,8 @@
     "cliGet": "oc get {{resource}} {{name}}",
     "cliGetTitle": "Read this object from the command line",
     "conditionEvent": "Event {{id}}",
-    "placementUses": "Uses"
+    "placementUses": "Uses",
+    "tenantDescription": "Tenant description"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1183,8 +1184,8 @@
     "deleting": "Being deleted",
     "waitsFor": "The delete waits for:",
     "changeNotApplied": "Change not applied: {{reason}}",
-    "platformActs": "The platform team acts on this.",
-    "youAct": "You can fix this: change the object or what it refers to.",
+    "platformActs": "The platform team has to fix this.",
+    "youAct": "You can fix this: the reason and its message say what to change.",
     "tenantDelayedTitle": "Changes in this tenant are delayed",
     "tenantDelayed": "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."
   },

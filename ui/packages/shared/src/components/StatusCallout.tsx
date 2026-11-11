@@ -5,6 +5,7 @@ import {
   actorOf,
   changeNotApplied,
   deletionBlockers,
+  detailOf,
   phaseOf,
   phaseSinceOf,
   reasonOf,
@@ -17,8 +18,9 @@ import { displayText, objectLabel } from '../i18n/vocabulary';
 
 /**
  * One callout under the page title that says what is going on (Q10, UX-053,
- * UX-056): in progress (with the usual duration), failed (summary and reason,
- * and who acts), degraded, or deleting (since when and what it waits for).
+ * UX-056): in progress (with the usual duration), failed (summary, the
+ * deciding condition's own message, reason and who acts), degraded, or
+ * deleting (since when and what it waits for).
  * Ready objects show nothing. A refused edit (Accepted=False) adds a chip.
  */
 export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject }): React.ReactElement | null {
@@ -31,6 +33,9 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
   const rel = since ? formatRelativeTime(since) : undefined;
   const usual = usualDuration(kind, phase);
   const refused = changeNotApplied(item);
+  // the deciding condition's own message: which network, range or field (the summary is the reason's general line)
+  const detail = detailOf(item);
+  const detailLine = detail ? <p className="sc-status-callout__detail">{displayText(t, detail)}</p> : null;
 
   const sinceText = rel ? <span title={rel.title}>{t('callout.since', { time: rel.label })}</span> : null;
   const refusedChip = refused ? (
@@ -79,6 +84,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
         <p>
           {displayText(t, summary)} {sinceText}
         </p>
+        {detailLine}
         {reason && (
           <p className="sc-text-muted">
             {t('status.reason')}: <code>{reason}</code>
@@ -101,6 +107,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
       <p>
         {displayText(t, summary)} {sinceText}
       </p>
+      {phase === 'Waiting' && detailLine}
       {usual && <p className="sc-text-muted">{t(usual.key, { defaultValue: usual.defaultValue })}</p>}
       {phase === 'Waiting' && actorText && <p className="sc-text-muted">{actorText}</p>}
       {refusedChip}

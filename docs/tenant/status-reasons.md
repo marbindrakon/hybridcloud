@@ -212,7 +212,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ProvisionFailed` | Creating or updating did not complete. The platform team is looking at it. | The platform team |
 | `PublishFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
 | `RegionNotSupported` | This region is not supported. | You (the tenant) |
-| `RouterAdvertisementFailed` | The site did not confirm that floating IPs on this network are reachable from outside it. The platform team is looking at it. | The platform team |
+| `RouterAdvertisementFailed` | The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this. | The platform team |
 | `RouterAttachmentsOff` | The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement. | You (the tenant) |
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
