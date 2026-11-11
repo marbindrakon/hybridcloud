@@ -587,6 +587,19 @@ class OpenstackAddressesFile(unittest.TestCase):
         # the same refusal before the install still gives them back
         rc, tr, out = self.run_a(k8s(fab=fab))
         self.assertIn("os:cluster-fips/absent", self.steps(tr))
+        # Review R3 (test quality, R2 M1): the realistic trigger, a floating IP that another network's accepted prefix
+        # now covers (fips-check ServicePrefixInUse): an installed cluster keeps its addresses and its prefixes
+        other = fabric(networks=[{"network": f"{NS}/n2", "prefixes": ["192.0.2.0/28"]}])
+        pf = {"fabric": "f1", "networkId": "net-1", "service": other["status"]["realization"]["service"]}
+        rc, tr, out = self.run_a(k8s(fab=other), pf=pf, po_cr_current={"resources": [{"status": {
+            "clusterInstalled": True, "platformPrefixes": ["192.0.2.15/32", "192.0.2.16/32"], "buildName": "shc-oso-acme-c1"}}]})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("Floating IP 192.0.2.15 lies in 192.0.2.0/28, which the platform already reaches for another "
+                      "network. The cluster keeps", out)
+        self.assertNotIn("new addresses are chosen", out)
+        self.assertNotIn("os:cluster-fips/absent", self.steps(tr))
+        self.assertFalse([p for p in H.patches(tr) if "platformPrefixes" in p["body"] and p["body"]["platformPrefixes"] is None])
+        self.assertIn("keeps its floating IPs 192.0.2.15 and 192.0.2.16", out)
 
     def test_install_started_is_recorded_before_the_helm_release(self):
         names = [t.get("name") for t in load(os.path.join(TASKS, "openstack_clusterbuild.yml"))]

@@ -112,7 +112,8 @@
             ps_reason: "{{ cb_fip_conflict.reason if cb_fip_conflict.reason | length > 0 else pp_outcome.reason }}"
             ps_message: >-
               PlatformOpenshift {{ ansible_operator_meta.name }}:
-              {{ cb_fip_conflict.message if cb_fip_conflict.reason | length > 0 else pp_outcome.message }}
+              {{ (cb_fip_conflict.message ~ '; new addresses are chosen on the next attempt')
+                 if cb_fip_conflict.reason | length > 0 else pp_outcome.message }}
 
     # a refused prefix of a cluster whose install was started: it keeps its floating IPs and prefixes (they are in its
     # install), and reports the refusal; the platform team resolves it and the next run continues

@@ -381,7 +381,7 @@ def fips_check(req):
             for pfx in row.get("prefixes") or []:
                 if inside(f"{a}/32", [pfx]):
                     return result("ServicePrefixInUse", f"Floating IP {a} lies in {pfx}, which the platform already "
-                                  "reaches for another network; new addresses are chosen on the next attempt")
+                                  "reaches for another network")
     return result()
 
 
