@@ -255,6 +255,18 @@ devices are legs whose input `shc_service` filters itself (BGP, BFD and ICMP fro
 everything else dropped), and the `se*`/`so*` pairs get the filter's common answers. Each dropping rule counts its
 packets (`nft list table ip shc_service`).
 
+What the stateless filter cannot tell apart, and what remains of it: a reply is recognised by its shape (TCP from a
+service port with ACK set), not by a connection the hub opened, because the request and its reply may cross
+different nodes. So a cluster can send ACK-shaped segments (also with RST, FIN or data) from its own accepted
+addresses and a service port to any address and port in the hub's ranges. Nothing new is opened by them: a hub host
+with a stateful stack or firewall drops them or answers with a reset. Those resets come back to the cluster (they are
+addressed to a service port), so a cluster could map which hub addresses answer; the filter passes the hub's resets
+toward a network at no more than 10 per second (burst 20) per network and node, which slows such a scan down to a
+trickle without touching the hub's own connections. The cluster can never use another network's addresses (sources
+are bound to its own prefixes), never reach a hub port with a SYN, and never reach another network. Hub hosts that
+must not be seen at all from the clusters belong outside `infrastructure.hub` or behind a firewall that drops
+unsolicited ACKs silently.
+
 The health check reads `show bgp vrf <service> summary json` and reports `ServiceSessionsDown` on the fabric when a
 node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing). The
 apply's snapshot covers the VRF, the pairs and the table, so drift is reported as for the rest of the root.

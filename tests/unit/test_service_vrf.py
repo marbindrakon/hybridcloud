@@ -768,6 +768,22 @@ while time.time() < end:
         seen.append(socket.inet_ntoa(d[12:16]))
 print(" ".join(seen))
 PY
+cat > /tmp/svc-scan.py <<'PY'
+import socket, struct, sys
+def csum(b):
+    if len(b) % 2: b += b"\0"
+    s = sum(struct.unpack("!%dH" % (len(b) // 2), b)); s = (s >> 16) + (s & 0xffff); s += s >> 16
+    return ~s & 0xffff
+src, dst, n = sys.argv[1], sys.argv[2], int(sys.argv[3])
+r = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_RAW)
+for i in range(n):
+    tcp = struct.pack("!HHIIBBHHH", 6443, 23, 1000 + i, 2000, 5 << 4, 0x10, 65535, 0, 0)
+    ph = socket.inet_aton(src) + socket.inet_aton(dst) + struct.pack("!BBH", 0, 6, len(tcp))
+    tcp = tcp[:16] + struct.pack("!H", csum(ph + tcp)) + tcp[18:]
+    ip = struct.pack("!BBHHHBBH4s4s", 0x45, 0, 40, 1, 0, 64, 6, 0, socket.inet_aton(src), socket.inet_aton(dst))
+    ip = ip[:10] + struct.pack("!H", csum(ip)) + ip[12:]
+    r.sendto(ip + tcp, (dst, 0))
+PY
 probe() {
   $C python3 /tmp/svc-l.py 192.0.2.15:6443 192.0.2.15:22 & $C2 python3 /tmp/svc-l.py 192.0.2.99:6443 &
   $H python3 /tmp/svc-l.py 198.51.100.10:6443 198.51.100.5:22 198.51.100.10:22 & sleep 1
@@ -788,6 +804,10 @@ probe() {
   $H python3 /tmp/svc-icap.py 2 > /tmp/svc-icap.out & sleep 0.5
   $C python3 /tmp/svc-icmp.py 192.0.2.15 198.51.100.5; $C python3 /tmp/svc-icmp.py 192.0.2.99 198.51.100.5
   wait; echo "icmp: $(cat /tmp/svc-icap.out)"
+  # an ACK scan of a hub host from the service port: the hub's resets back
+  $C python3 /tmp/svc-cap.py 2 > /tmp/svc-scan.out & sleep 0.5
+  $C python3 /tmp/svc-scan.py 192.0.2.15 198.51.100.5 60
+  wait; echo "resets: $(grep -o '198.51.100.5:23>6443' /tmp/svc-scan.out | wc -l)"
 }
 echo "--- before"; probe
 nft -f "$1"
@@ -838,6 +858,10 @@ class RealKernel(A.ApplyCase):
         # an ICMP error toward the hub passes from the network's own prefix only (not forged with another's)
         self.assertEqual(res["before"]["icmp"].split(), ["192.0.2.15", "192.0.2.99"])
         self.assertEqual(res["after"]["icmp"].split(), ["192.0.2.15"])
+        # an ACK scan from the service port: the hub's resets come back at a limited rate
+        self.assertGreaterEqual(int(res["before"]["resets"]), 50)
+        self.assertLessEqual(int(res["after"]["resets"]), 30)
+        self.assertGreaterEqual(int(res["after"]["resets"]), 1)
         # the SYN-ACK without its SYN on this node passes (stateless), the bare SYN from the service port does not
         self.assertIn("192.0.2.15:6443>40000 12", res["after"]["raw"])
         self.assertNotIn(">40001", res["after"]["raw"])

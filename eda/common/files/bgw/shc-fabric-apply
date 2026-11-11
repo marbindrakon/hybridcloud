@@ -1396,9 +1396,14 @@ out += ["  chain forward {", "    type filter hook forward priority filter; poli
 for n in ns:
     p = elements(n["prefixes"])
     if cdevs and hub:
-        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} accept')
+        # (a reset from the hub toward the service ports at a limited rate: the reply rule below is stateless, so a
+        # cluster can send ACK-shaped segments from those ports to any hub address and port, and each closed port
+        # answers with a reset; the hub's own resets to a cluster are rare)
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == 0 accept')
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == rst limit rate 10/second burst 20 packets accept')
     if hub:
-        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & ack == ack accept')
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & (syn | ack) == ack accept')
+        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & (syn | ack | rst) == syn | ack accept')
     for e in eps:
         eports = ", ".join(str(x) for x in e.get("ports") or [])
         if not eports:
