@@ -12,7 +12,8 @@ It runs inside the site's own Neutron server image (Python 3.9 or later, the sta
 Python bindings). It holds no OpenStack credential: every call is authorized by the caller's own token.
 
 API (JSON):
-  GET  /healthz                              no authentication
+  GET  /healthz                              no authentication; always 200 with the state
+  GET  /readyz                               no authentication; 200 while the database is connected, else 503
   GET  /v1/router-ports/{port_id}            header X-Auth-Token
   PUT  /v1/router-ports/{port_id}/nat        header X-Auth-Token, body {"enabled": true|false}
 
@@ -245,6 +246,13 @@ class OvsdbappPortStore:
         self._stop = threading.Event()
         self._thread = None
         self._on_change = None
+        self._reported = set()
+
+    def _report_once(self, message):
+        """An unexpected failure on a path that must not raise: logged once per distinct message."""
+        if message not in self._reported:
+            self._reported.add(message)
+            LOG.error("OVN connection: %s", message)
 
     # lifecycle -------------------------------------------------------------------------------------------------
     def start(self, on_change=None):
@@ -294,19 +302,30 @@ class OvsdbappPortStore:
         helper.register_table(LRP_TABLE)
         base = getattr(connection, "OvsdbIdl", None) or ovs_idl.Idl
         on_change = self._on_change
+        report = self._report_once
 
         class _Idl(base):
             def notify(self, event, row, *args, **kwargs):
                 if on_change is not None:
                     try:
                         on_change(getattr(row, "name", None))
-                    except Exception:  # never let the guard's callback break the connection thread
-                        pass
+                    except Exception as exc:  # never let the guard's callback break the connection thread
+                        report("row change notification failed: " + describe(exc))
 
         idl = _Idl(s.ovn_connection, helper, leader_only=True)
         conn = connection.Connection(idl, timeout=s.ovn_timeout)
-        api = impl_idl.OvnNbApiIdlImpl(conn)
-        return api, idl
+        # ovsdbapp keeps the connection on the API *class* and sets it only once: a fresh subclass per attempt,
+        # or a retry after a failed start would reuse the dead connection for good.
+        api_cls = type("RouterAdvertisementNbApi", (impl_idl.OvnNbApiIdlImpl,), {"_ovsdb_connection": None})
+        try:
+            api = api_cls(conn)
+        except Exception:
+            try:
+                idl.close()
+            except Exception as exc:
+                LOG.debug("closing the failed attempt's IDL: %s", describe(exc))
+            raise
+        return api, api.idl
 
     # state -----------------------------------------------------------------------------------------------------
     def connected(self):
@@ -314,9 +333,18 @@ class OvsdbappPortStore:
             idl = self._idl
         if idl is None:
             return False
+        # ovs.db.idl.Idl has no is_connected() (OVS 3.5); its jsonrpc session has. Prefer the IDL's own if a
+        # version has one.
+        probe = getattr(idl, "is_connected", None)
+        if probe is None:
+            probe = getattr(getattr(idl, "_session", None), "is_connected", None)
+        if probe is None:
+            self._report_once("the IDL offers no connection state (no is_connected on it or on its session)")
+            return False
         try:
-            return bool(idl.is_connected())
-        except Exception:
+            return bool(probe())
+        except Exception as exc:
+            self._report_once("connection probe failed: " + describe(exc))
             return False
 
     def generation(self):
@@ -325,13 +353,15 @@ class OvsdbappPortStore:
             idl = self._idl
         if idl is None:
             return None
-        session = getattr(idl, "_session", None)
-        if session is not None and hasattr(session, "get_seqno"):
-            try:
-                return session.get_seqno()
-            except Exception:
-                return None
-        return None
+        get_seqno = getattr(getattr(idl, "_session", None), "get_seqno", None)
+        if get_seqno is None:
+            self._report_once("the IDL's session offers no get_seqno: reconnects are seen only as a disconnection")
+            return None
+        try:
+            return get_seqno()
+        except Exception as exc:
+            self._report_once("connection generation failed: " + describe(exc))
+            return None
 
     # commands --------------------------------------------------------------------------------------------------
     def _run(self, step, *args):
@@ -663,6 +693,12 @@ class RouterAdvertisementService:
                 raise ServiceError(405, "MethodNotAllowed", "Use GET.")
             return 200, {"ok": True, "ovn": "connected" if self.store.connected() else "unreachable",
                          "guard": self.guard.summary()}
+        if path == "/readyz":
+            if method != "GET":
+                raise ServiceError(405, "MethodNotAllowed", "Use GET.")
+            if self.store.connected():
+                return 200, {"ready": True, "ovn": "connected"}
+            return 503, {"ready": False, "ovn": "unreachable"}
         for kind, rx in ROUTES:
             m = rx.match(path)
             if m:
@@ -782,7 +818,7 @@ def make_handler(service, request_timeout=15.0):
             self.end_headers()
             self.wfile.write(data)
             path = urllib.parse.urlsplit(self.path).path
-            if path != "/healthz" or status != 200:
+            if path not in ("/healthz", "/readyz") or status not in (200, 503):
                 LOG.info("%s %s %d %.0f ms", method, path[:200], status, (time.monotonic() - started) * 1000)
 
         def do_GET(self):
@@ -810,6 +846,39 @@ class Server(http.server.ThreadingHTTPServer):
     daemon_threads = False
     block_on_close = True  # server_close() waits for the requests in flight
     request_queue_size = 128  # the listen backlog: the default of 5 resets connections under a burst
+    tls = None  # (context, certificate file, key file) when the server serves TLS
+    reload_interval = 60.0
+    _tls_checked = 0.0
+    _tls_stamp = None
+
+    def get_request(self):
+        self.maybe_reload_tls()
+        return super().get_request()
+
+    def maybe_reload_tls(self, now=None):
+        """Load a renewed serving certificate (a mounted Secret changes in place): new connections get it."""
+        if self.tls is None:
+            return False
+        now = time.monotonic() if now is None else now
+        if now - self._tls_checked < self.reload_interval:
+            return False
+        self._tls_checked = now
+        context, cert, key = self.tls
+        try:
+            stamp = (os.stat(cert).st_mtime_ns, os.stat(key).st_mtime_ns)
+        except OSError as exc:
+            LOG.warning("serving certificate: %s", describe(exc))
+            return False
+        if stamp == self._tls_stamp:
+            return False
+        try:
+            context.load_cert_chain(cert, key)
+        except (OSError, ssl.SSLError) as exc:
+            LOG.error("serving certificate not reloaded: %s", describe(exc))
+            return False
+        self._tls_stamp = stamp
+        LOG.info("serving certificate reloaded")
+        return True
 
     def handle_error(self, request, client_address):
         LOG.warning("connection from %s: %s", client_address[0], describe(sys.exc_info()[1]))
@@ -823,6 +892,9 @@ def build_server(service, address, port, tls_cert=None, tls_key=None):
         context.load_cert_chain(tls_cert, tls_key)
         # The handshake runs in the request's thread (setup), not in the accept loop.
         server.socket = context.wrap_socket(server.socket, server_side=True, do_handshake_on_connect=False)
+        server.tls = (context, tls_cert, tls_key)
+        server._tls_stamp = (os.stat(tls_cert).st_mtime_ns, os.stat(tls_key).st_mtime_ns)
+        server._tls_checked = time.monotonic()
     return server
 
 

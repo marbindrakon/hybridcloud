@@ -208,9 +208,10 @@ objects:
                 periodSeconds: 20
                 timeoutSeconds: 5
                 failureThreshold: 3
+              # Ready only while the northbound database is connected: a pod that cannot reach it takes no traffic.
               readinessProbe:
                 httpGet:
-                  path: /healthz
+                  path: /readyz
                   port: https
                   scheme: HTTPS
                 periodSeconds: 10
