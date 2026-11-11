@@ -226,11 +226,20 @@ root index (egress links keep the lower half); the addresses are next hops only,
 sources.
 
 Routes: in the service VRF, each accepted cluster address of a network via that network's `se` end (FRR static) and
-the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`); in the network's VRF
-`e<t>`, each IPv4 `infrastructure.hub` range via `so` (configured, not learned, so it does not depend on the
-sessions). FRR redistributes the network VRF's statics with one route map (`SHC-VRF-STATIC`: the default route of
-internet egress and the hub ranges), so the hub ranges enter the network's VPN and the sites return cluster traffic
-to the nodes. The service VRF's sessions announce the accepted addresses only, and only inside
+the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`). The network's VRF
+`e<t>` learns the hub's routes from the service VRF over its service link: an iBGP session between the two VRF
+instances on the node (the network side connects, the service VRF has a router ID of its own, the node's address on
+its first platform edge connection; TTL 255 only, `ttl-security hops 1`, and the root's input filter admits it from the
+link's other end only). The service VRF sends the hub's routes and nothing else (next hop its `so` end), the network
+VRF takes the hub's ranges and nothing else (weight 100, so its own beats the other node's in the network's VPN) and
+sends nothing. So the hub's ranges enter the network's VPN from a node only while that node holds them from a
+platform edge connection: a node whose connections are all down withdraws them, and the sites return the clusters'
+traffic to the node that can deliver it. The failover time is the time the node needs to see its sessions go down
+(at once when the connection's link goes down, at most the hold time of 30 seconds otherwise, a second with BFD on
+the connection) plus about a second for the withdrawal through the network's VPN. With every connection of every
+node down, no node announces the hub's ranges: the clusters lose the hub and nothing else changes (a reject route at
+distance 254 for each hub range in `e<t>` keeps the clusters' traffic to the hub off the network's other routes,
+its internet egress default among them). The service VRF's sessions announce the accepted addresses only, and only inside
 `service.attachableRanges`; they accept the hub's ranges only, and never a default route, the link pools, the core
 pools or an accepted address.
 
@@ -268,7 +277,9 @@ must not be seen at all from the clusters belong outside `infrastructure.hub` or
 unsolicited ACKs silently.
 
 The health check reads `show bgp vrf <service> summary json` and reports `ServiceSessionsDown` on the fabric when a
-node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing). The
+node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing: the
+node has withdrawn the hub's ranges from the networks already, the finding is for the platform team). The sessions
+over the service links do not count for it. The
 apply's snapshot covers the VRF, the pairs and the table, so drift is reported as for the rest of the root.
 
 ## The orphan check on a node

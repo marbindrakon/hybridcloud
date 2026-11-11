@@ -49,7 +49,7 @@
 #   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed (the
 #   platform circuits' devices are the service's, below).
 #   service {vrf, table, mtu, hub, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
-#   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, prefixes}]} (the service VRF, through
+#   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, seIp, soIp, prefixes}]} (the service VRF, through
 #   which the hub reaches the clusters the platform builds on tenant networks; absent = none, and a node that had it
 #   loses it all): the nftables table ip shc_service first (see service_nft: stateless, because the two directions of
 #   a connection may cross different nodes; the hub to a network's accepted prefixes on ports, a network's prefixes to
@@ -1251,6 +1251,12 @@ out = [f"table {t}", f"delete table {t}", f"table {t} {{", "  chain input {",
        "    type filter hook input priority filter; policy accept;"]
 if legs:
     out.append(f'{m} meta sdifname {names(legs)} accept comment "a leg of the VRF: its own filter and sessions"')
+if fam == "4":
+    # the network VRF's BGP session with the service VRF over the service link (the network side connects): only from
+    # the link's other end, only as sent by the node itself (TTL 255: a forwarded packet has less)
+    for n in sv.get("networks") or []:
+        out.append(f'    iifname "{sv["vrf"]}" meta sdifname "{n["so"]}" ip saddr {n["seIp"]} ip daddr {n["soIp"]} '
+                   'ip ttl 255 tcp dport 179 accept comment "the network VRF\'s session over its service link"')
 if fam == "6":
     # the upstream routers' BGP sessions on the hand-off device (IPv6 egress; no other session runs there)
     for a in ups:
@@ -1391,6 +1397,9 @@ for c in cs:
 if cdevs:
     out += [f"    meta sdifname {names(cdevs)} icmp type {{ echo-request, echo-reply, destination-unreachable, time-exceeded }} accept",
             f'    meta sdifname {names(cdevs)} counter drop comment "only BGP, BFD and ICMP from a platform circuit to the node"']
+# to the node over a service link: the network VRF's own session only (sent by the node itself, TTL 255); nothing a
+# network forwards toward the service VRF's addresses
+out.append('    meta sdifname "so*" ip ttl != 255 counter drop comment "to the node over a service link: only its own session"')
 out.append("  }")
 out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
 for n in ns:

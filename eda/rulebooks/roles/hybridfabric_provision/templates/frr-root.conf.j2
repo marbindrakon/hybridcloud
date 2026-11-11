@@ -158,7 +158,7 @@ vrf {{ n.vrf }}
 {% endif %}
 {% if n.vrf in _svc_by_vrf %}
 {% for h in _svc.hub %}
- ip route {{ h }} {{ _svc_by_vrf[n.vrf].soIp }}
+ ip route {{ h }} reject 254
 {% endfor %}
 {% endif %}
 {% if _e6 and n.ipv6 is defined %}
@@ -271,16 +271,19 @@ exit
 {% if _svc %}
 {# the service VRF (no VPN, no route target, no SID or label): the hub's routes from the platform circuits (eBGP,
    only the hub's ranges), a route to each accepted prefix of a network over its service link, announced to the hub
-   (only the accepted prefixes, only inside the attachable ranges). Each network with clusters gets a route to each of
-   the hub's IPv4 ranges over its service link, configured (not learned: independent of the sessions) and announced
-   into the network's VPN (SHC-VRF-STATIC), so the sites return the clusters' traffic to the nodes. Nothing of the
-   service VRF reaches a network VRF but these routes, so no route crosses between tenant networks #}
+   (only the accepted prefixes, only inside the attachable ranges). Each network with clusters learns the hub's
+   ranges from the service VRF over its service link (iBGP, the network VRF connecting, the service VRF passive):
+   only while this node holds them from a platform circuit, so a node whose circuits are all down withdraws them from
+   the network's VPN and the sites return the clusters' traffic to a node that can deliver it. A reject route at
+   distance 254 keeps the hub's ranges off any other route of the network (its internet egress default) while
+   neither node has them. Nothing else of the service VRF reaches a network VRF, so no route crosses between tenant
+   networks #}
 ! the service VRF {{ _svc.vrf }}: the platform's management (the hub, {{ _svc.hub | join(', ') }}) reaches the clusters the
 ! platform builds on tenant networks; handed off to the hub's network by the platform circuits
 {% for v in hf_node_vrfs if v.service is defined and not v.egress %}
 vrf {{ v.vrf }}
 {% for h in _svc.hub %}
- ip route {{ h }} {{ v.service.soIp }}
+ ip route {{ h }} reject 254
 {% endfor %}
 exit-vrf
 !
@@ -295,16 +298,20 @@ vrf {{ _svc.vrf }}
 exit-vrf
 !
 {% endif %}
-ip prefix-list SHC-DEFAULT4 seq 5 permit 0.0.0.0/0
 {% for h in _svc.hub %}
 ip prefix-list SHC-HUB4 seq {{ loop.index * 5 }} permit {{ h }} le 32
 {% endfor %}
 !
-route-map SHC-VRF-STATIC permit 10
- match ip address prefix-list SHC-DEFAULT4
-exit
-route-map SHC-VRF-STATIC permit 20
+route-map SVC-NET-IN permit 10
  match ip address prefix-list SHC-HUB4
+ set weight 100
+exit
+route-map SVC-NET-OUT deny 10
+exit
+route-map SVC-TO-NET permit 10
+ match ip address prefix-list SHC-HUB4
+exit
+route-map SVC-FROM-NET deny 10
 exit
 !
 {% for e in _svc.accept %}
@@ -345,9 +352,18 @@ exit
 {% endif %}
 !
 {% endfor %}
+{# its own router ID (the node's address on its first platform circuit): the network VRFs, with the loopback as
+   theirs, peer with it #}
 router bgp {{ fab_spec.domainAsn }} vrf {{ _svc.vrf }}
- bgp router-id {{ hf_pe.loopbackIp }}
+ bgp router-id {{ _svc.circuits[0].ip }}
  no bgp default ipv4-unicast
+{% for w in _svc.networks %}
+ neighbor {{ w.seIp }} remote-as {{ fab_spec.domainAsn }}
+ neighbor {{ w.seIp }} description service link of {{ w.network }}
+ neighbor {{ w.seIp }} ttl-security hops 1
+ neighbor {{ w.seIp }} passive
+ neighbor {{ w.seIp }} timers 10 30
+{% endfor %}
 {% for c in _svc.circuits %}
  neighbor {{ c.ce }} remote-as {{ c.peerAsn }}
  neighbor {{ c.ce }} description {{ c.id }} {{ c.circuit }}
@@ -367,6 +383,12 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ _svc.vrf }}
   neighbor {{ c.ce }} route-map {{ c.id }}-IN in
   neighbor {{ c.ce }} route-map {{ c.id }}-OUT out
   neighbor {{ c.ce }} maximum-prefix {{ c.maxPrefixes }}{{ ' warning-only' if c.maxPrefixAction == 'warning' else (' restart ' ~ hf_attach_restart if hf_attach_restart | int > 0 else '') }}
+{% endfor %}
+{% for w in _svc.networks %}
+  neighbor {{ w.seIp }} activate
+  neighbor {{ w.seIp }} next-hop-self
+  neighbor {{ w.seIp }} route-map SVC-FROM-NET in
+  neighbor {{ w.seIp }} route-map SVC-TO-NET out
 {% endfor %}
  exit-address-family
 exit
@@ -459,6 +481,12 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  neighbor {{ n.xe }} interface v6only remote-as external
  neighbor {{ n.xe }} description IPv6 egress of {{ n.network }}
 {% endif %}
+{% if n.service is defined %}
+ neighbor {{ n.service.soIp }} remote-as {{ fab_spec.domainAsn }}
+ neighbor {{ n.service.soIp }} description the hub's routes from the service VRF
+ neighbor {{ n.service.soIp }} ttl-security hops 1
+ neighbor {{ n.service.soIp }} timers 10 30
+{% endif %}
 {% for c in n.circuits %}
  neighbor {{ c.ce }} remote-as {{ c.peerAsn }}
  neighbor {{ c.ce }} description {{ c.id }} {{ c.circuit }}
@@ -486,11 +514,13 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
 {% if 4 in _fam %}
  !
  address-family ipv4 unicast
-{% if n.service is defined %}
-{# one redistribute static per family: the default route (internet egress) and the hub's ranges #}
-  redistribute static route-map SHC-VRF-STATIC
-{% elif n.egress %}
+{% if n.egress %}
   redistribute static route-map SHC-EGRESS-DEFAULT
+{% endif %}
+{% if n.service is defined %}
+  neighbor {{ n.service.soIp }} activate
+  neighbor {{ n.service.soIp }} route-map SVC-NET-IN in
+  neighbor {{ n.service.soIp }} route-map SVC-NET-OUT out
 {% endif %}
 {# no soft-reconfiguration inbound: the routes the policy rejects would be kept, and maximum-prefix doesn't bound
    them (a CE could fill the node's memory); a policy change asks the CE to send its routes again (route refresh) #}
@@ -506,10 +536,11 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
 {# FRR tracks an exported BGP route's next hop inside the VRF, where the loopback is unknown: with a CE's routes
-   in the VRF, the VPN routes keep their own next hop (announced as the node's own address) #}
+   (or the hub's, learned over the service link) in the VRF, the VPN routes keep their own next hop (announced as the
+   node's own address) #}
 {#- SRv6: the same rule, with the IPv6 loopback where a next hop is set (the SID is reached over IPv6); where none is
     set the routes go out with the session's local address, the IPv6 loopback, as next hop (extended next hop) #}
-{% if not n.circuits %}
+{% if not n.circuits and n.service is not defined %}
   nexthop vpn export {{ hf_pe.loopbackIp6 if _srv6 else hf_pe.loopbackIp }}
 {% endif %}
   export vpn

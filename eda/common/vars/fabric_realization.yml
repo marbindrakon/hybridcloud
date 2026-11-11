@@ -267,8 +267,9 @@ fabric_realization_defaults:
   # off to the hub's network by AttachmentCircuits of ceKind platform (an eBGP session per node and circuit: the hub's
   # IPv4 ranges in, the clusters' prefixes out). A network takes part from its first cluster on: its VRF on every node
   # gets a veth pair (se<vpnTarget> in the network's VRF, so<vpnTarget> in the service VRF) on its root index's
-  # service link (the upper half of egress.linkPool), a route to each IPv4 hub range (announced into the network's
-  # VPN), and the service VRF a route to each of the cluster's prefixes; the nftables table ip shc_service admits only
+  # service link (the upper half of egress.linkPool) over which it learns the hub's IPv4 ranges from the service VRF
+  # (announced into the network's VPN only while the node holds them from a platform circuit), and the service VRF a
+  # route to each of the cluster's prefixes; the nftables table ip shc_service admits only
   # the hub to the clusters' prefixes on ports and the clusters to hubEndpoints, statelessly (the two directions may
   # cross different nodes). IPv4 only. Needs attachments.enabled and an IPv4 infrastructure.hub range.
   service:

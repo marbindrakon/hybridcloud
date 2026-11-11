@@ -219,6 +219,9 @@ class NodeSteps(unittest.TestCase):
         self.assertIn("ip -j link show dev so10002 | jq -r '.[0].master')\" = service ]", text)
         self.assertIn("show bgp vrf service neighbors %s json' | grep -q '\"remoteAs\":64600'"
                       % svc["bgw-1"]["circuits"][0]["ce"], text)
+        # the session over each network's service link, configured on both sides
+        self.assertIn("show bgp vrf service neighbors 169.254.128.5 json' | grep -q '\"remoteAs\":65010'", text)
+        self.assertIn("show bgp vrf e10002 neighbors 169.254.128.4 json' | grep -q '\"remoteAs\":65010'", text)
         with tempfile.NamedTemporaryFile("w", suffix=".sh", delete=False) as f:
             f.write(text)
         self.addCleanup(os.remove, f.name)

@@ -333,32 +333,51 @@ class ServiceTemplate(unittest.TestCase):
                       "route-map AC3099-OUT permit 10\n match ip address prefix-list SVC-ACCEPTED\nexit\n", out)
         ce = svc["bgw-1"]["circuits"][0]["ce"]
         inst = out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0]
+        # its own router ID (the node's address on its platform circuit): the network VRFs peer with it; each network
+        # with clusters is a passive iBGP neighbour over its service link that gets the hub's routes only
         self.assertEqual(inst.splitlines(), [
-            " bgp router-id 10.255.0.1", " no bgp default ipv4-unicast",
+            f" bgp router-id {svc['bgw-1']['circuits'][0]['ip']}", " no bgp default ipv4-unicast",
+            " neighbor 169.254.128.5 remote-as 65010", " neighbor 169.254.128.5 description service link of acme/lab",
+            " neighbor 169.254.128.5 ttl-security hops 1", " neighbor 169.254.128.5 passive",
+            " neighbor 169.254.128.5 timers 10 30",
             f" neighbor {ce} remote-as 64600", f" neighbor {ce} description AC3099 platform/hub-a",
             f" neighbor {ce} timers 10 30", " !", " address-family ipv4 unicast",
             "  redistribute static route-map SVC-STATIC", f"  neighbor {ce} activate",
             f"  neighbor {ce} route-map AC3099-IN in", f"  neighbor {ce} route-map AC3099-OUT out",
-            f"  neighbor {ce} maximum-prefix 50 restart 2", " exit-address-family"])
+            f"  neighbor {ce} maximum-prefix 50 restart 2", "  neighbor 169.254.128.5 activate",
+            "  neighbor 169.254.128.5 next-hop-self", "  neighbor 169.254.128.5 route-map SVC-FROM-NET in",
+            "  neighbor 169.254.128.5 route-map SVC-TO-NET out", " exit-address-family"])
+        self.assertNotEqual(svc["bgw-1"]["circuits"][0]["ip"], "10.255.0.1")
+        self.assertIn("route-map SVC-TO-NET permit 10\n match ip address prefix-list SHC-HUB4\nexit\n"
+                      "route-map SVC-FROM-NET deny 10\nexit\n", out)
         # no VPN for the service VRF
         self.assertNotRegex(inst, r"rd vpn|rt vpn|label vpn|sid vpn|export vpn|import vpn")
 
     def test_network_vrfs(self):
         out, _ = self.render()
-        # the service-only network: its own vrf stanza with the route to the hub, SHC-VRF-STATIC, a label
-        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 169.254.128.4\nexit-vrf\n", out)
+        # the service-only network: the hub's routes learned over its service link (preferred over another node's in
+        # the network's VPN), never configured; a reject route at distance 254 keeps them off any other route while no
+        # node has them; nothing redistributed, a label, the VPN routes with their own next hop
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
+        self.assertNotRegex(out, r"ip route 198\.51\.100\.0/24 169\.254")
         lab = out.split("router bgp 65010 vrf e10002\n")[1].split("\nexit\n")[0]
-        self.assertIn("  redistribute static route-map SHC-VRF-STATIC\n", lab)
-        self.assertIn("  label vpn export auto\n", lab)
-        self.assertIn("  nexthop vpn export 10.255.0.1\n", lab)
-        self.assertIn("route-map SHC-VRF-STATIC permit 10\n match ip address prefix-list SHC-DEFAULT4\nexit\n"
-                      "route-map SHC-VRF-STATIC permit 20\n match ip address prefix-list SHC-HUB4\nexit\n", out)
+        for line in (" neighbor 169.254.128.4 remote-as 65010\n", " neighbor 169.254.128.4 ttl-security hops 1\n",
+                     "  neighbor 169.254.128.4 activate\n", "  neighbor 169.254.128.4 route-map SVC-NET-IN in\n",
+                     "  neighbor 169.254.128.4 route-map SVC-NET-OUT out\n", "  label vpn export auto\n"):
+            self.assertIn(line, lab)
+        self.assertNotIn("passive", lab)
+        self.assertNotIn("redistribute static", lab)
+        self.assertNotIn("nexthop vpn export", lab)
+        self.assertIn("route-map SVC-NET-IN permit 10\n match ip address prefix-list SHC-HUB4\n set weight 100\nexit\n"
+                      "route-map SVC-NET-OUT deny 10\nexit\n", out)
         self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/24 le 32\n", out)
+        self.assertNotIn("SHC-VRF-STATIC", out)
         self.assertIn("! HybridNetwork acme/lab: clusters the platform reaches (192.0.2.15/32,192.0.2.16/32)", out)
         # networks without clusters: as without the service
         core = out.split("router bgp 65010 vrf e10000\n")[1].split("\nexit\n")[0]
         self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", core)
-        self.assertNotIn("ip route 198.51.100.0/24", out.split("vrf e10000\n")[1].split("exit-vrf")[0])
+        self.assertIn("  nexthop vpn export 10.255.0.1\n", core)
+        self.assertNotIn("198.51.100.0/24", out.split("vrf e10000\n")[1].split("exit-vrf")[0])
         self.assertNotIn("vrf e10003", out)
 
     def test_egress_network_with_clusters(self):
@@ -369,10 +388,14 @@ class ServiceTemplate(unittest.TestCase):
         real["service"]["attachableRanges"] = ["0.0.0.0/0"]
         egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
         out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
-        # one vrf stanza: the default to the egress and the hub over the service link
-        self.assertIn("vrf e10000\n ip route 0.0.0.0/0 169.254.0.0\n ip route 198.51.100.0/24 169.254.128.0\nexit-vrf\n", out)
+        # one vrf stanza: the default to the egress and the reject route that keeps the hub's ranges off it
+        self.assertIn("vrf e10000\n ip route 0.0.0.0/0 169.254.0.0\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
         self.assertEqual(out.count("vrf e10000\n"), 2)  # the stanza and the BGP instance
-        self.assertIn("  redistribute static route-map SHC-VRF-STATIC\n", out.split("router bgp 65010 vrf e10000\n")[1])
+        inst = out.split("router bgp 65010 vrf e10000\n")[1].split("\nexit\n")[0]
+        # only the default is redistributed (the reject route is not), the hub's routes come over the service link
+        self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", inst)
+        self.assertIn("  neighbor 169.254.128.0 route-map SVC-NET-IN in\n", inst)
+        self.assertNotIn("nexthop vpn export", inst)
         self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 permit 0.0.0.0/0 le 32\n", out)
 
     def test_srv6(self):
@@ -380,6 +403,10 @@ class ServiceTemplate(unittest.TestCase):
         lab = out.split("router bgp 65010 vrf e10002\n")[1].split("\nexit\n")[0]
         self.assertIn(" sid vpn per-vrf export auto\n", lab)
         self.assertNotIn("label vpn", lab)
+        # the same learned hub routes on the SRv6 core, the VPN routes with their own next hop
+        self.assertIn("  neighbor 169.254.128.4 route-map SVC-NET-IN in\n", lab)
+        self.assertNotIn("nexthop vpn export", lab)
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
         self.assertNotIn("sid vpn", out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0])
 
     def test_no_accepted_prefixes(self):
@@ -390,7 +417,7 @@ class ServiceTemplate(unittest.TestCase):
         self.assertIn("ip prefix-list SVC-ACCEPTED seq 5 deny 0.0.0.0/0 le 32\n", out)
         self.assertIn("route-map AC3099-OUT deny 10\nexit\n", out)
         self.assertIn("router bgp 65010 vrf service\n", out)
-        self.assertNotIn("SHC-VRF-STATIC\n", out.split("route-map SHC-VRF-STATIC")[0])
+        self.assertNotIn("neighbor 169.254", out)
 
     def test_password(self):
         real, (egp, att, vrfs, svc) = service_setup()
@@ -454,6 +481,11 @@ class ServiceApply(A.ApplyCase):
         rin = st["nft"]["ip shc_root_in"]
         self.assertIn('iifname { "e10000", "e10001", "e10002", "egress", "service" } meta sdifname { "xe10000", '
                       '"bond1.3000", "bond1.3099" } accept', rin)
+        # the network VRF's session over its service link: only from the link's other end, only as sent by the node
+        self.assertIn('iifname "service" meta sdifname "so10002" ip saddr 169.254.128.5 ip daddr 169.254.128.4 ip ttl 255 '
+                      'tcp dport 179 accept', rin)
+        self.assertLess(rin.index("tcp dport 179 accept"), rin.index("tcp flags & (ack | rst) != 0 accept"))
+        self.assertIn('meta sdifname "so*" ip ttl != 255 counter drop', st["nft"]["ip shc_service"])
         # the IPv4 ICMP source on the service VRF too
         self.assertIn("192.0.0.8", [a["local"] for a in L["service"]["addrs"]])
         self.assertTrue(os.path.exists(os.path.join(h.etc, "root.service")))
