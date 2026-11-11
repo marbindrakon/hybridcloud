@@ -48,6 +48,11 @@ parameters:
       The host name of the service's Route; empty lets the cluster choose one (required with
       ROUTE_TERMINATION=passthrough: the certificate names it).
     value: ""
+  - name: ROUTE_ALLOWED_SOURCES
+    description: >-
+      The source addresses the Route admits, space-separated CIDRs (the networks the platform's jobs call from).
+      Required: give 0.0.0.0/0 only for a cluster whose default ingress is not reachable from outside.
+    required: true
   - name: ROUTE_TERMINATION
     description: >-
       reencrypt (default): the Route presents the cluster's default ingress certificate. passthrough: the pod
@@ -123,6 +128,9 @@ objects:
       namespace: ${NAMESPACE}
       labels:
         app.kubernetes.io/name: router-advertisement
+      annotations:
+        # only the platform's job sources reach the service through the cluster's ingress
+        haproxy.router.openshift.io/ip_whitelist: ${ROUTE_ALLOWED_SOURCES}
     spec:
       host: ${ROUTE_HOST}
       to:

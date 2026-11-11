@@ -43,6 +43,7 @@ oc process -f site-components/router-advertisement/deploy/rhoso/router-advertise
   -p CA_BUNDLE_SECRET=<CA bundle Secret> \
   -p OS_CACERT=/etc/router-advertisement/ca/tls-ca-bundle.pem \
   -p ROUTE_HOST=<host name of the Route, or leave out> \
+  -p ROUTE_ALLOWED_SOURCES="<CIDRs the platform's jobs call from, space-separated>" \
   | oc apply -f -
 oc -n "$NS" rollout status deployment/router-advertisement
 oc -n "$NS" logs deployment/router-advertisement | head

@@ -1663,6 +1663,16 @@ class DeployAssetsTest(unittest.TestCase):
         self.template = yaml.safe_load(self.text)
         self.objects = {o["kind"]: o for o in self.template["objects"]}
 
+    def test_the_route_admits_only_the_listed_sources(self):
+        # Review R2 L4: no open Route on the control plane's default ingress
+        params = {p["name"]: p for p in self.template["parameters"]}
+        self.assertTrue(params["ROUTE_ALLOWED_SOURCES"].get("required"))
+        self.assertNotIn("value", params["ROUTE_ALLOWED_SOURCES"])
+        self.assertEqual(self.objects["Route"]["metadata"]["annotations"]["haproxy.router.openshift.io/ip_whitelist"],
+                         "${ROUTE_ALLOWED_SOURCES}")
+        with open(README) as fh:
+            self.assertIn("-p ROUTE_ALLOWED_SOURCES=", fh.read())
+
     def test_every_deployment_name_is_a_parameter(self):
         params = {p["name"]: p for p in self.template["parameters"]}
         for name in ("NAMESPACE", "IMAGE", "OVN_CA_ISSUER", "ROUTE_HOST", "OVN_NB_CONNECTION", "KEYSTONE_URL",
