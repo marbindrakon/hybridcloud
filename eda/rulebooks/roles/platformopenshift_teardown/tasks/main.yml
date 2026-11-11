@@ -5,9 +5,10 @@
 # cluster's IAM (roles, OIDC provider) and its published issuer, the central namespace (its PushSecrets
 # would re-push deleted Vault keys), the recorded Vault paths, the Keycloak client, the services viewer
 # RBAC. Any failure lands in status.deletion and the CR stays Terminating; deletionComplete only after
-# every step succeeded. The build's objects on central are named after status.buildName (OpenStack:
-# shc-oso-<entity>-<name>, AWS: shc-aws-<entity>-<name>, GCP: shc-gcp-<entity>-<name>); without a record OpenStack
-# derives its build name again and AWS and GCP fall back to the CR's name. A cluster on a hybrid network leaves the
+# every step succeeded. The build's objects on central are named after status.buildName
+# (shc-<oso|aws|gcp>-<entity>-<name>-<digest>) and are touched only when the build's hub namespace is this cluster's
+# (hub_ownership.yml): a cluster without a recorded build, or whose name another object holds, deletes nothing on the
+# hub (Review R2 H1). A cluster on a hybrid network leaves the
 # platform's service routing domain (status.platformPrefixes cleared, the withdrawal checked) before an OpenStack
 # cluster's floating IPs are released (DESIGN cnet §4.3): the reverse of the build. Cloud teardowns run in the
 # shc-cloud container group.
@@ -40,27 +41,9 @@
         namespace: "{{ platformopenshift_cr_namespace }}"
       register: po_cr
 
-    - name: Read the namespace for the tenant (an OpenStack cluster's build name)
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: v1
-        kind: Namespace
-        name: "{{ platformopenshift_cr_namespace }}"
-      register: _po_ns
-      when:
-        - ((po_cr.resources | default([]) | first | default({})).spec | default({}, true)).type | default(platform_spec.type | default(''), true) == 'openstack'
-        - (((po_cr.resources | default([]) | first | default({})).status | default({}, true)).buildName | default('', true)) | length == 0
-
-    - name: Derive the build name of an OpenStack cluster without a record
-      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/build_name.yml"
-      vars:
-        bn_entity: >-
-          {{ (((_po_ns.resources | default([]) | first | default({})).metadata | default({})).labels | default({}, true))
-             ['hybridsovereign.redhat/entity'] | default('', true) }}
-        bn_name: "{{ platformopenshift_cr_name }}"
-      when: _po_ns is not skipped
+    # Review R2 H1: only a recorded build whose hub namespace is this cluster's is torn down on the hub
+    - name: What this cluster owns on the hub
+      ansible.builtin.include_tasks: hub_ownership.yml
 
     # Vault paths and the DNS account are derived from the cluster's identity (an object written before they left
     # the status is read from its old keys)
@@ -68,7 +51,7 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_platformopenshift_paths.yml"
       vars:
         rpp_cr: "{{ po_cr.resources | default([]) | first | default({}) }}"
-        rpp_build_name: "{{ bn_build_name if _po_ns is not skipped else '' }}"
+        rpp_build_name: "{{ po_hub_build }}"
 
     - name: Set platform type and recorded status facts
       vars:
@@ -80,7 +63,10 @@
         po_dns: "{{ _st.dns | default({}) }}"
         po_vault_paths: "{{ rpp_vault_paths }}"
         po_dns_account_vault_path: "{{ rpp_dns_account_vault_path }}"
-        po_oidc_client_id: "{{ _st.oidcClientId | default('', true) | default(platformopenshift_cr_name ~ '-keycloak-oidc', true) }}"
+        # the cluster's Keycloak client: the recorded one, else its build's (never one named after the CR alone)
+        po_oidc_client_id: >-
+          {{ (_st.oidcClientId | default('', true) or ((po_hub_build ~ '-keycloak-oidc') if po_hub_build | length > 0 else ''))
+             if po_hub_owned | bool else '' }}
         po_build_name: "{{ rpp_build_name_in_effect }}"
         po_aws_account: "{{ _st.awsAccountId | default('', true) }}"
         po_aws_region: "{{ _st.awsRegion | default('', true) }}"
@@ -105,6 +91,7 @@
 
     - name: Tear down ACM policies and ManagedCluster
       ansible.builtin.include_tasks: delete_acm.yml
+      when: po_hub_owned | bool
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -112,6 +99,7 @@
 
     - name: Tear down the Hive cluster build on central
       ansible.builtin.include_tasks: delete_clusterbuild.yml
+      when: po_hub_owned | bool
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -155,7 +143,7 @@
               memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
               entry: automation
             aws_args: [sts-down, --cluster, "{{ po_build_name }}", --issuer, "{{ po_issuer }}"]
-          when: po_issuer | length > 0
+          when: po_issuer | length > 0 and po_hub_owned | bool
 
         # a cluster on a hybrid network (P8 §13): its published names (Internal), the platform reach to its prefix,
         # the placement's public subnets (External; their load balancers went with the deprovision)
@@ -195,6 +183,7 @@
             kind: ConfigMap
             name: "oidc-static-{{ po_build_name }}"
             namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+          when: po_hub_owned | bool
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -213,6 +202,7 @@
             gcp_helper: shc_gcp_cluster.py
             gcp_config: {project: "{{ po_gcp_project }}", region: "{{ po_gcp_region }}"}
             gcp_args: [wif-down, --cluster, "{{ po_build_name }}"]
+          when: po_hub_owned | bool
 
         - name: Remove the cluster's published names (Internal)
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
@@ -233,6 +223,7 @@
             kind: ConfigMap
             name: "oidc-static-{{ po_build_name }}"
             namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+          when: po_hub_owned | bool
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -267,6 +258,7 @@
         name: "{{ po_build_name }}"
         wait: true
         wait_timeout: 600
+      when: po_hub_owned | bool
 
     - name: Note the step
       ansible.builtin.set_fact:
@@ -285,6 +277,7 @@
 
     - name: Open a Keycloak admin session
       ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/keycloak_admin_session.yml"
+      when: po_oidc_client_id | length > 0
 
     - name: Find the cluster's OIDC client
       ansible.builtin.uri:
@@ -293,6 +286,7 @@
           Authorization: "Bearer {{ kc_admin_token }}"
         validate_certs: false
       register: kc_client
+      when: po_oidc_client_id | length > 0
 
     - name: Delete the cluster's OIDC client
       ansible.builtin.uri:
@@ -302,7 +296,7 @@
           Authorization: "Bearer {{ kc_admin_token }}"
         validate_certs: false
         status_code: [204, 404]
-      loop: "{{ kc_client.json | default([]) }}"
+      loop: "{{ (kc_client.json | default([])) if kc_client is not skipped else [] }}"
       loop_control:
         label: "{{ item.clientId }}"
 
@@ -335,11 +329,12 @@
         kind: ManagedCluster
         name: "{{ po_build_name }}"
       register: mc_final
+      when: po_hub_owned | bool
 
     - name: Fail while the ManagedCluster remains
       ansible.builtin.fail:
         msg: "ManagedCluster {{ po_build_name }} is still present (finalizers) after the deprovision"
-      when: mc_final.resources | length > 0
+      when: mc_final is not skipped and mc_final.resources | length > 0
 
     - name: Get current timestamp for status
       ansible.builtin.set_fact:

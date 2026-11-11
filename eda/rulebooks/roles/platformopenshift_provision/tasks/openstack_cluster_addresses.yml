@@ -1,9 +1,10 @@
 ---
 # shc (DESIGN cnet §4.2 steps 4-6, §4.3): after the preflight, before DNS, the install-config and the Helm release.
-# From here on the cluster holds things on the site and the hub. Each is recorded before the
-# next step uses it, so a failure anywhere leaves a record a retry continues from and the teardown works from:
-# the build name and the network choice, then the floating IPs, then (hybrid network) the cluster's prefixes in the
-# platform's service routing domain, then DNS records, the install-config and the Helm release.
+# From here on the cluster holds things on the site and the hub. Each is recorded before the next step uses it, so a
+# failure anywhere leaves a record a retry continues from and the teardown works from: the build name and the network
+# choice, then the build's namespace on the hub (claim_build.yml, marked with this object's uid), then the floating
+# IPs, then (hybrid network) the cluster's prefixes in the platform's service routing domain, then DNS records, the
+# install-config and the Helm release.
 - name: Record the build and the cluster's network
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -15,6 +16,14 @@
     cr_status_body: >-
       {{ cb_network_record | combine({'buildName': cb_app_name, 'clusterNetwork': cb_cluster_network,
                                       'serviceNetwork': cb_service_network, 'machineNetwork': cb_machine_network}) }}
+
+# Review R2 H1: the build's namespace on the hub is this cluster's before anything is made under the build name
+- name: Claim the build on the hub
+  ansible.builtin.include_tasks: claim_build.yml
+  vars:
+    cl_recorded: >-
+      {{ ((po_cr_current.resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
 
 - name: The cluster's floating IPs
   ansible.builtin.include_tasks: cluster_fips.yml

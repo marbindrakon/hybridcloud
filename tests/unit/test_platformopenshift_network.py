@@ -292,7 +292,7 @@ class FipsAndWait(unittest.TestCase):
 CR = {"name": "c1", "namespace": NS}
 BASE = {"ansible_operator_meta": CR, "services_api_host": "https://services.example.org:6443",
         "services_bearer_token": "token-not-in-data-xyz", "central_api_host": "https://198.18.0.10:6443",
-        "central_bearer_token": "token-not-in-data-xyz",
+        "central_bearer_token": "token-not-in-data-xyz", "po_uid": "uid-c1",
         "fabric_platform_namespace": PLAT, "platformopenshift_networking": DEFAULTS,
         "platformopenshift_service_wait_retries": 1, "platformopenshift_service_wait_delay": 0}
 
@@ -457,6 +457,8 @@ class OpenstackAddressesFile(unittest.TestCase):
                 out.append("os:" + t["os"]["action"] + "/" + t["os"].get("state", ""))
             elif "nudge" in t:
                 out.append("nudge")
+            elif "create" in t:
+                out.append("create:" + t["create"])
         return out
 
     def test_hybrid_order(self):
@@ -464,7 +466,7 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.steps(tr), [
             "patch:buildName,clusterNetwork,externalNetwork,machineNetwork,network,placement,publish,serviceNetwork",
-            "os:cluster-fips/present", "patch:floatingIPs", "patch:platformPrefixes", "nudge",
+            "create:/api/v1/namespaces/shc-oso-acme-c1", "os:cluster-fips/present", "patch:floatingIPs", "patch:platformPrefixes", "nudge",
             "patch::Preflight=True"])
         rec = H.patches(tr)[0]["body"]
         self.assertEqual((rec["buildName"], rec["publish"], rec["externalNetwork"]), ("shc-oso-acme-c1", "Internal", None))
@@ -481,14 +483,14 @@ class OpenstackAddressesFile(unittest.TestCase):
     def test_external_path_has_no_prefixes(self):
         rc, tr, out = self.run_a(k8s(), cb_platform_path=False)
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.steps(tr)[1:], ["os:cluster-fips/present", "patch:floatingIPs", "patch::Preflight=True"])
+        self.assertEqual(self.steps(tr)[2:], ["os:cluster-fips/present", "patch:floatingIPs", "patch::Preflight=True"])
 
     def test_address_of_another_network_is_given_back(self):
         svc = fabric(networks=[{"network": "beta-ns/m", "prefixes": ["192.0.2.0/28"]}])["status"]["realization"]["service"]
         rc, tr, out = self.run_a(k8s(), pf={"fabric": "f1", "service": svc})
         self.assertNotEqual(rc, 0)
         self.assertIn("already reaches for another network", out)
-        self.assertEqual(self.steps(tr)[1:], ["os:cluster-fips/present", "patch:floatingIPs", "os:cluster-fips/absent",
+        self.assertEqual(self.steps(tr)[2:], ["os:cluster-fips/present", "patch:floatingIPs", "os:cluster-fips/absent",
                                               "patch:floatingIPs"])
         rel = H.os_calls(tr, "cluster-fips")[1]
         self.assertEqual((rel["ids"], rel["descriptions"]),
@@ -499,7 +501,7 @@ class OpenstackAddressesFile(unittest.TestCase):
         fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.16/32", "reason": "ServicePrefixInUse"}])
         rc, tr, out = self.run_a(k8s(fab=fab))
         self.assertNotEqual(rc, 0)
-        self.assertEqual(self.steps(tr)[1:], ["os:cluster-fips/present", "patch:floatingIPs", "patch:platformPrefixes",
+        self.assertEqual(self.steps(tr)[2:], ["os:cluster-fips/present", "patch:floatingIPs", "patch:platformPrefixes",
                                               "nudge", "patch:platformPrefixes", "nudge", "os:cluster-fips/absent",
                                               "patch:floatingIPs"])
         self.assertIsNone(H.patches(tr)[3]["body"]["platformPrefixes"])
@@ -869,9 +871,178 @@ class TeardownPaths(unittest.TestCase):
         self.assertEqual(build, "")
         self.assertFalse([p for p in paths if p.startswith("cluster/oso/")])
 
-    def test_aws_falls_back_to_the_cr_name(self):
+    def test_aws_without_record_owns_no_cluster_path(self):
+        # Review R2 H1: no fallback to the CR's name (a CR named like a hub namespace would have lost it)
         cr = {"metadata": {"name": "c1"}, "spec": {"type": "aws"}, "status": {}}
-        self.assertEqual(self.paths(cr)[0], "c1")
+        build, paths = self.paths(cr)
+        self.assertEqual((build, paths), ("", []))
+        cr["status"]["buildName"] = "shc-aws-acme-c1-0a1b2c3d"
+        build, paths = self.paths(cr, rpp_build_name="")   # recorded, but the hub says it is not this cluster's
+        self.assertEqual((build, paths), ("", []))
+
+
+class HubOwner(unittest.TestCase):
+    """Review R2 H1: whose is the build's hub namespace (po_preflight.py hub-owner)."""
+    B = "shc-oso-acme-c1-0a1b2c3d"
+
+    def owner(self, ns, recorded="", claim=False, uid="uid-c1"):
+        return P.hub_owner({"namespace": ns, "uid": uid, "recorded": recorded, "buildName": self.B, "claim": claim})
+
+    def ns(self, uid=None):
+        return {"metadata": {"name": self.B, **({"labels": {P.OWNER_LABEL: uid}} if uid else {})}}
+
+    def test_marked_for_this_cluster(self):
+        for claim in (True, False):
+            self.assertTrue(self.owner(self.ns("uid-c1"), claim=claim)["owned"])
+
+    def test_marked_for_another_cluster(self):
+        for claim, recorded in ((True, ""), (False, self.B), (True, self.B)):
+            r = self.owner(self.ns("uid-other"), recorded=recorded, claim=claim)
+            self.assertEqual((r["owned"], r["reason"]), (False, "NamespaceTaken"))
+
+    def test_unmarked_namespace_only_for_its_recorded_build(self):
+        r = self.owner(self.ns(), recorded=self.B, claim=True)
+        self.assertEqual((r["owned"], r["adopt"]), (True, True))
+        self.assertEqual((self.owner(self.ns(), recorded=self.B)["owned"], self.owner(self.ns(), recorded=self.B)["adopt"]),
+                         (True, False))
+        for recorded in ("", "shc-oso-acme-c1-ffffffff"):
+            self.assertEqual(self.owner(self.ns(), recorded=recorded, claim=True)["reason"], "NamespaceTaken")
+
+    def test_gone_namespace(self):
+        self.assertTrue(self.owner({}, recorded=self.B)["owned"])           # a teardown's leftovers of its record
+        self.assertFalse(self.owner({}, recorded="")["owned"])               # nothing recorded: nothing owned
+        self.assertEqual(self.owner({}, claim=True)["reason"], "NotClaimed")  # a build creates it first
+
+    def test_no_build_name_owns_nothing(self):
+        r = P.hub_owner({"namespace": self.ns("uid-c1"), "uid": "uid-c1", "recorded": "", "buildName": "", "claim": False})
+        self.assertFalse(r["owned"])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ClaimBuild(unittest.TestCase):
+    """Review R2 H1: the build's namespace is claimed (create-only, marked with the object's uid) right after the
+    record and before any floating IP; two clusters cannot share a release or a pair of floating IPs."""
+    B = "shc-oso-acme-c1"
+
+    def test_first_claim_creates_the_marked_namespace(self):
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml", addr_vars(),
+                            k8s=k8s(fab=CARRIED), result="1")
+        self.assertEqual(rc, 0, out)
+        c = [t for t in tr if "create" in t][0]
+        self.assertEqual(c["body"]["metadata"]["labels"]["hybridsovereign.redhat/platformopenshift-uid"], "uid-c1")
+        self.assertEqual(c["body"]["kind"], "Namespace")
+
+    def test_race_the_second_cluster_is_refused_before_its_floating_ips(self):
+        # both passed the preflight (no namespace yet); the other cluster's create won (409 here)
+        other = {f"Namespace//{self.B}": {"metadata": {"name": self.B,
+                                                        "labels": {"hybridsovereign.redhat/platformopenshift-uid": "uid-other"}}}}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml",
+                            addr_vars(fake_create={f"/api/v1/namespaces/{self.B}": 409}),
+                            k8s=k8s(fab=CARRIED, extra=other), result="1")
+        self.assertNotEqual(rc, 0)
+        self.assertIn(f"the build name {self.B} is already in use", out)
+        self.assertFalse(H.os_calls(tr), "no floating IP was looked up or created")
+        self.assertFalse([t for t in tr if "k8s" in t], "nothing was written on the hub")
+        self.assertIn({"buildName": None}, [p["body"] for p in H.patches(tr)])
+
+    def test_a_namespace_this_cluster_recorded_before_the_label_is_adopted(self):
+        legacy = {f"Namespace//{self.B}": {"metadata": {"name": self.B}}}
+        cur = {"resources": [{"status": {"buildName": self.B}}]}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml",
+                            addr_vars(fake_create={f"/api/v1/namespaces/{self.B}": 409}, po_cr_current=cur),
+                            k8s=k8s(fab=CARRIED, extra=legacy), result="1")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([t["k8s"] for t in tr if "k8s" in t],
+                         [{"state": "patched", "kind": "Namespace", "name": self.B, "namespace": None}])
+        # but not one it did not record
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml",
+                            addr_vars(fake_create={f"/api/v1/namespaces/{self.B}": 409}),
+                            k8s=k8s(fab=CARRIED, extra=legacy), result="1")
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(H.os_calls(tr))
+
+    def test_aws_and_gcp_claim_right_after_their_record(self):
+        for f in ("aws_clusterbuild_sts.yml", "gcp_clusterbuild_wif.yml"):
+            names = [t.get("name") or "" for t in load(os.path.join(TASKS, f))]
+            rec = [i for i, n in enumerate(names) if n.startswith("Record the build on the status")][0]
+            self.assertEqual(names[rec + 1], "Claim the build on the hub", f)
+
+
+TD_FAKES = {
+    "teardown_unrealized.yml": "[]\n",
+    "resolve_services_cluster_connection.yml": "[]\n",
+    "resolve_central_cluster_sa_from_vault.yml": "[]\n",
+    "vault_kv_delete.yml": H.TRACE % "{'vault_delete': vault_kv_delete_paths}",
+    "resolve_cloudoso_accounts.yml": "- ansible.builtin.set_fact:\n    rca_account_vault_path: sites/site1\n",
+}
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class TeardownOwnsOnlyItsBuild(unittest.TestCase):
+    """Review R2 H1: the whole teardown (platformopenshift_teardown main.yml) with fakes: a cluster that never recorded
+    a build, or whose build name is marked for another object on the hub, deletes nothing on the hub."""
+    HUB_KINDS = {"ManagedCluster", "Namespace", "ClusterDeployment", "Policy", "PlacementBinding", "Placement", "ConfigMap"}
+
+    def teardown(self, status, extra=None):
+        po = {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift",
+              "metadata": {"name": "corp-prod", "namespace": "acme", "uid": "uid-y"},
+              "spec": {"type": "openstack", "openstack": {"environment": "env1"}}, "status": status}
+        kube = {"PlatformOpenshift/acme/corp-prod": po,
+                "Namespace//acme": {"metadata": {"name": "acme", "labels": {"hybridsovereign.redhat/entity": "acme"}}},
+                "CloudOSO/acme/env1": {"status": {"projectId": "proj-y"}}}
+        kube.update(extra or {})
+        v = dict(BASE, event_payload={"regarding": {"name": "corp-prod", "namespace": "acme"}},
+                 shc_live_spec={"type": "openstack"}, clusterbuild_uninstall_timeout="1m")
+        return H.run("platformopenshift_teardown", "main.yml", v, k8s=kube, fakes=TD_FAKES)
+
+    def assert_nothing_on_the_hub(self, tr, out):
+        hub = [t["k8s"] for t in tr if "k8s" in t and t["k8s"]["kind"] in self.HUB_KINDS]
+        self.assertEqual(hub, [], out)
+        deleted = [p for t in tr if "vault_delete" in t for p in t["vault_delete"]]
+        self.assertFalse([p for p in deleted if p.startswith("cluster/")], deleted)
+        rel = H.os_calls(tr, "cluster-fips")
+        self.assertTrue(all(r["descriptions"] == {} for r in rel), rel)
+        self.assertTrue([p for p in H.patches(tr) if p["body"].get("deletionComplete")], out)
+
+    def test_never_recorded_deletes_nothing_on_the_hub(self):
+        # tenant acme's corp-prod stopped before its record; tenant acme-corp's prod is running under the name the old
+        # scheme derived for both
+        taken = {"Namespace//shc-oso-acme-corp-prod": {"metadata": {"name": "shc-oso-acme-corp-prod"}}}
+        rc, tr, out = self.teardown({"reason": "WaitingForPlacement"}, taken)
+        self.assertEqual(rc, 0, out)
+        self.assert_nothing_on_the_hub(tr, out)
+
+    def test_recorded_but_marked_for_another_object(self):
+        b = "shc-oso-acme-corp-prod-0a1b2c3d"
+        taken = {f"Namespace//{b}": {"metadata": {"name": b, "labels": {
+            "hybridsovereign.redhat/platformopenshift-uid": "uid-x"}}}}
+        rc, tr, out = self.teardown({"buildName": b, "floatingIPs": {"api": {"id": "fip-y1"}}}, taken)
+        self.assertEqual(rc, 0, out)
+        self.assert_nothing_on_the_hub(tr, out)
+        self.assertEqual(H.os_calls(tr, "cluster-fips")[0]["ids"], ["fip-y1"])   # its own recorded ids still go
+
+    def test_ownership_file(self):
+        b = "shc-oso-acme-c1-0a1b2c3d"
+        for labels, recorded, want in (({"hybridsovereign.redhat/platformopenshift-uid": "uid-c1"}, b, [True, b]),
+                                       (None, b, [True, b]), ("gone", b, [True, b]),
+                                       ({"hybridsovereign.redhat/platformopenshift-uid": "uid-x"}, b, [False, ""]),
+                                       ({"hybridsovereign.redhat/platformopenshift-uid": "uid-c1"}, "", [False, ""])):
+            kube = {} if labels == "gone" else {f"Namespace//{b}": {"metadata": dict({"name": b}, **({"labels": labels} if labels else {}))}}
+            cr = {"resources": [{"metadata": {"uid": "uid-c1"}, "status": {"buildName": recorded}}]}
+            rc, tr, out = H.run("platformopenshift_teardown", "hub_ownership.yml", dict(BASE, po_cr=cr), k8s=kube,
+                                result="[po_hub_owned | bool, po_hub_build]")
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(tr[-1]["result"], want, (labels, recorded))
+
+    def test_every_hub_step_is_gated(self):
+        main = load(os.path.join(TD, "tasks", "main.yml"))
+        for t in walk(main):
+            text = str({k: v for k, v in t.items() if k not in ("name", "block", "rescue", "always")})
+            hub = ("delete_acm.yml" in text or "delete_clusterbuild.yml" in text or "kind': 'Namespace'" in text
+                   or "oidc-static-" in text or "sts-down" in text or "wif-down" in text
+                   or "kind': 'ManagedCluster'" in text)
+            if hub and "po_cr_current" not in text:
+                self.assertIn("po_hub_owned", str(t.get("when", "")), t.get("name"))
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class RouterAdvertisementPreflight(unittest.TestCase):
