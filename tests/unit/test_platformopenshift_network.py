@@ -1107,6 +1107,16 @@ class ClaimBuild(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertFalse(H.os_calls(tr))
 
+    def test_the_stale_build_cleanup_runs_only_after_the_claim(self):
+        # Review R2, unconfirmed item 4: cleanup_stale_clusterbuild.yml deletes the ManagedCluster and the
+        # ClusterDeployment of the build name; it runs after openstack_cluster_addresses.yml (whose claim refuses a
+        # build name another object holds), so it only ever cleans this cluster's own failed build
+        names = [t.get("name") for t in load(os.path.join(TASKS, "openstack_clusterbuild.yml"))]
+        self.assertLess(names.index("The cluster's recorded build and addresses"),
+                        names.index("Clean up failed or stale Hive cluster build before reprovisioning"))
+        addr = [t.get("name") for t in load(os.path.join(TASKS, "openstack_cluster_addresses.yml"))]
+        self.assertLess(addr.index("Claim the build on the hub"), addr.index("The cluster's floating IPs"))
+
     def test_aws_and_gcp_claim_right_after_their_record(self):
         for f in ("aws_clusterbuild_sts.yml", "gcp_clusterbuild_wif.yml"):
             names = [t.get("name") or "" for t in load(os.path.join(TASKS, f))]
