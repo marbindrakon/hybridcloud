@@ -126,6 +126,13 @@
       recorded: "{{ (po_cr_current.resources[0].status | default({}, true)).buildName | default('', true) }}"
       buildName: "{{ cb_app_name }}"
 
+- name: Refuse a build this object recorded that is marked for another uid (a restored or moved object)
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: BuildOwnerMismatch
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ po_result.message }}"
+  when: po_result.reason == 'BuildOwnerMismatch'
+
 - name: Refuse a build name in use
   ansible.builtin.include_tasks: preflight_stop.yml
   vars:

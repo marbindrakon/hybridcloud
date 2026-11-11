@@ -149,6 +149,11 @@ REASONS = {
     # the site's router advertisement service did not hold the floating IPs' advertisement on a placed network: a
     # placement stays usable (condition Degraded, router attachments pending); a cluster's preflight refuses the build
     "RouterAdvertisementFailed": _r("P", FAILED, "The site did not confirm that floating IPs on this network are reachable from outside it. The platform team is looking at it."),
+    # an OpenShift cluster whose recorded build is marked on the platform for another uid (an object restored from a
+    # backup or moved gets a new uid): condition Preflight and the teardown's Warning event; never adopted
+    "BuildOwnerMismatch": _r("P", FAILED, "The cluster's build on the platform is marked for another copy of this cluster (a restored cluster object gets a new identity). The platform team checks it; nothing of the build is changed meanwhile."),
+    # Warning Event of a cluster's teardown when the cluster recorded no build: nothing on the platform was removed
+    "NoBuildRecorded": _r("P", FAILED, "This cluster recorded no build on the platform, so its deletion removed nothing there. The platform team looks for a build left from before."),
     # Warning Event on an Entity (never a condition): its operator-version annotation names an image that is not allowed
     "NamespaceOperatorImageRejected": _r("P", FAILED, "The requested operator version for this tenant is not allowed; the default version is used."),
     # ---- paused (an administrator holds the object; nothing changes until it is resumed) --

@@ -1073,9 +1073,17 @@ class HubOwner(unittest.TestCase):
             self.assertTrue(self.owner(self.ns("uid-c1"), claim=claim)["owned"])
 
     def test_marked_for_another_cluster(self):
-        for claim, recorded in ((True, ""), (False, self.B), (True, self.B)):
-            r = self.owner(self.ns("uid-other"), recorded=recorded, claim=claim)
-            self.assertEqual((r["owned"], r["reason"]), (False, "NamespaceTaken"))
+        r = self.owner(self.ns("uid-other"), recorded="", claim=True)
+        self.assertEqual((r["owned"], r["reason"]), (False, "NamespaceTaken"))
+
+    def test_a_restored_object_is_told_about_the_mismatch(self):
+        # Review R3 N4: the object recorded the build but the namespace carries another uid (a restored or moved object
+        # gets a new uid): never adopted, and the refusal names the namespace and both uids
+        for claim in (True, False):
+            r = self.owner(self.ns("uid-other"), recorded=self.B, claim=claim)
+            self.assertEqual((r["owned"], r["adopt"], r["reason"]), (False, False, "BuildOwnerMismatch"))
+            for word in (self.B, "uid-other", "uid-c1", P.OWNER_LABEL):
+                self.assertIn(word, r["message"])
 
     def test_unmarked_namespace_only_for_its_recorded_build(self):
         r = self.owner(self.ns(), recorded=self.B, claim=True)
@@ -1121,6 +1129,24 @@ class ClaimBuild(unittest.TestCase):
         self.assertFalse(H.os_calls(tr), "no floating IP was looked up or created")
         self.assertFalse([t for t in tr if "k8s" in t], "nothing was written on the hub")
         self.assertIn({"buildName": None}, [p["body"] for p in H.patches(tr)])
+
+    def test_a_restored_object_keeps_its_record_and_is_refused_with_the_mismatch(self):
+        # Review R3 N4: the record stays (it is the object's own), nothing is built, the condition names the mismatch
+        marked = {f"Namespace//{self.B}": {"metadata": {"name": self.B, "labels": {
+            "hybridsovereign.redhat/platformopenshift-uid": "uid-old"}}}}
+        cur = {"resources": [{"status": {"buildName": self.B}}]}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml",
+                            addr_vars(fake_create={f"/api/v1/namespaces/{self.B}": 409}, po_cr_current=cur),
+                            k8s=k8s(fab=CARRIED, extra=marked), result="1")
+        self.assertNotEqual(rc, 0)
+        self.assertFalse(H.os_calls(tr))
+        self.assertFalse([t for t in tr if "k8s" in t])
+        self.assertNotIn({"buildName": None}, [p["body"] for p in H.patches(tr)])
+        self.assertIn(f"namespace {self.B} on the hub carries hybridsovereign.redhat/platformopenshift-uid=uid-old, but "
+                      "this PlatformOpenshift has uid uid-c1", out)
+        stop = [t for t in walk(load(os.path.join(TASKS, "claim_build.yml")))
+                if t.get("ansible.builtin.include_tasks") == "preflight_stop.yml"]
+        self.assertEqual(stop[0]["vars"]["ps_reason"], "BuildOwnerMismatch")
 
     def test_a_namespace_this_cluster_recorded_before_the_label_is_adopted(self):
         legacy = {f"Namespace//{self.B}": {"metadata": {"name": self.B}}}
@@ -1207,6 +1233,34 @@ class TeardownOwnsOnlyItsBuild(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assert_nothing_on_the_hub(tr, out)
         self.assertEqual(H.os_calls(tr, "cluster-fips")[0]["ids"], ["fip-y1"])   # its own recorded ids still go
+
+    def events(self, tr):
+        return [t["definition"] for t in tr if "k8s" in t and t["k8s"]["kind"] == "Event"]
+
+    def test_the_teardown_says_what_it_left_on_the_hub(self):
+        # Review R3 N4 and unconfirmed 1: a teardown that removes nothing on the hub says so in an event on the cluster
+        # (and in its log), naming the namespace and the mismatch, or that nothing was recorded
+        b = "shc-oso-acme-corp-prod-0a1b2c3d"
+        taken = {f"Namespace//{b}": {"metadata": {"name": b, "labels": {
+            "hybridsovereign.redhat/platformopenshift-uid": "uid-x"}}}}
+        rc, tr, out = self.teardown({"buildName": b}, taken)
+        self.assertEqual(rc, 0, out)
+        ev = self.events(tr)
+        self.assertEqual([e["reason"] for e in ev], ["BuildOwnerMismatch"])
+        self.assertEqual((ev[0]["type"], ev[0]["regarding"]["name"], ev[0]["regarding"]["uid"]),
+                         ("Warning", "corp-prod", "uid-y"))
+        for word in (b, "uid-x", "uid-y", "Nothing"):
+            self.assertIn(word, ev[0]["note"])
+        rc, tr, out = self.teardown({"reason": "WaitingForPlacement"})
+        self.assertEqual(rc, 0, out)
+        ev = self.events(tr)
+        self.assertEqual([e["reason"] for e in ev], ["NoBuildRecorded"])
+        self.assertIn("status.buildName", ev[0]["note"])
+        # an owned build: no such event
+        mine = {f"Namespace//{b}": {"metadata": {"name": b, "labels": {
+            "hybridsovereign.redhat/platformopenshift-uid": "uid-y"}}}}
+        rc, tr, out = self.teardown({"buildName": b}, mine)
+        self.assertEqual(self.events(tr), [])
 
     def test_ownership_file(self):
         b = "shc-oso-acme-c1-0a1b2c3d"

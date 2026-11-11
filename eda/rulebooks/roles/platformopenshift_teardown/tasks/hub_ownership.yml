@@ -45,5 +45,46 @@
 
 - name: Say what the hub steps skip
   ansible.builtin.debug:
-    msg: "The hub steps of this teardown are skipped: {{ po_hub_note }}"
+    msg: "The hub steps of this teardown are skipped, nothing on the hub was removed: {{ po_hub_note }}"
   when: not (po_hub_owned | bool)
+
+# a teardown that leaves the hub as it is says so on the cluster (Review R3 N4, unconfirmed 1): a build made before
+# build names were recorded, or one marked for another uid, is found by a human, never adopted
+- name: Tell the cluster's owners what was left on the hub
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: present
+    api_version: events.k8s.io/v1
+    kind: Event
+    namespace: "{{ (_ho_cr.metadata | default({})).namespace | default('') }}"
+    definition:
+      apiVersion: events.k8s.io/v1
+      kind: Event
+      metadata:
+        namespace: "{{ (_ho_cr.metadata | default({})).namespace | default('') }}"
+        generateName: "platformopenshift-{{ (_ho_cr.metadata | default({})).name | default('') }}-"
+      regarding:
+        apiVersion: hybridsovereign.redhat/v1alpha1
+        kind: PlatformOpenshift
+        name: "{{ (_ho_cr.metadata | default({})).name | default('') }}"
+        namespace: "{{ (_ho_cr.metadata | default({})).namespace | default('') }}"
+        uid: "{{ (_ho_cr.metadata | default({})).uid | default('') }}"
+      note: >-
+        {{ ('Nothing on the hub was removed: ' ~ po_hub_note ~ '. A build made for this cluster before build names were'
+            ~ ' recorded (a hub namespace named after its tenant and name) is left as it is for the platform team to'
+            ~ ' find and remove.')
+           if po_result.reason == 'NoBuildName'
+           else ('Nothing on the hub was removed: ' ~ po_hub_note ~ '. The build may still run on the hub: the platform'
+                 ~ ' team checks it and removes it.') }}
+      type: Warning
+      action: Delete
+      reason: "{{ 'NoBuildRecorded' if po_result.reason == 'NoBuildName' else (po_result.reason | default('NotOwned', true)) }}"
+      reportingController: platformopenshift-operator
+      reportingInstance: platformopenshift-operator
+      eventTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+  ignore_errors: true
+  when:
+    - not (po_hub_owned | bool)
+    - (_ho_cr.metadata | default({})).name | default('') | length > 0

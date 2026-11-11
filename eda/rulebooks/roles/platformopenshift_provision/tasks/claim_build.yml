@@ -73,6 +73,15 @@
           hybridsovereign.redhat/platformopenshift-uid: "{{ po_uid }}"
   when: cl_owner.adopt | bool
 
+# a build this object recorded whose namespace carries another uid (a restored or moved object): the record stays,
+# nothing is built, the refusal names the namespace and both uids (Review R3 N4; never adopted)
+- name: Refuse a build this object recorded that is marked for another uid
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: BuildOwnerMismatch
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ cl_owner.message }}"
+  when: cl_owner.reason | default('') == 'BuildOwnerMismatch'
+
 - name: Refuse a build name another cluster holds
   when: not (cl_owner.owned | bool)
   block:

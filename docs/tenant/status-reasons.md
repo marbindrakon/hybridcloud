@@ -160,6 +160,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `AsnConflict` | The AS number conflicts with one already in use. | You (the tenant) |
 | `AttachmentNotSupported` | This attachment is not supported on the chosen site. | You (the tenant) |
 | `BearerNotFound` | The provider edge has no bearer of that name. Ask the platform team for the bearer names. | You (the tenant) |
+| `BuildOwnerMismatch` | The cluster's build on the platform is marked for another copy of this cluster (a restored cluster object gets a new identity). The platform team checks it; nothing of the build is changed meanwhile. | The platform team |
 | `CeKindNotAccepted` | The bearer does not accept this kind of router. Choose another bearer or ask the platform team. | You (the tenant) |
 | `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ClaimMissing` | Members of the granted access groups cannot sign in yet. The platform team is looking at it. | The platform team |
@@ -191,6 +192,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NetworkNameNotUnique` | Your environment sees another network with the name of the cluster's network. Rename or remove the other network. | You (the tenant) |
 | `NetworkNotFound` | The cluster's network or its placement in this environment was not found. | You (the tenant) |
 | `NoAccount` | No cloud account is set up for this environment. | You (the tenant) |
+| `NoBuildRecorded` | This cluster recorded no build on the platform, so its deletion removed nothing there. The platform team looks for a build left from before. | The platform team |
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
 | `NodeUnreachable` | A network node does not answer. Traffic takes the other nodes; the platform team is alerted. | The platform team |

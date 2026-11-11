@@ -23,7 +23,9 @@ Actions (request["action"]):
                  (PlatformOpenshift uid) owns the build's hub namespace: it carries the owner label with that uid; or,
                  for a build recorded under that name before the label existed, it has no owner label (claim: true
                  adopts it); a teardown (claim false) of a recorded build whose namespace is gone owns its leftovers.
-                 -> {owned, adopt, reason, message}
+                 A namespace marked with another uid for a build this object recorded is BuildOwnerMismatch (a
+                 restored or moved object: never adopted; the message names the namespace and both uids).
+                 -> {owned, adopt, reason, message, owner?}
   networking     {spec: spec.networking, defaults: {clusterNetwork, hostPrefix, serviceNetwork, machineNetwork},
                  machineFromPlacement: cidr or ""}  the cluster's ranges in effect (spec over defaults; the placement's
                  subnet as machine network for a cloud cluster on a network); a malformed default names its setting;
@@ -148,7 +150,8 @@ def hub_owner(req):
     owner = str((meta.get("labels") or {}).get(OWNER_LABEL) or "")
     out = {"owned": False, "adopt": False, "reason": "", "message": ""}
     if not build:
-        return dict(out, reason="NoBuildName", message="the cluster has no build name, so it owns nothing on the hub")
+        return dict(out, reason="NoBuildName", message="the cluster recorded no build name (status.buildName), so it "
+                    "owns nothing on the hub and nothing on the hub is removed for it")
     if not meta:
         if flag(req.get("claim")):
             return dict(out, reason="NotClaimed", message=f"namespace {build} does not exist on the hub")
@@ -158,6 +161,14 @@ def hub_owner(req):
     if owner:
         if uid and owner == uid:
             return dict(out, owned=True)
+        if recorded and recorded == build:
+            # this object recorded the build, the namespace names another uid: an object restored from a backup or
+            # moved gets a new uid. Never adopted: said, so that a human decides
+            return dict(out, reason="BuildOwnerMismatch", owner=owner, message=(
+                f"namespace {build} on the hub carries {OWNER_LABEL}={owner}, but this PlatformOpenshift has uid {uid} "
+                "although it recorded that build (an object restored from a backup or moved gets a new uid); nothing "
+                "of the build on the hub is touched for this object until the platform team, having checked that the "
+                f"build is this cluster's, sets the label to {uid}"))
         return dict(out, reason="NamespaceTaken", message=f"namespace {build} on the hub belongs to another cluster")
     if recorded and recorded == build:
         return dict(out, owned=True, adopt=flag(req.get("claim")))

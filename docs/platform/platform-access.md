@@ -118,7 +118,24 @@ Every OpenShift cluster the platform builds has a build name (`status.buildName`
 a namespace of that name on the hub, which its first run claims with the label
 `hybridsovereign.redhat/platformopenshift-uid` (the uid of the PlatformOpenshift). A cluster whose build name is held
 by a namespace another object claimed is refused (`NamespaceTaken`), and a teardown deletes only the hub objects of
-the build its own cluster claimed. Do not remove or copy that label by hand.
+the build its own cluster claimed. Do not remove or copy that label by hand, except as below.
+
+A build belongs to the object by its uid only. A PlatformOpenshift restored from a backup or moved (re-created with
+its status) gets a new uid, so the platform no longer treats the build it recorded as its own: its next run refuses
+with `BuildOwnerMismatch` (condition `Preflight`, the message names the hub namespace, the uid on it and the
+object's), keeps its record and changes nothing; deleting it removes nothing on the hub and leaves a Warning event
+`BuildOwnerMismatch` on the object. Nothing is adopted automatically. After such a restore:
+1. Check that the build is this cluster's: the namespace `status.buildName` on the hub, its annotation
+   `hybridsovereign.redhat/owner` (`PlatformOpenshift <namespace>/<name>`) and the old uid on it, and that no other
+   PlatformOpenshift has that uid any more (`oc get platformopenshift -A -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,UID:.metadata.uid`).
+2. Hand the build to the restored object:
+   `oc label namespace <build name> hybridsovereign.redhat/platformopenshift-uid=<new uid> --overwrite` (on the hub).
+3. Retry the object (or delete it, to tear the build down). Delete a restored object only after step 2: its teardown
+   otherwise removes its recorded floating IPs and DNS records but leaves the build running on the hub.
+
+A cluster that never recorded a build name owns nothing on the hub: deleting it removes nothing there and leaves a
+Warning event `NoBuildRecorded` on the object. A build an older job made for it before build names were recorded (a
+hub namespace named after its tenant and name) is left for the platform team to find and remove.
 
 ## What the hub's network must do
 

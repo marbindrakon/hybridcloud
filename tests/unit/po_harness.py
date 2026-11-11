@@ -85,7 +85,10 @@ def main():
                                          definition=dict(type="raw"), wait=dict(type="bool"), wait_timeout=dict(type="int")))
     p = m.params
     with open(os.environ["FAKE_TRACE"], "a") as f:
-        f.write(json.dumps({"k8s": {k: p[k] for k in ("state", "kind", "name", "namespace")}}) + "\\n")
+        rec = {"k8s": {k: p[k] for k in ("state", "kind", "name", "namespace")}}
+        if p["definition"] is not None:
+            rec["definition"] = p["definition"]
+        f.write(json.dumps(rec) + "\\n")
     m.exit_json(changed=True)
 main()
 '''
