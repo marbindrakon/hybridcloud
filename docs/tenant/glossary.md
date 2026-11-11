@@ -11,7 +11,7 @@ answer the questions people ask most.
 | Term | In the API (`oc get ...`) | Comparable to | Note |
 |---|---|---|---|
 | tenant | `Entity`: `entities`, `ent`, `tenant` | AWS: an AWS account under an organizational unit; Google Cloud: a Google Cloud project under a folder; Azure: an Azure subscription; OpenStack: an OpenStack domain | Not an Entra ID tenant. All tenants share one sign-in directory. |
-| tenant profile | `TenantProfile`: `tenantprofiles`, `tprofile` | - | Read-only. One object named shc in each tenant namespace, written by the platform: the tenant's display name, contacts and the sites it may use. |
+| tenant profile | `TenantProfile`: `tenantprofiles`, `tprofile` | - | Read-only. One object named shc in each tenant namespace, written by the platform: the tenant's display name, contacts, the sites it may use (with an OpenStack site's external networks) and the address ranges the platform reserves. |
 | site | `CloudInfrastructure`: `cloudinfrastructures`, `cinfra`, `site` | AWS: an AWS Region; Google Cloud: a Google Cloud region; Azure: an Azure region; OpenStack: an OpenStack region | - |
 | OpenStack environment | `CloudOSO`: `cloudosos`, `osenv` | AWS: an AWS account in one Region; Google Cloud: a Google Cloud project; OpenStack: an OpenStack project with its quota | - |
 | OpenShift Virtualization environment | `CloudVirt`: `cloudvirts`, `cvirt`, `vmenv` | AWS: an AWS account in one Region; Google Cloud: a Google Cloud project; OpenStack: an OpenStack project with its quota | Short form: VM environment. |
@@ -111,6 +111,20 @@ projects.
 - A **team setup** holds no people. It names the app projects and cluster assignments a team works
   with, and (in its access fields) which access groups may see or change them.
 
+## Words for clusters on networks
+
+- **Router attachments**: a network placement on an OpenStack environment with **Use for router
+  attachments** on lets the environment's routers use the network as their external network.
+  Comparable to an OpenStack external network, but for one project only.
+- **Floating IP**: an OpenStack address a router translates to a server or a load balancer. An
+  OpenShift cluster on OpenStack has two (API and applications), on the network it is published on.
+- **Platform access**: the platform's management may reach the OpenShift clusters it builds on a
+  network, and those clusters the platform's service endpoints. On by default; the network's
+  `PlatformReachable` condition says whether the platform reaches it.
+- **Reserved ranges**: address ranges the platform keeps for itself. Your networks cannot use the
+  refused ones, and the platform allocates no subnets from the others. Listed in the tenant profile
+  and on the network pages ([OpenShift clusters on your networks](clusters-on-networks.md)).
+
 ## What do I create for ...?
 
 | You want | Create |
@@ -121,6 +135,7 @@ projects.
 | A group of people | an **access group** (members are added in the sign-in directory) |
 | A role binding for a group | give the access group a role on the tenant (your tenant admin or the platform team), or use the access fields of a team setup or app project |
 | A private link to your own router | an **edge connection** |
+| An OpenShift cluster on one of your networks | an **OpenShift cluster** that names the network ([OpenShift clusters on your networks](clusters-on-networks.md)) |
 | A secrets store | a **Vault** and, inside it, a **KV secrets engine** |
 
 ## States and Retry now
