@@ -72,7 +72,7 @@ class FakeService:
     def __init__(self, cert, key):
         self.ports = {PORT4: {"redistribute": ["connected-as-host"], "wanted": False, "restores": 2,
                               "lastRestoredAt": "2026-11-11T00:00:00Z"}}
-        self.calls, self.tokens, self.fail, self.delay = [], [], {}, 0
+        self.calls, self.tokens, self.fail, self.delay, self.redirect = [], [], {}, 0, None
         svc = self
 
         class H(http.server.BaseHTTPRequestHandler):
@@ -94,6 +94,12 @@ class FakeService:
                 body = json.loads(self.rfile.read(length) or b"{}") if length else {}
                 if svc.delay:
                     time.sleep(svc.delay)
+                if svc.redirect:
+                    self.send_response(302)
+                    self.send_header("Location", svc.redirect)
+                    self.send_header("Content-Length", "0")
+                    self.end_headers()
+                    return
                 if method in svc.fail:
                     st, reason = svc.fail[method]
                     return self.reply(st, {"error": reason, "message": f"{reason} for {self.path}"})
@@ -259,6 +265,57 @@ class RouterAdvertisement(unittest.TestCase):
         self.assertEqual(out["reason"], "ServiceUnavailable")
         self.assertIn("CERTIFICATE", out["message"].upper())
         self.assertEqual(self.svc.calls, [])
+
+    def test_a_redirect_is_never_followed(self):
+        # Review R2 M2: a 302 to another listener (plain http) must not carry the token there
+        stolen = []
+
+        class Steal(http.server.BaseHTTPRequestHandler):
+            def log_message(self, *a):
+                pass
+
+            def do_GET(self):
+                stolen.append(dict(self.headers))
+                self.send_response(200)
+                self.send_header("Content-Length", "2")
+                self.end_headers()
+                self.wfile.write(b"{}")
+
+            do_PUT = do_GET
+
+        thief = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Steal)
+        threading.Thread(target=thief.serve_forever, daemon=True).start()
+        try:
+            for target in (f"http://127.0.0.1:{thief.server_address[1]}/steal", f"{self.svc.url}/v1/router-ports/{PORT4}"):
+                self.svc.redirect = target
+                out = self.call()
+                self.assertEqual(out["reason"], "ServiceUnavailable")
+                self.assertIn("redirect", out["message"])
+                self.assertIn(self.svc.url, out["message"])
+            self.assertEqual(stolen, [])
+        finally:
+            thief.shutdown()
+            thief.server_close()
+
+    def test_certificate_verification_off_is_refused(self):
+        # Review R2 M2: whatever the site credential says, the token never goes over an unchecked connection
+        for off in (False, "false", "False", "no"):
+            self.acct.verify = off
+            out = self.call()
+            self.assertEqual(out["reason"], "InvalidSetting", off)
+            self.assertIn("verify: false", out["message"])
+            self.assertIn("site-a", out["message"])
+        self.assertEqual(self.svc.calls, [])
+
+    def test_the_token_goes_only_to_the_configured_origin(self):
+        with self.assertRaises(ValueError):
+            S._ra_http("GET", "https://198.51.100.7:8443/v1/router-ports/x", TOKEN, self.cert, 1,
+                       origin=S._ra_origin(self.svc.url))
+        self.assertEqual(self.svc.calls, [])
+        # an odd port id cannot move the request elsewhere (it is one quoted path segment)
+        self.conn.ports[1].id = "../../x?y#z"
+        self.call()
+        self.assertTrue(all(p.startswith("/v1/router-ports/..%2F..%2Fx%3Fy%23z") for _, p in self.svc.calls), self.svc.calls)
 
     def test_no_answer(self):
         self.svc.stop()

@@ -59,6 +59,7 @@ import json
 import ssl
 import sys
 import urllib.error
+import urllib.parse
 import urllib.request
 
 import openstack
@@ -790,12 +791,38 @@ RA_KEY = "placement.routerAdvertisementBySite"
 RA_TIMEOUT = 10
 
 
-def _ra_http(method, url, token, verify, timeout, body=None):
-    """One call to the router advertisement service: (HTTP status, parsed JSON or {}). TLS is verified with the site
-    credential's CA bundle (a path), the system's trust (True) or not at all (False, as the site credential says)."""
-    if verify is False:
-        ctx = ssl._create_unverified_context()  # noqa: S323 - only when the site's own credential disables verification
-    elif isinstance(verify, str) and verify:
+class RaRedirect(Exception):
+    """The router advertisement service answered with a redirect: never followed (the token would go along)."""
+
+    def __init__(self, code, location):
+        super().__init__(f"HTTP {code} redirect to {location}")
+        self.code, self.location = code, location
+
+
+class _RaNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RaRedirect(code, urllib.parse.urlsplit(newurl)._replace(query="", fragment="").geturl())
+
+
+def _ra_verify_off(verify):
+    """The site credential turns certificate checking off (verify: false, also as a string)."""
+    return verify is False or (isinstance(verify, str) and verify.strip().lower() in ("false", "no", "off", "0"))
+
+
+def _ra_origin(url):
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port or (443 if parts.scheme == "https" else 80)
+
+
+def _ra_http(method, url, token, verify, timeout, body=None, origin=None):
+    """One call to the router advertisement service: (HTTP status, parsed JSON or {}). TLS is always verified, with
+    the site credential's CA bundle (a path) or the system's trust; a redirect is never followed (RaRedirect), and the
+    token goes only to the configured origin (scheme, host and port of the service URL)."""
+    if _ra_verify_off(verify):
+        raise ValueError("certificate verification is off")
+    if origin is not None and _ra_origin(url) != origin:
+        raise ValueError(f"{url} is not at the service's origin")
+    if isinstance(verify, str) and verify:
         ctx = ssl.create_default_context(cafile=verify)
     else:
         ctx = ssl.create_default_context()
@@ -803,8 +830,9 @@ def _ra_http(method, url, token, verify, timeout, body=None):
     req = urllib.request.Request(url, data=data, method=method,
                                  headers={"X-Auth-Token": token, "Accept": "application/json",
                                           **({"Content-Type": "application/json"} if data is not None else {})})
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _RaNoRedirect())
     try:
-        with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
+        with opener.open(req, timeout=timeout) as r:
             status, text = r.status, r.read()
     except urllib.error.HTTPError as e:
         with e:
@@ -836,8 +864,9 @@ def router_advertisement(req):
     -> {service: found|absent, port_id, nat, wanted, changed, restores, lastRestoredAt, reason, message}; reason ""
     = done. Service errors come back with the service's reason (Unauthenticated, NotProjectScoped, NotYourPort,
     NotARouterInterface, NoSuchRouterPort, NotAnAdvertisingPort, BadRequest, OvnUnavailable, IdentityUnavailable,
-    NetworkUnavailable, and NotFound, MethodNotAllowed, InternalError); ServiceUnavailable = no answer; InvalidSetting
-    = not an https URL; NoRouterInterface = the router has no IPv4 interface on the network. absent on a port the
+    NetworkUnavailable, and NotFound, MethodNotAllowed, InternalError); ServiceUnavailable = no answer (or a redirect,
+    which is never followed); InvalidSetting = not an https URL, or a site credential that turns certificate
+    verification off (the call always verifies, and sends the token only to the URL's origin); NoRouterInterface = the router has no IPv4 interface on the network. absent on a port the
     service answers NotAnAdvertisingPort for (no redistribute option: nothing advertised) is done, not a failure. Never raises for the service: a failing service is the caller's
     status, not an error. absent drops nat only where the service holds it (wanted): a nat the site set itself
     stays."""
@@ -858,6 +887,13 @@ def _router_advertisement(acct, req):
     if state not in ("present", "absent"):
         raise ValueError("state must be present or absent")
     acct = acct or Account(req)
+    if _ra_verify_off(acct.verify):
+        # the token is the site account's: never sent over a connection whose certificate is not checked
+        return {**out, "reason": "InvalidSetting",
+                "message": (f"the site credential of site {req.get('site') or '<site>'} turns certificate verification "
+                            "off (verify: false); the router advertisement service is called only with verification: "
+                            "give the credential a CA bundle (cacert) instead")}
+    origin = _ra_origin(url)
     pid = req.get("project_id")
     if not pid:
         own = acct.own_scope()
@@ -874,11 +910,15 @@ def _router_advertisement(acct, req):
     out["port_id"] = port.id
     token = conn.session.get_token()
     timeout = float(req.get("timeout") or RA_TIMEOUT)
-    base = f"{url}/v1/router-ports/{port.id}"
+    base = f"{url}/v1/router-ports/{urllib.parse.quote(str(port.id), safe='')}"
 
     def call(method, path="", body=None):
         try:
-            return _ra_http(method, base + path, token, acct.verify, timeout, body)
+            return _ra_http(method, base + path, token, acct.verify, timeout, body, origin=origin)
+        except RaRedirect as e:
+            return 0, {"error": "ServiceUnavailable",
+                       "message": f"router advertisement service at {url} answered with a redirect ({e}); the platform "
+                                  "does not follow redirects of this service"}
         except Exception as e:  # noqa: BLE001 - transport errors (refused, timeout, TLS) are the service's state
             reason = getattr(e, "reason", e)
             return 0, {"error": "ServiceUnavailable",
