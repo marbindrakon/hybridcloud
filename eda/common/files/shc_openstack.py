@@ -807,7 +807,8 @@ def _ra_http(method, url, token, verify, timeout, body=None):
         with urllib.request.urlopen(req, timeout=timeout, context=ctx) as r:
             status, text = r.status, r.read()
     except urllib.error.HTTPError as e:
-        status, text = e.code, e.read()
+        with e:
+            status, text = e.code, e.read()
     try:
         return status, json.loads(text or b"{}")
     except ValueError:
@@ -835,8 +836,9 @@ def router_advertisement(req):
     -> {service: found|absent, port_id, nat, wanted, changed, restores, lastRestoredAt, reason, message}; reason ""
     = done. Service errors come back with the service's reason (Unauthenticated, NotProjectScoped, NotYourPort,
     NotARouterInterface, NoSuchRouterPort, NotAnAdvertisingPort, BadRequest, OvnUnavailable, IdentityUnavailable,
-    NetworkUnavailable); ServiceUnavailable = no answer; InvalidSetting = not an https URL; NoRouterInterface = the
-    router has no IPv4 interface on the network. Never raises for the service: a failing service is the caller's
+    NetworkUnavailable, and NotFound, MethodNotAllowed, InternalError); ServiceUnavailable = no answer; InvalidSetting
+    = not an https URL; NoRouterInterface = the router has no IPv4 interface on the network. absent on a port the
+    service answers NotAnAdvertisingPort for (no redistribute option: nothing advertised) is done, not a failure. Never raises for the service: a failing service is the caller's
     status, not an error. absent drops nat only where the service holds it (wanted): a nat the site set itself
     stays."""
     return _router_advertisement(None, req)
@@ -886,7 +888,14 @@ def _router_advertisement(acct, req):
         return {**out, "reason": str(body.get("error") or "ServiceUnavailable"),
                 "message": _ra_scrub(body.get("message") or f"HTTP {status} from {url}", token)}
 
+    def nothing_to_drop(status, body):
+        # the service answers 409 NotAnAdvertisingPort for a port without the redistribute option (GET and PUT
+        # false alike): the port advertises nothing, so for absent there is nothing to do
+        return state == "absent" and status == 409 and body.get("error") == "NotAnAdvertisingPort"
+
     status, body = call("GET")
+    if nothing_to_drop(status, body):
+        return out
     if status != 200:
         return failed(status, body)
     out.update({"nat": bool(body.get("nat")), "wanted": bool(body.get("wanted")),
@@ -896,6 +905,8 @@ def _router_advertisement(acct, req):
     if (enable and out["nat"] and out["wanted"]) or (not enable and not out["wanted"]):
         return out
     status, body = call("PUT", "/nat", {"enabled": enable})
+    if nothing_to_drop(status, body):
+        return {**out, "nat": False, "wanted": False}
     if status != 200:
         return failed(status, body)
     after = body.get("after") or []
