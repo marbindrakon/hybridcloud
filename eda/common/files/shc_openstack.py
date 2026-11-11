@@ -519,6 +519,18 @@ def _router_name(conn, router_id):
         return router_id
 
 
+def _server_label(conn, server_id):
+    """'<name> (<id>)' when Nova gives the server's name to this account, else the id (the name only makes the message
+    easier to read: a server the account may not read is named by its id, nothing more is asked)."""
+    names = conn.__dict__.setdefault("_shc_server_names", {}) if hasattr(conn, "__dict__") else {}
+    if server_id not in names:
+        try:
+            names[server_id] = getattr(conn.compute.get_server(server_id), "name", None) or ""
+        except Exception:  # noqa: BLE001 - not readable, not found, no compute service: the id says it
+            names[server_id] = ""
+    return f"{names[server_id]} ({server_id})" if names[server_id] else server_id
+
+
 def _port_user(conn, p):
     """What a port on a placed network is, in the words of the placement's messages."""
     owner = p.device_owner or ""
@@ -528,7 +540,7 @@ def _port_user(conn, p):
         addrs = [ip.get("ip_address") for ip in (p.fixed_ips or []) if ip.get("ip_address")]
         return f"floating IP {addrs[0] if addrs else p.device_id}"
     if owner.startswith("compute:") and p.device_id:
-        return f"port of server {p.device_id}"
+        return f"port of server {_server_label(conn, p.device_id)}"
     return f"port {describe(p, 'name', 'device_owner')}"
 
 

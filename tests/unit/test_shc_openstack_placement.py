@@ -657,6 +657,48 @@ class RouterAttachments(unittest.TestCase):
         self.assertEqual(sorted(r.action for r in conn.network.rbacs), ["access_as_external", "access_as_shared"])
 
 
+class ServerNamedInUse(unittest.TestCase):
+    """gate s3s4 #3: a port of a server is named by the server's name and id where Nova gives the name."""
+
+    def ports_of(self, conn, *servers):
+        net = conn.network.nets[0]
+        for sid in servers:
+            conn.network.plist.append(Obj(id=f"port-{sid}", device_id=sid, device_owner="compute:nova",
+                                          network_id=net.id, project_id=TENANT, name="", fixed_ips=[]))
+
+    def test_named_by_name_and_id(self):
+        conn = FakeConn()
+        run(conn)
+        asked = []
+        names = {"3f1c0e2a-0000-4000-8000-000000000001": "web-1"}
+
+        def get_server(sid):
+            asked.append(sid)
+            if sid not in names:
+                raise S.openstack.exceptions.NotFoundException(f"server {sid} not found")
+            return Obj(id=sid, name=names[sid])
+        conn.compute = Obj(get_server=get_server)
+        self.ports_of(conn, "3f1c0e2a-0000-4000-8000-000000000001", "3f1c0e2a-0000-4000-8000-000000000001",
+                      "3f1c0e2a-0000-4000-8000-000000000002")
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        self.assertEqual(out["use"]["virtualMachines"]["inUse"],
+                         ["port of server web-1 (3f1c0e2a-0000-4000-8000-000000000001)",
+                          "port of server web-1 (3f1c0e2a-0000-4000-8000-000000000001)",
+                          "port of server 3f1c0e2a-0000-4000-8000-000000000002"])
+        self.assertEqual(len(asked), 2)          # each server asked once
+
+    def test_not_readable_keeps_the_id(self):
+        conn = FakeConn()
+        run(conn)
+
+        def refused(sid):
+            raise PermissionError("policy does not allow os_compute_api:servers:show")
+        conn.compute = Obj(get_server=refused)
+        self.ports_of(conn, "vm-1")
+        out = run(conn, use={"virtualMachines": False, "routerAttachments": True})
+        self.assertEqual(out["use"]["virtualMachines"]["inUse"], ["port of server vm-1"])
+
+
 class VirtualMachinesOff(unittest.TestCase):
     def test_no_share_at_create(self):
         conn = FakeConn()
