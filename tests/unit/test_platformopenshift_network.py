@@ -436,6 +436,16 @@ class OpenstackPreflightFile(unittest.TestCase):
             self.assertNotEqual(rc, 0)
             self.assertIn(want, out)
 
+    def test_router_attachments_off_while_holding_addresses_names_them(self):
+        # Review R2 L10: the refusal after the floating IPs were allocated says they are kept and how to go on
+        rc, tr, out = self.run_op(k8s(places=[placement(ra=False)]), cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("keeps its floating IPs 192.0.2.15 and 192.0.2.16", out)
+        self.assertIn("turn router attachments back on", out)
+        self.assertFalse(H.os_calls(tr))
+        rc, tr, out = self.run_op(k8s(places=[placement(ra=False)]))
+        self.assertNotIn("keeps its floating IPs", out)
+
     def test_network_name_must_lead_to_the_network_alone(self):
         # Review R2 M3: the installer takes the external network by name
         two = {"network-name-check": {"visible": [{"id": "net-1"}, {"id": "net-9"}], "unique": False}}

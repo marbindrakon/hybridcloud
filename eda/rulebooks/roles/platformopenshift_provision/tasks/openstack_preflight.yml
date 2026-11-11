@@ -17,6 +17,7 @@
         pn_network: "{{ oso_network }}"
         pn_need_platform: true
         pn_need_router_attachments: true
+        pn_held: ["{{ cb_api_vip | default('', true) }}", "{{ cb_ingress_vip | default('', true) }}"]
 
     - name: The cluster on the hybrid network
       ansible.builtin.set_fact:
