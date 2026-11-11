@@ -11,6 +11,14 @@ Actions (request["action"]):
                  name's limit), and 8 hex digits of the SHA-256 of the exact pair (entity, NUL, name), so two pairs
                  whose readable parts read alike (a hyphen from either side, a cut) still get different names.
                  Stable for a pair. -> {buildName}
+  acm-names      {buildName, namespace}  the base of the names of the build's ACM objects in the policy namespace
+                 (Policy <base>-keycloak-oidc and <base>-cluster-rbac, their Placement <policy>-placement and
+                 PlacementBinding <policy>-binding, the ConfigurationPolicy templates <base>-oidc-*): ACM refuses a
+                 policy whose namespace and name together exceed 62 characters (its copy on a managed cluster is
+                 named <namespace>.<name>, a label value). The build name itself when every policy name fits (so the
+                 objects of an existing build keep their names); else its head and 8 hex digits of the SHA-256 of the
+                 whole build name. -> {base, bases: [base, and the build name when it differs: names an older job
+                 may have used, for the teardown]}
   hub-owner      {namespace: the hub namespace object or {}, uid, recorded, buildName, claim}  whether the cluster
                  (PlatformOpenshift uid) owns the build's hub namespace: it carries the owner label with that uid; or,
                  for a build recorded under that name before the label existed, it has no owner label (claim: true
@@ -51,6 +59,11 @@ from urllib.parse import urlparse
 
 BUILD_NAME_MAX = 53
 BUILD_NAME_DIGEST = 8
+# ACM: the policy namespace and the policy name together at most 62 characters (the replicated policy on a managed
+# cluster is <namespace>.<name>); the suffixes of the build's policies (keycloak_oidc.yml, cluster_rbac.yml)
+ACM_COMBINED_MAX = 62
+ACM_POLICY_SUFFIXES = ("keycloak-oidc", "cluster-rbac")
+ACM_DIGEST = 8
 # the hub namespace of a build carries the uid of the PlatformOpenshift it was made for
 OWNER_LABEL = "hybridsovereign.redhat/platformopenshift-uid"
 
@@ -108,6 +121,21 @@ def build_name(req):
         raise ValueError(f"build-name: {limit} characters leave no room after {prefix}")
     readable = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{name}".lower())[:room].strip("-")
     return {"buildName": "-".join(x for x in (prefix, readable, digest) if x)}
+
+
+def acm_names(req):
+    build = str(req.get("buildName") or "").strip()
+    ns = str(req.get("namespace") or "").strip()
+    if not build or not ns:
+        raise ValueError("acm-names needs buildName and namespace")
+    room = ACM_COMBINED_MAX - len(ns) - 1 - max(len(s) for s in ACM_POLICY_SUFFIXES)
+    if room < ACM_DIGEST + 2:
+        raise ValueError(f"acm-names: namespace {ns} leaves no room for a policy name")
+    if len(build) <= room:
+        return {"base": build, "bases": [build]}
+    digest = hashlib.sha256(build.encode()).hexdigest()[:ACM_DIGEST]
+    base = build[:room - ACM_DIGEST - 1].rstrip("-") + "-" + digest
+    return {"base": base, "bases": [base, build]}
 
 
 def hub_owner(req):
@@ -389,7 +417,7 @@ def router_gateway(req):
     return {"address": "", "note": ""}
 
 
-ACTIONS = {"build-name": build_name, "hub-owner": hub_owner, "networking": networking, "network": network, "external": external,
+ACTIONS = {"build-name": build_name, "acm-names": acm_names, "hub-owner": hub_owner, "networking": networking, "network": network, "external": external,
            "fips-check": fips_check, "service-wait": service_wait, "router-gateway": router_gateway}
 
 

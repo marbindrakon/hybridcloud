@@ -44,9 +44,13 @@ This cross-cluster ServiceAccount configuration is managed via the Helm chart fo
 
 | Resource | Name | Namespace |
 |---|---|---|
-| Policy | `{cluster-name}-keycloak-oidc` | `openshift-gitops` |
-| Placement | `{cluster-name}-keycloak-oidc-placement` | `openshift-gitops` |
-| PlacementBinding | `{cluster-name}-keycloak-oidc-binding` | `openshift-gitops` |
+| Policy | `{acm-base}-keycloak-oidc` | `openshift-gitops` |
+| Placement | `{acm-base}-keycloak-oidc-placement` | `openshift-gitops` |
+| PlacementBinding | `{acm-base}-keycloak-oidc-binding` | `openshift-gitops` |
+
+`{acm-base}` is the cluster's build name when the policy names fit ACM's limit (the policy namespace and name
+together at most 62 characters), else the head of the build name and 8 hex digits of its SHA-256 (at most 32
+characters). The cluster RBAC policy (`{acm-base}-cluster-rbac` and its placement and binding) follows the same rule.
 
 The Policy uses `Placement.matchLabels.name: {cluster-name}` to target the correct ManagedCluster.
 
