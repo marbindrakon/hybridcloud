@@ -179,6 +179,7 @@ export const PART_REASONS: Record<string, ReasonEntry> = {
   "RoutingDaemonRestarted": { actor: "P", class: "ready", summary: "A routing process on a node restarted after a crash; the platform team is alerted." },
   "ServiceLimitReached": { actor: "P", class: "ready", summary: "The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team." },
   "ServiceNotOffered": { actor: "P", class: "ready", summary: "The platform's connection for clusters on networks is not offered here. Ask the platform team." },
+  "ServiceNotRealized": { actor: "P", class: "ready", summary: "The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts." },
   "ServicePrefixInUse": { actor: "T", class: "ready", summary: "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team." },
   "ServiceShareReached": { actor: "T", class: "ready", summary: "Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn." },
   "UpstreamDown": { actor: "P", class: "ready", summary: "IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted." },

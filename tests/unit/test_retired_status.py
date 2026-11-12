@@ -83,10 +83,11 @@ class RetiredConditions(unittest.TestCase):
 
 class FabricJobWiring(unittest.TestCase):
     def test_the_only_event_left_is_the_egress_outage(self):
-        """The fabric job reports one Warning event (the IPv6 egress upstream outage); nothing else."""
+        """The fabric job reports two Warning events (the IPv6 egress upstream outage; the service routing domain not
+        realized for a wrong setting, review R4 M2, once per change); nothing else."""
         reasons = {t["kubernetes.core.k8s"]["definition"]["reason"] for t in walk(load(FABRIC))
                    if (t.get("kubernetes.core.k8s") or {}).get("definition", {}).get("kind") == "Event"}
-        self.assertEqual(reasons, {"IPv6EgressUpstreamDown"})
+        self.assertEqual(reasons, {"IPv6EgressUpstreamDown", "ServiceNotRealized"})
 
     def test_every_included_task_file_exists(self):
         tasks_dir = os.path.dirname(FABRIC)

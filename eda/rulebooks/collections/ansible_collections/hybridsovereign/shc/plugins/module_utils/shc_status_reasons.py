@@ -189,6 +189,7 @@ PART_REASONS = {
     "UpstreamDown": _r("P", READY, "IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted."),
     # the HybridFabric's IPv6EgressUpstream condition and its Warning event: a node without an upstream session
     "IPv6EgressUpstreamDown": _r("P", READY, "IPv6 internet access works through the other node; a node's upstream sessions are down."),
+    "ServiceNotRealized": _r("P", READY, "The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts."),
     # the CloudInfrastructure's TenantDns condition: the site's tenant DNS controller reports a failed reconcile newer
     # than its last success, or no success for dns.reverse6.staleMinutes
     "DNSReconcileFailed": _r("P", READY, "The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it."),

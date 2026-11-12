@@ -270,6 +270,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `RoutingDaemonRestarted` | A routing process on a node restarted after a crash; the platform team is alerted. | The platform team |
 | `ServiceLimitReached` | The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
+| `ServiceNotRealized` | The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts. | The platform team |
 | `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
 | `ServiceShareReached` | Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn. | You (the tenant) |
 | `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
