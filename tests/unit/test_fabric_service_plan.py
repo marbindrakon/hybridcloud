@@ -268,7 +268,7 @@ class Plan(unittest.TestCase):
         self.assertEqual(n["advertise"], ["192.0.2.15/32", "192.0.2.16/32"])
         self.assertEqual(n["attachable"], ["192.0.2.0/24 le 32", "203.0.113.0/24 le 32"])
         # what is announced is guarded as the hub's routers filter it: never inside a published range
-        self.assertEqual(n["refuse"][0], "198.51.100.0/24 le 32")
+        self.assertEqual(n["refuse"][:2], ["0.0.0.0/0", "198.51.100.0/24 le 32"])
         self.assertEqual(n["circuits"][0]["address"], "10.255.128.9/29")
         self.assertEqual(out["nodes"]["bgw-2"]["circuits"][0]["address"], "10.255.128.10/29")
         st = out["status"]
@@ -434,7 +434,7 @@ class ServiceRange(unittest.TestCase):
         self.assertEqual(n["accept"], ["198.51.100.0/28 le 32"])
         self.assertEqual(n["range"], [RANGE])
         # out, guarded: refuse every published range (any length), then anything up to /32
-        self.assertEqual(n["refuse"][:2], ["198.51.100.0/24 le 32", "100.127.0.0/16 le 32"])
+        self.assertEqual(n["refuse"][:3], ["0.0.0.0/0", "198.51.100.0/24 le 32", "100.127.0.0/16 le 32"])
         self.assertIn("192.0.0.8/32", n["refuse"])
         self.assertTrue(all(":" not in e for e in n["refuse"]))
         self.assertEqual(n["attachable"], ["0.0.0.0/0 le 32"])
@@ -461,7 +461,7 @@ class ServiceRange(unittest.TestCase):
                               "realization": r})["ceConfig"]
         self.assertEqual(list(ce), ["acceptedRanges", "refusedRanges", "advertisedRanges", "maxPrefixes"])
         self.assertEqual(ce["acceptedRanges"], ["198.51.100.0/28 le 32"])
-        self.assertEqual(ce["refusedRanges"][0], "198.51.100.0/24 le 32")
+        self.assertEqual(ce["refusedRanges"][:2], ["0.0.0.0/0", "198.51.100.0/24 le 32"])
         self.assertEqual(ce["advertisedRanges"], ["0.0.0.0/0 le 32"])
         self.assertEqual(ce["maxPrefixes"], 200)
         ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
@@ -531,7 +531,7 @@ class ServiceRefusal(unittest.TestCase):
                               "realization": self.real(), "ranges": F.reserved_ranges(self.real(), self.SITES)})["ceConfig"]
         self.assertEqual(ce["refusedRanges"], n["refuse"])
         srows = F.service_refusal_rows(F.rows_of(F.reserved_ranges(self.real(), self.SITES)))
-        self.assertEqual([F.prefix_entry(x[0]) for x in srows], [e for e in n["refuse"] if e != "0.0.0.0/0"])
+        self.assertEqual(["0.0.0.0/0"] + [F.prefix_entry(x[0]) for x in srows], n["refuse"])
         for want in ("10.30.0.0/16 le 32", "10.40.0.0/16 le 32", "100.64.0.0/16 le 32", "203.0.113.64/26 le 32",
                      "203.0.113.0/24 le 32", "198.51.100.0/24 le 32", "127.0.0.0/8 le 32", "240.0.0.0/4 le 32"):
             self.assertIn(want, n["refuse"])
@@ -551,6 +551,18 @@ class ServiceRefusal(unittest.TestCase):
         # the per-prefix check (the network job's helper) with the published rows refuses it for the service
         out = F.service_prefix_check({"prefixes": ["10.40.0.20/32"], "space": ["10.40.0.0/24"], "ranges": rows})
         self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
+
+
+class DefaultRouteRefused(unittest.TestCase):
+    def test_the_hub_router_refuses_a_default_route_first(self):
+        # Review R4 L3: "0.0.0.0/0 le 32" would also admit a default route at the hub's router; it is refused first
+        ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
+                              "realization": real(service={"attachableRanges": []})})["ceConfig"]
+        self.assertEqual(ce["refusedRanges"][0], "0.0.0.0/0")
+        nets = [network("n1", ["192.0.2.0/24"], [("192.0.2.15/32", {})])]
+        alloc = ledger({("acme/n1", "192.0.2.15/32"): 1}, {"acme/n1": 10005}, {"acme/n1": 4})
+        n = plan(real(service={"attachableRanges": []}), nets, alloc)["nodes"]["bgw-1"]
+        self.assertEqual(n["refuse"], ce["refusedRanges"])
 
 
 class PrefixCheck(unittest.TestCase):

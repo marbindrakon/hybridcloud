@@ -140,7 +140,7 @@ class Refusals(unittest.TestCase):
         self.assertTrue(out["done"], out["msg"])
         self.assertIn("10.40.0.0/16 le 32", out["ce"]["refusedRanges"])
         self.assertEqual(out["ce"]["refusedRanges"],
-                         [F.prefix_entry(r[0]) for r in F.service_refusal_rows(F.rows_of(rows))])
+                         ["0.0.0.0/0"] + [F.prefix_entry(r[0]) for r in F.service_refusal_rows(F.rows_of(rows))])
 
     def test_the_service_range_is_required(self):
         for svc in (dict(SERVICE, range=[]), {k: v for k, v in SERVICE.items() if k != "range"},
@@ -221,7 +221,7 @@ class Record(unittest.TestCase):
         self.assertEqual((r["vlan"], r["linkIndex"], r["ce"], r["interface"], r["mtu"]), (3001, 2, "169.254.200.3", "bond1", 9000))
         self.assertEqual(len(r["rev"]), 12)
         self.assertEqual(ce["acceptedRanges"], ["192.0.2.0/28 le 32", "198.51.100.17/32"])
-        self.assertEqual(ce["refusedRanges"], ["192.0.2.0/24 le 32", "198.51.100.17/32"] + SPECIAL)
+        self.assertEqual(ce["refusedRanges"], ["0.0.0.0/0", "192.0.2.0/24 le 32", "198.51.100.17/32"] + SPECIAL)
         self.assertEqual(ce["advertisedRanges"], ["10.64.0.0/12 le 32"])
         self.assertEqual(ce["maxPrefixes"], 1000)
         self.assertEqual(ce["neighbors"], [{"name": "node-1", "address": "169.254.200.1", "asn": 65010},
@@ -234,7 +234,7 @@ class Record(unittest.TestCase):
         # IPv4 prefix up to /32; written out as 0.0.0.0/0 it reads the same
         out = self.record(load(os.path.join(AC, "main.yml")), record_vars(service=dict(SERVICE, attachableRanges=[])))
         self.assertEqual((out["ce"]["advertisedRanges"], out["real"]["advertise"]), (["0.0.0.0/0 le 32"],) * 2)
-        self.assertEqual(out["ce"]["refusedRanges"], ["192.0.2.0/24 le 32", "198.51.100.17/32"] + SPECIAL)
+        self.assertEqual(out["ce"]["refusedRanges"], ["0.0.0.0/0", "192.0.2.0/24 le 32", "198.51.100.17/32"] + SPECIAL)
         out = self.record(load(os.path.join(AC, "main.yml")),
                           record_vars(service=dict(SERVICE, attachableRanges=[], maxPrefixes=40)))
         self.assertEqual(out["ce"]["maxPrefixes"], 40)

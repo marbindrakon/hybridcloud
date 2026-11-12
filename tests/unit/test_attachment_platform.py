@@ -55,7 +55,7 @@ class CheckCircuit(unittest.TestCase):
         ce = out["ceConfig"]
         self.assertEqual(list(ce), ["acceptedRanges", "refusedRanges", "advertisedRanges", "maxPrefixes"])
         self.assertEqual(ce["acceptedRanges"], ["198.51.100.0/28 le 32"])
-        self.assertEqual(ce["refusedRanges"][0], "198.51.100.0/24 le 32")
+        self.assertEqual(ce["refusedRanges"][:2], ["0.0.0.0/0", "198.51.100.0/24 le 32"])
         self.assertTrue(all(":" not in e for e in ce["refusedRanges"]))
         self.assertEqual(ce["advertisedRanges"], ["192.0.2.0/24 le 32", "203.0.113.0/25 le 32"])
         self.assertEqual(ce["maxPrefixes"], 1000)

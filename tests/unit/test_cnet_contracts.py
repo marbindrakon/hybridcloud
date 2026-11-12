@@ -636,7 +636,7 @@ class ServiceRefusalSet(unittest.TestCase):
                        "ac_fabric": {"status": {"reservedRanges": published}}})
         verdict = [F.prefix_entry(r[0]) for r in F.service_rows(real, self.SITES)]
         self.assertEqual(json.dumps(ce["refusedRanges"]), json.dumps(guard))
-        self.assertEqual([e for e in guard if e != "0.0.0.0/0"], verdict)
+        self.assertEqual(guard, ["0.0.0.0/0"] + verdict)
         for want in ("10.30.0.0/16 le 32", "10.40.0.0/16 le 32", "203.0.113.64/26 le 32", "127.0.0.0/8 le 32"):
             self.assertIn(want, guard)
 

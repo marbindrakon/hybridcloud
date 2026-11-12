@@ -332,10 +332,11 @@ class ServiceTemplate(unittest.TestCase):
                       "192.0.2.16/32\n", out)
         # the guard on what is announced, as the hub's routers are told to filter it: the published ranges refused at
         # any length first, then the attachable ranges
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 deny 198.51.100.0/24 le 32\n"
-                      "ip prefix-list SVC-ATTACHABLE seq 10 deny 192.0.0.8/32\n", out)
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 65 permit 192.0.2.0/24 le 32\n", out)
-        self.assertEqual(out.count("SVC-ATTACHABLE seq"), 13)  # the hand-off and the special-purpose space too (R4 H1)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 deny 0.0.0.0/0\n"
+                      "ip prefix-list SVC-ATTACHABLE seq 10 deny 198.51.100.0/24 le 32\n"
+                      "ip prefix-list SVC-ATTACHABLE seq 15 deny 192.0.0.8/32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 70 permit 192.0.2.0/24 le 32\n", out)
+        self.assertEqual(out.count("SVC-ATTACHABLE seq"), 14)  # the hand-off and the special-purpose space too (R4 H1)
         self.assertIn("route-map SVC-STATIC permit 10\n match ip address prefix-list SVC-ATTACHABLE\nexit\n", out)
         self.assertIn("route-map AC3099-IN deny 10\n match ip address prefix-list SVC-DENY\nexit\n"
                       "route-map AC3099-IN permit 20\n match ip address prefix-list SVC-HUB\n"
@@ -412,7 +413,7 @@ class ServiceTemplate(unittest.TestCase):
         self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", inst)
         self.assertIn("  neighbor 169.254.128.0 route-map SVC-NET-IN in\n", inst)
         self.assertNotIn("nexthop vpn export", inst)
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 65 permit 0.0.0.0/0 le 32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 70 permit 0.0.0.0/0 le 32\n", out)
 
     def test_srv6(self):
         out, _ = self.render(core=CORE_SRV6)
@@ -445,8 +446,9 @@ class ServiceTemplate(unittest.TestCase):
         led["servicePrefix"] = {"HybridNetwork/acme/lab/192.0.2.15/32": 1}
         egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
         out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 65 permit 0.0.0.0/0 le 32\n", out)
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 deny 198.51.100.0/24 le 32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 70 permit 0.0.0.0/0 le 32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 deny 0.0.0.0/0\n"
+                      "ip prefix-list SVC-ATTACHABLE seq 10 deny 198.51.100.0/24 le 32\n", out)
         self.assertIn("ip prefix-list SVC-HUB seq 5 permit 198.51.100.0/29 le 32\n"
                       "ip prefix-list SVC-HUB seq 10 permit 198.51.100.10/32\n", out)
         self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/29 le 32\n"

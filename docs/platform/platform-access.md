@@ -161,7 +161,7 @@ addresses and session per border gateway node, and its filters in the order it a
 | Key | The hub-side router |
 |---|---|
 | `acceptedRanges` | announces these to the platform (`service.range`, up to /32); the platform accepts nothing else |
-| `refusedRanges` | refuses these from the platform, at any length (the published reserved ranges, IPv4) |
+| `refusedRanges` | refuses these from the platform: the default route itself (`0.0.0.0/0`, exact), then each published reserved range at any length (IPv4, every site's own included) |
 | `advertisedRanges` | then accepts these from the platform: `0.0.0.0/0 le 32` (any other IPv4 prefix up to /32), or each `service.attachableRanges` entry up to /32 when set |
 | `maxPrefixes` | sets this as its maximum-prefix for the session (`service.maxPrefixes`) |
 

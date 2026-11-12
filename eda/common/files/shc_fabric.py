@@ -1376,7 +1376,8 @@ def platform_ce_ranges(cfg, srows):
     what it accepts: any other IPv4 prefix up to /32, or exactly attachableRanges when set) and maxPrefixes (its
     maximum-prefix figure: the platform never announces more)."""
     return {"acceptedRanges": [prefix_entry(n) for n in cfg["range"]],
-            "refusedRanges": [prefix_entry(r[0]) for r in srows],
+            # the default route itself first (exact): advertisedRanges 0.0.0.0/0 le 32 would admit it (Review R4 L3)
+            "refusedRanges": ["0.0.0.0/0"] + [prefix_entry(r[0]) for r in srows],
             "advertisedRanges": [prefix_entry(n) for n in cfg["attachable"]] or ["0.0.0.0/0 le 32"],
             "maxPrefixes": cfg["maxPrefixes"]}
 
