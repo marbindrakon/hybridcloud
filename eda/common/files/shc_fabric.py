@@ -1268,11 +1268,14 @@ def service_settings_check(real):
     # only destinations a cluster reaches through it, the only routes taken from the hub's routers)
     rng = []
     raw = sv.get("range")
-    if raw in (None, "", []):
+    if raw not in (None, "", []) and not isinstance(raw, list):
+        # (a string would be read character by character by the jobs that iterate it: Review R4 L2)
+        errors.append(f"realization service.range must be a list of IPv4 prefixes, not {raw!r}")
+    elif raw in (None, "", []):
         errors.append("realization service.range is required with service.enabled: the IPv4 addresses of the hub "
                       "(inside infrastructure.hub) that reach the clusters and that the clusters may reach")
     else:
-        for i, v in enumerate([raw] if isinstance(raw, (str, bytes)) else (raw if isinstance(raw, list) else [raw])):
+        for i, v in enumerate(raw):
             try:
                 n = ipaddress.ip_network(str(v).strip(), strict=True)
             except ValueError:

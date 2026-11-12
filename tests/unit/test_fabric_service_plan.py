@@ -711,6 +711,13 @@ class FairLimit(unittest.TestCase):
         self.assertEqual(F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": 1})})["serviceErrors"], [])
 
 
+class ScalarRange(unittest.TestCase):
+    def test_a_scalar_range_is_refused_by_name(self):
+        # Review R4 L2: a string passed check-fabric and the plan, and the network and circuit jobs read its characters
+        errs = F.check_fabric({"spec": spec(), "realization": real(service={"range": "198.51.100.0/28"})})["serviceErrors"]
+        self.assertTrue([e for e in errs if "service.range must be a list" in e], errs)
+
+
 class PrefixCheck(unittest.TestCase):
     def test_rows(self):
         out = F.service_prefix_check({"realization": real(), "space": ["192.0.2.0/24", "100.64.0.0/24"],
