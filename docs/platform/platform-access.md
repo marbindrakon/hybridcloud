@@ -37,7 +37,7 @@ service:
   # addresses in the service range the clusters may open TCP connections to (the hub's API for cluster management)
   hubEndpoints:
     - {prefix: 198.51.100.10/32, ports: [6443]}
-  # optional: the ranges a cluster's addresses must lie in (absent: any range the platform does not refuse)
+  # the ranges a cluster's addresses may lie in (default: the private and shared blocks; 0.0.0.0/0: any)
   attachableRanges: [10.64.0.0/10]
   # the most cluster addresses the platform announces to the hub's network
   maxPrefixes: 1000
@@ -69,15 +69,14 @@ service:
   (`HubEndpointNotAdmitted`), because cluster management could not reach the hub from it. With entries set, an
   OpenStack cluster's router gateway address joins the cluster's addresses after the install, so the nodes' own
   traffic to the endpoints is admitted.
-- **`service.attachableRanges`** (optional): IPv4 ranges a cluster's addresses must lie in. An entry may hold reserved
-  ranges (a whole private block holding the hub's range, say): the reserved ranges are taken out first, by the
-  platform and, in `status.ceConfig`, by the hub's router (`refusedRanges` before `advertisedRanges`); tenants see
-  both, the reserved ranges and these. Absent or empty: any IPv4 address that passes the other checks (inside the network's own address space,
-  the provider's prefix shape, clear of every reserved range, not already taken for another network: first come,
-  first served); `0.0.0.0/0` written out reads the same. Set, it is an allow-list: the platform announces nothing
-  outside it, tenants see it as "Ranges for clusters managed by the platform", and a network with no IPv4 prefix
-  inside it reads `PlatformReachable` False `OutsideAttachableRanges`. See
-  [choosing between the two](#the-refused-ranges-or-an-allow-list).
+- **`service.attachableRanges`** (default: the private and shared blocks 10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16,
+  100.64.0.0/10): IPv4 ranges a cluster's addresses may lie in, the reserved ranges taken out first (an entry may
+  hold reserved ranges: a whole private block holding the hub's range, say). The hub's router is told exactly this
+  list (`status.ceConfig`, `refusedRanges` before `advertisedRanges`), tenants see it as "Ranges for clusters managed
+  by the platform", and a network with no IPv4 prefix inside it reads `PlatformReachable` False
+  `OutsideAttachableRanges`. A deployment whose tenants run clusters on other space sets its own list. `0.0.0.0/0`
+  is the one way to say any range the platform does not refuse; an empty list is refused by name. See
+  [choosing](#the-default-the-allow-list-or-any-range).
 - **`service.maxPrefixes`** (default 1000): the most cluster addresses the platform announces over a platform edge
   connection, given to the hub's network as its maximum-prefix figure. It is shared fairly and atomically: a
   cluster's addresses are admitted all or none; clusters whose install has started or completed keep their slots,
@@ -91,33 +90,33 @@ service:
   A tenant that filled the pool with installed clusters while it was alone keeps them: the others wait until its
   clusters go (or the setting grows).
 
-### The refused ranges or an allow-list
+### The default, the allow-list or any range
 
 The hub's network learns each cluster's addresses from the platform as routes up to /32. A route that is more
-specific than one the hub's network has for its own addresses wins there: a cluster address inside a range the
-hub's network routes (its own servers, DNS, proxies, another site) would draw that traffic to the tenant network
-instead of to the real destination. Something must keep cluster addresses out of everything the hub's network
-routes. There are two ways:
+specific than one the hub's network has wins there: a cluster address inside a range the hub's network routes (its
+own servers, DNS, proxies, another site, or the internet behind its default route) would draw that traffic to the
+tenant network instead of to the real destination. What keeps cluster addresses out of it:
 
-- **The refused ranges** (no `attachableRanges`): the refused ranges must cover everything the hub's network routes
-  itself, because the hub's routers then accept any other prefix up to /32 from the platform. The platform refuses
-  a cluster address that overlaps any range it publishes (`HybridFabric status.reservedRanges`), whatever the row's
-  rule and whichever site it names, and the hub's routers refuse the same list from the platform at any length
-  (`refusedRanges` below): `infrastructure.hub` and the service range, `network.exclusiveRanges`, the platform's own
-  pools (`core.loopbackPool`, `core.linkSubnet`, `core.icmpSource4`, `attachments.linkPool`, `egress.linkPool`), the
-  internet hand-off (each egress node's NAT pool and its hand-off network), every site's underlay and its
-  `placement.siteReserved` ranges, and the special-purpose space (0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16,
-  224.0.0.0/4, 240.0.0.0/4, and the default route itself). A site's own ranges count for every cluster, on every
-  site: a cluster address is announced to the hub's network, which routes every site. (A tenant network is judged
-  differently: a site's own ranges only constrain its placements on that site.) Everything else the hub's network
-  routes itself, including cloud-side ranges the fabric does not know (an AWS or Google Cloud hub's own subnets), the
-  deployment declares in `network.exclusiveRanges`. Choose this when the hub's network has a known, stable set of its own ranges and tenants
-  should be free to number their networks as they like.
-- **An allow-list** (`attachableRanges` set): clusters on networks must lie inside ranges agreed with the hub's
-  network team, which the hub's network does not use itself. Choose this when the hub's network cannot list all it
-  routes (a large or shared enterprise network), or when its team wants a fixed import filter that does not change
-  with the platform's reserved ranges. Tenants then see the ranges and must number networks for managed clusters
-  inside them.
+- **Always, the refused ranges.** The platform refuses a cluster address that overlaps any range it publishes
+  (`HybridFabric status.reservedRanges`), whatever the row's rule and whichever site it names, and the hub's routers
+  refuse the same list from the platform at any length (`refusedRanges` below): `infrastructure.hub` and the service
+  range, `network.exclusiveRanges`, the platform's own pools (`core.loopbackPool`, `core.linkSubnet`,
+  `core.icmpSource4`, `attachments.linkPool`, `egress.linkPool`), the internet hand-off (each egress node's NAT pool
+  and its hand-off network), every site's underlay and its `placement.siteReserved` ranges, and the special-purpose
+  space (0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 224.0.0.0/4, 240.0.0.0/4, and the default route itself). A site's
+  own ranges count for every cluster, on every site: a cluster address is announced to the hub's network, which
+  routes every site. (A tenant network is judged differently: a site's own ranges only constrain its placements on
+  that site.)
+- **The default allow-list**, the private and shared blocks: no cluster address in public space, so a hub that
+  reaches the internet by a default route never prefers a cluster's address over the internet's. The private ranges
+  the hub's network routes itself still need declaring (below).
+- **Your own allow-list**: ranges agreed with the hub's network team that it does not use itself. Choose it when the
+  hub's network cannot list all it routes (a large or shared enterprise network), or when its team wants an import
+  filter that does not change with the platform's reserved ranges.
+- **Any range** (`[0.0.0.0/0]`): tenants number networks as they like, public space included. The hub's routers then
+  accept any /32 from the platform: where the hub reaches the internet by a default route, a cluster's address is
+  preferred over the internet's (the hub's traffic to that internet address goes to the tenant), so choose it only
+  for a hub without a default route, and declare everything its network routes.
 
 Either way the platform refuses what lies inside a reserved range, and either way the hub's routers should keep the
 refusal as a second guard.
@@ -173,7 +172,7 @@ addresses and session per border gateway node, and its filters in the order it a
 |---|---|
 | `acceptedRanges` | announces these to the platform (`service.range`, up to /32); the platform accepts nothing else |
 | `refusedRanges` | refuses these from the platform: the default route itself (`0.0.0.0/0`, exact), then each published reserved range at any length (IPv4, every site's own included) |
-| `advertisedRanges` | then accepts these from the platform: `0.0.0.0/0 le 32` (any other IPv4 prefix up to /32), or each `service.attachableRanges` entry up to /32 when set |
+| `advertisedRanges` | then accepts these from the platform: each `service.attachableRanges` entry up to /32 (`0.0.0.0/0 le 32` when the list is `0.0.0.0/0`) |
 | `maxPrefixes` | sets this as its maximum-prefix for the session (`service.maxPrefixes`) |
 
 `status.sessions` shows each node's session.
@@ -274,7 +273,7 @@ install and the import.
 The fabric computes every range a tenant prefix is refused in or stepped around into `HybridFabric
 status.reservedRanges`; each tenant's profile copies the list of its fabric (`oc get tenantprofile shc -n
 entity-<tenant> -o yaml`, `status.reservedRanges`, and `status.managedClusterRanges` for
-`service.attachableRanges`, absent when none are set: then any range not reserved will do). The dashboard shows both
+`service.attachableRanges`, `0.0.0.0/0` for any range not reserved, absent where not offered). The dashboard shows both
 on the network pages.
 
 | Source | Rule | Purpose shown to tenants |
@@ -313,7 +312,8 @@ hub's routing (above) is the deployment's to verify.
 2. `service.enabled` with `attachments.enabled`; `service.range` (the hub's addresses Hive, ACM and the hub
    endpoints use); `service.ports`; `service.hubEndpoints` admitting the hub's API on 6443 when it lies in the
    service range; either the refused ranges covering everything the hub's network routes, or
-   `service.attachableRanges` as agreed with the hub's network team; `service.maxPrefixes`.
+   `service.attachableRanges` (the default private and shared blocks, or a list agreed with the hub's network team;
+   `0.0.0.0/0` only for a hub without a default route); `service.maxPrefixes`.
    `egress.platformSources` and `egress.platformPorts` removed.
 3. A provider edge bearer with `ceKinds: [platform]` and at least one `AttachmentCircuit` with `ceKind: platform` in
    the fabric's namespace, Ready, with its sessions established from every node.

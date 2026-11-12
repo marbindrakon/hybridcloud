@@ -128,9 +128,9 @@ export function hybridNetworkOptions(opts: {
 }): HybridNetworkOption[] {
   const kind = PROVIDER_ENV_KIND[opts.provider];
   if (!opts.environment) return [];
-  // an absent or empty list means the platform names no ranges: any range it does not reserve will do (first come,
-  // first served), so the form filters nothing itself and the network's PlatformReachable and the cluster's preflight
-  // decide (also whether the platform offers such clusters at all); a list restricts the placement's subnet
+  // the list (0.0.0.0/0: any range the platform does not reserve) restricts the placement's subnet; an absent list
+  // means not offered or not read: the form filters nothing itself and the network's PlatformReachable and the
+  // cluster's preflight decide
   const managedRanges = opts.profile?.status?.managedClusterRanges ?? [];
   const reserved = opts.profile?.status?.reservedRanges ?? [];
   const out: HybridNetworkOption[] = [];

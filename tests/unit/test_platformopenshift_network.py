@@ -209,11 +209,12 @@ class NetworkJudge(unittest.TestCase):
 
     def test_no_attachable_ranges_mean_any(self):
         # optional: none named (or 0.0.0.0/0 written out) = any range the network accepted; named, they restrict
+        # Review R4 NH1: 0.0.0.0/0 is any; an empty or absent list (never realized) is not offered
         self.assertEqual(judge(fabric=fabric(ranges=("0.0.0.0/0",)))["reason"], "")
-        self.assertEqual(judge(fabric=fabric(ranges=()))["reason"], "")
+        self.assertEqual(judge(fabric=fabric(ranges=()))["reason"], "ServiceNotOffered")
         f = fabric()
         del f["status"]["realization"]["service"]["attachableRanges"]
-        self.assertEqual(judge(fabric=f)["reason"], "")
+        self.assertEqual(judge(fabric=f)["reason"], "ServiceNotOffered")
         self.assertEqual(judge(fabric=fabric(ranges=("203.0.113.0/24",)))["reason"], "OutsideAttachableRanges")
 
     def test_a_service_the_fabric_does_not_realize(self):

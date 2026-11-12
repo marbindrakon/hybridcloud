@@ -249,7 +249,7 @@ the connection) plus about a second for the withdrawal through the network's VPN
 node down, no node announces the service range: the clusters lose the hub and nothing else changes (a reject route at
 distance 254 for each `service.range` entry in `e<t>` keeps the clusters' traffic to it off the network's other
 routes, its internet egress default among them). The service VRF's sessions announce the accepted addresses only,
-never inside a published reserved range and, when `service.attachableRanges` is set, only inside it; they accept
+never inside a published reserved range and only inside `service.attachableRanges`; they accept
 routes inside the service range only, and never a default route, the link pools, the core pools or an accepted
 address.
 
@@ -265,15 +265,14 @@ So a deployment whose hub routes carry further AS numbers keeps those numbers of
 the hub's router originate (or aggregate) the hub's ranges itself.
 
 `service.range` is required with `service.enabled` (the fabric fails with `InvalidSpec` naming it).
-`service.attachableRanges` is optional. Each platform edge connection's `status.ceConfig` gives the hub's router
+`service.attachableRanges` defaults to the private and shared blocks (`0.0.0.0/0` for any). Each platform edge connection's `status.ceConfig` gives the hub's router
 its filters in order: `acceptedRanges` (what it announces: the service range), `refusedRanges` (every published
 reserved range, every site's own included, as `<range> le 32`: refused from the platform at any length), `advertisedRanges` (then accepted:
-`0.0.0.0/0 le 32` without `attachableRanges`, else each of them as `<range> le 32`) and `maxPrefixes`
+each `attachableRanges` entry as `<range> le 32`) and `maxPrefixes`
 (`service.maxPrefixes`, which the plan never exceeds: later addresses wait). The nodes guard their own announcement
-the same way (prefix list `SVC-ATTACHABLE` on the redistribution). Without `attachableRanges`, a cluster address is
-any address the reserved ranges leave, so those ranges must cover everything the hub's network routes itself: a
-more-specific route from the platform inside one of the hub network's own ranges would draw that traffic into a
-tenant network (see [Platform access](platform-access.md#the-refused-ranges-or-an-allow-list)). What is announced
+the same way (prefix list `SVC-ATTACHABLE` on the redistribution). A more-specific route from the platform inside a
+range the hub's network routes itself would draw that traffic into a tenant network, which is why public space is
+outside the default list (see [Platform access](platform-access.md#the-default-the-allow-list-or-any-range)). What is announced
 is bounded further per cluster: an OpenStack cluster's addresses are /32s (its floating IPs and its router's
 gateway), an AWS or Google Cloud cluster's the subnet of its placement on the network, each inside the network's
 accepted address space; anything else is refused on the network's prefix row.

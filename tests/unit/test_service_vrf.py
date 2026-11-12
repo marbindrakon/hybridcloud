@@ -441,7 +441,7 @@ class ServiceTemplate(unittest.TestCase):
         # no attachable ranges: the announcement is guarded by the published ranges, then any IPv4 prefix up to /32;
         # a service range entry that is an address is written without a length range (FRR refuses "/32 le 32")
         real, _ = service_setup()
-        real["service"].update(attachableRanges=[], range=["198.51.100.10/32", "198.51.100.0/29"])
+        real["service"].update(attachableRanges=["0.0.0.0/0"], range=["198.51.100.10/32", "198.51.100.0/29"])
         nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32"])]
         led = copy.deepcopy(LEDGER)
         led["servicePrefix"] = {"HybridNetwork/acme/lab/192.0.2.15/32": 1}

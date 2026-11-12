@@ -288,12 +288,14 @@ fabric_realization_defaults:
     # destinations inside service.range the clusters may open TCP connections to: [{prefix, ports}] (e.g. the hub's
     # API). Empty = none: the clusters reach the hub by their network's own outbound path
     hubEndpoints: []
-    # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF, as an allow-list for the hub's network
-    # (status.ceConfig gives them as "<range> le 32"). Empty = any IPv4 prefix the other checks admit, first come
-    # first served: then the reserved ranges (infrastructure.hub, network.exclusiveRanges and the others published)
-    # must cover everything the hub's network routes itself, since the hub's routers accept any other prefix up to /32
-    # from the platform and would prefer a cluster's address over their own route to the same address
-    attachableRanges: []
+    # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF, the reserved ranges taken out first; the
+    # hub's network is told exactly this list (status.ceConfig, "<range> le 32"). Default: the private and shared
+    # blocks. A deployment whose tenants run clusters on other space sets its own list. 0.0.0.0/0 is the one way to
+    # say any range the platform does not refuse: the hub's routers then accept any public /32 from the platform too,
+    # and where the hub reaches the internet by a default route a cluster's address is preferred there over the
+    # internet's, so every range the hub's network routes itself must then be declared (service.hubRoutedRanges).
+    # Not empty (refused by name: an empty list would read as "none" or as "any")
+    attachableRanges: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
     # the most cluster prefixes the platform announces to the hub's network over a platform circuit (its
     # maximum-prefix, status.ceConfig.maxPrefixes). A cluster's prefixes are admitted all or none; clusters whose
     # install has started keep their slots, the others take what is left in the order they came; the rest wait

@@ -9949,9 +9949,9 @@ spec:
                 managedClusterRanges:
                   description: >-
                     The IPv4 ranges a network's addresses must lie in to host OpenShift clusters the platform builds
-                    and manages on it; 0.0.0.0/0 means any range not reserved. Absent when the platform names no
-                    such ranges: then any range not reserved (reservedRanges) will do, first come first served, where
-                    the platform offers such clusters (the network's PlatformReachable condition says whether it does).
+                    and manages on it, the reserved ranges (reservedRanges) taken out first; 0.0.0.0/0 means any range
+                    not reserved, first come first served. Absent when the platform does not offer such clusters on
+                    networks.
                   type: array
                   maxItems: 64
                   x-kubernetes-list-type: atomic

@@ -1309,11 +1309,16 @@ def service_settings_check(real):
     if isinstance(mp, bool) or not isinstance(mp, (int, str)) or not str(mp).strip().isdigit() or int(mp) < 1:
         errors.append(f"realization service.maxPrefixes {mp!r} must be a whole number from 1 (the most cluster prefixes "
                       "the platform announces to the hub's network)")
-    # attachableRanges is optional: absent or empty = any IPv4 prefix the other checks admit (the reserved ranges, the
-    # network's own space, first come first served); set, it restricts the clusters' prefixes to it. An entry may hold
+    # attachableRanges: the realization's default is the private and shared blocks (Review R4 NH1); 0.0.0.0/0 is the one
+    # way to say any range the platform does not refuse, and an empty list is refused by name (it would read as
+    # "none" to one reader and "any" to another). An entry may hold
     # reserved ranges, a whole private block holding the hub's range for one (Review R4 M3): the reserved ranges are
     # taken out first, by the planner's verdict, the node guard and the hub router's filter alike (refusedRanges before
     # advertisedRanges), so an entry admits nothing they refuse
+    if not sv.get("attachableRanges"):
+        errors.append("realization service.attachableRanges is empty: name the IPv4 ranges a cluster's addresses may "
+                      "lie in (the default: the private and shared blocks), or 0.0.0.0/0 for any range the platform does "
+                      "not refuse")
     for i, v in enumerate(sv.get("attachableRanges") or []):
         n = _net(v)
         if n is None or n.version != 4:

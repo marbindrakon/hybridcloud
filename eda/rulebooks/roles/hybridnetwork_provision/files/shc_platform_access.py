@@ -31,8 +31,8 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       ledger         the fabric ledger's servicePrefix allocations {owner: value}
       fabric         the fabric's name (messages)
     A prefix is accepted when the network is eligible and the prefix is IPv4, inside the network's space, inside
-    service.attachableRanges when the realization sets them (absent or empty: any range the platform does not
-    refuse), clear of the reserved ranges and of every prefix accepted earlier for another network (first come first
+    service.attachableRanges (the realization's default: the private and shared blocks; 0.0.0.0/0: any range the
+    platform does not refuse; empty: not offered), clear of the reserved ranges and of every prefix accepted earlier for another network (first come first
     served: the ledger value, the lower the earlier; a prefix the fabric realizes counts as accepted). The sources are
     the service range (service.range: the only addresses the platform's management opens connections from) while the
     service is on, the hub's IPv4 ranges otherwise. Returns {state, reason, message, condition, sources, ports,
@@ -162,7 +162,8 @@ def platform_access(req):
     rng = [n for n in nets(svc.get("range")) if n.version == 4]
     sources = [str(h) for h in (rng if svc.get("enabled") else hub) if h.version == 4]
     ports = [int(p) for p in (svc.get("ports") or [])]
-    # empty: any range the platform does not refuse (the reserved ranges, first come first served)
+    # the realization's default is the private and shared blocks; 0.0.0.0/0 is any range the platform does not refuse;
+    # empty is refused by the fabric (Review R4 NH1)
     attachable = [n for n in nets(svc.get("attachableRanges")) if n.version == 4]
     ledger = {str(k): v for k, v in (req.get("ledger") or {}).items()}
     clusters = sorted(req.get("clusters") or [], key=lambda c: str(c.get("name")))
@@ -193,6 +194,10 @@ def platform_access(req):
         reason, message = "ServiceNotOffered", (
             f"HybridFabric {fabric} does not realize the platform's connection for clusters on networks: "
             f"{sst.get('message') or sst.get('reason')}; ask the platform team.")
+    elif not attachable:
+        reason, message = "ServiceNotOffered", (
+            f"HybridFabric {fabric} names no ranges for clusters on networks (service.attachableRanges is empty); ask "
+            "the platform team.")
     elif not rng:
         # the service needs its range (check-fabric refuses it without one): nothing reaches a cluster without it
         reason, message = "ServiceNotOffered", (

@@ -106,14 +106,15 @@ Your tenant profile lists the ranges the platform reserves (`oc get tenantprofil
   a prefix inside one before you create the network.
 - **Not allocated**: the platform does not give subnets from it (on the site named, where a row names one).
 
-**Ranges for clusters managed by the platform** (`status.managedClusterRanges`): where the platform names them, a
-network must have addresses in them to host clusters the platform manages (on OpenStack the floating IPs, on AWS
-and Google Cloud with Internal the placement's subnet). Where it names none (the list is absent, or `0.0.0.0/0`),
-**any range** will do that is not refused above: you number your networks as you like, and a cluster's addresses
-are taken first come, first served, so two tenants with the same address space can both have clusters as long as
-their clusters' addresses differ (`ServicePrefixInUse` tells the second one; creating the cluster again picks new
-addresses). Whether the platform offers clusters it manages on a network at all shows in the network's
-`PlatformReachable` condition (`ServiceNotOffered` when it does not).
+**Ranges for clusters managed by the platform** (`status.managedClusterRanges`): a network must have addresses in
+them, outside the ranges refused above, to host clusters the platform manages (on OpenStack the floating IPs, on
+AWS and Google Cloud with Internal the placement's subnet). By default these are the private and shared blocks
+(10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10); `0.0.0.0/0` means **any range** not refused above.
+Inside them you number your networks as you like: a cluster's addresses are taken first come, first served, so
+two tenants with the same address space can both have clusters as long as their clusters' addresses differ
+(`ServicePrefixInUse` tells the second one; creating the cluster again picks new addresses). The list is absent
+where the platform does not offer clusters it manages on networks (the network's `PlatformReachable` condition says
+`ServiceNotOffered`).
 
 ## Address settings of a cluster
 

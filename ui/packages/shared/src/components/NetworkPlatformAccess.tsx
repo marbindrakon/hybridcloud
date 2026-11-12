@@ -174,10 +174,12 @@ export function ReservedRangesSection({
       <h4 className="sc-netov__title" style={{ marginBottom: '0.5rem' }}>{t('reserved.managedTitle')}</h4>
       <p className="sc-text-muted">{t('reserved.managedHelp')}</p>
       <p>
-        {Array.isArray(managed) && managed.length ? (
+        {Array.isArray(managed) && managed.includes('0.0.0.0/0') ? (
+          t('reserved.managedAny')
+        ) : Array.isArray(managed) && managed.length ? (
           <Mono items={managed} />
         ) : Array.isArray(ranges) ? (
-          t('reserved.managedAny')
+          t('reserved.managedNotOffered')
         ) : (
           t('reserved.managedNotListed')
         )}

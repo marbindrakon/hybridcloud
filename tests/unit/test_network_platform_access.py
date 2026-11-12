@@ -108,18 +108,23 @@ class Eligibility(unittest.TestCase):
     def test_one_prefix_inside_is_enough(self):
         self.assertEqual(run(space=["172.16.0.0/16", "10.20.0.0/16"])["condition"]["reason"], "Attachable")
 
-    def test_absent_or_empty_attachable_ranges_mean_any(self):
-        # service.attachableRanges is optional: absent or empty = any range the platform does not refuse (0.0.0.0/0
-        # written out reads the same); set, it restricts as before
-        for att in ({"attachableRanges": ["0.0.0.0/0"]}, {"attachableRanges": []}, {"attachableRanges": None}, {}):
+    def test_any_is_written_out_and_empty_is_not_offered(self):
+        # Review R4 NH1: 0.0.0.0/0 is the one way to say any range the platform does not refuse; an empty list (the
+        # fabric refuses it by name) reads as not offered, by name
+        svc = dict(SERVICE, attachableRanges=["0.0.0.0/0"])
+        self.assertEqual(run(space=["172.16.0.0/16"], service=svc)["condition"]["reason"], "Attachable")
+        out = run(space=["172.16.0.0/16"], service=svc, clusters=[cl("c1", "172.16.0.9/32")])
+        self.assertEqual(out["accepted"], ["172.16.0.9/32"])
+        for att in ({"attachableRanges": []}, {"attachableRanges": None}, {}):
             svc = {k: v for k, v in SERVICE.items() if k != "attachableRanges"}
             svc.update(att)
             with self.subTest(service=str(att)):
-                self.assertEqual(run(space=["172.16.0.0/16"], service=svc)["condition"]["reason"], "Attachable")
                 out = run(space=["172.16.0.0/16"], service=svc, clusters=[cl("c1", "172.16.0.9/32")])
-                self.assertEqual(out["accepted"], ["172.16.0.9/32"])
-        # the reserved ranges still refuse: the hub's range and the published rows
-        out = run(space=["172.16.0.0/16", "198.51.100.0/24"], service=dict(SERVICE, attachableRanges=[]),
+                self.assertEqual(out["condition"]["reason"], "ServiceNotOffered")
+                self.assertIn("service.attachableRanges", out["message"])
+                self.assertEqual(out["accepted"], [])
+        # the reserved ranges still refuse under any: the hub's range and the published rows
+        out = run(space=["172.16.0.0/16", "198.51.100.0/24"], service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]),
                   clusters=[cl("c1", "198.51.100.7/32")])
         self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
 
@@ -450,7 +455,7 @@ class PlatformAccessTasks(unittest.TestCase):
     def test_the_job_passes_the_range_and_no_attachable_ranges_mean_any(self):
         # the realization's service.range reaches the decision (sources; without it: not offered, by name), and a
         # realization without attachableRanges accepts any range the platform does not refuse
-        svc = {k: v for k, v in SERVICE.items() if k != "attachableRanges"}
+        svc = dict(SERVICE, attachableRanges=["0.0.0.0/0"])
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], real={"service": svc})
         self.assertEqual(out["access"]["sources"], ["192.0.2.0/28"])
         self.assertEqual([(r["prefix"], r["state"], r["reason"]) for r in out["access"]["prefixes"]],
