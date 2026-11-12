@@ -1737,6 +1737,6 @@
     "managedTitle": "Ranges for clusters managed by the platform",
     "managedAny": "Any range the platform does not reserve (above). The platform names no ranges: a network's addresses are taken first come, first served. Whether the platform builds such clusters on a network shows under Platform access on the network.",
     "managedNotListed": "Your tenant profile does not list them yet.",
-    "managedHelp": "When the platform names ranges here, a network that hosts OpenShift clusters the platform manages needs addresses inside them."
+    "managedHelp": "When the platform names ranges here, a network that hosts OpenShift clusters the platform manages needs addresses inside them, outside the refused ranges above (those are taken out first)."
   }
 }

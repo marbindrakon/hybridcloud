@@ -183,17 +183,15 @@ class Realization(unittest.TestCase):
              "realization service.hubEndpoints[0].ports must hold TCP ports"),
             (real(service={"attachableRanges": ["2001:db8::/32"]}),
              "realization service.attachableRanges[0] '2001:db8::/32' is not an IPv4 network"),
-            (real(service={"attachableRanges": ["198.51.0.0/16"]}),
-             "realization service.attachableRanges[0] 198.51.0.0/16 overlaps 198.51.100.0/24 (networks the platform's "
-             "management connects from)"),
-            (real(service={"attachableRanges": ["10.255.0.0/25"]}),
-             "realization service.attachableRanges[0] 10.255.0.0/25 overlaps 10.255.0.0/24"),
         ]
         for r, want in cases:
             with self.subTest(want=want):
                 self.assertTrue(any(want in e for e in self.errs(r)), self.errs(r))
         # an attachable range holding a stepped-around range is fine (the address management steps around it)
         self.assertEqual(self.errs(real(service={"attachableRanges": ["10.0.0.0/8"]})), [])
+        # Review R4 M3: and one holding the hub's range, or lying in a reserved one: the reserved ranges are taken
+        # out first everywhere, so it admits nothing they refuse
+        self.assertEqual(self.errs(real(service={"attachableRanges": ["198.51.0.0/16", "10.255.0.0/25"]})), [])
 
     def test_interface_names_the_service_filter_would_catch(self):
         # Review R3 N5 (node): the service table drops by wildcard (devices named so*, se*); an interface the realization

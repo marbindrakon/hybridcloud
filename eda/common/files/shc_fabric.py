@@ -1180,7 +1180,8 @@ def service_check(real):
     egress.networkTableBase, the ports, service.range (required: IPv4 networks, addresses as /32, each inside an IPv4
     hub range), every hubEndpoints prefix an IPv4 network inside service.range with its ports, service.maxPrefixes a
     whole number from 1, and every attachableRanges entry (optional: absent or empty = any range the other checks
-    admit) an IPv4 network clear of the reserved ranges (0.0.0.0/0 written out: everything)."""
+    admit) an IPv4 network (it may hold reserved ranges: they are taken out first; 0.0.0.0/0 written out:
+    everything)."""
     real = real or {}
     errors = []
     inf = real.get("infrastructure") or {}
@@ -1274,20 +1275,15 @@ def service_check(real):
     if isinstance(mp, bool) or not isinstance(mp, (int, str)) or not str(mp).strip().isdigit() or int(mp) < 1:
         errors.append(f"realization service.maxPrefixes {mp!r} must be a whole number from 1 (the most cluster prefixes "
                       "the platform announces to the hub's network)")
-    rows = [(n, purpose, rule, "") for key, n, purpose, rule, site in range_rows(real) if not site]
     # attachableRanges is optional: absent or empty = any IPv4 prefix the other checks admit (the reserved ranges, the
-    # network's own space, first come first served); set, it restricts the clusters' prefixes to it
+    # network's own space, first come first served); set, it restricts the clusters' prefixes to it. An entry may hold
+    # reserved ranges, a whole private block holding the hub's range for one (Review R4 M3): the reserved ranges are
+    # taken out first, by the planner's verdict, the node guard and the hub router's filter alike (refusedRanges before
+    # advertisedRanges), so an entry admits nothing they refuse
     for i, v in enumerate(sv.get("attachableRanges") or []):
         n = _net(v)
         if n is None or n.version != 4:
             errors.append(f"realization service.attachableRanges[{i}] {v!r} is not an IPv4 network")
-            continue
-        if n.prefixlen == 0:
-            # everything, written explicitly: each prefix is still checked against the reserved ranges
-            continue
-        clash = range_clash(n, rows)
-        if clash is not None:
-            errors.append(f"realization service.attachableRanges[{i}] {n} overlaps {clash[0]} ({lower_first(clash[1])})")
     return errors
 
 

@@ -69,8 +69,10 @@ service:
   (`HubEndpointNotAdmitted`), because cluster management could not reach the hub from it. With entries set, an
   OpenStack cluster's router gateway address joins the cluster's addresses after the install, so the nodes' own
   traffic to the endpoints is admitted.
-- **`service.attachableRanges`** (optional): IPv4 ranges a cluster's addresses must lie in, clear of the reserved
-  ranges. Absent or empty: any IPv4 address that passes the other checks (inside the network's own address space,
+- **`service.attachableRanges`** (optional): IPv4 ranges a cluster's addresses must lie in. An entry may hold reserved
+  ranges (a whole private block holding the hub's range, say): the reserved ranges are taken out first, by the
+  platform and, in `status.ceConfig`, by the hub's router (`refusedRanges` before `advertisedRanges`); tenants see
+  both, the reserved ranges and these. Absent or empty: any IPv4 address that passes the other checks (inside the network's own address space,
   the provider's prefix shape, clear of every reserved range, not already taken for another network: first come,
   first served); `0.0.0.0/0` written out reads the same. Set, it is an allow-list: the platform announces nothing
   outside it, tenants see it as "Ranges for clusters managed by the platform", and a network with no IPv4 prefix

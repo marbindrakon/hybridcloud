@@ -1737,6 +1737,6 @@
     "managedTitle": "Plages pour les clusters gérés par la plateforme",
     "managedAny": "Toute plage que la plateforme ne réserve pas (ci-dessus). La plateforme n'indique aucune plage : les adresses d'un réseau sont prises dans l'ordre d'arrivée. La section Accès de la plateforme d'un réseau indique si la plateforme y construit de tels clusters.",
     "managedNotListed": "Votre profil de locataire ne les indique pas encore.",
-    "managedHelp": "Lorsque la plateforme indique des plages ici, un réseau qui héberge des clusters OpenShift gérés par la plateforme doit avoir des adresses dans ces plages."
+    "managedHelp": "Lorsque la plateforme indique des plages ici, un réseau qui héberge des clusters OpenShift gérés par la plateforme doit avoir des adresses dans ces plages, hors des plages refusées ci-dessus (elles sont retirées d'abord)."
   }
 }

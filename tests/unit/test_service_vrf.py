@@ -456,6 +456,39 @@ class ServiceTemplate(unittest.TestCase):
         self.assertIn("vrf e10002\n ip route 198.51.100.0/29 reject 254\n ip route 198.51.100.10/32 reject 254\nexit-vrf\n", out)
         self.assertNotIn("/32 le 32", out)
 
+    def test_an_allow_list_of_whole_private_blocks(self):
+        # Review R4 M3, the lab-like shape: the hub's /24 is the service range, a refused /16 holds it, public
+        # ranges are refused, the allow-list is the four private blocks (it holds refused ranges: they are taken out
+        # first, by the node as by the hub's router). Through the real check-fabric, the planner and the template
+        real, _ = service_setup()
+        real["infrastructure"]["hub"] = ["172.18.230.0/24"]
+        real["network"]["exclusiveRanges"] = ["172.18.0.0/16", "100.64.0.0/10", "198.51.100.0/24"]
+        real["service"].update(range=["172.18.230.0/24"], hubEndpoints=[{"prefix": "172.18.230.10/32", "ports": [6443]}],
+                               attachableRanges=["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "100.64.0.0/10"])
+        spec = {"domainAsn": 65010, "vniPool": {"start": 50000, "end": 50999}, "l2vniPool": {"start": 60000, "end": 60999},
+                "borderGateway": {"nodes": [{"name": n} for n in NODES]}}
+        self.assertEqual(F.check_fabric({"spec": spec, "realization": real})["errors"], [])
+        nets = [hn("lab", ["172.20.0.0/24"], internet=False, rows=["172.20.0.15/32", "172.18.5.5/32"])]
+        nets[0]["status"]["addressSpace"].append({"prefix": "172.18.5.0/24", "family": 4})
+        led = copy.deepcopy(LEDGER)
+        led["servicePrefix"] = {"HybridNetwork/acme/lab/172.20.0.15/32": 1, "HybridNetwork/acme/lab/172.18.5.5/32": 2}
+        egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
+        n = svc["bgw-1"]
+        self.assertEqual(n["advertise"], ["172.20.0.15/32"])  # inside the refused /16: never
+        # the guard and the hub's router: refusal first, then the allow-list, exactly as the node applies them
+        ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
+                              "realization": real})["ceConfig"]
+        self.assertEqual((ce["refusedRanges"], ce["advertisedRanges"]), (n["refuse"], n["attachable"]))
+        self.assertIn("172.18.0.0/16 le 32", n["refuse"])
+        self.assertEqual(n["attachable"], ["10.0.0.0/8 le 32", "172.16.0.0/12 le 32", "192.168.0.0/16 le 32",
+                                           "100.64.0.0/10 le 32"])
+        out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
+        lines = [l for l in out.splitlines() if l.startswith("ip prefix-list SVC-ATTACHABLE ")]
+        first_permit = next(i for i, l in enumerate(lines) if " permit " in l)
+        self.assertTrue(all(" deny " in l for l in lines[:first_permit]))
+        self.assertIn("deny 172.18.0.0/16 le 32", "\n".join(lines[:first_permit]))
+        self.assertTrue(lines[-1].endswith("permit 100.64.0.0/10 le 32"))
+
     def test_password(self):
         real, (egp, att, vrfs, svc) = service_setup()
         svc["bgw-1"]["circuits"][0]["authentication"] = "md5"
