@@ -659,11 +659,13 @@ class Ruleset:
     packet: the subset of nftables the script writes (device names and their wildcards, addresses, sets, ports, TCP
     flag tests, ICMP types, TTL, limit, the reverse path lookup, counter, comment, notrack, accept, drop)."""
 
-    def __init__(self, text, routes):
-        """routes: [(prefix, device)] of the service VRF, for `fib saddr . iif oif`."""
+    def __init__(self, text, routes, local=()):
+        """routes: [(prefix, device)] of the service VRF, for `fib saddr . iif oif`; local: the node's own addresses
+        there (a local route: never "routed back over" a link, as in the kernel)."""
         import ipaddress
         self.ip = ipaddress
         self.routes = [(ipaddress.ip_network(p), d) for p, d in routes]
+        self.local = {ipaddress.ip_address(a) for a in local}
         self.sets, self.chains, cur = {}, {}, None
         for line in text.splitlines():
             line = line.strip()
@@ -761,6 +763,8 @@ class Ruleset:
                 continue
             if take(r"fib saddr \. iif oif missing"):
                 a = self.ip.ip_address(pk["saddr"])
+                if a in self.local:
+                    continue
                 best = max((n for n, d in self.routes if a in n), key=lambda n: n.prefixlen, default=None)
                 dev = next((d for n, d in self.routes if n == best), None)
                 if dev == pk["iif"]:
@@ -815,8 +819,9 @@ class ServiceFilter(unittest.TestCase):
         # service range over the platform circuit
         routes = [(p, w["so"]) for w in s["networks"] for p in w["prefixes"]]
         routes += [(w["soAddr"], w["so"]) for w in s["networks"]]
-        routes += [(r, s["circuits"][0]["device"]) for r in s["range"]]
-        cls.rs = Ruleset(cls.text, routes)
+        routes += [(r, s["circuits"][0]["device"]) for r in s.get("range") or []]
+        local = [w["soIp"] for w in s["networks"]] + [c["ip"] for c in s["circuits"]]
+        cls.rs = Ruleset(cls.text, routes, local)
         cls.circ = s["circuits"][0]["device"]
 
     def verdict(self, **pk):
@@ -898,6 +903,16 @@ class ServiceFilter(unittest.TestCase):
                 with self.subTest(src=src, **{k: str(v) for k, v in pk.items()}):
                     pk = dict({"daddr": "198.51.100.5"}, **pk)
                     self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=src, **pk), "drop")
+        # Review R4 L4: the node's own addresses (its end of the link, its circuit address) are never routed back over
+        # a link: the reverse path check drops them, as the kernel does
+        for src in (self.conf["service"]["networks"][0]["soIp"], self.conf["service"]["circuits"][0]["ip"]):
+            with self.subTest(local=src):
+                self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=src, daddr="198.51.100.5",
+                                              proto="tcp", sport=6443, dport=40000, flags=["ack"]), "drop")
+                # by the reverse path check itself, not only by a later rule
+                self.assertEqual(self.rs.chain("raw_prerouting", {"iif": "so10002", "saddr": src, "daddr": "198.51.100.5",
+                                                                  "proto": "tcp", "sport": 6443, "dport": 40000})[0],
+                                 "drop")
         # Review R4 L1: the link's other end (the network VRF's own address on the service link) is no client source
         se = self.conf["service"]["networks"][0]["seIp"]
         for pk in ({"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["ack"], "daddr": "198.51.100.5"},
@@ -1210,6 +1225,10 @@ probe() {
   # a reply toward an address outside the service range, and one forged with the other network's prefix as source
   $C python3 /tmp/svc-raw.py 192.0.2.15 198.51.100.200 6443 40002 12
   $C python3 /tmp/svc-raw.py 192.0.2.99 198.51.100.5 6443 40003 12
+  # forged with the link's other end, an address of the service range, the node's circuit address (Review R4 L4)
+  $C python3 /tmp/svc-raw.py 169.254.128.5 198.51.100.5 6443 40004 12
+  $C python3 /tmp/svc-raw.py 198.51.100.10 198.51.100.5 6443 40005 12
+  $C python3 /tmp/svc-raw.py 10.255.128.9 198.51.100.5 6443 40006 12
   wait %4 2>/dev/null || true; sleep 2.5
   echo "raw: $(cat /tmp/svc-cap.out)"
   kill %1 %2 %3 2>/dev/null || true; wait 2>/dev/null || true
@@ -1278,6 +1297,8 @@ class RealKernel(A.ApplyCase):
         self.assertIn("192.0.2.99:6443>40003 12", res["before"]["raw"])
         self.assertNotIn(">40002", res["after"]["raw"])
         self.assertNotIn(">40003", res["after"]["raw"])
+        for port in (40004, 40005, 40006):
+            self.assertNotIn(f">{port}", res["after"]["raw"])
         # an ICMP error toward the hub passes from the network's own prefix only (not forged with another's)
         self.assertEqual(res["before"]["icmp"].split(), ["192.0.2.15", "192.0.2.99"])
         self.assertEqual(res["after"]["icmp"].split(), ["192.0.2.15"])
