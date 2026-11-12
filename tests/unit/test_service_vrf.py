@@ -29,6 +29,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 
 import yaml
 
@@ -659,13 +660,15 @@ class Ruleset:
     packet: the subset of nftables the script writes (device names and their wildcards, addresses, sets, ports, TCP
     flag tests, ICMP types, TTL, limit, the reverse path lookup, counter, comment, notrack, accept, drop)."""
 
-    def __init__(self, text, routes, local=()):
+    def __init__(self, text, routes, local=(), rp_filter=()):
         """routes: [(prefix, device)] of the service VRF, for `fib saddr . iif oif`; local: the node's own addresses
         there (a local route: never "routed back over" a link, as in the kernel)."""
         import ipaddress
         self.ip = ipaddress
         self.routes = [(ipaddress.ip_network(p), d) for p, d in routes]
         self.local = {ipaddress.ip_address(a) for a in local}
+        # devices with the kernel's strict reverse path filter (SERVICE_SOURCE_CHECK rp_filter)
+        self.rp_filter = set(rp_filter)
         self.sets, self.chains, cur = {}, {}, None
         for line in text.splitlines():
             line = line.strip()
@@ -762,15 +765,18 @@ class Ruleset:
             if take(r"limit rate \d+/second burst \d+ packets"):
                 continue
             if take(r"fib saddr \. iif oif missing"):
-                a = self.ip.ip_address(pk["saddr"])
-                if a in self.local:
-                    continue
-                best = max((n for n, d in self.routes if a in n), key=lambda n: n.prefixlen, default=None)
-                dev = next((d for n, d in self.routes if n == best), None)
-                if dev == pk["iif"]:
+                if self.routed_back(pk):
                     return False, None
                 continue
             raise AssertionError(f"rule part not understood: {toks!r} in {rule!r}")
+
+    def routed_back(self, pk):
+        """the source's route in the service VRF leads over the packet's own device (a local address never does)"""
+        a = self.ip.ip_address(pk["saddr"])
+        if a in self.local:
+            return False
+        best = max((n for n, d in self.routes if a in n), key=lambda n: n.prefixlen, default=None)
+        return next((d for n, d in self.routes if n == best), None) == pk["iif"]
 
     def chain(self, name, pk):
         for rule in self.chains.get(name, []):
@@ -780,7 +786,10 @@ class Ruleset:
         return "accept", "(policy)"
 
     def forward(self, pk):
-        """A packet forwarded in the service VRF: the raw prerouting pass on its device, then the forward chain."""
+        """A packet forwarded in the service VRF: the kernel's reverse path filter where a device has it, the raw
+        prerouting pass on its device, then the forward chain."""
+        if pk["iif"] in self.rp_filter and not self.routed_back(pk):
+            return "drop", "(rp_filter)"
         verdict, rule = self.chain("raw_prerouting", dict(pk, sdif=pk["iif"]))
         if verdict == "drop":
             return verdict, rule
@@ -788,6 +797,8 @@ class Ruleset:
 
 
 class ServiceFilter(unittest.TestCase):
+    MODE = "fib"
+
     """The service VRF's filter by destination (no rule names a client range), proven on the ruleset the node script
     loads into the fake kernel: from a network's link only packets to service.range (replies from the service ports,
     connections to the hub endpoints, ICMP errors), from the hub only service.range's addresses to a network's
@@ -810,9 +821,13 @@ class ServiceFilter(unittest.TestCase):
         h = A.Harness(tmp)
         h.set_state(blade())
         h.conf("root", cls.conf)
-        rc, out, err, _ = h.run("root")
-        assert rc == 0, err
+        with mock.patch.dict(os.environ, {"SHC_SERVICE_SOURCE_CHECK": cls.MODE}):
+            rc, out, err, _ = h.run("root")
+            assert rc == 0, err
+            cls.snapshot = h.run("root", "snapshot")[1]
         cls.text = h.get_state()["ns"][""]["nft"]["ip shc_service"]
+        cls.rpf = {w["so"] for w in cls.conf["service"]["networks"]
+                   if h.sysctl("", f"net/ipv4/conf/{w['so']}/rp_filter") == "1"}
         __import__("shutil").rmtree(tmp, True)
         s = cls.conf["service"]
         # the service VRF's routes as FRR installs them: each accepted prefix over its network's link, the links, the
@@ -821,7 +836,7 @@ class ServiceFilter(unittest.TestCase):
         routes += [(w["soAddr"], w["so"]) for w in s["networks"]]
         routes += [(r, s["circuits"][0]["device"]) for r in s.get("range") or []]
         local = [w["soIp"] for w in s["networks"]] + [c["ip"] for c in s["circuits"]]
-        cls.rs = Ruleset(cls.text, routes, local)
+        cls.rs = Ruleset(cls.text, routes, local, cls.rpf)
         cls.circ = s["circuits"][0]["device"]
 
     def verdict(self, **pk):
@@ -910,9 +925,12 @@ class ServiceFilter(unittest.TestCase):
                 self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=src, daddr="198.51.100.5",
                                               proto="tcp", sport=6443, dport=40000, flags=["ack"]), "drop")
                 # by the reverse path check itself, not only by a later rule
-                self.assertEqual(self.rs.chain("raw_prerouting", {"iif": "so10002", "saddr": src, "daddr": "198.51.100.5",
-                                                                  "proto": "tcp", "sport": 6443, "dport": 40000})[0],
-                                 "drop")
+                pk = {"iif": "so10002", "saddr": src, "daddr": "198.51.100.5", "proto": "tcp", "sport": 6443,
+                      "dport": 40000}
+                if self.MODE == "fib":
+                    self.assertEqual(self.rs.chain("raw_prerouting", pk)[0], "drop")
+                else:
+                    self.assertFalse(self.rs.routed_back(pk))
         # Review R4 L1: the link's other end (the network VRF's own address on the service link) is no client source
         se = self.conf["service"]["networks"][0]["seIp"]
         for pk in ({"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["ack"], "daddr": "198.51.100.5"},
@@ -921,8 +939,38 @@ class ServiceFilter(unittest.TestCase):
                 self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=se, **pk), "drop")
         # the network VRF's own session over its link passes the reverse path check (the link is the route back)
         se = self.conf["service"]["networks"][0]["seIp"]
-        self.assertEqual(self.rs.chain("raw_prerouting", {"iif": "so10002", "saddr": se, "daddr": "169.254.128.4",
-                                                          "proto": "tcp", "dport": 179})[0], "accept")
+        pk = {"iif": "so10002", "saddr": se, "daddr": "169.254.128.4", "proto": "tcp", "dport": 179}
+        self.assertEqual(self.rs.chain("raw_prerouting", pk)[0], "accept")
+        self.assertTrue(self.rs.routed_back(pk))
+
+    def test_the_switch(self):
+        # Review R4 U1: one way or the other, never both, never neither
+        fib = 'fib saddr . iif oif missing' in self.text
+        self.assertEqual(fib, self.MODE == "fib")
+        self.assertEqual(self.rpf, set() if self.MODE == "fib" else {"so10002", "so10003"})
+        self.assertEqual("so10002 rp_filter 1" in self.snapshot, self.MODE == "rp_filter")
+
+
+class ServiceFilterRpFilter(ServiceFilter):
+    """The same filter with SERVICE_SOURCE_CHECK rp_filter: no fib rule, the kernel's strict reverse path filter on each
+    service link instead (Review R4 U1)."""
+    MODE = "rp_filter"
+
+
+class ServiceSourceCheckSwitch(A.ApplyCase):
+    def test_a_wrong_value_stops_before_any_write(self):
+        real, (egp, att, vrfs, svc) = service_setup()
+        self.h.set_state(blade())
+        self.h.conf("root", service_conf(real, egp, att, svc))
+        with mock.patch.dict(os.environ, {"SHC_SERVICE_SOURCE_CHECK": "both"}):
+            rc, out, err, log = self.h.run("root")
+        self.assertEqual(rc, 4, err)
+        self.assertIn("SERVICE_SOURCE_CHECK must be fib or rp_filter", err)
+        self.assertEqual(A.writes(log), [])
+
+    def test_the_default_is_fib(self):
+        with open(os.path.join(ROOT, "eda", "common", "files", "bgw", "shc-fabric-apply")) as f:
+            self.assertIn("\nSERVICE_SOURCE_CHECK=fib\n", f.read())
 
 
 class StopHarness(A.Harness):
@@ -1243,6 +1291,8 @@ probe() {
 }
 echo "--- before"; probe
 nft -f "$1"
+# SERVICE_SOURCE_CHECK rp_filter: the kernel's strict reverse path filter on the service links instead of the rule
+if [ "${2:-fib}" = rp_filter ]; then sysctl -qw net.ipv4.conf.so10002.rp_filter=1 net.ipv4.conf.so10003.rp_filter=1; fi
 echo "--- after"; probe
 nft -s list table ip shc_service | grep -c counter >/dev/null
 nft list table ip shc_service | grep 'counter packets' | sed 's/^\s*/rule: /'
@@ -1251,6 +1301,11 @@ nft list table ip shc_service | grep 'counter packets' | sed 's/^\s*/rule: /'
 
 class RealKernel(A.ApplyCase):
     def test_probes(self):
+        for mode in ("fib", "rp_filter"):
+            with self.subTest(switch=mode):
+                self.probe(mode)
+
+    def probe(self, mode):
         import test_icmp_source_announce as G
         if not G.can_probe():
             self.skipTest("no unprivileged user and network namespace with VRF devices, nft and ip here")
@@ -1267,17 +1322,18 @@ class RealKernel(A.ApplyCase):
         egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
         self.h.set_state(blade())
         self.h.conf("root", service_conf(real, egp, att, svc))
-        self.h.ok(self, "root")
+        with mock.patch.dict(os.environ, {"SHC_SERVICE_SOURCE_CHECK": mode}):
+            self.h.ok(self, "root")
         f = os.path.join(self.tmp, "svc.nft")
         with open(f, "w") as fh:
             fh.write(self.h.get_state()["ns"][""]["nft"]["ip shc_service"])
         script = os.path.join(self.tmp, "probe.sh")
         with open(script, "w") as fh:
             fh.write(PROBE)
-        p = subprocess.run(["unshare", "-rnm", "bash", script, f], capture_output=True, text=True, timeout=180)
+        p = subprocess.run(["unshare", "-rnm", "bash", script, f, mode], capture_output=True, text=True, timeout=180)
         self.assertEqual(p.returncode, 0, p.stdout[-1500:] + p.stderr[-2000:])
         if self.evidence:
-            with open(os.path.join(self.evidence, "service-real-kernel-probes.txt"), "w") as fh:
+            with open(os.path.join(self.evidence, f"service-real-kernel-probes-{mode}.txt"), "w") as fh:
                 fh.write(p.stdout)
         before, after = p.stdout.split("--- after")
         res = {s: dict(re.findall(r"^([a-z0-9-]+): (.*)$", t, re.M)) for s, t in (("before", before), ("after", after))}
@@ -1315,7 +1371,10 @@ class RealKernel(A.ApplyCase):
             counts[c] = counts.get(c, 0) + int(n)
         self.assertGreaterEqual(counts.get("no network reaches another through the service VRF", 0), 1, p.stdout)
         self.assertGreaterEqual(counts.get("nothing else through the service VRF", 0), 2, p.stdout)
-        self.assertGreaterEqual(counts.get("from a service link only a source routed back over it", 0), 2, p.stdout)
+        if mode == "fib":
+            self.assertGreaterEqual(counts.get("from a service link only a source routed back over it", 0), 2, p.stdout)
+        else:
+            self.assertNotIn("fib saddr", p.stdout)
 
 
 if __name__ == "__main__":

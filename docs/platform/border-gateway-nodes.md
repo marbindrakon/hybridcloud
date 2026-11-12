@@ -282,9 +282,14 @@ The table `ip shc_service`, loaded before FRR takes the service VRF and replaced
 crosses it, statelessly (the two directions may cross different nodes): from a platform edge connection, sources
 inside `service.range` only (set `service_range`), TCP on `service.ports` and ICMP echo to a network's accepted
 addresses only; from a network's link, by destination, packets to `service.range` only (replies from the service
-ports, TCP to `service.hubEndpoints`, ICMP errors and echo replies), no rule naming a client range, and only from a
-source the service VRF routes back over that same link (a reverse path check in the table, `fib saddr . iif`,
-whatever the host's `rp_filter`: a network's own accepted addresses); nothing from
+ports, TCP to `service.hubEndpoints`, ICMP errors and echo replies), no rule naming a client range, never from a
+service link's own addresses (the upper half of `egress.linkPool`), and only from a source the service VRF routes
+back over that same link (a network's own accepted addresses). How that last check is made is one switch at the top
+of `shc-fabric-apply`, `SERVICE_SOURCE_CHECK`: `fib` (default) puts a reverse path rule in the table (`fib saddr .
+iif oif missing`; it needs a kernel whose nftables `fib` looks a VRF slave's source up in the VRF's table, upstream
+6.2, else every cluster packet is dropped), `rp_filter` sets the kernel's strict reverse path filter on each `so*`
+link instead (set and checked on every run; sound there because those links carry nothing decapsulated, unlike the
+network VRFs, which run without it on SRv6); nothing from
 one `so*` device to another (the drops match the `so*` and `se*` devices by name, never by a list, so a pair a run
 has not yet removed is dropped too), so no network reaches
 another through the service VRF. The service VRF joins the root's input filter (`shc_root_in`): its connection

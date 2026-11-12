@@ -560,6 +560,8 @@ precheck() {
 # never a packet's sdifname, and the raw notrack on its name leaves a connection already tracked as it is
 service_precheck() {
   local t
+  # the switch is one of its two values, before the run's first write
+  service_source_check rule >/dev/null
   t=$(ip -j -d link show | jq -r '[.[] | select(.ifname != null) | select(.ifname | test("^s[eo]"))
       | select((.linkinfo.info_kind // "") != "vrf")
       | select(((.ifname | test("^s[eo][0-9]+$")) and ((.linkinfo.info_kind // "") == "veth")) | not) | .ifname]
@@ -1372,6 +1374,31 @@ attach_up() {
 MARKS=/etc/shc-fabric/$I.service
 SV=$(opt .service.vrf)
 
+# THE SWITCH: how the sources a network sends over its service link (so<t>) are checked (the reply and endpoint rules
+# match destinations only, no client range; this binds a network to the sources the service VRF routes back over its
+# own link, its accepted prefixes, so it cannot forge another network's):
+#   fib        a rule in shc_service (raw prerouting: fib saddr . iif oif missing drop). Needs a kernel whose nft fib
+#              looks a VRF slave's source up in the VRF's table (upstream 2a8a7c0eaa87, 6.2; RHEL 9: see the
+#              kernel's changelog); without it every cluster packet is dropped
+#   rp_filter  the kernel's strict reverse path filter on each so<t> (net.ipv4.conf.<so>.rp_filter=1, set by the
+#              apply on every run, after udev handled the new device). Sound on these links: their packets come from
+#              the network's VRF over a veth, never decapsulated (the SRv6 reason the network VRFs e<t> run without
+#              it does not apply), and the kernel takes the larger of all and the device's, so all=0 (SRv6) is fine
+# The lead sets it from the node probe (default fib); SHC_SERVICE_SOURCE_CHECK overrides it (the unit tests)
+SERVICE_SOURCE_CHECK=fib
+SERVICE_SOURCE_CHECK=${SHC_SERVICE_SOURCE_CHECK:-$SERVICE_SOURCE_CHECK}
+
+# service_source_check rule: the nft rule of the fib way (nothing for rp_filter); service_source_check link <so>: the
+# rp_filter way's setting on one link (nothing for fib)
+service_source_check() {
+  case "$SERVICE_SOURCE_CHECK:$1" in
+    fib:rule) echo '    iifname "so*" fib saddr . iif oif missing counter drop comment "from a service link only a source routed back over it"' ;;
+    rp_filter:link) udevadm settle --timeout=15 2>/dev/null || true; sysctl -qw "net/ipv4/conf/$2/rp_filter=1" ;;
+    fib:link|rp_filter:rule) ;;
+    *) echo "shc-fabric-apply: SERVICE_SOURCE_CHECK must be fib or rp_filter, not $SERVICE_SOURCE_CHECK" >&2; exit 4 ;;
+  esac
+}
+
 # the platform circuits' devices this configuration lists (one per line)
 service_devices() { jq -r '.service.circuits // [] | .[].device' "$CONF"; }
 
@@ -1388,9 +1415,10 @@ service_devices() { jq -r '.service.circuits // [] | .[].device' "$CONF"; }
 # network leaving, a run that stopped part-way) is dropped like any other, and the table is in place before the
 # first link exists and goes only after the last one (service_up, service_down)
 service_nft() {
-  python3 - "$CONF" <<'PY'
+  python3 - "$CONF" "$(service_source_check rule)" <<'PY'
 import ipaddress, json, sys
 doc = json.load(open(sys.argv[1]))
+source_rule = sys.argv[2]
 s = doc["service"]
 cs = s.get("circuits") or []
 ns = s.get("networks") or []
@@ -1410,9 +1438,11 @@ if rng:
 # from a service link only a source the service VRF routes back over that same link (a strict reverse path check
 # in the table itself, whatever the host's rp_filter: a network's packets carry its own accepted prefixes as source,
 # never another network's; no client range is named, the VRF's routes say it)
-out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
-        '    iifname "so*" fib saddr . iif oif missing counter drop comment "from a service link only a source routed back over it"',
-        '    iifname "so*" notrack', '    iifname "se*" notrack']
+out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;"]
+# (SERVICE_SOURCE_CHECK fib: the reverse path rule, from service_source_check)
+if source_rule:
+    out.append(source_rule)
+out += ['    iifname "so*" notrack', '    iifname "se*" notrack']
 if cdevs:
     out.append(f"    iifname {names(cdevs)} notrack")
 out.append("  }")
@@ -1491,6 +1521,12 @@ service_state() {
     ip -br -4 addr show dev "$d" 2>/dev/null || true
     cat "/proc/sys/net/ipv4/conf/$d/rp_filter" "/proc/sys/net/ipv6/conf/$d/disable_ipv6" 2>/dev/null || true
   done
+  # (SERVICE_SOURCE_CHECK rp_filter: the links' setting is part of the state, so a reset by the host shows as drift)
+  if [ "$SERVICE_SOURCE_CHECK" = rp_filter ]; then
+    for d in $(jq -r '.service.networks // [] | .[].so' "$CONF" 2>/dev/null); do
+      echo "$d rp_filter $(cat "/proc/sys/net/ipv4/conf/$d/rp_filter" 2>/dev/null)"
+    done
+  fi
   nft -s list table ip shc_service 2>/dev/null || true
 }
 
@@ -1554,6 +1590,7 @@ service_up() {
     root_vrf "$v" "$t"
     ip link show "$se" >/dev/null 2>&1 || ip link add "$se" mtu "$mtu" type veth peer name "$so" mtu "$mtu"
     sysctl -qw "net/ipv6/conf/$se/disable_ipv6=1" "net/ipv6/conf/$so/disable_ipv6=1"
+    service_source_check link "$so"
     ip link set "$se" master "$v" mtu "$mtu" up
     ip link set "$so" master "$SV" mtu "$mtu" up
     for a in $(stray "$se" 0.0.0.0/0 "$sea"); do ip addr del "$a" dev "$se"; done
