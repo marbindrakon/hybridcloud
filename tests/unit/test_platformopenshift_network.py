@@ -965,6 +965,125 @@ class RouterGatewayFile(unittest.TestCase):
         self.assertIn("services API down", msg)
 
 
+CD_INFO = {"resources": [{"spec": {"installed": True, "clusterMetadata": {"infraID": INFRA}}}]}
+ROUTER_ON_NET1 = dict(CAPI_ROUTER, external_gateway_info=dict(CAPI_ROUTER["external_gateway_info"], network_id="net-1"))
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RouterGatewayAgain(unittest.TestCase):
+    """Gate F10c: an installed, healthy cluster takes openstack.yml's fast path, which skips the build and with it the
+    router gateway step; router_gateway_again.yml runs the step there when the gateway is not carried. Real task files
+    (the network judge of the preflight in its read-only mode, the step), fakes at the module boundary only."""
+
+    def run_again(self, fab, routers=(ROUTER_ON_NET1,), fakes=None, kube=None, **kw):
+        v = dict(BASE, oso_env_name="env1", oso_network="n1", cb_app_name="shc-oso-acme-h1", cb_oso_project_id="proj-1",
+                 cb_fip_account="sites/site1", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16", cd_info=CD_INFO,
+                 fake_os={"project-routers": {"routers": list(routers)}})
+        v.update(kw)
+        return H.run("platformopenshift_provision", "router_gateway_again.yml", v, k8s=kube or k8s(fab=fab),
+                     result="'end'", fakes=fakes)
+
+    def condition(self, tr):
+        conds = [c for p in H.patches(tr) for c in p["body"].get("conditions") or []]
+        self.assertEqual(len(conds), 1, conds)
+        self.assertEqual(conds[0]["type"], "RouterGateway")
+        return conds[0]["status"], conds[0]["reason"], conds[0]["message"]
+
+    def prefixes(self, tr):
+        return [p["body"]["platformPrefixes"] for p in H.patches(tr) if "platformPrefixes" in p["body"]]
+
+    def test_not_carried_runs_the_step_and_it_joins(self):
+        fab = fabric(networks=[{"network": f"{NS}/n1", "prefixes": ["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"]}])
+        rc, tr, out = self.run_again(fab)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr), [{"action": "project-routers", "project_id": "proj-1",
+                                           "tag": "openshiftClusterID=h1-xstcm"}])
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"]])
+        self.assertEqual(self.condition(tr)[:2], ("True", "AsExpected"))
+        # nothing of the preflight that refuses or records: only the step's partial writes
+        self.assertTrue(all(p["partial"] for p in H.patches(tr)))
+        self.assertEqual(tr[-1], {"result": "end"})
+
+    def test_not_carried_yet_waits(self):
+        rc, tr, out = self.run_again(fabric())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.condition(tr)[:2], ("False", "WaitingForPlatformAccess"))
+
+    def test_the_step_failing_leaves_the_cluster_ready(self):
+        tag = f"shc-oso-rga-{os.getpid()}"
+        rc, tr, out = self.run_again(fabric(), fakes=ACCOUNT_FILE_FAKES, cb_app_name=tag)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(f"/tmp/eda-po-router-{tag}-clouds.yaml"))
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "Failed"))
+        self.assertIn("it could not be read: the cloud did not answer", msg)
+        self.assertEqual(self.prefixes(tr), [])
+        self.assertFalse([p for p in H.patches(tr) if not p["partial"]])
+
+    def test_a_network_the_judge_does_not_pass_is_said_not_refused(self):
+        rc, tr, out = self.run_again(fabric(), kube=k8s(places=[placement(ready=False)]))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr), [])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "Failed"))
+        self.assertIn("HybridNetwork n1: WaitingForPlacement", msg)
+        self.assertFalse([p for p in H.patches(tr) if "status" in p["body"]])   # no pending / failed write
+
+    def test_a_failed_read_of_the_network(self):
+        rc, tr, out = self.run_again(fabric(), fabric_platform_namespace="")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr), [])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "Failed"))
+        self.assertIn("the network could not be read: Set fabric_platform_namespace", msg)
+
+    def test_no_hub_endpoints_nothing_happens(self):
+        # the hub's API outside the service range (reached by the network's own path): nothing to add
+        rc, tr, out = self.run_again(fabric(endpoints=()), central_api_host="https://203.0.113.10:6443")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((H.os_calls(tr), H.patches(tr)), ([], []))
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class RouterGatewayAgainWhen(unittest.TestCase):
+    """openstack.yml decides from the status it already read whether the step runs again: the include's own `when`,
+    run with the include replaced by a marker."""
+
+    def runs(self, st, platform_path=True, vips=("192.0.2.15", "192.0.2.16")):
+        t = by_name(load(os.path.join(TASKS, "openstack.yml")), "The router gateway step again for an installed cluster")
+        t = {k: v for k, v in t.items() if k != "ansible.builtin.include_tasks"}
+        t["ansible.builtin.set_fact"] = {"ran": True}
+        v = {"po_cr_current": {"resources": [{"status": st}]}, "cb_platform_path": str(platform_path),
+             "cb_api_vip": vips[0], "cb_ingress_vip": vips[1]}
+        return run_play([{"ansible.builtin.set_fact": {"ran": False}}, t, write_out("ran")], v)
+
+    def status(self, cond=None, prefixes=3, health="Healthy"):
+        st = {"clusterInstalled": True, "clusterHealth": health,
+              "platformPrefixes": ["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"][:prefixes]}
+        if cond:
+            st["conditions"] = [{"type": "Available", "status": "True"},
+                                {"type": "RouterGateway", "status": cond[0], "reason": cond[1]}]
+        return st
+
+    def test_when(self):
+        cases = (
+            (self.status(("True", "AsExpected")), True, False),                 # carried: no cloud call
+            (self.status(("False", "Failed"), prefixes=2), True, True),         # h1 after F10 / F10b
+            (self.status(("False", "WaitingForPlatformAccess")), True, True),
+            (self.status(None, prefixes=2), True, True),                        # never ran (F10: job died)
+            (self.status(("True", "AsExpected"), prefixes=2), True, True),      # record lost
+            (self.status(("False", "Failed"), prefixes=2), False, False),       # external network: untouched
+            (self.status(("False", "Failed"), prefixes=2, health="Degraded"), True, False),  # not the fast path
+        )
+        for st, path, want in cases:
+            with self.subTest(st=st, path=path):
+                self.assertEqual(self.runs(st, path), want)
+        # the status written as a boolean (2.16) still counts as carried
+        st = self.status(("True", "AsExpected"))
+        st["conditions"][1]["status"] = True
+        self.assertFalse(self.runs(st))
+
+
 def cloud_vars(cloud, publish, **kw):
     v = dict(BASE, **{f"{cloud}_env_name": "env1", f"{cloud}_network": "n1", f"{cloud}_publish": publish,
                       f"{cloud}_site": "site1", f"{cloud}_account": "111111111111", f"{cloud}_region": "region-1",

@@ -132,6 +132,23 @@
         cb_api_url: "{{ cb_api_url | default(po_cr_current.resources[0].status.apiURL) }}"
         cb_apps_url: "{{ cb_apps_url | default(po_cr_current.resources[0].status.appsURL) }}"
 
+# an installed cluster on a hybrid network whose router gateway address is not carried (its step failed or was
+# refused once): run the step again. A carried one (RouterGateway True and the gateway /32 recorded) is left alone:
+# no cloud call on every periodic reconcile (a gateway address that changed later is not noticed; the installer does
+# not change it)
+- name: The router gateway step again for an installed cluster
+  vars:
+    _st: "{{ po_cr_current.resources[0].status | default({}, true) }}"
+    _rg: "{{ (_st.conditions | default([], true) | selectattr('type', 'equalto', 'RouterGateway') | list + [{}]) | first }}"
+  ansible.builtin.include_tasks: router_gateway_again.yml
+  when:
+    - cb_platform_path | bool
+    - _st.clusterInstalled | default(false) | bool
+    - _st.clusterHealth | default('') == 'Healthy'
+    - cb_api_vip | length > 0
+    - cb_ingress_vip | length > 0
+    - (_rg.status | default('') | string) != 'True' or (_st.platformPrefixes | default([], true) | length) < 3
+
 - name: Check the cluster before anything is created
   ansible.builtin.include_tasks: openstack_preflight.yml
   when: >-
