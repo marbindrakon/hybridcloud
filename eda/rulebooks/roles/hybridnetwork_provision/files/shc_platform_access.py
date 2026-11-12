@@ -21,7 +21,8 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       hub            infrastructure.hub
       service        the realization's service keys {enabled, ports, range, attachableRanges}
       serviceStatus  HybridFabric status.realization.service {circuits, networks, refused}
-      reserved       HybridFabric status.reservedRanges rows {prefix, purpose, rule, site?}; site rows do not apply
+      reserved       HybridFabric status.reservedRanges rows {prefix, purpose, rule, site?}: every row refuses a cluster
+                     prefix that overlaps it, whatever its rule and site (the fabric's service_refusal_rows)
       clusters       [{name, prefixes, deleting, type?}] the PlatformOpenshifts that name the network (not fully
                      deleted); with type (spec.type), each prefix has the shape its provider gives: openstack /32s
                      (floating IPs, the router's gateway), aws and gcp a subnet of the network's placements
@@ -116,14 +117,17 @@ def hub_check(req):
 
 
 def reserved_rows(req):
-    """The ranges a cluster prefix must stay clear of: the published rows without the site ones (a site's own
-    addresses are stepped around inside that site only), and the hub's ranges in any case."""
+    """The ranges a cluster prefix must stay clear of (Review R4 H1): every published row, whatever its rule and
+    whichever site it names, and the hub's ranges in any case. A cluster's address is announced to the hub's network,
+    which routes every site's own addresses; a tenant network itself is judged by its own site's rows only (the
+    fabric's check-network). The same set as the fabric's service_refusal_rows."""
     rows = []
     for r in req.get("reserved") or []:
         n = net(r.get("prefix"))
-        if n is None or r.get("site"):
+        if n is None:
             continue
-        rows.append((n, str(r.get("purpose") or "")))
+        why = str(r.get("purpose") or "")
+        rows.append((n, why + (f" (site {r['site']})" if r.get("site") else "")))
     for h in nets(req.get("hub")):
         if not any(n == h for n, _ in rows):
             rows.append((h, HUB_PURPOSE))

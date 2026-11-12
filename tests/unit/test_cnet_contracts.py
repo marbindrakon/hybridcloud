@@ -119,10 +119,10 @@ def network_object(key, rows, space=SPACE):
                        "platformAccess": {"prefixes": rows}}}
 
 
-def fabric_plan(real, networks, ledger, previous=None):
+def fabric_plan(real, networks, ledger, previous=None, sites=None):
     return F.service_plan({"realization": real, "nodes": NODES, "fabric": FABRIC, "domainAsn": 65010,
                            "networks": networks, "ledger": ledger.alloc, "circuits": [platform_circuit_plan_entry()],
-                           "vrfs": {n: [] for n in NODES}, "previous": previous or {}})
+                           "vrfs": {n: [] for n in NODES}, "previous": previous or {}, "sites": sites or []})
 
 
 class NetworkRowsAndTheServicePlan(unittest.TestCase):
@@ -601,6 +601,70 @@ class ServiceRange(unittest.TestCase):
                 self.assertEqual(ce["advertisedRanges"], n["attachable"])
                 self.assertEqual(ce["maxPrefixes"], mp)
                 self.assertLessEqual(len(n["advertise"]), ce["maxPrefixes"])
+
+
+class ServiceRefusalSet(unittest.TestCase):
+    """Review R4 H1: one set of ranges a service prefix may not overlap (shc_fabric.service_refusal_rows), read by the
+    planner's verdict, the node guard (the root's service.refuse, SVC-ATTACHABLE), the hub router's
+    ceConfig.refusedRanges (the platform circuit's real tasks, from the fabric's published rows) and the network job
+    (the published rows): byte for byte the same list, the same verdict per prefix."""
+
+    SITES = [{"name": "site-a", "kind": "openstack", "ranges": ["10.30.0.0/16"]},
+             {"name": "site-b", "kind": "openshift", "ranges": ["10.40.0.0/16"]}]
+
+    def real(self):
+        r = realization(attachable=())
+        r["egress"].update({"enabled": True, "parentInterface": "bond1.100", "gateway": "203.0.113.1",
+                            "prefixLength": 24, "linkPool": "169.254.0.0/16",
+                            "nodes": {"bgw-1": {"address": "203.0.113.11", "natPool": "203.0.113.64/26"},
+                                      "bgw-2": {"address": "203.0.113.12", "natPool": "203.0.113.128/26"}}})
+        return r
+
+    def test_the_lists_are_one(self):
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        real = self.real()
+        published = F.reserved_ranges(real, self.SITES)
+        plan = fabric_plan(real, [], Ledger(), sites=self.SITES)
+        guard = plan["nodes"]["bgw-1"]["refuse"]
+        tasks = load(os.path.join(ROLES, "attachmentcircuit_provision", "tasks", "platform_circuit.yml"))
+        picked = [copy.deepcopy(t) for t in tasks if t.get("name") in ("The hub router's filters",
+                                                                        "Keep the hub router's filters")]
+        ce = run_play(picked + [write_out("ac_platform_ce")],
+                      {"role_path": os.path.join(ROLES, "attachmentcircuit_provision"), "fab_namespace": PLAT,
+                       "fabric_platform_namespace": PLAT, "fab_real": real,
+                       "ac_fabric": {"status": {"reservedRanges": published}}})
+        verdict = [F.prefix_entry(r[0]) for r in F.service_rows(real, self.SITES)]
+        self.assertEqual(json.dumps(ce["refusedRanges"]), json.dumps(guard))
+        self.assertEqual([e for e in guard if e != "0.0.0.0/0"], verdict)
+        for want in ("10.30.0.0/16 le 32", "10.40.0.0/16 le 32", "203.0.113.64/26 le 32", "127.0.0.0/8 le 32"):
+            self.assertIn(want, guard)
+
+    def test_one_verdict_per_prefix(self):
+        real = self.real()
+        published = F.reserved_ranges(real, self.SITES)
+        for prefix, space, want in (("10.40.0.20/32", "10.40.0.0/24", "PrefixReserved"),
+                                    ("10.30.5.5/32", "10.30.5.0/24", "PrefixReserved"),
+                                    ("203.0.113.70/32", "203.0.113.64/27", "PrefixReserved"),
+                                    ("240.0.0.9/32", "240.0.0.0/24", "PrefixReserved"),
+                                    ("192.0.2.15/32", SPACE, "")):
+            with self.subTest(prefix=prefix):
+                led = Ledger()
+                led.network("acme/n1", 10005, 3)
+                d = PA.platform_access({
+                    "network": "acme/n1", "fabric": FABRIC, "platformAccess": True, "space": [space], "overlaps": [],
+                    "hub": [HUB], "service": {"enabled": True, "ports": [6443], "range": [RANGE], "attachableRanges": []},
+                    "serviceStatus": {"circuits": CIRCUIT_STATUS}, "reserved": published,
+                    "clusters": [{"name": "c1", "prefixes": [prefix]}], "ledger": {}})
+                self.assertEqual(d["prefixes"][0]["reason"], want, d["prefixes"][0]["message"])
+                # the plan, on a row the network accepted, says the same
+                led.alloc["servicePrefix"][f"HybridNetwork/acme/n1/{prefix}"] = 1
+                plan = fabric_plan(real, [network_object("acme/n1", [{"prefix": prefix, "cluster": "c1", "state": "pending"}],
+                                                          space=space)], led, sites=self.SITES)
+                got = plan["status"]["refused"][0]["reason"] if plan["status"]["refused"] else ""
+                self.assertEqual(got, want)
+                verdict = F.service_prefix_check({"prefixes": [prefix], "space": [space], "ranges": published})
+                self.assertEqual(verdict["prefixes"][0]["reason"], want)
 
 
 class UpgradeWithTheServiceOn(unittest.TestCase):

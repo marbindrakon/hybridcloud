@@ -266,8 +266,8 @@ the hub's router originate (or aggregate) the hub's ranges itself.
 
 `service.range` is required with `service.enabled` (the fabric fails with `InvalidSpec` naming it).
 `service.attachableRanges` is optional. Each platform edge connection's `status.ceConfig` gives the hub's router
-its filters in order: `acceptedRanges` (what it announces: the service range), `refusedRanges` (the published
-reserved ranges as `<range> le 32`: refused from the platform at any length), `advertisedRanges` (then accepted:
+its filters in order: `acceptedRanges` (what it announces: the service range), `refusedRanges` (every published
+reserved range, every site's own included, as `<range> le 32`: refused from the platform at any length), `advertisedRanges` (then accepted:
 `0.0.0.0/0 le 32` without `attachableRanges`, else each of them as `<range> le 32`) and `maxPrefixes`
 (`service.maxPrefixes`, which the plan never exceeds: later addresses wait). The nodes guard their own announcement
 the same way (prefix list `SVC-ATTACHABLE` on the redistribution). Without `attachableRanges`, a cluster address is

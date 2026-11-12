@@ -89,11 +89,18 @@ instead of to the real destination. Something must keep cluster addresses out of
 routes. There are two ways:
 
 - **The refused ranges** (no `attachableRanges`): the refused ranges must cover everything the hub's network routes
-  itself, because the hub's routers then accept any other prefix up to /32 from the platform. Declare those ranges
-  as `infrastructure.hub` (the ranges the platform's management connects from) and `network.exclusiveRanges` (the
-  other ranges the deployment keeps for itself); the other published reserved ranges count too. A tenant network or
-  cluster address inside any of them is refused, and the hub's routers refuse them from the platform at any length
-  (`refusedRanges` below). Choose this when the hub's network has a known, stable set of its own ranges and tenants
+  itself, because the hub's routers then accept any other prefix up to /32 from the platform. The platform refuses
+  a cluster address that overlaps any range it publishes (`HybridFabric status.reservedRanges`), whatever the row's
+  rule and whichever site it names, and the hub's routers refuse the same list from the platform at any length
+  (`refusedRanges` below): `infrastructure.hub` and the service range, `network.exclusiveRanges`, the platform's own
+  pools (`core.loopbackPool`, `core.linkSubnet`, `core.icmpSource4`, `attachments.linkPool`, `egress.linkPool`), the
+  internet hand-off (each egress node's NAT pool and its hand-off network), every site's underlay and its
+  `placement.siteReserved` ranges, and the special-purpose space (0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16,
+  224.0.0.0/4, 240.0.0.0/4, and the default route itself). A site's own ranges count for every cluster, on every
+  site: a cluster address is announced to the hub's network, which routes every site. (A tenant network is judged
+  differently: a site's own ranges only constrain its placements on that site.) Everything else the hub's network
+  routes itself, including cloud-side ranges the fabric does not know (an AWS or Google Cloud hub's own subnets), the
+  deployment declares in `network.exclusiveRanges`. Choose this when the hub's network has a known, stable set of its own ranges and tenants
   should be free to number their networks as they like.
 - **An allow-list** (`attachableRanges` set): clusters on networks must lie inside ranges agreed with the hub's
   network team, which the hub's network does not use itself. Choose this when the hub's network cannot list all it

@@ -182,17 +182,18 @@
   when: ac_range | length == 0
 
 # what the hub's router configures toward the platform (status.ceConfig), computed where the fabric's plan computes
-# what the nodes announce and accept, so both sides read one rule
+# what the nodes announce and accept, so both sides read one rule; the ranges it refuses are the fabric's published
+# rows (status.reservedRanges, every site's own among them), as the fabric's plan reads them. A fabric that has not
+# published them yet gives the realization's own; its next run wakes the circuit with the full list
 - name: The hub router's filters
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
   vars:
-    fab_check:
-      action: check-circuit
-      ceKind: platform
-      namespace: "{{ fab_namespace }}"
-      fabricNamespace: "{{ fabric_platform_namespace }}"
-      accept: []
-      realization: "{{ fab_real }}"
+    _published: "{{ (ac_fabric.status | default({}, true)).reservedRanges | default(none) }}"
+    fab_check: >-
+      {{ {'action': 'check-circuit', 'ceKind': 'platform', 'namespace': fab_namespace,
+          'fabricNamespace': fabric_platform_namespace, 'accept': [], 'realization': fab_real}
+         | combine({'ranges': _published} if _published is iterable and _published is not string
+                                             and _published | length > 0 else {}) }}
 
 - name: Keep the hub router's filters
   ansible.builtin.set_fact:

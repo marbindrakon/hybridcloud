@@ -35,6 +35,9 @@ SERVICE = {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": 
            "range": ["192.0.2.0/28", "198.51.100.17/32"], "attachableRanges": ["10.64.0.0/12"]}
 sys.path.insert(0, os.path.join(ROOT, "eda", "common", "files"))
 import shc_fabric as F  # noqa: E402
+
+# the special-purpose IPv4 space (Review R4 H1), never announced: refused at the hub's router after the realization's
+SPECIAL = ["0.0.0.0/8 le 32", "127.0.0.0/8 le 32", "169.254.0.0/16 le 32", "224.0.0.0/4 le 32", "240.0.0.0/4 le 32"]
 PLAN = {"link": "169.254.200.0/29", "ce": "169.254.200.3", "ceSecond": "169.254.200.4", "prefixLength": 29,
         "nodes": [{"name": "node-1", "address": "169.254.200.1"}, {"name": "node-2", "address": "169.254.200.2"}],
         "errors": []}
@@ -61,7 +64,7 @@ def spec(**kw):
     return s
 
 
-def front(namespace="platform-ns", e=None, real=None, sp=None):
+def front(namespace="platform-ns", e=None, real=None, sp=None, fabric_status=None):
     """platform_circuit.yml with the API reads and includes replaced; returns the refusal or the facts."""
     out = []
     for t in load(os.path.join(AC, "platform_circuit.yml")):
@@ -70,7 +73,8 @@ def front(namespace="platform-ns", e=None, real=None, sp=None):
             t = {"name": n, "ansible.builtin.set_fact": {"_ac_edge": {"resources": [e if e is not None else edge()]}}}
         elif n == "Read the platform circuit's fabric":
             t = {"name": n, "ansible.builtin.set_fact": {"_ac_fabric": {"resources": [
-                {"metadata": {"name": "fab"}, "spec": {"domainAsn": 65010}}]}}}
+                dict({"metadata": {"name": "fab"}, "spec": {"domainAsn": 65010}},
+                     **({"status": fabric_status} if fabric_status else {}))]}}}
         elif n == "The platform's realization parameters for the platform circuit":
             t = {"name": n, "ansible.builtin.set_fact": {"fab_real": real if real is not None else
                                                          {"service": SERVICE, "infrastructure": {"hub": HUB},
@@ -127,6 +131,16 @@ class Refusals(unittest.TestCase):
     def test_ipv4_only(self):
         out = front(real={"service": SERVICE, "infrastructure": {"hub": ["2001:db8:f::/48"]}})
         self.assertEqual(out["reason"], "FamilyUnavailable")
+
+    def test_the_hub_router_refuses_every_published_range(self):
+        # Review R4 H1: the fabric's published rows (every site's own among them) are what the hub's router refuses
+        rows = F.reserved_ranges({"service": SERVICE, "infrastructure": {"hub": HUB}},
+                                 [{"name": "site-b", "kind": "openstack", "ranges": ["10.40.0.0/16"]}])
+        out = front(fabric_status={"reservedRanges": rows})
+        self.assertTrue(out["done"], out["msg"])
+        self.assertIn("10.40.0.0/16 le 32", out["ce"]["refusedRanges"])
+        self.assertEqual(out["ce"]["refusedRanges"],
+                         [F.prefix_entry(r[0]) for r in F.service_refusal_rows(F.rows_of(rows))])
 
     def test_the_service_range_is_required(self):
         for svc in (dict(SERVICE, range=[]), {k: v for k, v in SERVICE.items() if k != "range"},
@@ -207,7 +221,7 @@ class Record(unittest.TestCase):
         self.assertEqual((r["vlan"], r["linkIndex"], r["ce"], r["interface"], r["mtu"]), (3001, 2, "169.254.200.3", "bond1", 9000))
         self.assertEqual(len(r["rev"]), 12)
         self.assertEqual(ce["acceptedRanges"], ["192.0.2.0/28 le 32", "198.51.100.17/32"])
-        self.assertEqual(ce["refusedRanges"], ["192.0.2.0/24 le 32", "198.51.100.17/32"])
+        self.assertEqual(ce["refusedRanges"], ["192.0.2.0/24 le 32", "198.51.100.17/32"] + SPECIAL)
         self.assertEqual(ce["advertisedRanges"], ["10.64.0.0/12 le 32"])
         self.assertEqual(ce["maxPrefixes"], 1000)
         self.assertEqual(ce["neighbors"], [{"name": "node-1", "address": "169.254.200.1", "asn": 65010},
@@ -220,7 +234,7 @@ class Record(unittest.TestCase):
         # IPv4 prefix up to /32; written out as 0.0.0.0/0 it reads the same
         out = self.record(load(os.path.join(AC, "main.yml")), record_vars(service=dict(SERVICE, attachableRanges=[])))
         self.assertEqual((out["ce"]["advertisedRanges"], out["real"]["advertise"]), (["0.0.0.0/0 le 32"],) * 2)
-        self.assertEqual(out["ce"]["refusedRanges"], ["192.0.2.0/24 le 32", "198.51.100.17/32"])
+        self.assertEqual(out["ce"]["refusedRanges"], ["192.0.2.0/24 le 32", "198.51.100.17/32"] + SPECIAL)
         out = self.record(load(os.path.join(AC, "main.yml")),
                           record_vars(service=dict(SERVICE, attachableRanges=[], maxPrefixes=40)))
         self.assertEqual(out["ce"]["maxPrefixes"], 40)

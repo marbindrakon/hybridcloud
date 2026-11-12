@@ -374,6 +374,53 @@
       ansible.builtin.set_fact:
         hf_attach_plan: "{{ fab_check_result }}"
 
+    # the ranges tenants may not use: the realization's and each site's own (its gateway's underlay and the
+    # realization's placement.siteReserved of the site's kind), for status.reservedRanges (the Entity job copies them)
+    # and for the service VRF, where every site's ranges refuse a cluster prefix (Review R4 H1)
+    - name: List the gateways and sites for the ranges tenants may not use
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+        namespace: "{{ fab_namespace }}"
+      loop: [CloudGateway, CloudInfrastructure]
+      register: _hf_sites
+
+    - name: The fabric's sites and their own ranges
+      vars:
+        _types: >-
+          {%- set out = {} -%}
+          {%- for c in _hf_sites.results[1].resources | default([]) -%}
+            {%- set _ = out.update({c.metadata.name: (c.spec | default({})).type | default('')}) -%}
+          {%- endfor -%}
+          {{ out }}
+      ansible.builtin.set_fact:
+        hf_sites: >-
+            {%- set out = [] -%}
+            {%- for g in _hf_sites.results[0].resources | default([])
+                  if (g.spec.fabricRef | default({})).name | default('') == fab_name
+                     and g.metadata.deletionTimestamp is not defined -%}
+              {%- set site = (g.spec.cloudRef | default({})).name | default('') -%}
+              {%- set cidr = (g.spec.siteUnderlay | default({})).cidr | default('', true) -%}
+              {%- set _ = out.append({'name': site, 'kind': _types.get(site, ''),
+                                      'ranges': [cidr] if cidr | length > 0 else []}) -%}
+            {%- endfor -%}
+            {{ out | sort(attribute='name') }}
+
+    - name: The ranges tenants may not use
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: reserved-ranges
+          realization: "{{ fab_real }}"
+          sites: "{{ hf_sites }}"
+
+    - name: Keep the ranges tenants may not use
+      ansible.builtin.set_fact:
+        hf_reserved: "{{ fab_check_result.ranges }}"
+
     # the service VRF: the networks' cluster prefixes (status.platformAccess) on every node with a platform circuit,
     # the root VRFs of the networks gaining their service links
     - name: Plan the service VRF on the nodes
@@ -390,6 +437,7 @@
           circuits: "{{ hf_attach_plan.platform | default([]) }}"
           vrfs: "{{ hf_attach_plan.vrfs | default({}) }}"
           previous: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
+          sites: "{{ hf_sites }}"
 
     - name: Refuse an unusable service plan
       ansible.builtin.set_fact:
@@ -407,50 +455,12 @@
         hf_service: "{{ fab_check_result }}"
         hf_service_before: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
 
-    # the ranges tenants may not use: the realization's and each site's own (its gateway's underlay and the
-    # realization's placement.siteReserved of the site's kind), for status.reservedRanges (the Entity job copies them)
-    - name: List the gateways and sites for the ranges tenants may not use
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: "{{ item }}"
-        namespace: "{{ fab_namespace }}"
-      loop: [CloudGateway, CloudInfrastructure]
-      register: _hf_sites
-
-    - name: The ranges tenants may not use
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
-      vars:
-        _types: >-
-          {%- set out = {} -%}
-          {%- for c in _hf_sites.results[1].resources | default([]) -%}
-            {%- set _ = out.update({c.metadata.name: (c.spec | default({})).type | default('')}) -%}
-          {%- endfor -%}
-          {{ out }}
-        fab_check:
-          action: reserved-ranges
-          realization: "{{ fab_real }}"
-          sites: >-
-            {%- set out = [] -%}
-            {%- for g in _hf_sites.results[0].resources | default([])
-                  if (g.spec.fabricRef | default({})).name | default('') == fab_name
-                     and g.metadata.deletionTimestamp is not defined -%}
-              {%- set site = (g.spec.cloudRef | default({})).name | default('') -%}
-              {%- set cidr = (g.spec.siteUnderlay | default({})).cidr | default('', true) -%}
-              {%- set _ = out.append({'name': site, 'kind': _types.get(site, ''),
-                                      'ranges': [cidr] if cidr | length > 0 else []}) -%}
-            {%- endfor -%}
-            {{ out | sort(attribute='name') }}
-
     # what tenants see of these (the ranges and the ranges a managed cluster's prefixes must lie in) joins the offer
     # the Entities were told (status.realization.ipam.tenantOffer), so a change wakes them
-    - name: Keep the ranges tenants may not use
+    - name: Tell the Entities of the ranges tenants may not use
       ansible.builtin.set_fact:
-        hf_reserved: "{{ fab_check_result.ranges }}"
         hf_tenant_offer: >-
-          {{ hf_tenant_offer ~ '; ranges ' ~ ({'reservedRanges': fab_check_result.ranges,
+          {{ hf_tenant_offer ~ '; ranges ' ~ ({'reservedRanges': hf_reserved,
                                                'managedClusterRanges': hf_service.status.attachableRanges}
                                               | to_json | hash('sha1'))[:12] }}
 

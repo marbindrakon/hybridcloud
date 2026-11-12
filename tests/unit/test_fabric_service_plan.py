@@ -106,7 +106,9 @@ class ReservedRanges(unittest.TestCase):
     def test_defaults(self):
         rows = F.reserved_ranges(copy.deepcopy(DEFAULTS))
         self.assertEqual([x["prefix"] for x in rows],
-                         ["192.0.0.8/32", "10.255.0.0/24", "10.255.1.0/24", "10.255.128.0/20", "169.254.0.0/16"])
+                         ["192.0.0.8/32", "10.255.0.0/24", "10.255.1.0/24", "10.255.128.0/20", "169.254.0.0/16",
+                          # Review R4 H1: the special-purpose space (link-local is egress.linkPool's already)
+                          "0.0.0.0/8", "127.0.0.0/8", "224.0.0.0/4", "240.0.0.0/4"])
 
     def test_action(self):
         p = subprocess.run([sys.executable, os.path.join(ROOT, "eda/common/files/shc_fabric.py")],
@@ -475,6 +477,80 @@ class ServiceRange(unittest.TestCase):
         rows = F.reserved_ranges(real())
         out = F.service_prefix_check({"ranges": rows, "space": ["100.64.0.0/24"], "prefixes": ["100.64.0.5/32"]})
         self.assertEqual(out["prefixes"][0]["reason"], "")
+
+
+class ServiceRefusal(unittest.TestCase):
+    """Review R4 H1: every range a service prefix may not overlap, one set (service_refusal_rows) for the planner's
+    verdict, the node guard and the hub router's refusedRanges, and in the published list: every site's own ranges
+    whichever site the cluster is on (a service prefix is announced to the hub's network, where every site is routed),
+    the platform's pools and hand-off, the service range, the special-purpose space."""
+
+    SITES = [{"name": "site-a", "kind": "openstack", "ranges": ["10.30.0.0/16"]},
+             {"name": "site-b", "kind": "openshift", "ranges": ["10.40.0.0/16"]}]
+    EGRESS = {"enabled": True, "parentInterface": "bond1.100", "gateway": "203.0.113.1", "prefixLength": 24,
+              "linkPool": "169.254.0.0/16",
+              "nodes": {"bgw-1": {"address": "203.0.113.11", "natPool": "203.0.113.64/26"},
+                        "bgw-2": {"address": "203.0.113.12", "natPool": "203.0.113.128/26"}}}
+
+    def real(self):
+        return real(service={"attachableRanges": []}, egress=self.EGRESS)
+
+    def plan_one(self, prefix, space):
+        nets = [network("n1", [space], [(prefix, {})])]
+        alloc = ledger({("acme/n1", prefix): 1}, {"acme/n1": 10005}, {"acme/n1": 4})
+        out = F.service_plan({"realization": self.real(), "nodes": NODES, "fabric": "lab", "domainAsn": 65010,
+                              "networks": nets, "ledger": alloc, "circuits": [circuit()], "sites": self.SITES,
+                              "vrfs": {n: [] for n in NODES}, "previous": {}})
+        self.assertEqual(out["errors"], [])
+        return out
+
+    def test_another_sites_underlay_is_refused(self):
+        # the review's case: a network placed on site A with an address of site B's underlay
+        out = self.plan_one("10.40.0.20/32", "10.40.0.0/24")
+        self.assertEqual(out["status"]["networks"], [])
+        r = out["status"]["refused"][0]
+        self.assertEqual((r["prefix"], r["reason"]), ("10.40.0.20/32", "PrefixReserved"))
+        self.assertIn("10.40.0.0/16", r["message"])
+        self.assertIn("site-b", r["message"])
+        # and its site-reserved ranges (site B is OpenShift Virtualization: placement.siteReserved.CloudVirt)
+        out = self.plan_one("100.64.0.9/32", "100.64.0.0/24")
+        self.assertEqual(out["status"]["refused"][0]["reason"], "PrefixReserved")
+
+    def test_the_hand_off_and_the_special_purpose_space_are_refused(self):
+        for prefix, space in (("203.0.113.70/32", "203.0.113.64/27"), ("203.0.113.40/32", "203.0.113.32/27"),
+                              ("240.0.0.5/32", "240.0.0.0/24"), ("127.0.0.5/32", "127.0.0.0/24"),
+                              ("224.0.0.5/32", "224.0.0.0/24"), ("0.0.0.5/32", "0.0.0.0/24")):
+            with self.subTest(prefix=prefix):
+                self.assertEqual(self.plan_one(prefix, space)["status"]["refused"][0]["reason"], "PrefixReserved")
+
+    def test_three_users_one_set(self):
+        out = self.plan_one("192.0.2.15/32", "192.0.2.0/24")
+        self.assertEqual(out["status"]["networks"][0]["prefixes"], ["192.0.2.15/32"])
+        n = out["nodes"]["bgw-1"]
+        ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
+                              "realization": self.real(), "ranges": F.reserved_ranges(self.real(), self.SITES)})["ceConfig"]
+        self.assertEqual(ce["refusedRanges"], n["refuse"])
+        srows = F.service_refusal_rows(F.rows_of(F.reserved_ranges(self.real(), self.SITES)))
+        self.assertEqual([F.prefix_entry(x[0]) for x in srows], [e for e in n["refuse"] if e != "0.0.0.0/0"])
+        for want in ("10.30.0.0/16 le 32", "10.40.0.0/16 le 32", "100.64.0.0/16 le 32", "203.0.113.64/26 le 32",
+                     "203.0.113.0/24 le 32", "198.51.100.0/24 le 32", "127.0.0.0/8 le 32", "240.0.0.0/4 le 32"):
+            self.assertIn(want, n["refuse"])
+        # the service range lies inside the hub's range (check-fabric): covered by it, listed once
+        self.assertNotIn("198.51.100.0/28 le 32", n["refuse"])
+
+    def test_published_and_the_tenant_network_check_keep_their_rules(self):
+        rows = F.reserved_ranges(self.real(), self.SITES)
+        by = {(r["prefix"], r.get("site", "")): r["rule"] for r in rows}
+        self.assertEqual(by[("10.40.0.0/16", "site-b")], "SteppedAround")
+        self.assertEqual(by[("203.0.113.64/26", "")], "Refused")
+        self.assertEqual(by[("127.0.0.0/8", "")], "Refused")
+        self.assertNotIn(("198.51.100.0/28", ""), by)  # inside the hub's row
+        # a tenant network on site A may hold site B's range (a site's own ranges only constrain placements there)
+        out = F.check_network({"prefixes": ["10.40.0.0/24"], "ranges": rows, "site": "site-a"})
+        self.assertEqual(out.get("reason", ""), "")
+        # the per-prefix check (the network job's helper) with the published rows refuses it for the service
+        out = F.service_prefix_check({"prefixes": ["10.40.0.20/32"], "space": ["10.40.0.0/24"], "ranges": rows})
+        self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
 
 
 class PrefixCheck(unittest.TestCase):

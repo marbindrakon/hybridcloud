@@ -967,6 +967,42 @@ RANGE_KEYS = (
     ("egress.linkPool", "Addresses inside the platform's network nodes", STEPPED),
 )
 PURPOSE_SITE = "Addresses the site uses itself"
+PURPOSE_SERVICE = "The platform's management addresses that reach clusters"
+PURPOSE_HANDOFF = "The platform's internet hand-off"
+PURPOSE_SPECIAL = "Special-purpose addresses that are never routed"
+# IPv4 space no prefix is ever announced in: "this network", loopback, link-local, multicast, reserved (RFC 6890)
+SPECIAL4 = ("0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4")
+
+
+def platform_extra_rows(real):
+    """The addresses the platform uses that RANGE_KEYS does not name, and the special-purpose IPv4 space:
+    [(key, network, purpose, rule)]: service.range (the service on), each egress node's NAT pool and its hand-off
+    network (address/prefixLength; egress on), SPECIAL4. All Refused."""
+    real = real or {}
+    out = []
+    sv = real.get("service") if isinstance(real.get("service"), dict) else {}
+    if sv.get("enabled"):
+        raw = sv.get("range") or []
+        for v in ([raw] if isinstance(raw, str) else raw if isinstance(raw, list) else []):
+            n = _net(v)
+            if n is not None:
+                out.append(("service.range", n, PURPOSE_SERVICE, REFUSED))
+    eg = real.get("egress") if isinstance(real.get("egress"), dict) else {}
+    if eg.get("enabled"):
+        for name, node in sorted((eg.get("nodes") or {}).items()):
+            node = node if isinstance(node, dict) else {}
+            n = _net(node.get("natPool"))
+            if n is not None:
+                out.append((f"egress.nodes.{name}.natPool", n, PURPOSE_HANDOFF, REFUSED))
+            try:
+                h = ipaddress.ip_network(f"{node.get('address')}/{int(eg.get('prefixLength') or 24)}", strict=False)
+            except (TypeError, ValueError):
+                h = None
+            if h is not None:
+                out.append((f"egress.nodes.{name}.address", h, PURPOSE_HANDOFF, REFUSED))
+    for v in SPECIAL4:
+        out.append(("special-purpose", ipaddress.ip_network(v), PURPOSE_SPECIAL, REFUSED))
+    return out
 # a site's type (CloudInfrastructure spec.type) -> the backend kind of placement.siteReserved
 SITE_KINDS = {"openshift": "CloudVirt", "openstack": "CloudOSO", "aws": "CloudAWS", "gcp": "CloudGCP"}
 
@@ -1011,6 +1047,12 @@ def range_rows(real, sites=None):
             if n is not None and (n, rule, "") not in seen:
                 seen.add((n, rule, ""))
                 out.append((key, n, purpose, rule, ""))
+    # the rest of what the platform uses, unless a row above holds it already (the service range inside the hub's,
+    # the link-local space as egress.linkPool): a tenant sees each range once, under its first purpose
+    for key, n, purpose, rule in platform_extra_rows(real):
+        if not any(n.version == o[1].version and n.subnet_of(o[1]) for o in out):
+            seen.add((n, rule, ""))
+            out.append((key, n, purpose, rule, ""))
     siteres = ((real or {}).get("placement") or {}).get("siteReserved") or {}
     for s in sites or []:
         name = str(s.get("name") or "")
@@ -1268,20 +1310,41 @@ def router_advertisement_check(real):
     return errors
 
 
-def service_refused4(real):
-    """The published ranges (not a site's own) as IPv4 networks, in their order: what a cluster prefix may not lie in,
-    so what the hub's network refuses from the platform at any length."""
-    out = []
-    for _, n, _, _, site in range_rows(real):
-        if not site and n.version == 4 and n not in out:
-            out.append(n)
+def service_refusal_rows(rows):
+    """Every range a service prefix may not overlap (Review R4 H1), from the range rows [(network, purpose, rule,
+    site)] (range_rows with the fabric's sites, or rows_of the published list): EVERY row whatever its rule and
+    whichever site it names, IPv4, in their order, each network once -> [(network, purpose, site)].
+
+    The difference from a tenant network is deliberate: a tenant prefix is judged by the row's rule, and a site's own
+    rows only for placements on that site (range_clash), because the network is routed there only; a service prefix is
+    announced to the hub's network, which routes every site's addresses, the platform's pools and hand-off and the
+    service range, so no such range may be shadowed there by a cluster's address, whatever site the cluster is on.
+    The planner's verdict (prefix_verdict), the node guard (service.refuse) and the hub router's refusedRanges
+    (platform_ce_ranges) all read this list."""
+    out, seen = [], set()
+    for n, purpose, _rule, site in rows:
+        if n.version == 4 and n not in seen:
+            seen.add(n)
+            out.append((n, purpose, site))
     return out
+
+
+def service_rows(real, sites=None, ranges=None):
+    """service_refusal_rows of the published rows (ranges) when given, else of the realization's with the sites."""
+    if ranges is not None:
+        return service_refusal_rows(rows_of(ranges))
+    return service_refusal_rows([(n, p, r, st) for _, n, p, r, st in range_rows(real, sites or [])])
+
+
+def service_clash(net, srows):
+    """The first range of service_refusal_rows the prefix overlaps (either direction), or None."""
+    return next((r for r in srows if r[0].overlaps(net)), None)
 
 
 def service_settings(real):
     """The service VRF's settings as the plan uses them (after service_check): {vrf, table, hub (IPv4, collapsed),
     range (service.range, collapsed), ports, hubEndpoints [{prefix, ports}], attachable (attachableRanges: [] = any),
-    refused (the published IPv4 ranges), maxPrefixes}."""
+    maxPrefixes}."""
     sv = (real or {}).get("service") or {}
     vrf = sv.get("vrf") or {}
     hub4 = sorted(ipaddress.collapse_addresses(hub_nets(real, 4)), key=lambda n: (int(n.network_address), n.prefixlen))
@@ -1297,8 +1360,7 @@ def service_settings(real):
     return {"vrf": str(vrf.get("name") or "service"), "table": int(vrf.get("table") or 9001),
             "hub": [str(n) for n in hub4], "range": [str(n) for n in rng],
             "ports": sorted({int(p) for p in sv.get("ports") or [6443, 443]}),
-            "hubEndpoints": eps, "attachable": [str(n) for n in att],
-            "refused": [str(n) for n in service_refused4(real)], "maxPrefixes": int(sv.get("maxPrefixes") or 1000)}
+            "hubEndpoints": eps, "attachable": [str(n) for n in att], "maxPrefixes": int(sv.get("maxPrefixes") or 1000)}
 
 
 def prefix_entry(n):
@@ -1307,13 +1369,14 @@ def prefix_entry(n):
     return entry_text(n, le=32) if n.prefixlen < 32 else str(n)
 
 
-def platform_ce_ranges(cfg):
-    """What the hub's router configures toward the platform, from service_settings: acceptedRanges (what it announces:
-    the service range; the platform accepts nothing else), refusedRanges (what it refuses from the platform, at any
-    length: the published ranges), advertisedRanges (then what it accepts: any other IPv4 prefix up to /32, or exactly
-    attachableRanges when set) and maxPrefixes (its maximum-prefix figure: the platform never announces more)."""
+def platform_ce_ranges(cfg, srows):
+    """What the hub's router configures toward the platform, from service_settings and service_refusal_rows:
+    acceptedRanges (what it announces: the service range; the platform accepts nothing else), refusedRanges (what it
+    refuses from the platform, at any length: every range a service prefix may not overlap), advertisedRanges (then
+    what it accepts: any other IPv4 prefix up to /32, or exactly attachableRanges when set) and maxPrefixes (its
+    maximum-prefix figure: the platform never announces more)."""
     return {"acceptedRanges": [prefix_entry(n) for n in cfg["range"]],
-            "refusedRanges": [prefix_entry(n) for n in cfg["refused"]],
+            "refusedRanges": [prefix_entry(r[0]) for r in srows],
             "advertisedRanges": [prefix_entry(n) for n in cfg["attachable"]] or ["0.0.0.0/0 le 32"],
             "maxPrefixes": cfg["maxPrefixes"]}
 
@@ -1336,10 +1399,10 @@ def network_space4(n):
     return out
 
 
-def prefix_verdict(text, space, rows, attachable):
+def prefix_verdict(text, space, srows, attachable):
     """A service prefix on its own (no other network considered): (network or None, reason, message); reason "" =
-    acceptable. space: the network's IPv4 space (networks); rows: range rows (network, purpose, rule, site) without
-    site rows; attachable: networks (service.attachableRanges; empty = any range the reserved ranges leave)."""
+    acceptable. space: the network's IPv4 space (networks); srows: service_refusal_rows (every site's rows included);
+    attachable: networks (service.attachableRanges; empty = any range the reserved ranges leave)."""
     try:
         net = ipaddress.ip_network(str(text).strip(), strict=True)
     except ValueError:
@@ -1348,9 +1411,11 @@ def prefix_verdict(text, space, rows, attachable):
         return net, "FamilyUnavailable", f"{net}: the platform reaches clusters over IPv4 only"
     if not any(net.subnet_of(s) for s in space):
         return net, "OutsideAddressSpace", f"{net} is not inside the network's IPv4 address space"
-    clash = range_clash(net, rows)
+    clash = service_clash(net, srows)
     if clash is not None:
-        return net, "PrefixReserved", reserved_message("prefix", net, clash)
+        n, purpose, site = clash
+        return net, "PrefixReserved", (f"prefix {net} overlaps {n}, reserved by the platform: {lower_first(purpose)}"
+                                       + (f" (site {site})" if site else ""))
     if attachable and not any(net.subnet_of(a) for a in attachable):
         return net, "OutsideAttachableRanges", (f"{net} is outside the ranges the platform reaches "
                                                 f"({', '.join(str(a) for a in attachable)})")
@@ -1366,10 +1431,10 @@ def service_prefix_check(req):
     only says whether a prefix can be accepted now."""
     real = req.get("realization")
     if real is not None:
-        rows = [(n, p, r, "") for _, n, p, r, s in range_rows(real) if not s]
+        rows = service_rows(real, req.get("sites"), req.get("ranges"))
         attachable = [ipaddress.ip_network(a) for a in service_settings(real)["attachable"]]
     else:
-        rows = [r for r in rows_of(req.get("ranges")) if not r[3]]
+        rows = service_rows({}, ranges=req.get("ranges") or [])
         attachable = [n for n in (_net(a) for a in req.get("attachableRanges") or []) if n is not None and n.version == 4]
     space = [n for n in (_net(c) for c in req.get("space") or []) if n is not None and n.version == 4]
     others = [n for n in (_net(c) for c in req.get("accepted") or []) if n is not None]
@@ -1419,7 +1484,8 @@ def service_plan(req):
     asn = int(req.get("domainAsn") or 0)
     fabric = req.get("fabric")
     alloc = req.get("ledger") or {}
-    rows = [(n, p, r, "") for _, n, p, r, s in range_rows(real) if not s]
+    # every range a service prefix may not overlap: the realization's and every site's (the fabric job's sites)
+    rows = service_rows(real, req.get("sites"))
     attachable = [ipaddress.ip_network(a) for a in cfg["attachable"]]
     prev = {(str(w.get("network")), str(p)) for w in ((req.get("previous") or {}).get("networks") or [])
             for p in w.get("prefixes") or []}
@@ -1506,7 +1572,7 @@ def service_plan(req):
     # in from the hub's routers: the service range only; out: the accepted prefixes, guarded on the redistribution as
     # the hub's routers are told to filter them (status.ceConfig): never inside a published range, then inside
     # attachableRanges when set, else any IPv4 prefix
-    ce = platform_ce_ranges(cfg)
+    ce = platform_ce_ranges(cfg, rows)
     accept = ce["acceptedRanges"]
     refuse, attach = ce["refusedRanges"], ce["advertisedRanges"]
     policy = hashlib.sha1(json.dumps([deny, accept, all_prefixes, attach, refuse], sort_keys=True).encode()).hexdigest()[:12]
@@ -1869,7 +1935,7 @@ def check_platform_circuit(req):
         out["familyErrors"].append("a platform circuit carries IPv4 only")
     if req.get("advertise"):
         out["notes"].append("routing.advertise is not used: a platform circuit announces the clusters' prefixes only")
-    out["ceConfig"] = platform_ce_ranges(service_settings(real))
+    out["ceConfig"] = platform_ce_ranges(service_settings(real), service_rows(real, req.get("sites"), req.get("ranges")))
     return out
 
 

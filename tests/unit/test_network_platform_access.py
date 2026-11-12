@@ -179,8 +179,15 @@ class Prefixes(unittest.TestCase):
         out = run(space=["10.20.0.0/16", "172.16.0.0/16"], clusters=[cl("c1", "172.16.0.9/32")])
         self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "OutsideAttachableRanges"))
 
-    def test_a_site_row_does_not_refuse(self):
-        self.assertEqual(run(clusters=[cl("c1", "10.20.200.9/32")])["accepted"], ["10.20.200.9/32"])
+    def test_a_site_row_refuses_a_service_prefix(self):
+        # Review R4 H1: a cluster's address is announced to the hub's network, where every site's own addresses are
+        # routed: a row of any site refuses it, whatever site the network is placed on (a tenant network itself is
+        # judged by its own site's rows only, check-network)
+        out = run(clusters=[cl("c1", "10.20.200.9/32")])
+        self.assertEqual(out["accepted"], [])
+        self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
+        self.assertIn("10.20.200.0/24", out["prefixes"][0]["message"])
+        self.assertIn("site-a", out["prefixes"][0]["message"])
 
     def test_the_hub_refuses_without_a_published_row(self):
         out = run(space=["192.0.2.0/24", "10.20.0.0/16"], reserved=[], clusters=[cl("c1", "192.0.2.9/32")],

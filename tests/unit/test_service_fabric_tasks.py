@@ -72,8 +72,11 @@ class FabricJob(unittest.TestCase):
         out = run_play([{"ansible.builtin.set_fact": {"_r": t["vars"]["fab_check"]}}, write_out("_r")],
                        {"fab_real": real, "fab_spec": {"domainAsn": 65010, "borderGateway": {"nodes": [{"name": n} for n in S.NODES]}},
                         "fab_name": "lab", "_hf_networks": {"resources": nets}, "hf_alloc": led, "hf_attach_plan": a,
+                        "hf_sites": [{"name": "site-b", "kind": "openshift", "ranges": ["10.40.0.0/16"]}],
                         "fab_st": {"realization": {"service": {"networks": [{"network": "acme/lab", "prefixes": []}]}}}})
         self.assertEqual(out["action"], "service-plan")
+        # the fabric's sites reach the plan (Review R4 H1: every site's ranges refuse a cluster prefix)
+        self.assertEqual(out["sites"], [{"name": "site-b", "kind": "openshift", "ranges": ["10.40.0.0/16"]}])
         self.assertIsInstance(out["realization"]["service"], dict)
         r = F.service_plan(out)
         self.assertEqual(r["errors"], [])
@@ -82,7 +85,7 @@ class FabricJob(unittest.TestCase):
         out = run_play([{"ansible.builtin.set_fact": {"_r": t["vars"]["fab_check"]}}, write_out("_r")],
                        {"fab_real": real, "fab_spec": {"domainAsn": 65010, "borderGateway": {"nodes": []}},
                         "fab_name": "lab", "_hf_networks": {"resources": nets}, "hf_alloc": led,
-                        "hf_attach_plan": {"vrfs": {}}, "fab_st": {}})
+                        "hf_attach_plan": {"vrfs": {}}, "fab_st": {}, "hf_sites": []})
         self.assertEqual(out["circuits"], [])
         self.assertEqual(out["previous"], {})
 
@@ -98,18 +101,20 @@ class FabricJob(unittest.TestCase):
                          [("e10000", [4], "x"), ("e10002", [4], "y")])
 
     def test_ranges_join_the_tenants_offer(self):
-        t = main_task("Keep the ranges tenants may not use")
+        keep = main_task("Keep the ranges tenants may not use")
+        t = main_task("Tell the Entities of the ranges tenants may not use")
         rows = F.reserved_ranges(S.realization(S.CORE, service=True))
         # (pools.yml sets the offer as a fact; an extra variable would win over the step's set_fact)
         pre = {"ansible.builtin.set_fact": {"hf_tenant_offer": "{{ _offer }}"}}
+        pre = [pre, keep]
         base = {"fab_check_result": {"ranges": rows}, "_offer": "/48 /56 default /56",
                 "hf_service": {"status": {"attachableRanges": ["192.0.2.0/24"]}}}
-        a = run_play([pre, t, write_out("[hf_reserved, hf_tenant_offer]")], base)
+        a = run_play(pre + [t, write_out("[hf_reserved, hf_tenant_offer]")], base)
         self.assertEqual(a[0], rows)
         self.assertRegex(a[1], r"^/48 /56 default /56; ranges [0-9a-f]{12}$")
-        b = run_play([pre, t, write_out("hf_tenant_offer")], dict(base, hf_service={"status": {"attachableRanges": []}}))
+        b = run_play(pre + [t, write_out("hf_tenant_offer")], dict(base, hf_service={"status": {"attachableRanges": []}}))
         self.assertNotEqual(a[1], b)
-        c = run_play([pre, t, write_out("hf_tenant_offer")], base)
+        c = run_play(pre + [t, write_out("hf_tenant_offer")], base)
         self.assertEqual(a[1], c)
 
     def test_status(self):
