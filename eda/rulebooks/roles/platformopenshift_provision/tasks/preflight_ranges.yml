@@ -1,0 +1,71 @@
+---
+# The cluster's own address ranges (spec.networking over the installation's defaults) and their checks, before
+# anything is built (DESIGN cnet §2.2): the ranges against each other, the hybrid network's address space and the
+# ranges reserved by the platform (shc_fabric.py check-cluster-networks). Inputs:
+#   pr_machine_from_placement  AWS/GCP on a network: the placement's IPv4 subnet is the machine network ('' else)
+#   pr_space                   the hybrid network's address space ([] without one)
+#   pr_reserved                the reserved ranges [{prefix, purpose, rule, site?}] (a site's own rows count for the
+#                              cluster's site only)
+#   pr_site                    the environment's site ('' when it has none)
+# Sets cb_cluster_network, cb_host_prefix, cb_service_network, cb_machine_network; refuses through preflight_stop.yml.
+- name: The cluster's address ranges in effect
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: networking
+      spec: "{{ platform_spec.networking | default({}, true) }}"
+      defaults: "{{ platformopenshift_networking }}"
+      machineFromPlacement: "{{ pr_machine_from_placement | default('', true) }}"
+
+- name: Refuse ranges that cannot be used
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ po_result.reason }}"
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ po_result.message }}"
+  when: po_result.reason | length > 0
+
+- name: Keep the ranges
+  ansible.builtin.set_fact:
+    cb_cluster_network: "{{ po_result.clusterNetwork }}"
+    cb_host_prefix: "{{ po_result.hostPrefix | int }}"
+    cb_service_network: "{{ po_result.serviceNetwork }}"
+    cb_machine_network: "{{ po_result.machineNetwork }}"
+    pr_reserved_here: >-
+      {%- set out = [] -%}
+      {%- for r in pr_reserved | default([], true) if r is mapping and (r.prefix | default('', true)) -%}
+        {%- if (r.site | default('', true)) in ['', pr_site | default('', true)] -%}{%- set _ = out.append(r) -%}{%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: Check the ranges against each other, the network and the reserved ranges
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+  vars:
+    # one expression: on ansible-core 2.16 a number templated inside a nested mapping stays a string.
+    # The request is shc_fabric.py's: provider (openstack|aws|gcp) and network (the cluster names a hybrid network:
+    # on AWS and Google Cloud the machine network is then the placement's subnet, checked against the reserved ranges
+    # only), ranges (the published rows) and site (a site's own rows count for that site only)
+    fab_check: >-
+      {{ {'action': 'check-cluster-networks',
+          'clusterNetwork': cb_cluster_network, 'hostPrefix': cb_host_prefix | int,
+          'serviceNetwork': cb_service_network, 'machineNetwork': cb_machine_network,
+          'provider': platform_spec.type | default('openstack', true),
+          'network': ((pr_machine_from_placement | default('', true)) | length > 0)
+                     or ((pr_space | default([], true)) | length > 0),
+          'space': pr_space | default([], true), 'ranges': pr_reserved_here,
+          'site': pr_site | default('', true)} }}
+
+# the helper's answer: errors (messages, the reserved ranges first) and reason (PrefixReserved, AddressConflict,
+# InvalidSpec or "")
+- name: Read the first conflict
+  ansible.builtin.set_fact:
+    pr_conflict_reason: >-
+      {{ '' if (fab_check_result.errors | default([], true) | length == 0)
+         else (fab_check_result.reason | default('', true) or 'AddressConflict') }}
+    pr_conflict_message: "{{ (fab_check_result.errors | default([], true) + [''])[0] | string }}"
+
+- name: Refuse overlapping ranges
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ pr_conflict_reason | trim }}"
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pr_conflict_message }}"
+  when: pr_conflict_reason | trim | length > 0

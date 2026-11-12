@@ -426,8 +426,10 @@ class WiringTest(unittest.TestCase):
         for s in ("ipv6_mode.yml", "ipv6_realized.yml", "platform_block.yml", "egress_status.yml", "IPv6ModeInUse",
                   "exclusive:", "ipam-pool-release", "mode6:", "holders:", "tenant:", "'ipv6': hn_ipv6_status"):
             self.assertIn(s, t)
-        # the egress index is held for IPv4 only
-        self.assertIn("hn_egress_want4 | bool or hn_platform_reach", t)
+        # the egress index is held for IPv4 egress, IPv6 egress the fabric offers, or the network's service prefixes
+        # (the platform reach annotation is retired)
+        self.assertIn("(hn_egress_want4 | bool or (hn_egress_want6 | bool and hn_egress_offered6 | bool))", t)
+        self.assertIn("or hn_service_hold | bool", t)
         b = self.text(HN, "platform_block.yml")
         for s in ("fabric_ipam_pools.yml", "ipam-pool-allocate", "WaitingForAddressSpace", "FamilyUnavailable",
                   "PrefixInvalid", "holdDownUntil"):

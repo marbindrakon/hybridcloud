@@ -32,7 +32,7 @@ def render(**extra):
 
 class Wiring(unittest.TestCase):
     def test_every_build_path_passes_the_cluster_domain(self):
-        want = {"openstack.yml": "{{ cb_cluster_name }}.{{ cb_cluster_domain }}",
+        want = {"openstack.yml": "{{ cb_ocp_name }}.{{ cb_cluster_domain }}",
                 "aws.yml": "{{ cb_cluster_domain }}",
                 "gcp.yml": "{{ cb_cluster_domain }}"}
         for f, dom in want.items():
@@ -55,7 +55,7 @@ class Wiring(unittest.TestCase):
     def test_identity_provider_name_matches_the_callback(self):
         policy = by_name(load(OIDC), "Build ACM Policy for OpenShift OAuth configuration")
         tpl = policy["ansible.builtin.set_fact"]["acm_oidc_policy"]["spec"]["policy-templates"]
-        oauth = [t for t in tpl if t["objectDefinition"]["metadata"]["name"] == "{{ cluster_name }}-oauth"][0]
+        oauth = [t for t in tpl if t["objectDefinition"]["metadata"]["name"] == "{{ acm_base }}-oauth"][0]
         idp = oauth["objectDefinition"]["spec"]["object-templates"][0]["objectDefinition"]["spec"]["identityProviders"][0]
         self.assertEqual(idp["name"], "{{ platformopenshift_oidc_idp_name }}")
         self.assertEqual(load(DEFAULTS)["platformopenshift_oidc_idp_name"], "keycloak-sso")

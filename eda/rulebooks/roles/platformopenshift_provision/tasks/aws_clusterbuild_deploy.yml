@@ -133,6 +133,19 @@
          (cb_helm_release_failed | bool) or
          (values_diff_result.stdout | default('true') | trim == 'true') }}
 
+# the install starts with the Helm release below: from here on a refused prefix never withdraws the cluster's subnet
+# (cloud_internal_reach.yml)
+- name: Record that the install starts
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      installStarted: true
+
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
     argv:

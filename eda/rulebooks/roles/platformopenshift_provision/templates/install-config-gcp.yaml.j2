@@ -29,13 +29,13 @@ compute:
         diskType: pd-ssd
 networking:
   clusterNetwork:
-  - cidr: 10.128.0.0/14
-    hostPrefix: 23
+  - cidr: {{ cb_cluster_network }}
+    hostPrefix: {{ cb_host_prefix }}
   machineNetwork:
-  - cidr: {{ cb_machine_cidr | default('10.0.0.0/16') }}
+  - cidr: {{ cb_machine_cidr }}
   networkType: OVNKubernetes
   serviceNetwork:
-  - 172.30.0.0/16
+  - {{ cb_service_network }}
 platform:
   gcp:
     projectID: {{ cb_project }}

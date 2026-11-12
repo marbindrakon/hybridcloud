@@ -65,6 +65,8 @@ export interface SpecFieldMeta {
   visibleWhen?: SpecFieldVisibleWhen;
   /** Empty input removes the key (sent as null) instead of storing '' */
   omitWhenEmpty?: boolean;
+  /** The value the API applies when the field is unset (shown for an unset boolean) */
+  defaultValue?: boolean;
   /** When the field is hidden by visibleWhen, saving removes this path (default: the field's own) */
   clearWhenHidden?: boolean | string;
   /** Platform-only field (e.g. a Vault path): not shown on tenant pages */
@@ -199,9 +201,22 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'openstack.workerCount', labelKey: 'fields.workerCount', widget: 'number', visibleWhen: poOpenstack },
       { path: 'openstack.controlPlaneFlavor', labelKey: 'fields.controlPlaneFlavor', widget: 'text', visibleWhen: poOpenstack },
       { path: 'openstack.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poOpenstack },
-      { path: 'openstack.externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', visibleWhen: poOpenstack },
+      // the cluster's network: a network of the tenant or an external network of the site, fixed once created
+      { path: 'openstack.network', labelKey: 'clusterNet.network', widget: 'text', immutable: true, omitWhenEmpty: true, visibleWhen: poOpenstack },
+      { path: 'openstack.externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', immutable: true, omitWhenEmpty: true, visibleWhen: poOpenstack },
       { path: 'aws.environment', labelKey: 'fields.cloudAwsEnv', widget: 'text', immutable: true, visibleWhen: poAws },
       { path: 'aws.region', labelKey: 'fields.region', widget: 'text', visibleWhen: poAws },
+      { path: 'aws.network', labelKey: 'fields.network', widget: 'text', visibleWhen: poAws, omitWhenEmpty: true },
+      {
+        path: 'aws.publish',
+        labelKey: 'fields.publish',
+        widget: 'select',
+        visibleWhen: poAws,
+        options: [
+          { value: 'External', labelKey: 'fields.publishExternal' },
+          { value: 'Internal', labelKey: 'fields.publishInternal' },
+        ],
+      },
       {
         path: 'aws.clusterType',
         labelKey: 'fields.clusterType',
@@ -233,6 +248,11 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'gcp.workerCount', labelKey: 'fields.workerCount', widget: 'number', visibleWhen: poGcp },
       { path: 'gcp.controllerFlavor', labelKey: 'fields.controllerFlavor', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
       { path: 'gcp.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
+      // the cluster's address ranges: fixed once created (empty = the installation's default)
+      { path: 'networking.clusterNetwork', labelKey: 'clusterNet.clusterNetwork', widget: 'text', immutable: true, omitWhenEmpty: true },
+      { path: 'networking.hostPrefix', labelKey: 'clusterNet.hostPrefix', widget: 'number', immutable: true, omitWhenEmpty: true },
+      { path: 'networking.serviceNetwork', labelKey: 'clusterNet.serviceNetwork', widget: 'text', immutable: true, omitWhenEmpty: true },
+      { path: 'networking.machineNetwork', labelKey: 'clusterNet.machineNetwork', widget: 'text', immutable: true, omitWhenEmpty: true },
       { path: 'toolRbac.clusterAdminRbac', labelKey: 'form.roles.clusterAdmins', widget: 'rbacRefList' },
       { path: 'toolRbac.clusterOperatorRbac', labelKey: 'form.roles.clusterOperators', widget: 'rbacRefList' },
       { path: 'toolRbac.clusterDeveloperRbac', labelKey: 'form.roles.clusterDevelopers', widget: 'rbacRefList' },
@@ -484,6 +504,13 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         ...MTU,
       },
       { path: 'egress.internet', labelKey: 'fields.egressInternet', widget: 'boolean', helpKey: 'fields.egressInternetHelp' },
+      {
+        path: 'platformAccess',
+        labelKey: 'platformAccess.switch',
+        widget: 'boolean',
+        helpKey: 'platformAccess.help',
+        defaultValue: true,
+      },
       // no job reads networkViewerRbac yet (UX-015, UX-088): platform administrators only
       { path: 'networkViewerRbac', labelKey: 'fields.networkViewerRbac', widget: 'rbacRefList', adminOnly: true },
     ],
@@ -498,6 +525,23 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'ipv6.prefixLength', labelKey: 'fields.placementIpv6Size', widget: 'number', immutable: true },
       { path: 'ipv6.prefix', labelKey: 'fields.placementIpv6Pinned', widget: 'text', immutable: true },
       { path: 'ipv6.source', labelKey: 'attach.ipv6Source', widget: 'text', immutable: true },
+      // OpenStack environments only; can be changed at any time
+      {
+        path: 'use.virtualMachines',
+        labelKey: 'attach.useVm',
+        widget: 'boolean',
+        helpKey: 'attach.useVmHelp',
+        defaultValue: true,
+        visibleWhen: { path: 'backend.kind', equals: 'CloudOSO' },
+      },
+      {
+        path: 'use.routerAttachments',
+        labelKey: 'attach.useRouters',
+        widget: 'boolean',
+        helpKey: 'attach.useRoutersHelp',
+        defaultValue: false,
+        visibleWhen: { path: 'backend.kind', equals: 'CloudOSO' },
+      },
     ],
   },
   HybridFabric: {

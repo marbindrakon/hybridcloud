@@ -1,0 +1,149 @@
+---
+# shc (DESIGN cnet §4.2 steps 4-6, §4.3): after the preflight, before DNS, the install-config and the Helm release.
+# From here on the cluster holds things on the site and the hub. Each is recorded before the next step uses it, so a
+# failure anywhere leaves a record a retry continues from and the teardown works from: the build name and the network
+# choice, then the build's namespace on the hub (claim_build.yml, marked with this object's uid), then the floating
+# IPs, then (hybrid network) the cluster's prefixes in the platform's service routing domain, then DNS records, the
+# install-config and the Helm release.
+- name: Record the build and the cluster's network
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body: >-
+      {{ cb_network_record | combine({'buildName': cb_app_name, 'clusterNetwork': cb_cluster_network,
+                                      'serviceNetwork': cb_service_network, 'machineNetwork': cb_machine_network}) }}
+
+# Review R2 H1: the build's namespace on the hub is this cluster's before anything is made under the build name
+- name: Claim the build on the hub
+  ansible.builtin.include_tasks: claim_build.yml
+  vars:
+    cl_recorded: >-
+      {{ ((po_cr_current.resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
+
+- name: The cluster's floating IPs
+  ansible.builtin.include_tasks: cluster_fips.yml
+  vars:
+    cf_project_id: "{{ cb_oso_project_id }}"
+    cf_network_id: "{{ cb_fip_network_id }}"
+    cf_account: "{{ cb_fip_account }}"
+
+# Review R2 M1: an install that was started (status.installStarted, recorded just before the Helm release) or done
+# (status.clusterInstalled) has the floating IPs baked into the cluster: a refusal never gives them back
+- name: Whether the cluster's install was started
+  vars:
+    _st: "{{ (po_cr_current.resources | default([{}], true) | first).status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cb_install_started: "{{ (_st.clusterInstalled | default(false) | bool) or (_st.installStarted | default(false) | bool) }}"
+
+- name: The cluster's prefixes in the platform's service routing domain (hybrid network)
+  when: cb_platform_path | bool
+  block:
+    - name: Check the addresses against the other networks the platform reaches
+      ansible.builtin.include_tasks: po_call.yml
+      vars:
+        po_request:
+          action: fips-check
+          addresses: ["{{ cb_api_vip }}", "{{ cb_ingress_vip }}"]
+          network: "{{ ansible_operator_meta.namespace }}/{{ oso_network }}"
+          service: "{{ pf.service }}"
+
+    - name: Keep the address check
+      ansible.builtin.set_fact:
+        cb_fip_conflict: "{{ po_result }}"
+
+    - name: Carry the floating IPs as the cluster's prefixes
+      ansible.builtin.include_tasks: platform_prefixes.yml
+      vars:
+        # an installed cluster keeps its router's gateway address (router_gateway.yml) while the build re-runs
+        pp_prefixes: >-
+          {{ ([cb_api_vip ~ '/32', cb_ingress_vip ~ '/32']
+              + (((po_cr_current.resources[0].status | default({}, true)).platformPrefixes | default([], true))
+                 if (po_cr_current.resources[0].status | default({}, true)).clusterInstalled | default(false) | bool
+                 else [])) | unique | list }}
+        pp_network: "{{ oso_network }}"
+        pp_fabric: "{{ pf.fabric }}"
+      when: cb_fip_conflict.reason | length == 0
+
+    # a refused prefix of a cluster not installed yet: the addresses go back (the next attempt gets new ones) and the
+    # cluster holds nothing
+    - name: Give the floating IPs back after a refusal
+      when:
+        - >-
+          cb_fip_conflict.reason | length > 0
+          or (pp_outcome is defined and not (pp_outcome.done | bool) and not (pp_outcome.wait | bool))
+        - not (cb_install_started | bool)
+      block:
+        - name: Withdraw the cluster's prefixes
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: platformopenshifts
+            cr_name: "{{ ansible_operator_meta.name }}"
+            cr_namespace: "{{ ansible_operator_meta.namespace }}"
+            cr_status_partial: true
+            cr_status_body:
+              platformPrefixes: null
+          when: pp_outcome is defined
+
+        - name: Wake the network (it drops the prefixes)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+          vars:
+            nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ oso_network }}"}]
+          when: pp_outcome is defined
+
+        - name: Release the floating IPs
+          ansible.builtin.include_tasks: cluster_fips_release.yml
+          vars:
+            cfr_project_id: "{{ cb_oso_project_id }}"
+            cfr_account: "{{ cb_fip_account }}"
+            cfr_ids: ["{{ cb_fips.api.id }}", "{{ cb_fips.ingress.id }}"]
+            cfr_build: "{{ cb_app_name }}"
+            cfr_cr_name: "{{ ansible_operator_meta.name }}"
+            cfr_cr_namespace: "{{ ansible_operator_meta.namespace }}"
+
+        - name: Refuse the addresses
+          ansible.builtin.include_tasks: preflight_stop.yml
+          vars:
+            ps_reason: "{{ cb_fip_conflict.reason if cb_fip_conflict.reason | length > 0 else pp_outcome.reason }}"
+            ps_message: >-
+              PlatformOpenshift {{ ansible_operator_meta.name }}:
+              {{ (cb_fip_conflict.message ~ '; new addresses are chosen on the next attempt')
+                 if cb_fip_conflict.reason | length > 0 else pp_outcome.message }}
+
+    # a refused prefix of a cluster whose install was started: it keeps its floating IPs and prefixes (they are in its
+    # install), and reports the refusal; the platform team resolves it and the next run continues
+    - name: Report the refusal and keep the addresses (the install was started)
+      ansible.builtin.include_tasks: preflight_stop.yml
+      vars:
+        ps_reason: "{{ cb_fip_conflict.reason if cb_fip_conflict.reason | length > 0 else pp_outcome.reason }}"
+        ps_message: >-
+          PlatformOpenshift {{ ansible_operator_meta.name }}:
+          {{ cb_fip_conflict.message if cb_fip_conflict.reason | length > 0 else pp_outcome.message }}.
+          The cluster keeps its floating IPs {{ cb_api_vip }} and {{ cb_ingress_vip }} (they are part of its
+          installation); the platform team must resolve the refusal.
+      when:
+        - >-
+          cb_fip_conflict.reason | length > 0
+          or (pp_outcome is defined and not (pp_outcome.done | bool) and not (pp_outcome.wait | bool))
+        - cb_install_started | bool
+
+    # not carried yet: the floating IPs and the prefixes stay recorded; the next run continues from them
+    - name: Wait for the platform to reach the cluster's addresses
+      ansible.builtin.include_tasks: preflight_stop.yml
+      vars:
+        ps_reason: WaitingForPlatformAccess
+        ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pp_outcome.message }}"
+      when: pp_outcome is defined and not (pp_outcome.done | bool)
+
+- name: Record the passed preflight
+  ansible.builtin.include_tasks: preflight_passed.yml
+  vars:
+    pp_passed_message: >-
+      {{ ('On HybridNetwork ' ~ oso_network ~ ', floating IPs ' ~ cb_api_vip ~ ' and ' ~ cb_ingress_vip
+          ~ ' reached by the platform') if cb_platform_path | bool
+         else ('On external network ' ~ cb_external_network ~ ', floating IPs ' ~ cb_api_vip ~ ' and ' ~ cb_ingress_vip) }}

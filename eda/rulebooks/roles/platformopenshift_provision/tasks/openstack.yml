@@ -1,7 +1,13 @@
 ---
+# shc (DESIGN cnet §4.2): an OpenStack cluster is published on a hybrid network placed on its environment
+# (spec.openstack.network) or on one of the site's global external networks (spec.openstack.externalNetwork, else the
+# site's default). Its two floating IPs are its own (allocated, recorded and released by these jobs), its build name
+# is shc-oso-<entity>-<name>-<digest> (build_name.yml), and a preflight refuses before anything is created.
 - name: Set OpenStack spec facts
   ansible.builtin.set_fact:
     oso_env_name: "{{ platform_spec.openstack.environment }}"
+    oso_network: "{{ platform_spec.openstack.network | default('', true) }}"
+    oso_external_choice: "{{ platform_spec.openstack.externalNetwork | default('', true) }}"
     oso_control_plane_count: "{{ platform_spec.openstack.controlPlaneCount | default(default_control_plane_count) }}"
     oso_worker_count: "{{ platform_spec.openstack.workerCount | default(default_worker_count) }}"
     oso_control_plane_flavor: "{{ platform_spec.openstack.controlPlaneFlavor | default(default_control_plane_flavor, true) }}"
@@ -50,9 +56,11 @@
     cb_cluster_domain: "{{ _oso_st.domain }}"
     cb_base_domain: "{{ cloudoso_cr.resources[0].spec.baseDomain | default('') }}"
     cb_route53_vault_path: "{{ rca_route53_vault_path }}"
-    cb_api_vip: "{{ _oso_st.apiVIP | default('') }}"
-    cb_ingress_vip: "{{ _oso_st.ingressVIP | default('') }}"
-    cb_external_network: "{{ platform_spec.openstack.externalNetwork | default(_oso_st.externalNetwork, true) }}"
+    # the floating IPs are the cluster's (status.floatingIPs), allocated with the site account in this project
+    cb_oso_project_id: "{{ _oso_st.projectId | default('', true) }}"
+    cb_oso_site: "{{ _oso_st.cloudInfrastructure | default('', true) }}"
+    cb_fip_account: "{{ rca_account_vault_path }}"
+    cb_entity: "{{ _oso_st.entity | default(resolved_entity, true) }}"
     use_designate_dns: "{{ (_oso_st.dnsProvider | default('')) == 'designate' }}"
     designate_zone_id: "{{ _oso_st.dnsZoneId | default('') }}"
     designate_project_id: "{{ _oso_st.dnsProjectId | default('') }}"
@@ -68,10 +76,22 @@
          if (cloudoso_cr.resources[0].status.dnsProvider | default('')) == 'none' else
          ("CloudOSO '" ~ oso_env_name ~ "' has no recorded DNS provider/zone/account; reconcile it (reconcileNow) so its status carries dnsProvider, dnsZoneId and dnsProjectId, and check its site's account.") }}
 
+- name: The cluster's build name
+  ansible.builtin.include_tasks: build_name.yml
+  vars:
+    bn_entity: "{{ cb_entity }}"
+    bn_name: "{{ ansible_operator_meta.name }}"
+    bn_recorded: >-
+      {{ (((platformopenshift_cr | default({})).resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
+
+# cb_app_name / cb_cluster_name: the build on the hub (Helm release, namespace, ClusterDeployment, ManagedCluster);
+# cb_ocp_name: the OpenShift cluster (install-config metadata.name, DNS api.<name>.<environment domain>)
 - name: Set cluster build identifiers
   ansible.builtin.set_fact:
-    cb_app_name: "{{ ansible_operator_meta.name }}"
-    cb_cluster_name: "{{ ansible_operator_meta.name }}"
+    cb_app_name: "{{ bn_build_name }}"
+    cb_cluster_name: "{{ bn_build_name }}"
+    cb_ocp_name: "{{ ansible_operator_meta.name }}"
 
 - name: Read PlatformOpenshift CR for existing cluster status
   kubernetes.core.k8s_info:
@@ -84,6 +104,14 @@
     namespace: "{{ ansible_operator_meta.namespace }}"
   register: po_cr_current
 
+- name: The cluster's recorded floating IPs and network
+  vars:
+    _st: "{{ po_cr_current.resources[0].status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cb_api_vip: "{{ ((_st.floatingIPs | default({}, true)).api | default({}, true)).address | default('', true) }}"
+    cb_ingress_vip: "{{ ((_st.floatingIPs | default({}, true)).ingress | default({}, true)).address | default('', true) }}"
+    cb_platform_path: "{{ oso_network | length > 0 }}"
+
 - name: Fast-path reconcile for already-installed healthy cluster
   when:
     - po_cr_current.resources[0].status.clusterInstalled | default(false) | bool
@@ -91,6 +119,10 @@
   block:
     - name: Refresh Designate DNS for healthy cluster
       ansible.builtin.include_tasks: designate_dns.yml
+      when:
+        - use_designate_dns | bool
+        - cb_api_vip | length > 0
+        - cb_ingress_vip | length > 0
 
     - name: Refresh cluster monitor facts for healthy cluster
       ansible.builtin.include_tasks: openstack_clusterbuild_monitor.yml
@@ -99,6 +131,14 @@
       ansible.builtin.set_fact:
         cb_api_url: "{{ cb_api_url | default(po_cr_current.resources[0].status.apiURL) }}"
         cb_apps_url: "{{ cb_apps_url | default(po_cr_current.resources[0].status.appsURL) }}"
+
+- name: Check the cluster before anything is created
+  ansible.builtin.include_tasks: openstack_preflight.yml
+  when: >-
+    not (
+      po_cr_current.resources[0].status.clusterInstalled | default(false) | bool and
+      po_cr_current.resources[0].status.clusterHealth | default('') == 'Healthy'
+    )
 
 - name: Run OpenStack cluster build
   ansible.builtin.include_tasks: openstack_clusterbuild.yml
@@ -169,6 +209,7 @@
       platformType: openstack
       slug: "{{ cb_slug }}"
       domain: "{{ oso_domain }}"
+      buildName: "{{ cb_app_name }}"
       apiURL: "{{ cb_api_url }}"
       appsURL: "{{ cb_apps_url }}"
       consoleURL: "{{ cb_console_url | default('') }}"
@@ -202,12 +243,15 @@
 - name: Configure Keycloak OIDC client and ACM OAuth policy for this cluster
   ansible.builtin.include_tasks: keycloak_oidc.yml
   vars:
-    cluster_name: "{{ ansible_operator_meta.name }}"
+    # the ManagedCluster (the build name); the object itself is cluster_cr_name
+    cluster_name: "{{ cb_app_name }}"
+    cluster_cr_name: "{{ ansible_operator_meta.name }}"
+    cluster_ocp_name: "{{ cb_ocp_name }}"
     cluster_console_url: "{{ cb_console_url | default('') }}"
     cluster_api_url: "{{ cb_api_url | default('') }}"
     cluster_apps_url: "{{ cb_apps_url | default('') }}"
     # the cluster's DNS domain: its OAuth callback is https://oauth-openshift.apps.<cluster_domain>/oauth2callback/<idp>
-    cluster_domain: "{{ cb_cluster_name }}.{{ cb_cluster_domain }}"
+    cluster_domain: "{{ cb_ocp_name }}.{{ cb_cluster_domain }}"
     cluster_namespace: "{{ ansible_operator_meta.namespace }}"
     # shc: upstream never passed the central token, so OIDC and cluster RBAC were always skipped
     central_token: "{{ central_bearer_token }}"

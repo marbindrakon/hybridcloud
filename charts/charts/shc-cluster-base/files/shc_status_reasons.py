@@ -67,6 +67,11 @@ REASONS = {
     "ReferenceDeleting": _r("T", WAITING, "An object this one refers to is being deleted."),
     "NoMembersYet": _r("T", WAITING, "Ready; sign-in will be verified once a granted access group has a member."),
     "CredentialsUnavailable": _r("P", WAITING, "The site credentials are not available yet. The platform team is looking at it."),
+    # an OpenShift cluster on a hybrid network (condition Preflight): nobody acts, the cluster is checked again
+    "WaitingForPlacement": _r("A", WAITING, "Waiting for the network's placement in this environment to be ready."),
+    "WaitingForPlatformAccess": _r("A", WAITING, "The platform is connecting to the cluster's network; this takes a few minutes."),
+    # a NetworkPlacement use turned off while the environment still uses it (condition Degraded)
+    "InUse": _r("T", WAITING, "A setting turned off waits until the environment no longer uses it; the message lists what still does."),
     "NoJobStarted": _r("P", BLOCKED, "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost."),
     # ---- failed: tenant can fix ----------------------------------------------------------
     "Failed": _r("P", FAILED, "Could not be completed; see the reason."),
@@ -103,6 +108,21 @@ REASONS = {
     "ExternalNetworkNotFound": _r("P", FAILED, "The site's external network was not found. The platform team is looking at it."),
     "PolicyRefused": _r("T", FAILED, "The request was refused by a platform policy."),
     "NotRealizable": _r("T", FAILED, "The request cannot be realized on the chosen site."),
+    # an OpenShift cluster's preflight (condition Preflight): nothing was created
+    "NetworkNotFound": _r("T", FAILED, "The cluster's network or its placement in this environment was not found."),
+    "RouterAttachmentsOff": _r("T", FAILED, "The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement."),
+    "PlacementHasNoIPv4": _r("T", FAILED, "The network has no IPv4 subnet here; clusters need one."),
+    "PlatformAccessOff": _r("T", FAILED, "The platform may not reach this network. Allow platform access on the network."),
+    "OutsideAttachableRanges": _r("T", FAILED, "Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges)."),
+    "AddressConflict": _r("T", FAILED, "The cluster's address ranges overlap each other or the network's addresses; the message names both."),
+    "ServicePrefixInUse": _r("T", FAILED, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
+    "NetworkChoiceRequired": _r("T", FAILED, "This site has no default external network. Choose a network."),
+    "ExternalNetworkNotListed": _r("T", FAILED, "The named network is not an external network of this site."),
+    "NetworkNameNotUnique": _r("T", FAILED, "Your environment sees another network with the name of the cluster's network. Rename or remove the other network."),
+    # edge connections (AttachmentCircuit): the bearer and the kind of router at the other end
+    "BearerNotFound": _r("T", FAILED, "The provider edge has no bearer of that name. Ask the platform team for the bearer names."),
+    "CeKindNotAccepted": _r("T", FAILED, "The bearer does not accept this kind of router. Choose another bearer or ask the platform team."),
+    "NotPlatformNamespace": _r("T", FAILED, "Platform circuits are accepted only in the platform's namespace. Connect a network with ceKind customer."),
     # ---- failed: platform acts -----------------------------------------------------------
     "OperatorFailed": _r("P", FAILED, "The request could not be queued. The platform team is looking at it."),
     "EDAFailed": _r("P", FAILED, "Could not be completed; see the reason."),
@@ -121,6 +141,21 @@ REASONS = {
     "ClaimMissing": _r("P", FAILED, "Members of the granted access groups cannot sign in yet. The platform team is looking at it."),
     "MapperMissing": _r("P", FAILED, "Sign-in is not set up for this service yet. The platform team is looking at it."),
     "NoDefaultConfig": _r("P", FAILED, "No default connection is configured for this service. Ask the platform team."),
+    # a platform circuit where the realization offers no connection for clusters on networks (also a part reason)
+    "ServiceNotOffered": _r("P", FAILED, "The platform's connection for clusters on networks is not offered here. Ask the platform team."),
+    # an OpenShift cluster's preflight where the platform's connection for clusters on networks is not ready
+    "CircuitNotDeployed": _r("P", FAILED, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
+    "HubEndpointNotAdmitted": _r("P", FAILED, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
+    # the site's router advertisement service did not hold the floating IPs' advertisement on a placed network: a
+    # placement stays usable (condition Degraded, router attachments pending); a cluster's preflight refuses the build.
+    # Nothing alerts the platform team: the placement is Degraded, so it is listed among the failed objects of the
+    # platform overview, and the summary says only that the platform team has to fix it
+    "RouterAdvertisementFailed": _r("P", FAILED, "The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this."),
+    # an OpenShift cluster whose recorded build is marked on the platform for another uid (an object restored from a
+    # backup or moved gets a new uid): condition Preflight and the teardown's Warning event; never adopted
+    "BuildOwnerMismatch": _r("P", FAILED, "The cluster's build on the platform is marked for another copy of this cluster (a restored copy). The platform team checks it."),
+    # Warning Event of a cluster's teardown when the cluster recorded no build: nothing on the platform was removed
+    "NoBuildRecorded": _r("P", FAILED, "The cluster recorded no build on the platform, so its deletion removed nothing there. The platform team checks."),
     # Warning Event on an Entity (never a condition): its operator-version annotation names an image that is not allowed
     "NamespaceOperatorImageRejected": _r("P", FAILED, "The requested operator version for this tenant is not allowed; the default version is used."),
     # ---- paused (an administrator holds the object; nothing changes until it is resumed) --
@@ -140,6 +175,8 @@ REASONS = {
     "RoutingDaemonDown": _r("P", FAILED, "Routing on a node is partly down. The platform team is alerted."),
     "StartIncomplete": _r("P", FAILED, "The network configuration was applied in part on a node. The platform team is alerted."),
     "SiteSessionsDown": _r("P", FAILED, "The site's routing sessions are down on a node. The platform team is alerted."),
+    "ServiceSessionsDown": _r("P", FAILED, "A node has no session with the platform's router for clusters on networks. The platform team is alerted."),
+    "ServiceLinkDown": _r("P", FAILED, "On a node, a network lacks the platform's routes for its clusters; other nodes carry them. The platform team is alerted."),
 }
 
 # Reasons written on a part of an object's status (an egress family of a network, its translation to IPv4, the IPv6
@@ -173,6 +210,22 @@ PART_REASONS = {
     "NodeRebooted": _r("A", READY, "A node restarted."),
     "NodeHealthRecovered": _r("A", READY, "Every node is healthy again."),
     "HealthWake": _r("A", READY, "A repair run was requested for what the health check found."),
+    # a HybridNetwork's PlatformReachable condition (status.platformAccess): can the platform's management reach the
+    # OpenShift clusters it builds on the network? The network stays Ready whatever it says
+    "Attachable": _r("A", READY, "Clusters the platform manages can be built on this network."),
+    "Attached": _r("A", READY, "The platform reaches the clusters it manages on this network."),
+    "NotRequested": _r("T", READY, "The platform may not reach this network. Allow platform access on the network to build clusters the platform manages."),
+    "NoIPv4": _r("T", READY, "The network has no IPv4 address space; clusters the platform manages need it."),
+    "OutsideAttachableRanges": _r("T", READY, "Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges)."),
+    "InfrastructureOverlap": _r("T", READY, "This network's addresses overlap a range the platform's management connects from; the platform cannot reach it."),
+    "ServiceNotOffered": _r("P", READY, "The platform's connection for clusters on networks is not offered here. Ask the platform team."),
+    "CircuitNotDeployed": _r("P", READY, "The platform's connection for clusters on networks is not ready. Ask the platform team."),
+    "AttachPending": _r("A", READY, "The platform is connecting to this network; try again in a few minutes."),
+    # a row of status.platformAccess.prefixes (a cluster's address the platform should reach)
+    "ServicePrefixInUse": _r("T", READY, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
+    "OutsideAddressSpace": _r("T", READY, "The cluster's address lies outside the network's address space."),
+    # an OpenShift cluster's condition Preflight when every check passed (Ready decides the phase)
+    "PreflightPassed": _r("A", READY, "Every check before the build passed."),
 }
 
 # Deletion requests written by the operator are named <Kind>DeleteRequested.

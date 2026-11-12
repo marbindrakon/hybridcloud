@@ -116,6 +116,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | Reason | What it means | Who acts |
 |---|---|---|
 | `CredentialsUnavailable` | The site credentials are not available yet. The platform team is looking at it. | The platform team |
+| `InUse` | A setting turned off waits until the environment no longer uses it; the message lists what still does. | You (the tenant) |
 | `LinkedNotReady` | Waiting for its team setup, app projects and OpenShift cluster to be ready. | Nobody: it continues by itself |
 | `NoMembersYet` | Ready; sign-in will be verified once a granted access group has a member. | You (the tenant) |
 | `ReferenceDeleting` | An object this one refers to is being deleted. | You (the tenant) |
@@ -127,6 +128,8 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `WaitingForDependents` | Waiting for the objects that depend on this one to be deleted. | Nobody: it continues by itself |
 | `WaitingForFabric` | Waiting for the network fabric to be ready. | Nobody: it continues by itself |
 | `WaitingForGateway` | Waiting for the site connection to be ready. | Nobody: it continues by itself |
+| `WaitingForPlacement` | Waiting for the network's placement in this environment to be ready. | Nobody: it continues by itself |
+| `WaitingForPlatformAccess` | The platform is connecting to the cluster's network; this takes a few minutes. | Nobody: it continues by itself |
 | `WaitingForSecret` | Waiting for a required credential to be available. | Nobody: it continues by itself |
 | `WaitingForSiteEdge` | Waiting for the site connection to be ready. | Nobody: it continues by itself |
 
@@ -153,8 +156,13 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | Reason | What it means | Who acts |
 |---|---|---|
 | `AccessNotMapped` | No access group named here exists in this tenant; nobody can sign in yet. | You (the tenant) |
+| `AddressConflict` | The cluster's address ranges overlap each other or the network's addresses; the message names both. | You (the tenant) |
 | `AsnConflict` | The AS number conflicts with one already in use. | You (the tenant) |
 | `AttachmentNotSupported` | This attachment is not supported on the chosen site. | You (the tenant) |
+| `BearerNotFound` | The provider edge has no bearer of that name. Ask the platform team for the bearer names. | You (the tenant) |
+| `BuildOwnerMismatch` | The cluster's build on the platform is marked for another copy of this cluster (a restored copy). The platform team checks it. | The platform team |
+| `CeKindNotAccepted` | The bearer does not accept this kind of router. Choose another bearer or ask the platform team. | You (the tenant) |
+| `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ClaimMissing` | Members of the granted access groups cannot sign in yet. The platform team is looking at it. | The platform team |
 | `CnvNotAvailable` | The site does not offer virtual machines yet. The platform team is looking at it. | The platform team |
 | `ConfigNotFound` | The named connection does not exist. | You (the tenant) |
@@ -165,10 +173,12 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `EntityNotAllowed` | This site is not available to this tenant. | You (the tenant) |
 | `EnvironmentNameTaken` | This environment name is already in use. Choose another name. | You (the tenant) |
 | `ExternalNetworkNotFound` | The site's external network was not found. The platform team is looking at it. | The platform team |
+| `ExternalNetworkNotListed` | The named network is not an external network of this site. | You (the tenant) |
 | `FabricAmbiguous` | More than one fabric could serve this request. The platform team must resolve it. | The platform team |
 | `FabricMismatch` | The network and the site belong to different fabrics. | You (the tenant) |
 | `Failed` | Could not be completed; see the reason. | The platform team |
 | `FamilyUnavailable` | This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it. | You (the tenant) |
+| `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
@@ -178,13 +188,21 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NamespaceNotOwned` | The tenant namespace already exists and was not created for this tenant. The platform team must remove or rename it. | The platform team |
 | `NamespaceOperatorImageRejected` | The requested operator version for this tenant is not allowed; the default version is used. | The platform team |
 | `NamespaceTaken` | The namespace name is already in use on the site. Choose another name. | You (the tenant) |
+| `NetworkChoiceRequired` | This site has no default external network. Choose a network. | You (the tenant) |
+| `NetworkNameNotUnique` | Your environment sees another network with the name of the cluster's network. Rename or remove the other network. | You (the tenant) |
+| `NetworkNotFound` | The cluster's network or its placement in this environment was not found. | You (the tenant) |
 | `NoAccount` | No cloud account is set up for this environment. | You (the tenant) |
+| `NoBuildRecorded` | The cluster recorded no build on the platform, so its deletion removed nothing there. The platform team checks. | The platform team |
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
 | `NodeUnreachable` | A network node does not answer. Traffic takes the other nodes; the platform team is alerted. | The platform team |
+| `NotPlatformNamespace` | Platform circuits are accepted only in the platform's namespace. Connect a network with ceKind customer. | You (the tenant) |
 | `NotRealizable` | The request cannot be realized on the chosen site. | You (the tenant) |
 | `OperatorFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
+| `OutsideAttachableRanges` | Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges). | You (the tenant) |
 | `PeerAsnReserved` | This AS number is reserved by the platform. Configure your router with another AS number. | You (the tenant) |
+| `PlacementHasNoIPv4` | The network has no IPv4 subnet here; clusters need one. | You (the tenant) |
+| `PlatformAccessOff` | The platform may not reach this network. Allow platform access on the network. | You (the tenant) |
 | `PolicyRefused` | The request was refused by a platform policy. | You (the tenant) |
 | `PrefixInUse` | The address prefix overlaps one already in use: a placement's subnet or another network of this tenant. | You (the tenant) |
 | `PrefixInvalid` | The address prefix is not valid. | You (the tenant) |
@@ -194,9 +212,15 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ProvisionFailed` | Creating or updating did not complete. The platform team is looking at it. | The platform team |
 | `PublishFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
 | `RegionNotSupported` | This region is not supported. | You (the tenant) |
+| `RouterAdvertisementFailed` | The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this. | The platform team |
+| `RouterAttachmentsOff` | The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement. | You (the tenant) |
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
 | `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
+| `ServiceLinkDown` | On a node, a network lacks the platform's routes for its clusters; other nodes carry them. The platform team is alerted. | The platform team |
+| `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
+| `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
+| `ServiceSessionsDown` | A node has no session with the platform's router for clusters on networks. The platform team is alerted. | The platform team |
 | `SiteNotAllowed` | This site is not available to this tenant. | You (the tenant) |
 | `SiteNotEvpnCapable` | The chosen site cannot join hybrid networks. | You (the tenant) |
 | `SiteNotVirtualizationCapable` | The chosen site does not offer virtual machines. | You (the tenant) |
@@ -215,14 +239,20 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | Reason | What it means | Who acts |
 |---|---|---|
 | `AddressChoice` | Not offered for tenant-provided IPv6 prefixes: IPv6 internet access, or translation to IPv4. | You (the tenant) |
+| `AttachPending` | The platform is connecting to this network; try again in a few minutes. | Nobody: it continues by itself |
+| `Attachable` | Clusters the platform manages can be built on this network. | Nobody: it continues by itself |
+| `Attached` | The platform reaches the clusters it manages on this network. | Nobody: it continues by itself |
+| `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ConfigurationDrift` | A node's network state differs from its configuration; a repair run is requested. | Nobody: it continues by itself |
 | `ConfigurationNotTaken` | A node's routing does not take part of its configuration; the platform team is looking at it. | The platform team |
 | `DNSReconcileFailed` | The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it. | The platform team |
 | `Degraded` | IPv6 internet access works with one upstream down; some connections may reset when traffic moves to the other path. | Nobody: it continues by itself |
 | `HealthWake` | A repair run was requested for what the health check found. | Nobody: it continues by itself |
 | `IPv6EgressUpstreamDown` | IPv6 internet access works through the other node; a node's upstream sessions are down. | The platform team |
+| `InfrastructureOverlap` | This network's addresses overlap a range the platform's management connects from; the platform cannot reach it. | You (the tenant) |
 | `JobInFlight` | A change is queued; the nodes are checked next time. | Nobody: it continues by itself |
 | `LeaseHeld` | A change to the nodes was in progress; they are checked next time. | Nobody: it continues by itself |
+| `NoIPv4` | The network has no IPv4 address space; clusters the platform manages need it. | You (the tenant) |
 | `NodeHealthRecovered` | Every node is healthy again. | Nobody: it continues by itself |
 | `NodeReadFailed` | A node answered but could not be checked this time. | The platform team |
 | `NodeRebooted` | A node restarted. | Nobody: it continues by itself |
@@ -232,7 +262,13 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NotEnabled` | Not turned on for this fabric. | Nobody: it continues by itself |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 | `NotReported` | The site does not report this health check. | Nobody: it continues by itself |
+| `NotRequested` | The platform may not reach this network. Allow platform access on the network to build clusters the platform manages. | You (the tenant) |
+| `OutsideAddressSpace` | The cluster's address lies outside the network's address space. | You (the tenant) |
+| `OutsideAttachableRanges` | Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges). | You (the tenant) |
+| `PreflightPassed` | Every check before the build passed. | Nobody: it continues by itself |
 | `ReadFailed` | A node answered but could not be checked this time. | The platform team |
 | `RoutingDaemonRestarted` | A routing process on a node restarted after a crash; the platform team is alerted. | The platform team |
+| `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
+| `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
 | `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
 <!-- reasons:end -->

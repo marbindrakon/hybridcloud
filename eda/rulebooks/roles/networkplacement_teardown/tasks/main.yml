@@ -3,8 +3,9 @@
 # CloudVirt namespaces that name the network. In order:
 # 1. the gateway drops the placement's VRF: status.realization.gatewayRelease, the gateway is woken and wakes this
 #    placement again once its VRF is gone (the deletion waits meanwhile);
-# 2. the site side: CloudVirt = the RouteAdvertisements and the ClusterUserDefinedNetwork; CloudOSO = the share,
-#    router, subnets and network in the platform project (refused while the tenant's ports still use the network);
+# 2. the site side: CloudVirt = the RouteAdvertisements and the ClusterUserDefinedNetwork; CloudOSO = the RBAC
+#    policies (share and router attachments), router, subnets and network in the platform project (refused while
+#    the tenant's ports, or router gateways or floating IPs of any project, still use the network);
 #    CloudAWS = the VPC with its attachment (shc_aws_tenant.py place-down; with spec.ipv6 its IPv6 routes,
 #    egress-only gateway, IPv6 block and IPAM pool first and last; refused while instances remain); CloudGCP =
 #    the VPC with its tunnels, Cloud Router (an IPv6-only placement's Cloud NAT for NAT64 with it), HA VPN gateway,
@@ -211,7 +212,21 @@
                   platformProject: "{{ fab_real.openstack.platformProject }}"
                   name: "{{ npd_names.osNetwork }}"
                   tag: "{{ npd_names.tag }}"
+                  # the site's router advertisement service drops what it holds for the router port before the
+                  # interface is removed (once nothing blocks the deletion); asked only when the placement used
+                  # router attachments or the last run recorded the service holding the advertisement
+                  routerAdvertisement: >-
+                    {{ {'service_url': (((fab_real.placement | default({}, true)).routerAdvertisementBySite
+                                         | default({}, true))[fab_st.site | default('', true)] | default({}, true)).url
+                                       | default('', true) | string | trim,
+                        'site': fab_st.site | default('', true)}
+                       if ((fab_spec.use | default({}, true)).routerAttachments | default(false) | bool)
+                          or ((((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement
+                               | default({}, true)).wanted | default(false) | bool)
+                       else {} }}
 
+            # blocked: ports of other projects (the environment's servers and routers), router gateways and floating
+            # IPs of any project on the network (shc_openstack.py placement-network state absent)
             - name: Report the ports that block the deletion
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
               vars:
@@ -224,7 +239,10 @@
                   status: pending
                   ready: false
                   lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-                  message: "Deletion waits for ports on network {{ npd_names.osNetwork }}: {{ os_result.blocked[:10] | join(', ') }}"
+                  message: >-
+                    Deletion waits until nothing else uses network {{ npd_names.osNetwork }}:
+                    {{ os_result.blocked[:10] | join(', ') }}{{ (' and ' ~ (os_result.blocked | length - 10) ~ ' more')
+                    if os_result.blocked | length > 10 else '' }}
                   deletionBlockedBy: "{{ os_result.blocked }}"
               when: os_result.blocked | default([]) | length > 0
 

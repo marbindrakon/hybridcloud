@@ -6,8 +6,13 @@
 # Input:
 #   rpp_cr                   the PlatformOpenshift object (as read from the API)
 #   rpp_ignore_status_keys   true: never read the legacy status keys (vaultPaths, dns.accountVaultPath)
+#   rpp_build_name           the build name whose hub paths belong to this cluster (the teardown passes the
+#                            recorded name only when the hub says it is this cluster's, else ''); absent: the
+#                            recorded status.buildName. There is no derived or CR-name fallback: a cluster without a
+#                            recorded build owns no cluster/<provider>/<build>/ path.
 # Uses services_api_host / services_bearer_token (the OpenStack environment's CloudOSO, for its DNS account).
 # Sets:
+#   rpp_build_name_in_effect     the build name ('' = none of this cluster's)
 #   rpp_vault_paths              the Vault paths the cluster build wrote (same formulas as
 #                                platformopenshift_provision tasks/{openstack_clusterbuild,aws_clusterbuild_facts,
 #                                gcp_clusterbuild_facts}.yml: change them together)
@@ -20,21 +25,24 @@
     _spec: "{{ _cr.spec | default({}, true) }}"
     _name: "{{ (_cr.metadata | default({})).name | default('') }}"
     _type: "{{ _spec.type | default(_st.platformType | default(''), true) }}"
-    _build: "{{ _st.buildName | default(_name, true) }}"
+    _build: >-
+      {{ (rpp_build_name | default('', true)) if rpp_build_name is defined else (_st.buildName | default('', true)) }}
     _env: "{{ (_spec.openstack | default({}, true)).environment | default('', true) }}"
     _use_status: "{{ not (rpp_ignore_status_keys | default(false) | bool) }}"
     _derived: >-
       {%- if _type == 'openstack' -%}
         {{ ((['oso/projects/' ~ _env ~ '/clusters/' ~ _name ~ '/install-config'] if _env | length > 0 else [])
-            + ['admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config'] | map('regex_replace', '^', 'cluster/oso/' ~ _name ~ '/') | list) }}
-      {%- elif _type == 'aws' -%}
+            + ((['admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config']
+                | map('regex_replace', '^', 'cluster/oso/' ~ _build ~ '/') | list) if _build | length > 0 else [])) }}
+      {%- elif _type == 'aws' and _build | length > 0 -%}
         {{ ['build/install-config', 'build/sa-signer', 'build/manifests', 'admin-kubeconfig', 'admin-password']
            | map('regex_replace', '^', 'cluster/aws/' ~ _build ~ '/') | list }}
-      {%- elif _type == 'gcp' -%}
+      {%- elif _type == 'gcp' and _build | length > 0 -%}
         {{ ['build/install-config', 'build/sa-signer', 'build/manifests', 'build/provider-creds', 'admin-kubeconfig', 'admin-password']
            | map('regex_replace', '^', 'cluster/gcp/' ~ _build ~ '/') | list }}
-      {%- else -%}[]{%- endif -%}
+      {%- else -%}{{ [] }}{%- endif -%}
   ansible.builtin.set_fact:
+    rpp_build_name_in_effect: "{{ _build }}"
     rpp_vault_paths: >-
       {{ ((_st.vaultPaths | default([], true)) if _use_status | bool else []) | union(_derived) }}
     rpp_status_dns_account: >-

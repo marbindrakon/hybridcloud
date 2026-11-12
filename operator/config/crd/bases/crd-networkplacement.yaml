@@ -81,6 +81,12 @@ spec:
                     : (!has(self.ipv6.prefixLength) || self.ipv6.prefixLength == 64)
                       && (!has(self.ipv6.prefix) || !isCIDR(self.ipv6.prefix) || cidr(self.ipv6.prefix).prefixLength() == 64))
                   message: the IPv6 subnet must be a /64 (a /56 or /60 on CloudAWS)
+                - rule: "!has(self.use) || self.use.virtualMachines || self.use.routerAttachments"
+                  message: spec.use needs virtualMachines, routerAttachments or both
+                - rule: >-
+                    !has(self.use) || self.backend.kind == 'CloudOSO'
+                    || (self.use.virtualMachines && !self.use.routerAttachments)
+                  message: spec.use is offered only on CloudOSO; other environments use the defaults
               properties:
                 network:
                   type: string
@@ -189,6 +195,26 @@ spec:
                         site's default applies; status reports the result.
                       type: string
                       enum: [Network, Provider]
+                use:
+                  type: object
+                  description: >-
+                    How the environment may use the placed network. Offered on CloudOSO; other environment kinds
+                    take the defaults. Can be changed at any time; turning a use off waits while the environment
+                    still uses it that way.
+                  properties:
+                    virtualMachines:
+                      type: boolean
+                      default: true
+                      description: >-
+                        The environment's virtual machines and ports attach directly to the network. Default true.
+                    routerAttachments:
+                      type: boolean
+                      default: false
+                      description: >-
+                        The environment's routers may set their external gateway on the network and allocate
+                        floating IPs from its IPv4 subnet, for this environment only. Floating IPs are reachable
+                        from the network's other placements only where the site advertises them (a site
+                        requirement). Needed by an OpenShift cluster that names this network. Default false.
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -211,6 +237,53 @@ spec:
                   type: object
                   description: How the platform realized the placement (informational; depends on the platform).
                   x-kubernetes-preserve-unknown-fields: true
+                  properties:
+                    site:
+                      type: object
+                      description: The placement's objects at the site.
+                      x-kubernetes-preserve-unknown-fields: true
+                      properties:
+                        routerAdvertisement:
+                          type: object
+                          description: >-
+                            CloudOSO with router attachments: whether the site advertises the floating IPs on the
+                            network. mode Service = the site's router advertisement service holds the advertisement
+                            on the network's router port; Assumed = the site has no such service and is expected to
+                            advertise them itself; NotApplicable = the placement has no IPv4 subnet, so there are no
+                            floating IPs to advertise (message says so).
+                          properties:
+                            mode:
+                              type: string
+                              description: Service, Assumed or NotApplicable.
+                            message:
+                              type: string
+                              description: Why the advertisement does not apply (mode NotApplicable).
+                            nat:
+                              type: boolean
+                              description: >-
+                                The service reports the advertisement on the router port (its answer at
+                                confirmedAt). Absent when the service never answered for the port.
+                            wanted:
+                              type: boolean
+                              description: The service holds the advertisement (restores it when the site removes it).
+                            restores:
+                              type: integer
+                              description: How often the service restored the advertisement since it started.
+                            lastRestoredAt:
+                              type: string
+                              description: When the service last restored it (RFC 3339), empty when never.
+                            checkedAt:
+                              type: string
+                              description: When the platform last asked the service (RFC 3339).
+                            confirmedAt:
+                              type: string
+                              description: When the service last answered for the router port (RFC 3339).
+                            stale:
+                              type: boolean
+                              description: >-
+                                The service did not answer when last asked; nat and the counters are its last answer
+                                (confirmedAt) and may no longer be true. The reason is on router attachments
+                                (status.use).
                 mtu:
                   type: integer
                   description: Effective MTU at this placement.
@@ -288,6 +361,41 @@ spec:
                           description: >-
                             The IPv4 address translated traffic leaves from on the internet (path Provider, once the
                             provider reports it).
+                use:
+                  type: object
+                  description: >-
+                    How the environment uses the placed network (CloudOSO), one entry per use of spec.use: state
+                    ready (allowed for the environment), pending, removing (turned off, waiting while the
+                    environment still uses it; the message names what) or off.
+                  properties:
+                    virtualMachines:
+                      type: object
+                      description: The use for virtual machines and ports.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending, removing or off.
+                        reason:
+                          type: string
+                          description: One-word reason when not ready or off (InUse while removing).
+                        message:
+                          type: string
+                          description: What the state means for this placement, in plain words.
+                    routerAttachments:
+                      type: object
+                      description: The use for router gateways and floating IPs.
+                      properties:
+                        state:
+                          type: string
+                          description: ready, pending, removing or off.
+                        reason:
+                          type: string
+                          description: >-
+                            One-word reason when not ready or off: InUse while removing, RouterAdvertisementFailed
+                            while the site does not confirm that it advertises the network's floating IPs.
+                        message:
+                          type: string
+                          description: What the state means for this placement, in plain words.
                 namespaces:
                   type: array
                   description: CloudVirt site namespaces the network serves (the environment's namespaces that name it).

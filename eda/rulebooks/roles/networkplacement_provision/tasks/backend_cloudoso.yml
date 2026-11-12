@@ -9,6 +9,23 @@
 # subnet's dns_nameservers (DHCPv6 and the config drive) carry them; a dual-stack placement never does (its workloads
 # reach IPv4 natively and must not be steered into the translator). Uses the site account (cloud admin). Input:
 # np_recreate_router (bool). Sets np_backend_status.
+# The CloudOSO's uses of the network (spec.use, sent always with its defaults): virtualMachines (default true) = the
+# share to its project (access_as_shared), routerAttachments (default false) = the network external for its project
+# only (access_as_external; never the network's own router:external flag). A use turned off while the project still
+# uses it that way (its ports; its router gateways and floating IPs) stays until they are gone: status.use <use>
+# state removing, reason InUse, the message names up to ten (np_use_removing; the job re-checks on the reconcile
+# period, main.yml). Floating IPs on the network are reachable from the network's other placements only where the
+# site's EVPN advertises the NAT addresses of routers with their gateway on it: a documented site requirement the
+# platform assumes and does not check. Where the site runs a router advertisement service (realization
+# placement.routerAdvertisementBySite[<site>].url, router_advertisement.yml) the job asks it on every run to hold the
+# advertisement while router attachments are used (present; also while turned off but still in use) and to drop it
+# once they are off (absent, only when the service held it); a placement that never used router attachments asks
+# nothing. A failing or unconfirmed service leaves the share and the placement usable: router attachments read
+# pending, reason RouterAdvertisementFailed, and the job runs again on the reconcile period (main.yml). A placement
+# without IPv4 (no spec.ipv4: fixed for its life) has nothing to advertise (floating IPs are IPv4, and its router has
+# no IPv4 interface): the service is not asked, the record says mode NotApplicable with why, and router attachments
+# are ready as soon as the policy exists.
+# Sets np_status.use, np_use_removing (the uses that wait), np_use_wait_reason, np_use_wait_messages, np_use_note.
 - name: The site's OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
   vars:
@@ -35,6 +52,9 @@
             + (fab_real.placement.resolversBySite | default({}, true))[np_site] | default([], true)) | unique | list }}
       l3Vni: "{{ np_real.l3Vni | int }}"
       shareProjectId: "{{ np_backend.status.projectId }}"
+      use:
+        virtualMachines: "{{ (fab_spec.use | default({}, true)).virtualMachines | default(true) | bool }}"
+        routerAttachments: "{{ (fab_spec.use | default({}, true)).routerAttachments | default(false) | bool }}"
       recreateRouter: "{{ np_recreate_router | default(false) | bool }}"
 
 - name: Refuse a router without the placement's VNI
@@ -51,13 +71,122 @@
       subnets: "{{ os_result.subnets }}"
       addressMode: "{{ os_result.addressMode | default('') }}"
       sharedTo: "{{ np_backend.status.projectId }}"
+      networkName: "{{ np_names.osNetwork }}"
+      rbac:
+        shared: "{{ os_result.shareId | default('', true) }}"
+        external: "{{ os_result.externalId | default('', true) }}"
+      routerExternalForProject: "{{ os_result.routerExternalForProject | default(false) | bool }}"
     np_backend_changed: "{{ (os_result.created | length + os_result.changed | length) > 0 }}"
+    # the router advertisement call below replaces os_result
+    np_place_result: "{{ os_result }}"
+
+# the router advertisement: present while router attachments are on or still in use; absent once off, but only when
+# the last run recorded the service holding it; nothing at all for a placement that never used them
+- name: Decide on the router advertisement
+  ansible.builtin.set_fact:
+    np_ra_want: >-
+      {{ ((fab_spec.use | default({}, true)).routerAttachments | default(false) | bool)
+         or ((np_place_result.use | default({}, true)).routerAttachments | default({}, true)).state | default('') == 'removing' }}
+    np_ra_held: >-
+      {{ ((((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement
+          | default({}, true)).wanted | default(false)) | bool }}
+    # floating IPs are IPv4: a placement without IPv4 has no router port to advertise them from
+    np_ra_applies: "{{ 'ipv4' in (fab_spec | default({}, true)) }}"
+
+- name: The router advertisement on the placed network
+  ansible.builtin.include_tasks: router_advertisement.yml
+  vars:
+    ra_state: "{{ 'present' if np_ra_want | bool else 'absent' }}"
+    ra_router_id: "{{ np_place_result.routerId }}"
+    ra_network_id: "{{ np_place_result.networkId }}"
+    ra_site: "{{ np_site }}"
+    ra_domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
+    ra_platform_project: "{{ fab_real.openstack.platformProject }}"
+    ra_region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
+    ra_held_before: "{{ np_ra_held | bool }}"
+    ra_before: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement | default({}, true) }}"
+  when: (np_ra_want | bool and np_ra_applies | bool) or np_ra_held | bool
+
+- name: Record the router advertisement
+  ansible.builtin.set_fact:
+    np_backend_status: "{{ np_backend_status | combine({'routerAdvertisement': ra_record}) }}"
+    np_ra_failed: "{{ ra_failed | default('') }}"
+  when: (np_ra_want | bool and np_ra_applies | bool) or np_ra_held | bool
+
+- name: Nothing to advertise on a placement without IPv4
+  ansible.builtin.set_fact:
+    # one expression: on ansible-core 2.16 the values of a nested YAML map stay strings
+    np_backend_status: >-
+      {{ np_backend_status | combine({'routerAdvertisement': {
+           'mode': 'NotApplicable', 'nat': false, 'wanted': false,
+           'message': 'Floating IPs are IPv4 and this placement has no IPv4 subnet, so there is nothing for the site '
+                      ~ 'to advertise; routers of the environment can still take their external gateway on the network.',
+           'checkedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}}) }}
+    np_ra_failed: ""
+  when: np_ra_want | bool and not (np_ra_applies | bool) and not (np_ra_held | bool)
+
+- name: No router advertisement asked
+  ansible.builtin.set_fact:
+    np_ra_failed: ""
+  when: not (np_ra_want | bool or np_ra_held | bool)
+
+# status.use: one row per use; removing names up to ten of what still uses the network that way
+- name: The environment's uses of the network
+  vars:
+    _uses: "{{ np_place_result.use | default({}, true) }}"
+    _rows: >-
+      {%- set out = {} -%}
+      {%- for key in ['virtualMachines', 'routerAttachments'] -%}
+        {%- set u = _uses[key] | default({}, true) -%}
+        {%- set users = u.inUse | default([], true) -%}
+        {%- if u.state | default('') == 'removing' -%}
+          {%- set more = (' and ' ~ (users | length - 10) ~ ' more') if users | length > 10 else '' -%}
+          {%- set _ = out.update({key: {'state': 'removing', 'reason': 'InUse',
+                'message': 'Turning this off waits until the environment no longer uses it: '
+                           ~ users[:10] | join(', ') ~ more}}) -%}
+        {%- else -%}
+          {%- set _ = out.update({key: {'state': u.state | default('pending', true), 'reason': '', 'message': ''}}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- if np_ra_failed | length > 0 and out.routerAttachments.state == 'ready' -%}
+        {%- set _ = out.update({'routerAttachments': {'state': 'pending', 'reason': 'RouterAdvertisementFailed',
+              'message': 'Floating IPs on this network may not be reachable from outside the site: '
+                         ~ ra_message}}) -%}
+      {%- endif -%}
+      {{ out }}
+  ansible.builtin.set_fact:
+    np_use_status: "{{ _rows }}"
+    np_use_removing: >-
+      {{ (_rows | dict2items | selectattr('value.reason', 'in', ['InUse', 'RouterAdvertisementFailed'])
+          | map(attribute='key') | list
+          + (['routerAttachments'] if np_ra_failed | length > 0 else [])) | unique | list }}
+    np_use_wait_reason: "{{ 'RouterAdvertisementFailed' if np_ra_failed | length > 0 else 'InUse' }}"
+    np_use_wait_messages: >-
+      {{ (_rows | dict2items | selectattr('value.message', 'truthy') | map(attribute='value.message') | list
+          + (['Router attachments are off; ' ~ ra_message]
+             if np_ra_failed | length > 0 and _rows.routerAttachments.reason != 'RouterAdvertisementFailed' else [])) }}
+    np_status: "{{ np_status | combine({'use': _rows}) }}"
+    np_use_note: >-
+      {%- set notes = [] -%}
+      {%- if _rows.virtualMachines.state == 'removing' -%}
+        {%- set _ = notes.append('; use for virtual machines turned off, waiting: ' ~ _rows.virtualMachines.message.split(': ', 1)[1]) -%}
+      {%- endif -%}
+      {%- if _rows.routerAttachments.state == 'removing' -%}
+        {%- set _ = notes.append('; use for router attachments turned off, waiting: ' ~ _rows.routerAttachments.message.split(': ', 1)[1]) -%}
+      {%- endif -%}
+      {%- if np_ra_failed | length > 0 -%}
+        {%- set _ = notes.append('; ' ~ ra_message) -%}
+      {%- endif -%}
+      {%- if np_place_result.pruneInUse | default([], true) | length > 0 -%}
+        {%- set _ = notes.append('; external access of other projects kept while used: ' ~ np_place_result.pruneInUse[:10] | join(', ')) -%}
+      {%- endif -%}
+      {{ notes | join('') }}
 
 # status.subnets: an IPv6 subnet's gateway is the one the site assigned (gateway_ip; subnets.yml put the first host
 # there, which stays when the site reports none)
 - name: The IPv6 gateways the site assigned
   vars:
-    _gws: "{{ os_result.gateways | default({}, true) }}"
+    _gws: "{{ (np_place_result | default(os_result)).gateways | default({}, true) }}"
     _rows: >-
       {%- set out = [] -%}
       {%- for r in np_subnets | default([], true) -%}

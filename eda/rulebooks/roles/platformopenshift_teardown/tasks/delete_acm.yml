@@ -1,24 +1,37 @@
 ---
 # shc (§11.6 phase C): detach from ACM first, while the cluster can still run its klusterlet cleanup.
+# The names the provision job used (platformopenshift_provision/files/po_preflight.py acm-names): the build name, or
+# its shorter form when the policy names would exceed ACM's limit; both when they differ (an older job may have made
+# objects under the build name itself).
+- name: The names of the cluster's ACM objects
+  ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/po_call.yml"
+  vars:
+    po_request:
+      action: acm-names
+      buildName: "{{ po_build_name }}"
+      namespace: openshift-gitops
+
 - name: Delete the per-cluster ACM policies, placements and bindings
   kubernetes.core.k8s:
     host: "{{ central_api_host }}"
     api_key: "{{ central_bearer_token }}"
     validate_certs: false
     state: absent
-    api_version: "{{ item.api_version }}"
-    kind: "{{ item.kind }}"
-    name: "{{ po_build_name }}-{{ item.suffix }}"
+    api_version: "{{ item.1.api_version }}"
+    kind: "{{ item.1.kind }}"
+    name: "{{ item.0 }}-{{ item.1.suffix }}"
     namespace: openshift-gitops
-  loop:
-    - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: keycloak-oidc}
-    - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: keycloak-oidc-binding}
-    - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: keycloak-oidc-placement}
-    - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: cluster-rbac}
-    - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: cluster-rbac-binding}
-    - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: cluster-rbac-placement}
+  loop: "{{ po_result.bases | product(_acm_objects) | list }}"
   loop_control:
-    label: "{{ item.kind }}/{{ po_build_name }}-{{ item.suffix }}"
+    label: "{{ item.1.kind }}/{{ item.0 }}-{{ item.1.suffix }}"
+  vars:
+    _acm_objects:
+      - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: keycloak-oidc}
+      - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: keycloak-oidc-binding}
+      - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: keycloak-oidc-placement}
+      - {api_version: policy.open-cluster-management.io/v1, kind: Policy, suffix: cluster-rbac}
+      - {api_version: policy.open-cluster-management.io/v1, kind: PlacementBinding, suffix: cluster-rbac-binding}
+      - {api_version: cluster.open-cluster-management.io/v1beta1, kind: Placement, suffix: cluster-rbac-placement}
 
 - name: Delete the ManagedCluster
   kubernetes.core.k8s:

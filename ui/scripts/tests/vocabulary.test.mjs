@@ -58,6 +58,12 @@ test('field keys read as labels in the vocabulary', () => {
   assert.equal(v.fieldLabel(t, 'entity'), 'Tenant');
   assert.equal(v.fieldLabel(t, 'attributes.entity'), 'Attributes · Tenant');
   assert.equal(v.fieldLabel(t, 'billingId'), 'Billing ID');
+  // gate S8 UX 7: a plural acronym stays whole ("Floating i ps" before)
+  assert.equal(v.fieldLabel(t, 'floatingIPs.api.address'), 'Floating IPs · API · Address');
+  assert.equal(v.fieldLabel(t, 'platformPrefixes'), 'Platform prefixes');
+  assert.equal(v.fieldLabel(t, 'apiURLs'), 'API URLs');
+  assert.equal(v.fieldLabel(t, 'HTTPServer'), 'HTTPServer');
+  assert.equal(v.fieldLabel(t, 'httpServer'), 'HTTP server');
   assert.equal(v.fieldLabel(t, 'attributes.billing-id'), 'Attributes · Billing ID');
   assert.equal(v.fieldLabel(t, 'features.argo'), 'Features · Argo');
   assert.equal(v.fieldLabel(t, 'cloudVirtRef'), 'VM environment ref');

@@ -64,6 +64,8 @@
         ns_labels: "{{ (ns_info.resources | default([{}]))[0].metadata.labels | default({}) }}"
         ns_annotations: "{{ (ns_info.resources | default([{}]))[0].metadata.annotations | default({}) }}"
         platformopenshift_generation: "{{ platformopenshift_cr.resources[0].metadata.generation | default(0) | int }}"
+        # the identity the build's hub namespace is marked with (claim_build.yml)
+        po_uid: "{{ platformopenshift_cr.resources[0].metadata.uid | default('', true) }}"
 
     - name: Resolve entity label
       ansible.builtin.set_fact:
@@ -118,12 +120,15 @@
         cr_plural: platformopenshifts
         cr_name: "{{ platformopenshift_cr_name }}"
         cr_namespace: "{{ platformopenshift_cr_namespace }}"
+        # a preflight refusal (preflight_stop.yml) or a named failure sets po_fail_reason; the Preflight condition
+        # goes with a refusal
         cr_status_body:
           status: failed
-          reason: ProvisionFailed
+          reason: "{{ po_fail_reason | default('ProvisionFailed', true) }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          conditions: "{{ [po_preflight_condition] if (po_preflight_condition | default({}, true)) else [] }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined
 

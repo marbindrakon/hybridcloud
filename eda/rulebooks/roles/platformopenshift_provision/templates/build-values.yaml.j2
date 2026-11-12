@@ -1,6 +1,7 @@
 ---
 cluster:
   name: {{ cb_cluster_name }}
+  clusterName: {{ cb_ocp_name | default(cb_cluster_name) }}
   importToHub: true
   managedClusterSet: "{{ platformopenshift_managed_cluster_set }}"
   useACM: true

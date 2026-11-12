@@ -2,7 +2,9 @@
 # shc (§11.6 phase C): environment preparation through files/shc_openstack.py with the platform's
 # OpenStack account: the site's cloud admin (P7.1, CloudInfrastructure credentialsRef) or the legacy
 # tenant admin (domain `manager`). Everything provision creates is recorded on the CR status so teardown
-# works from ids, not from names it re-derives.
+# works from ids, not from names it re-derives. shc (DESIGN cnet §4.3): the environment holds no floating IPs (each
+# OpenShift cluster allocates its own) and needs no external network; a pair an older run allocated is released
+# once no PlatformOpenshift names the environment.
 - name: Set environmentprep spec facts
   ansible.builtin.set_fact:
     ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
@@ -10,7 +12,6 @@
     ep_vault_path: "{{ oso_settings.vaultPath }}"
     ep_base_domain: "{{ oso_settings.baseDomain }}"
     ep_project_domain: "{{ oso_settings.projectDomain }}"
-    ep_external_network: "{{ oso_settings.externalNetwork }}"
     ep_region_name: "{{ oso_settings.regionName }}"
     ep_dns_provider: "{{ oso_settings.dnsProvider | trim }}"
     ep_designate_zone_id: "{{ oso_settings.designateZoneId }}"
@@ -24,13 +25,12 @@
     that:
       - ep_vault_path | length > 0
       - ep_project_domain | length > 0
-      - ep_external_network | length > 0
       - ep_dns_provider in ['designate', 'route53', 'none', 'zone']
       - ep_dns_provider == 'none' or ep_base_domain | length > 0
       - ep_dns_provider != 'designate' or (ep_designate_zone_id | length > 0 and ep_designate_project_id | length > 0)
       - ep_dns_provider != 'route53' or ep_route53_vault_path | length > 0
     fail_msg: >-
-      CloudOSO {{ cloudoso_cr_name }} needs an account (vaultPath), projectDomain, externalNetwork and a DNS
+      CloudOSO {{ cloudoso_cr_name }} needs an account (vaultPath), projectDomain and a DNS
       provider (designate: baseDomain + designateZoneId + designateProjectId; route53: baseDomain +
       route53VaultPath; zone: the tenant DNS domain; none), from {{ ('CloudInfrastructure ' ~ oso_cloudinfra_name) if oso_cloudinfra_name | length > 0
       else "the spec or the installation's cloudoso_defaults" }}.
@@ -69,7 +69,7 @@
          if (ep_vault_creds.status == 200 and
              (ep_vault_creds.json.data.data['clouds.yaml'] | default('')) | length > 0) else '' }}
 
-- name: Create or reconcile the project, floating IPs and application credential
+- name: Create or reconcile the project and its application credential
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
   vars:
     os_request:
@@ -77,10 +77,6 @@
       domain: "{{ ep_project_domain }}"
       project: "{{ ep_project }}"
       description: "Sovereign Cloud project for {{ entity_name }} (CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }})"
-      external_network: "{{ ep_external_network }}"
-      fip_descriptions:
-        api: "sovereign-{{ cloudoso_cr_name }}-api"
-        ingress: "sovereign-{{ cloudoso_cr_name }}-ingress"
       app_cred_name: "sovereign-{{ ep_project }}"
       app_cred_description: "CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
       reuse_app_cred_id: "{{ ep_reuse_app_cred_id }}"
@@ -92,6 +88,67 @@
   ansible.builtin.set_fact:
     ep_os: "{{ os_result }}"
   no_log: true
+
+# an older run allocated the environment's pair of floating IPs (status apiFloatingIPId / ingressFloatingIPId,
+# apiVIP / ingressVIP, descriptions sovereign-<name>-api / -ingress); it goes once no cluster names the environment.
+# No cluster takes it over: each cluster allocates its own.
+- name: The environment's legacy floating IP pair
+  vars:
+    _st: "{{ cloudoso_cr_lookup.resources[0].status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    ep_legacy_fip_ids: >-
+      {{ [_st.apiFloatingIPId | default('', true), _st.ingressFloatingIPId | default('', true)] | select | list }}
+    ep_legacy_fip_recorded: >-
+      {{ ([_st.apiFloatingIPId | default('', true), _st.ingressFloatingIPId | default('', true),
+           _st.apiVIP | default('', true), _st.ingressVIP | default('', true)] | select | list | length > 0)
+         or ('externalNetwork' in _st) }}
+
+- name: List the clusters of this namespace
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    namespace: "{{ cloudoso_cr_namespace }}"
+  register: ep_clusters
+  when: ep_legacy_fip_recorded | bool
+
+- name: Release the legacy pair when no cluster names the environment
+  when:
+    - ep_legacy_fip_recorded | bool
+    - >-
+      ep_clusters.resources | default([]) | selectattr('spec.type', 'defined') | selectattr('spec.type', 'equalto', 'openstack')
+      | map(attribute='spec.openstack') | map('default', {}) | selectattr('environment', 'defined')
+      | selectattr('environment', 'equalto', cloudoso_cr_name) | list | length == 0
+  block:
+    - name: Release the environment's floating IPs
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_request:
+          action: cluster-fips
+          state: absent
+          project_id: "{{ ep_os.project.id }}"
+          ids: "{{ ep_legacy_fip_ids }}"
+          descriptions:
+            api: "sovereign-{{ cloudoso_cr_name }}-api"
+            ingress: "sovereign-{{ cloudoso_cr_name }}-ingress"
+
+    - name: Remove the pair from the record
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudosos
+        cr_name: "{{ cloudoso_cr_name }}"
+        cr_namespace: "{{ cloudoso_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          apiVIP: null
+          ingressVIP: null
+          externalNetwork: null
+          apiFloatingIPId: null
+          ingressFloatingIPId: null
 
 # shc (design/TENANT-DNS.md D1): the environment's own zone in the site's Designate, owned by the site's DNS
 # project (the site account holds member there) and shared with this CloudOSO's project, so the tenant manages
@@ -203,14 +260,9 @@
     oso_slug: "{{ ep_slug }}"
     oso_dns_domain: "{{ ep_cluster_domain }}"
     oso_route53_zone_id: "{{ ep_route53_zone_id | default('') }}"
-    oso_api_vip: "{{ ep_os.fips.api.ip }}"
-    oso_ingress_vip: "{{ ep_os.fips.ingress.ip }}"
-    oso_external_network: "{{ ep_external_network }}"
     # the status record: ids only, no account or Vault path (eda/common/tasks/resolve_cloudoso_accounts.yml)
     oso_record:
       appCredentialId: "{{ ep_os.app_cred.id }}"
-      apiFloatingIPId: "{{ ep_os.fips.api.id }}"
-      ingressFloatingIPId: "{{ ep_os.fips.ingress.id }}"
       # zone: recorded as designate so PlatformOpenshift writes its records into the environment zone
       # (owner = the site's DNS project, account = the site account)
       dnsProvider: "{{ 'designate' if ep_dns_provider == 'zone' else ep_dns_provider }}"

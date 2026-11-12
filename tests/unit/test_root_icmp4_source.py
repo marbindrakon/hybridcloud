@@ -9,7 +9,7 @@ reserves part of 169.254.0.0/17), so which networks lost IPv4 path MTU discovery
 - for a route whose next hop lies outside the VRF (every route back to a network's hosts: over the core) the kernel
   prefers the VRF device's address whatever the order of the VRF's other devices; the egress VRF's routes back to the
   networks have their next hop inside that VRF (the egress veth), so FRR installs them with the address as their
-  source (zebra route-map on the static routes, only the NAT addresses and platform prefixes);
+  source (zebra route-map on the static routes, only the NAT addresses);
 - check-fabric refuses an address that is no single IPv4 address, link-local, or inside the core's IPv4 ranges; the
   network job keeps tenant prefixes off it.
 A real kernel (an unprivileged user and network namespace) shows the error source of a forwarded packet's time
@@ -78,19 +78,19 @@ class RootConfig(unittest.TestCase):
 
 
 class Template(unittest.TestCase):
-    def vars(self, src, platform=()):
+    def vars(self, src):
         v = E.root_vars(standby=False)
         v["fab_real"]["core"]["icmpSource4"] = src
-        v["hf_node_egress"]["networks"][0]["platform"] = list(platform)
         return v
 
     def test_routes_back_to_the_networks_take_it(self):
-        out = T.render(T.RT, self.vars(SRC, ["10.60.9.0/24"]))
+        out = T.render(T.RT, self.vars(SRC))
         nat = self.vars(SRC)["hf_node_egress"]["networks"][0]["nat"]
         egress = out.split("vrf egress\n")[1].split("exit-vrf")[0]
         self.assertTrue(egress.startswith(" ip protocol static route-map SHC-EGRESS-SRC4\n"), egress)
+        # the NAT addresses only (the platform reach prefixes of an earlier release are gone)
         self.assertIn("ip prefix-list SHC-EGRESS-NETS4 seq 5 permit %s/32\n" % nat, out)
-        self.assertIn("ip prefix-list SHC-EGRESS-NETS4 seq 10 permit 10.60.9.0/24\n", out)
+        self.assertNotIn("ip prefix-list SHC-EGRESS-NETS4 seq 10 ", out)
         # the hand-off address, not icmpSource4: the error crosses the network's VRF, which holds icmpSource4 as a
         # local address and would drop it as a martian source (RealKernelEgress)
         handoff = self.vars(SRC)["hf_node_egress"]["address"].split("/")[0]

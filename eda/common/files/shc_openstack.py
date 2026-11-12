@@ -9,16 +9,19 @@ Keystone, the project for its resources), so the account's own scope keys are dr
 the account's own scope. A private CA comes as request["cacert"] (a file path) or clouds.yaml `cacert`.
 
 Actions (request["action"]):
-  provision     project in the domain, `member` for the account, API/ingress floating IPs found or
-                created by description, the project's application credential (reused by id or
-                recreated); returns every id it touched so teardown can work from the record.
+  provision     project in the domain, `member` for the account, the project's application credential
+                (reused by id or recreated); returns every id it touched so teardown can work from the record.
+                fip_descriptions (optional, a request of an earlier release): floating IPs found or created by
+                description on external_network. Without it no external network is looked up.
   check-empty   lists what is left in a project besides the recorded floating IPs (and DNS
                 records under a suffix); teardown refuses to delete a project that isn't empty.
   teardown      deletes the recorded floating IPs, application credentials and the project.
   dns-upsert    creates or updates A records in a Designate zone (scoped to the zone's project).
   dns-delete    deletes recordsets by name/type from a Designate zone; reports what was missing.
   site-probe    CloudInfrastructure probe (cloud admin): authenticates, reports the catalog, Neutron's
-                extensions (evpn) and the external network; ensures the tenant project domain (created
+                extensions (evpn), the named external network and the site's global external networks (those
+                with an access_as_external RBAC policy for every project, target "*"; a network external for some
+                projects only is never listed); ensures the tenant project domain (created
                 only when asked) with the account's admin role on it, and the site's DNS project (created
                 only when asked) with the account's member role on it.
   platform-project  a platform-owned project (CloudGateway, design/P7-PLAN.md §12.3.2) in a domain, with
@@ -29,16 +32,39 @@ Actions (request["action"]):
                 addressMode as RA and address mode, resolvers of the subnet's family as dns_nameservers), router
                 <name> with evpn_vni (the site advertises the subnets as EVPN type-5 routes under that VNI), the
                 subnets on the router (the first interface with advertise_host; the plugin takes one advertised
-                interface per network), and the network shared to the tenant project (RBAC access_as_shared).
-                state absent removes them in order (interfaces, router, subnets, network), refused while other
-                ports (the tenant's VMs) use the network.
+                interface per network), and the tenant project's uses of the network (use: virtualMachines =
+                RBAC access_as_shared, default on; routerAttachments = RBAC access_as_external to that project
+                only, default off; the network's own router:external flag is never set, and a placed network
+                that is external for every project is refused). A use turned off while the project still uses
+                it that way (its ports; its router gateways and floating IPs) is left in place and reported
+                (state removing, inUse). Policies of either action for other projects are pruned.
+                state absent removes them in order (RBAC policies, interfaces, router, subnets, network), refused
+                while the network is used: ports of other projects, router gateways and floating IPs of any
+                project (listed in blocked).
                 recreateRouter: delete and recreate the router (the site fills its gateway chassis at creation).
+  cluster-fips  a cluster's API and ingress floating IPs in the environment's project (site account scoped
+                to project_id): state present finds each by description (descriptions {api, ingress}) on
+                network_id, else creates it; state absent releases them by recorded ids and by description (a
+                missing id counts as released).
+  network-name-check  read only, with the environment's own credential (the one the installer runs with, scoped to
+                the environment's project): the networks of a name as Neutron lists them to that project, each with
+                router:external as the project sees it; unique when only the expected network id is among them (the
+                installer takes the external network by name), external when the project may use it as one.
+  router-advertisement  the site's router advertisement service (an optional site component that switches the `nat`
+                token of an EVPN router port, so the site advertises floating IPs on a placed network): state
+                present asks it to hold `nat` on the router's IPv4 interface port on the network, absent to drop
+                it; service_url empty = the site has no such service ({service: absent}, nothing else happens).
+                The calls carry a Keystone token of the router's project (never logged or returned).
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
 """
 import ipaddress
 import json
+import ssl
 import sys
+import urllib.error
+import urllib.parse
+import urllib.request
 
 import openstack
 import yaml
@@ -56,6 +82,7 @@ class Account:
         self.region = req.get("region") or cfg.get("region_name")
         self.interface = cfg.get("interface", "public")
         self.verify = req.get("cacert") or cfg.get("cacert") or cfg.get("verify", True)
+        self.auth_type = cfg.get("auth_type") or ""
 
     def connect(self, **scope):
         return openstack.connect(auth={**self.auth, **scope}, region_name=self.region,
@@ -65,6 +92,13 @@ class Account:
     def own_scope(self):
         return openstack.connect(auth=self.own_auth, region_name=self.region, interface=self.interface,
                                  verify=self.verify, identity_api_version="3")
+
+    def as_configured(self):
+        """The clouds.yaml entry as written, its auth type included (an application credential: its scope is its
+        own and cannot be changed)."""
+        return openstack.connect(auth=self.own_auth, region_name=self.region, interface=self.interface,
+                                 verify=self.verify, identity_api_version="3",
+                                 **({"auth_type": self.auth_type} if self.auth_type else {}))
 
     def domain(self, name):
         return self.connect(domain_name=name)
@@ -100,9 +134,11 @@ def provision(req):
     conn_d.identity.assign_project_role_to_user(project, user_id, role)
 
     conn_p = acct.project(project.id)
-    net = conn_p.network.find_network(req["external_network"], ignore_missing=False)
     fips = {}
-    for key, desc in req["fip_descriptions"].items():
+    # floating IPs belong to the clusters (cluster-fips); a request without fip_descriptions needs no external network
+    descs = req.get("fip_descriptions") or {}
+    net = conn_p.network.find_network(req["external_network"], ignore_missing=False) if descs else None
+    for key, desc in descs.items():
         existing = list(conn_p.network.ips(description=desc, project_id=project.id))
         if existing:
             fips[key] = {"id": existing[0].id, "ip": existing[0].floating_ip_address, "created": False}
@@ -289,6 +325,26 @@ def public_volume_types(conn, services, notes):
         return []
 
 
+def global_external_networks(conn, notes):
+    """The site's global external networks, [{name, id, families, shared}] sorted by name; read only. Global = an
+    access_as_external RBAC policy with target "*" (Neutron writes one when a network's router:external flag is set);
+    a network external for some projects only (per-project policies) is never listed. None when the list cannot be
+    read (a note says why; the caller keeps what it had)."""
+    try:
+        out, seen = [], set()
+        for rp in conn.network.rbac_policies(action="access_as_external", target_project_id="*"):
+            if rp.target_project_id != "*" or getattr(rp, "object_type", "network") != "network" or rp.object_id in seen:
+                continue
+            seen.add(rp.object_id)
+            net = conn.network.get_network(rp.object_id)
+            families = sorted({int(sn.ip_version) for sn in conn.network.subnets(network_id=net.id)})
+            out.append({"name": net.name, "id": net.id, "families": families, "shared": bool(net.is_shared)})
+        return sorted(out, key=lambda n: (n["name"] or "", n["id"]))
+    except Exception as e:  # noqa: BLE001 - a missing list must not fail the site probe
+        notes.append(f"external networks not listed: {type(e).__name__}")
+        return None
+
+
 def site_probe(req):
     """CloudInfrastructure type openstack. Read-only apart from the tenant domain and the account's
     grants on it (and on the Designate project), which the tenant jobs' domain-scoped calls need."""
@@ -309,6 +365,9 @@ def site_probe(req):
         out["external_network"] = {"found": net is not None,
                                    "external": bool(net and net.is_router_external),
                                    "id": net.id if net else ""}
+    nets = global_external_networks(conn, out["notes"])
+    if nets is not None:
+        out["external_networks"] = nets
     if req.get("project_domain"):
         name = req["project_domain"]
         dom = conn.identity.find_domain(name)
@@ -431,6 +490,129 @@ def _family_resolvers(resolvers, family):
     return [a for a in resolvers if (":" in a) == (family == 6)]
 
 
+_GATEWAY, _FLOATING_IP = "network:router_gateway", "network:floatingip"
+# ports Neutron deletes with their network
+_AUTO_DELETED = ("network:dhcp", "network:distributed")
+
+
+def _flag(value, default):
+    """A boolean setting from the request (a job may send "True"/"false" strings); absent = the default."""
+    if value is None or value == "":
+        return default
+    if isinstance(value, str):
+        return value.strip().lower() in ("true", "1", "yes")
+    return bool(value)
+
+
+def _use(req):
+    """The placement's uses (spec.use): virtualMachines default on, routerAttachments default off."""
+    use = req.get("use") or {}
+    return {"virtualMachines": _flag(use.get("virtualMachines"), True),
+            "routerAttachments": _flag(use.get("routerAttachments"), False)}
+
+
+def _router_name(conn, router_id):
+    try:
+        r = conn.network.get_router(router_id)
+        return getattr(r, "name", None) or router_id
+    except Exception:  # noqa: BLE001 - the name only makes the message easier to read
+        return router_id
+
+
+def _server_label(conn, server_id):
+    """'<name> (<id>)' when Nova gives the server's name to this account, else the id (the name only makes the message
+    easier to read: a server the account may not read is named by its id, nothing more is asked)."""
+    names = conn.__dict__.setdefault("_shc_server_names", {}) if hasattr(conn, "__dict__") else {}
+    if server_id not in names:
+        try:
+            names[server_id] = getattr(conn.compute.get_server(server_id), "name", None) or ""
+        except Exception:  # noqa: BLE001 - not readable, not found, no compute service: the id says it
+            names[server_id] = ""
+    return f"{names[server_id]} ({server_id})" if names[server_id] else server_id
+
+
+def _port_user(conn, p):
+    """What a port on a placed network is, in the words of the placement's messages."""
+    owner = p.device_owner or ""
+    if owner == _GATEWAY:
+        return f"router gateway of router {_router_name(conn, p.device_id)}"
+    if owner == _FLOATING_IP:
+        addrs = [ip.get("ip_address") for ip in (p.fixed_ips or []) if ip.get("ip_address")]
+        return f"floating IP {addrs[0] if addrs else p.device_id}"
+    if owner.startswith("compute:") and p.device_id:
+        return f"port of server {_server_label(conn, p.device_id)}"
+    return f"port {describe(p, 'name', 'device_owner')}"
+
+
+def _blocks_delete(p, platform_project_id):
+    owner = p.device_owner or ""
+    if owner in (_GATEWAY, _FLOATING_IP):
+        return True
+    return getattr(p, "project_id", None) != platform_project_id and owner not in _AUTO_DELETED
+
+
+def _shared_users(conn, net, project_id):
+    """What keeps an access_as_shared policy in use: the project's ports on the network."""
+    return [_port_user(conn, p) for p in conn.network.ports(network_id=net.id, project_id=project_id)]
+
+
+def _external_users(conn, net, project_id):
+    """What keeps an access_as_external policy in use: the project's router gateways and floating IPs on the network."""
+    users = [f"router gateway of router {r.name or r.id}" for r in conn.network.routers(project_id=project_id)
+             if ((r.external_gateway_info or {}).get("network_id")) == net.id]
+    users += [f"floating IP {ip.floating_ip_address}"
+              for ip in conn.network.ips(floating_network_id=net.id, project_id=project_id)]
+    return users
+
+
+def _use_off(conn, net, tenant, action, users_of, label, changed):
+    """A use turned off: its policy for the tenant goes, unless the tenant still uses the network that way (Neutron
+    would refuse the delete); then it stays and the users are reported (state removing)."""
+    mine = [rp for rp in conn.network.rbac_policies(object_id=net.id, action=action) if rp.target_project_id == tenant]
+    if not mine:
+        return {"state": "off", "policyId": "", "inUse": []}
+    users = users_of(conn, net, tenant)
+    if users:
+        return {"state": "removing", "policyId": mine[0].id, "inUse": users}
+    for rp in mine:
+        conn.network.delete_rbac_policy(rp)
+    changed.append(f"{label} removed")
+    return {"state": "off", "policyId": "", "inUse": []}
+
+
+def _router_attachments(conn, net, proj, tenant, use, external, created, changed):
+    """routerAttachments: an access_as_external policy for the tenant's project only (never the network's own
+    router:external flag, never target "*"), owned by the platform project; external policies of other projects
+    are pruned unless their project still uses them (pruneInUse)."""
+    if use["routerAttachments"]:
+        mine = next((rp for rp in external if rp.target_project_id == tenant), None)
+        if mine is None:
+            mine = conn.network.create_rbac_policy(object_type="network", object_id=net.id, action="access_as_external",
+                                                   target_project_id=tenant, project_id=proj.id)
+            created.append("external")
+        state = {"state": "ready", "policyId": mine.id, "inUse": []}
+    else:
+        state = _use_off(conn, net, tenant, "access_as_external", _external_users, "external", changed)
+    prune_in_use = []
+    for rp in external:
+        if rp.target_project_id in (tenant, "*"):
+            continue
+        users = _external_users(conn, net, rp.target_project_id)
+        if users:
+            prune_in_use += [f"project {rp.target_project_id}: {u}" for u in users]
+            continue
+        conn.network.delete_rbac_policy(rp)
+        changed.append(f"external to {rp.target_project_id} removed")
+    return state, prune_in_use
+
+
+def _external_for_project(conn, net, ra):
+    """Verify: the network reads router:external with the tenant's policy in place (read back from Neutron)."""
+    if ra["state"] not in ("ready", "removing"):
+        return False
+    return bool(getattr(conn.network.get_network(net.id), "is_router_external", False))
+
+
 def placement_network(req):
     """The cloud admin's own scope: a placement's network, subnets, EVPN router and share, in the platform project.
     prefixes carries both families (one subnet each); addressMode ("" = the site's default) is the IPv6 subnets' RA
@@ -448,14 +630,26 @@ def placement_network(req):
     if req.get("state", "present") == "absent":
         out = {"name": name, "found": bool(net or router), "deleted": []}
         if net is not None:
-            busy = [f"port {describe(p, 'name', 'device_owner')}" for p in conn.network.ports(network_id=net.id)
-                    if not (p.device_owner or "").startswith("network:")]
+            # busy: every port of another project (Neutron deletes only its own DHCP and metadata ports with the
+            # network), and router gateways and floating IPs of any project (their ports belong to no project)
+            busy = [_port_user(conn, p) for p in conn.network.ports(network_id=net.id) if _blocks_delete(p, proj.id)]
             if busy:
                 return {**out, "blocked": busy}
             for r in conn.network.rbac_policies(object_id=net.id):
                 conn.network.delete_rbac_policy(r)
                 out["deleted"].append(f"rbac {r.id}")
         if router is not None:
+            ra = req.get("routerAdvertisement") or {}
+            if net is not None and (ra.get("service_url") or "").strip():
+                # before the interface goes: the service drops what it holds for the port (its marker would go
+                # with the port anyway); never blocks the teardown
+                try:
+                    out["routerAdvertisement"] = _router_advertisement(acct, {
+                        "state": "absent", "router_id": router.id, "network_id": net.id, "project_id": proj.id,
+                        "service_url": ra["service_url"], "site": ra.get("site", ""), "timeout": ra.get("timeout")})
+                except Exception as e:  # noqa: BLE001 - reported, the deletion goes on
+                    out["routerAdvertisement"] = {"service": "found", "reason": "ServiceUnavailable",
+                                                  "message": f"{type(e).__name__}: {e}"}
             _delete_router(conn, router)
             out["deleted"].append(f"router {router.id}")
         if net is not None:
@@ -519,25 +713,308 @@ def placement_network(req):
             _add_router_interface(conn, router, cidr, sid, advertise=not attached)
             attached.add(sid)
             created.append(f"interface {cidr}")
-    rbac = None
-    if req.get("shareProjectId"):
+    rbac, uses = None, {}
+    tenant = req.get("shareProjectId")
+    if tenant:
+        use = _use(req)
+        # a network external for every project (its router:external flag, set outside the platform) is not the
+        # platform's to place: refused before any policy is written
+        external = list(conn.network.rbac_policies(object_id=net.id, action="access_as_external"))
+        if any(rp.target_project_id == "*" for rp in external):
+            raise RuntimeError(f"network {name} is external for every project (its router:external flag is set outside "
+                               "the platform); the platform does not place such a network")
+        if use["virtualMachines"]:
+            for rp in conn.network.rbac_policies(object_id=net.id, action="access_as_shared"):
+                if rp.target_project_id == tenant:
+                    rbac = rp
+            if rbac is None:
+                # owned by the platform project like the network itself (Neutron would otherwise own it by the
+                # account's own project and count it against that project's rbac_policy quota)
+                rbac = conn.network.create_rbac_policy(object_type="network", object_id=net.id,
+                                                       action="access_as_shared", target_project_id=tenant,
+                                                       project_id=proj.id)
+                created.append("share")
+            uses["virtualMachines"] = {"state": "ready", "policyId": rbac.id, "inUse": []}
+        else:
+            uses["virtualMachines"] = _use_off(conn, net, tenant, "access_as_shared", _shared_users, "share", changed)
+            rbac = None
         for rp in conn.network.rbac_policies(object_id=net.id, action="access_as_shared"):
-            if rp.target_project_id == req["shareProjectId"]:
-                rbac = rp
-        if rbac is None:
-            # owned by the platform project like the network itself (Neutron would otherwise own it by the account's
-            # own project and count it against that project's rbac_policy quota)
-            rbac = conn.network.create_rbac_policy(object_type="network", object_id=net.id, action="access_as_shared",
-                                                   target_project_id=req["shareProjectId"], project_id=proj.id)
-            created.append("share")
-        for rp in conn.network.rbac_policies(object_id=net.id, action="access_as_shared"):
-            if rp.target_project_id != req["shareProjectId"]:
+            if rp.target_project_id != tenant:
                 conn.network.delete_rbac_policy(rp)
                 changed.append(f"share to {rp.target_project_id} removed")
+        uses["routerAttachments"], prune_in_use = _router_attachments(conn, net, proj, tenant, use, external,
+                                                                      created, changed)
     evpn = conn.network.get(f"/routers/{router.id}").json()["router"].get("evpn_vni")
-    return {"name": name, "projectId": proj.id, "networkId": net.id, "routerId": router.id, "subnets": subnets,
-            "gateways": gateways, "addressMode": applied_mode, "evpnVni": evpn, "shareId": rbac.id if rbac else "",
-            "mtu": net.mtu, "created": created, "changed": changed}
+    out = {"name": name, "projectId": proj.id, "networkId": net.id, "routerId": router.id, "subnets": subnets,
+           "gateways": gateways, "addressMode": applied_mode, "evpnVni": evpn,
+           "shareId": rbac.id if rbac else (uses.get("virtualMachines") or {}).get("policyId", ""),
+           "mtu": net.mtu, "created": created, "changed": changed}
+    if tenant:
+        ra = uses["routerAttachments"]
+        out.update({"use": uses, "externalId": ra["policyId"] if ra["state"] in ("ready", "removing") else "",
+                    "routerExternalForProject": _external_for_project(conn, net, ra),
+                    "inUse": uses["virtualMachines"]["inUse"] + ra["inUse"], "pruneInUse": prune_in_use})
+    return out
+
+
+def cluster_fips(req):
+    """A cluster's floating IPs in the environment's project, with the site account scoped to that project.
+    present: {project_id, network_id, descriptions: {api, ingress}} -> {network, api: {address, id, created},
+    ingress: {...}, released: [ids of duplicates]}; each found by description first (a re-run after a failure
+    creates nothing twice), else created on network_id. One found on another network is refused (the cluster's
+    network is fixed). absent: {project_id, ids: [recorded ids], descriptions (optional)} -> {released, missing}; a
+    recorded id that no longer exists counts as released (missing); floating IPs of other projects are never
+    touched."""
+    acct = Account(req)
+    pid = req["project_id"]
+    conn = acct.project(pid)
+    descs = req.get("descriptions") or {}
+    if req.get("state", "present") == "absent":
+        ids = {i for i in (req.get("ids") or []) if i}
+        for desc in descs.values():
+            ids.update(i.id for i in conn.network.ips(description=desc, project_id=pid))
+        released, missing = [], []
+        for fid in sorted(ids):
+            try:
+                ip = conn.network.get_ip(fid)
+            except openstack.exceptions.NotFoundException:
+                ip = None
+            if ip is None or getattr(ip, "project_id", pid) != pid:
+                missing.append(fid)
+                continue
+            conn.network.delete_ip(fid, ignore_missing=True)
+            released.append(fid)
+        return {"released": released, "missing": missing}
+    net_id = req["network_id"]
+    if set(descs) != {"api", "ingress"}:
+        raise ValueError("descriptions needs api and ingress")
+    out = {"network": net_id, "released": []}
+    for key in ("api", "ingress"):
+        desc = descs[key]
+        found = list(conn.network.ips(description=desc, project_id=pid))
+        other = [i for i in found if i.floating_network_id != net_id]
+        if other:
+            raise RuntimeError(f"floating IP {desc} ({other[0].floating_ip_address}) is on network "
+                               f"{other[0].floating_network_id}, not {net_id}")
+        if found:
+            # one per description: the associated one (or the first by id) stays, unassociated duplicates go
+            found.sort(key=lambda i: (not getattr(i, "port_id", None), i.id))
+            keep = found[0]
+            for extra in found[1:]:
+                if not getattr(extra, "port_id", None):
+                    conn.network.delete_ip(extra.id, ignore_missing=True)
+                    out["released"].append(extra.id)
+            out[key] = {"address": keep.floating_ip_address, "id": keep.id, "created": False}
+        else:
+            ip = conn.network.create_ip(floating_network_id=net_id, description=desc)
+            out[key] = {"address": ip.floating_ip_address, "id": ip.id, "created": True}
+    return out
+
+
+def network_name_check(req):
+    """The networks named `name` as the installer finds them (install-config platform.openstack.externalNetwork takes a
+    name only; the installer lists the networks of that name with the environment's credential and fails on two).
+    clouds_yaml is the environment's own credential (the installer's: an application credential of the environment's
+    project), so the list is what Neutron itself gives that project: its own networks, the shared ones, and those an
+    RBAC policy exposes to it or to every project, whether or not the project can read the policy (a project never
+    reads another project's policies, so counting policies cannot tell). router:external is the network's flag as
+    Neutron computes it for that project. {project_id (the environment's project: the credential must be scoped to
+    it), name, network_id} -> {name, project_id (the credential's), visible: [{id, project_id, shared, external}],
+    unique: exactly one is visible and it is network_id, external: network_id is visible and external for the
+    project}."""
+    acct = Account(req)
+    pid = req.get("project_id") or ""
+    name = req["name"]
+    want = req.get("network_id") or ""
+    conn = acct.as_configured()
+    _, _, scoped = token_info(conn)
+    if pid and scoped != pid:
+        raise RuntimeError(f"the environment's credential is scoped to project {scoped}, not to the environment's "
+                           f"project {pid}")
+    visible = []
+    for n in conn.network.networks(name=name):
+        if n.name != name:
+            continue
+        visible.append({"id": n.id, "project_id": n.project_id, "shared": bool(getattr(n, "is_shared", False)),
+                        "external": bool(getattr(n, "is_router_external", False))})
+    ids = [v["id"] for v in visible]
+    mine = [v for v in visible if want and v["id"] == want]
+    return {"name": name, "project_id": scoped, "visible": visible,
+            "unique": len(ids) == 1 and (not want or ids[0] == want),
+            "external": bool(mine) and mine[0]["external"]}
+
+
+RA_KEY = "placement.routerAdvertisementBySite"
+RA_TIMEOUT = 10
+
+
+class RaRedirect(Exception):
+    """The router advertisement service answered with a redirect: never followed (the token would go along)."""
+
+    def __init__(self, code, location):
+        super().__init__(f"HTTP {code} redirect to {location}")
+        self.code, self.location = code, location
+
+
+class _RaNoRedirect(urllib.request.HTTPRedirectHandler):
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        raise RaRedirect(code, urllib.parse.urlsplit(newurl)._replace(query="", fragment="").geturl())
+
+
+def _ra_verify_off(verify):
+    """The site credential turns certificate checking off (verify: false, also as a string)."""
+    return verify is False or (isinstance(verify, str) and verify.strip().lower() in ("false", "no", "off", "0"))
+
+
+def _ra_origin(url):
+    parts = urllib.parse.urlsplit(url)
+    return parts.scheme.lower(), (parts.hostname or "").lower(), parts.port or (443 if parts.scheme == "https" else 80)
+
+
+def _ra_http(method, url, token, verify, timeout, body=None, origin=None):
+    """One call to the router advertisement service: (HTTP status, parsed JSON or {}). TLS is always verified, with
+    the site credential's CA bundle (a path) or the system's trust; a redirect is never followed (RaRedirect), and the
+    token goes only to the configured origin (scheme, host and port of the service URL)."""
+    if _ra_verify_off(verify):
+        raise ValueError("certificate verification is off")
+    if origin is not None and _ra_origin(url) != origin:
+        raise ValueError(f"{url} is not at the service's origin")
+    if isinstance(verify, str) and verify:
+        ctx = ssl.create_default_context(cafile=verify)
+    else:
+        ctx = ssl.create_default_context()
+    data = json.dumps(body).encode() if body is not None else None
+    req = urllib.request.Request(url, data=data, method=method,
+                                 headers={"X-Auth-Token": token, "Accept": "application/json",
+                                          **({"Content-Type": "application/json"} if data is not None else {})})
+    opener = urllib.request.build_opener(urllib.request.HTTPSHandler(context=ctx), _RaNoRedirect())
+    try:
+        with opener.open(req, timeout=timeout) as r:
+            status, text = r.status, r.read()
+    except urllib.error.HTTPError as e:
+        with e:
+            status, text = e.code, e.read()
+    try:
+        return status, json.loads(text or b"{}")
+    except ValueError:
+        return status, {}
+
+
+def _ra_router_port(conn, router_id, network_id):
+    """The router's interface port on the network that carries IPv4 (the EVPN plugin's advertised interface)."""
+    for p in conn.network.ports(device_id=router_id, network_id=network_id):
+        if p.device_owner in _IFACE_OWNERS and any(":" not in (ip.get("ip_address") or ":")
+                                                  for ip in (p.fixed_ips or [])):
+            return p
+    return None
+
+
+def _ra_scrub(text, token):
+    text = str(text)
+    return text.replace(token, "<token>") if token else text
+
+
+def router_advertisement(req):
+    """state present|absent, router_id, network_id, service_url (empty = no service), project_id or
+    domain + platformProject (the router's project: the token is scoped to it, as the service authorizes by the
+    port's project), site (names the realization key in messages), timeout (seconds, default 10).
+    -> {service: found|absent, port_id, nat, wanted, changed, restores, lastRestoredAt, reason, message, read}; reason
+    "" = done; read = the service answered with the port's state (nat, wanted, restores and lastRestoredAt are its
+    answer; without read they are only defaults: the caller must not report them as the port's state). Service errors come back with the service's reason (Unauthenticated, NotProjectScoped, NotYourPort,
+    NotARouterInterface, NoSuchRouterPort, NotAnAdvertisingPort, BadRequest, OvnUnavailable, IdentityUnavailable,
+    NetworkUnavailable, and NotFound, MethodNotAllowed, InternalError); ServiceUnavailable = no answer (or a redirect,
+    which is never followed); InvalidSetting = not an https URL, or a site credential that turns certificate
+    verification off (the call always verifies, and sends the token only to the URL's origin); NoRouterInterface = the router has no IPv4 interface on the network (present only: for absent there is nothing to drop). absent on a port the
+    service answers NotAnAdvertisingPort for (no redistribute option: nothing advertised) is done, not a failure. Never raises for the service: a failing service is the caller's
+    status, not an error. absent drops nat only where the service holds it (wanted): a nat the site set itself
+    stays."""
+    return _router_advertisement(None, req)
+
+
+def _router_advertisement(acct, req):
+    out = {"service": "absent", "port_id": "", "nat": False, "wanted": False, "changed": False, "restores": 0,
+           "lastRestoredAt": "", "reason": "", "message": "", "read": False}
+    url = (req.get("service_url") or "").strip().rstrip("/")
+    if not url:
+        return out
+    out["service"] = "found"
+    key = f"{RA_KEY}[{req['site']}].url" if req.get("site") else f"{RA_KEY}[<site>].url"
+    if not url.lower().startswith("https://"):
+        return {**out, "reason": "InvalidSetting", "message": f"{key} must be an https:// URL"}
+    state = req.get("state", "present")
+    if state not in ("present", "absent"):
+        raise ValueError("state must be present or absent")
+    acct = acct or Account(req)
+    if _ra_verify_off(acct.verify):
+        # the token is the site account's: never sent over a connection whose certificate is not checked
+        return {**out, "reason": "InvalidSetting",
+                "message": (f"the site credential of site {req.get('site') or '<site>'} turns certificate verification "
+                            "off (verify: false); the router advertisement service is called only with verification: "
+                            "give the credential a CA bundle (cacert) instead")}
+    origin = _ra_origin(url)
+    pid = req.get("project_id")
+    if not pid:
+        own = acct.own_scope()
+        dom = own.identity.find_domain(req["domain"], ignore_missing=False)
+        proj = own.identity.find_project(req["platformProject"], domain_id=dom.id)
+        if proj is None:
+            raise RuntimeError(f"platform project {req['platformProject']} does not exist")
+        pid = proj.id
+    conn = acct.project(pid)
+    port = _ra_router_port(conn, req["router_id"], req["network_id"])
+    if port is None and state == "absent":
+        # no IPv4 interface: no port that could carry nat, so nothing to drop (an IPv6-only placement, or an
+        # interface already removed)
+        return {**out, "read": True}
+    if port is None:
+        return {**out, "reason": "NoRouterInterface",
+                "message": f"router {req['router_id']} has no IPv4 interface on network {req['network_id']}"}
+    out["port_id"] = port.id
+    # the site account's token scoped to the router's project: the roles the account holds there (the platform gives
+    # it member; the service needs no more). A narrower token would need a credential of its own (Review R2 L5).
+    token = conn.session.get_token()
+    timeout = float(req.get("timeout") or RA_TIMEOUT)
+    base = f"{url}/v1/router-ports/{urllib.parse.quote(str(port.id), safe='')}"
+
+    def call(method, path="", body=None):
+        try:
+            return _ra_http(method, base + path, token, acct.verify, timeout, body, origin=origin)
+        except RaRedirect as e:
+            return 0, {"error": "ServiceUnavailable",
+                       "message": f"router advertisement service at {url} answered with a redirect ({e}); the platform "
+                                  "does not follow redirects of this service"}
+        except Exception as e:  # noqa: BLE001 - transport errors (refused, timeout, TLS) are the service's state
+            reason = getattr(e, "reason", e)
+            return 0, {"error": "ServiceUnavailable",
+                       "message": f"router advertisement service at {url}: {_ra_scrub(reason, token)}"}
+
+    def failed(status, body):
+        return {**out, "reason": str(body.get("error") or "ServiceUnavailable"),
+                "message": _ra_scrub(body.get("message") or f"HTTP {status} from {url}", token)}
+
+    def nothing_to_drop(status, body):
+        # the service answers 409 NotAnAdvertisingPort for a port without the redistribute option (GET and PUT
+        # false alike): the port advertises nothing, so for absent there is nothing to do
+        return state == "absent" and status == 409 and body.get("error") == "NotAnAdvertisingPort"
+
+    status, body = call("GET")
+    if nothing_to_drop(status, body):
+        return {**out, "read": True}
+    if status != 200:
+        return failed(status, body)
+    out.update({"read": True, "nat": bool(body.get("nat")), "wanted": bool(body.get("wanted")),
+                "restores": int(body.get("restores") or 0), "lastRestoredAt": str(body.get("lastRestoredAt") or "")})
+    enable = state == "present"
+    # present: nat held by the service (wanted); absent: only what the service holds is dropped
+    if (enable and out["nat"] and out["wanted"]) or (not enable and not out["wanted"]):
+        return out
+    status, body = call("PUT", "/nat", {"enabled": enable})
+    if nothing_to_drop(status, body):
+        return {**out, "nat": False, "wanted": False}
+    if status != 200:
+        return failed(status, body)
+    after = body.get("after") or []
+    return {**out, "nat": "nat" in after, "wanted": enable, "changed": bool(body.get("changed"))}
 
 
 def platform_inventory(req):
@@ -562,6 +1039,8 @@ def platform_inventory(req):
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
+           "cluster-fips": cluster_fips, "router-advertisement": router_advertisement,
+           "network-name-check": network_name_check,
            "platform-inventory": platform_inventory}
 
 if __name__ == "__main__":

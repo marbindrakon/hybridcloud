@@ -13,6 +13,10 @@
 # side (backend_<kind>.yml), the gateway asked to carry the placement's VRF (pending WaitingForGateway until it
 # does; the gateway job wakes the placement), and the site's routes checked on every border gateway node. Last, the
 # forward-confirmed name of the placement's IPv6 gateway (gateway_name.yml, design/IPV6-PLAN.md §8.3).
+# A CloudOSO placement with a use turned off but still in use, or whose router advertisement the site's service did
+# not confirm (status.use, backend_cloudoso.yml), stays Ready: the condition Degraded (reason InUse or
+# RouterAdvertisementFailed) names what waits, and the operator runs a ready placement that waits so again on its
+# reconcile period until it is resolved (operator/namespace/roles/networkplacement).
 - block:
     - name: Read the NetworkPlacement
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_read.yml"
@@ -29,6 +33,17 @@
         np_waiting: []
         np_reason: WaitingForDependencies
         np_status: {entity: "{{ fab_entity }}"}
+        np_use_removing: []
+        np_use_wait_reason: InUse
+        np_use_wait_messages: []
+        np_use_note: ""
+        # the last run left the placement ready with a use waiting (condition Degraded, see the final write): the run
+        # is a re-check, not a change the network or the fabric need to hear about
+        np_prev_use_wait: >-
+          {{ (fab_st.ready | default(false) | bool)
+             and (fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'Degraded')
+                  | selectattr('status', 'equalto', 'True')
+                  | selectattr('reason', 'in', ['InUse', 'RouterAdvertisementFailed']) | list | length > 0) }}
         np_backend_kind: "{{ fab_spec.backend.kind }}"
         np_backend_name: "{{ fab_spec.backend.name }}"
 
@@ -493,8 +508,21 @@
           {{ np_prefixes | join(', ') }} on {{ np_site }} through CloudGateway {{ np_gateway.metadata.name }}
           (VNI {{ np_l3vni }}{{ (', MAC-VRF ' ~ np_real.l2Vni) if np_real.l2Vni is defined else '' }}); routes of
           the network's other placements on the gateway: {{ np_route_nodes | map(attribute='vpnRoutes') | map('string') | join('/') }}{{
-          np_rdns_note | default('') }}{{ npp_note | default('') }}
+          np_rdns_note | default('') }}{{ npp_note | default('') }}{{ np_use_note | default('', true) }}
+        _np_degraded_before: >-
+          {{ fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'Degraded')
+             | selectattr('status', 'equalto', 'True') | list | length > 0 }}
         fab_status: "{{ np_final }}"
+        fab_conditions: >-
+          {%- set now = lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') -%}
+          {%- if np_use_removing | length > 0 -%}
+            {{ [{'type': 'Degraded', 'status': 'True', 'lastTransitionTime': now, 'reason': np_use_wait_reason,
+                 'message': (np_use_wait_messages | join(' '))[:1000]}] }}
+          {%- elif np_backend_kind == 'CloudOSO' and _np_degraded_before | bool -%}
+            {{ [{'type': 'Degraded', 'status': 'False', 'lastTransitionTime': now, 'reason': 'Ready', 'message': ''}] }}
+          {%- else -%}
+            {{ [] }}
+          {%- endif -%}
 
     - name: Tell the network and the backend
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
@@ -502,7 +530,9 @@
         nudge_crs:
           - {kind: HybridNetwork, namespace: "{{ fab_namespace }}", name: "{{ fab_spec.network }}"}
           - {kind: "{{ np_backend_kind }}", namespace: "{{ fab_namespace }}", name: "{{ np_backend_name if np_backend_kind == 'CloudVirt' else '' }}"}
-      when: fab_st.status | default('') != 'ready'
+      when:
+        - fab_st.status | default('') != 'ready'
+        - not np_prev_use_wait | bool
 
     # the network lists its placements' provider-assigned IPv6 subnets (status.ipv6.providerPrefixes); the wake above
     # misses a re-run of a ready placement, so one whose provider subnet came, went or changed since the network
@@ -529,6 +559,7 @@
         nudge_crs: [{kind: HybridFabric, namespace: "{{ fabric_platform_namespace }}", name: "{{ np_fabric.metadata.name }}"}]
       when:
         - fab_st.status | default('') != 'ready'
+        - not np_prev_use_wait | bool
         - np_circuits | length > 0
 
   rescue:

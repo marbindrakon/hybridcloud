@@ -1,0 +1,50 @@
+# Optional: the certificate the service's Route presents, from a cert-manager issuer whose CA the site's public
+# endpoints already use (so the CA bundle of the platform's site credential verifies it). Apply it before the main
+# template and process the main template with SERVING_CERT_SECRET=router-advertisement-route-tls and
+# ROUTE_TERMINATION=passthrough (README.md, step 3): the pod then serves this certificate itself.
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: router-advertisement-route-certificate
+  annotations:
+    description: >-
+      The Route certificate of the router advertisement service, from an issuer of the deployment's choice.
+parameters:
+  - name: NAMESPACE
+    description: The namespace of the OpenStack control plane (the same as for the main template).
+    required: true
+  - name: ROUTE_HOST
+    description: The host name of the service's Route (the same value for the main template's ROUTE_HOST).
+    required: true
+  - name: ROUTE_CERT_ISSUER
+    description: The cert-manager issuer whose CA the site's public endpoints use.
+    required: true
+  - name: ROUTE_CERT_ISSUER_KIND
+    description: Issuer (in NAMESPACE) or ClusterIssuer.
+    value: Issuer
+objects:
+  - apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: router-advertisement-route
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+    spec:
+      secretName: router-advertisement-route-tls
+      dnsNames:
+        - ${ROUTE_HOST}
+      duration: 2160h
+      renewBefore: 360h
+      usages:
+        - digital signature
+        - key encipherment
+        - server auth
+      privateKey:
+        algorithm: RSA
+        size: 2048
+        rotationPolicy: Always
+      issuerRef:
+        group: cert-manager.io
+        kind: ${ROUTE_CERT_ISSUER_KIND}
+        name: ${ROUTE_CERT_ISSUER}

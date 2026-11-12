@@ -8,10 +8,15 @@ Ledger: ConfigMap fabric-ledger-<fabric> (key ledger.json) in the fabric's names
   {"version": 1, "fabric": <name>, "pools": {kind: [start, end]}, "alloc": {kind: {owner: value}}}
   kinds: vni, l2vni (per NetworkPlacement), vpnTarget (per HybridNetwork), peIndex (per provider edge: 1 is the
   border gateway root), egress (per HybridNetwork with internet egress: its index in the nodes' NAT pools),
-  attachVlan / attachLink (per AttachmentCircuit: its VLAN on the bearer, its link subnet's index). Writes replace the ConfigMap at the resourceVersion read (optimistic concurrency, retried).
+  attachVlan / attachLink (per AttachmentCircuit: its VLAN on the bearer, its link subnet's index), servicePrefix (per
+  cluster prefix a HybridNetwork accepted into the service VRF, owner HybridNetwork/<ns>/<name>/<prefix>). Writes
+  replace the ConfigMap at the resourceVersion read (optimistic concurrency, retried).
   ledger-ensure   {fabric, fabric_uid, pools, reserve: {kind: {owner: value}}}   create/update the pools; refused
                   when an allocated value would fall outside its new pool
-  ledger-allocate {fabric, kind, owner}   the owner's value (lowest free one the first time)
+  ledger-allocate {fabric, kind, owner}   the owner's value (lowest free one the first time). Kinds whose values are an
+                  order (ORDERED_KINDS: servicePrefix, first come first served) get a value above every value held:
+                  a later entry always ranks after the ones held when it came; when the pool's end is reached the
+                  held values are renumbered from the pool's start in their order (the order is what the value means)
   ledger-release  {fabric, kind, owner}
   An allocate or release that changes the ledger also writes its counts to the HybridFabric's status.allocated /
   status.available (best effort), so they follow every change and not only the fabric's own runs. Ensure, allocate
@@ -51,7 +56,9 @@ import requests
 import urllib3
 
 urllib3.disable_warnings()
-KINDS = ("vni", "l2vni", "vpnTarget", "peIndex", "egress", "attachVlan", "attachLink")
+KINDS = ("vni", "l2vni", "vpnTarget", "peIndex", "egress", "attachVlan", "attachLink", "servicePrefix")
+# kinds whose value is the order of arrival, not an address or index (see ledger-allocate)
+ORDERED_KINDS = ("servicePrefix",)
 
 
 class Api:
@@ -221,6 +228,20 @@ def ledger_ensure(api, req):
     return result
 
 
+def ordered_value(alloc, start, end, kind):
+    """The value of a new entry of an ordered kind: above every value held (the latest arrival ranks last). At the
+    pool's end the held values are renumbered from start, keeping their order (ties by owner, as every reader sorts
+    them), so the pool runs out only when every value in it is held."""
+    top = max(alloc.values(), default=start - 1)
+    if top < end:
+        return max(top + 1, start)
+    if len(alloc) >= end - start + 1:
+        raise RuntimeError(f"{kind} pool {start}-{end} is exhausted")
+    for i, o in enumerate(sorted(alloc, key=lambda o: (alloc[o], o))):
+        alloc[o] = start + i
+    return start + len(alloc)
+
+
 def ledger_allocate(api, req):
     k, owner = req["kind"], req["owner"]
 
@@ -229,10 +250,13 @@ def ledger_allocate(api, req):
         if owner in alloc:
             return {"value": alloc[owner], "unchanged": True}
         s, e = led["pools"][k]
-        used = set(alloc.values())
-        free = next((v for v in range(s, e + 1) if v not in used), None)
-        if free is None:
-            raise RuntimeError(f"{k} pool {s}-{e} is exhausted")
+        if k in ORDERED_KINDS:
+            free = ordered_value(alloc, s, e, k)
+        else:
+            used = set(alloc.values())
+            free = next((v for v in range(s, e + 1) if v not in used), None)
+            if free is None:
+                raise RuntimeError(f"{k} pool {s}-{e} is exhausted")
         alloc[owner] = free
         return {"value": free, "new": True}
     result = update(api, req, change)

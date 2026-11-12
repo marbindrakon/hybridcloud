@@ -35,8 +35,7 @@ ROOT_CONF = {
     "loopback": "10.255.0.1/32", "loopbackPool": "10.255.0.0/24",
     "egress": {
         "vrf": "egress", "table": 9000, "parent": "bond1.237", "mtu": 9000, "address": "172.18.237.13/24",
-        "gateway": "172.18.237.1", "deny": ["10.0.0.0/8"], "allow": [], "platformSources": ["172.18.230.0/24"],
-        "platformPorts": [6443, 443],
+        "gateway": "172.18.237.1", "deny": ["10.0.0.0/8"], "allow": [],
         "networks": [{"vrf": "e10000", "table": 110000, "zone": 1, "xe": "xe10000", "xo": "xo10000",
                       "xeAddr": "169.254.0.1/31", "xoAddr": "169.254.0.0/31", "nat": "172.18.237.64",
                       "platform": []}]},

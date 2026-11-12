@@ -32,6 +32,10 @@ const SAMPLES = {
   'PlatformOpenshift.aws.workerCount': 2,
   'PlatformOpenshift.gcp.controlPlaneCount': 3,
   'PlatformOpenshift.gcp.workerCount': 2,
+  'PlatformOpenshift.networking.clusterNetwork': '10.128.0.0/14',
+  'PlatformOpenshift.networking.serviceNetwork': '10.96.0.0/16',
+  'PlatformOpenshift.networking.machineNetwork': '10.0.0.0/16',
+  'PlatformOpenshift.networking.hostPrefix': 23,
 };
 
 function sampleFor(kind, dotted, schema) {
@@ -174,4 +178,59 @@ test('platform-only fields are never sent and an edit keeps their stored values'
   // An openstack block removed by the edit is not re-created for the platform-only field alone.
   const awsOnly = san.keepPlatformOnlyFields('PlatformOpenshift', { type: 'aws', aws: { environment: 'a' } }, { openstack: { sshKeyVaultPath: 'k' } });
   assert.equal(awsOnly.openstack, undefined);
+});
+
+test('clusters: the network, real node counts, address settings; control plane at least 1 everywhere', () => {
+  const os = san.sanitizePlatformOpenshiftSpec({
+    type: 'openstack',
+    openstack: { environment: 'e', network: 'web', controlPlaneCount: 3, workerCount: 0 },
+    networking: { clusterNetwork: '10.128.0.0/14', hostPrefix: 23, serviceNetwork: '10.96.0.0/16', machineNetwork: '10.0.0.0/16' },
+  });
+  assert.deepEqual(os.spec.openstack, { environment: 'e', network: 'web', controlPlaneCount: 3, workerCount: 0 });
+  assert.deepEqual(os.spec.networking, { clusterNetwork: '10.128.0.0/14', hostPrefix: 23, serviceNetwork: '10.96.0.0/16', machineNetwork: '10.0.0.0/16' });
+  assert.equal(san.sanitizePlatformOpenshiftSpec({ openstack: { environment: 'e', externalNetwork: 'public' } }).spec.openstack.externalNetwork, 'public');
+  assert.match(san.sanitizePlatformOpenshiftSpec({ openstack: { environment: 'e', network: 'Not A Name' } }).error, /spec\.openstack\.network/);
+  for (const cloud of ['aws', 'gcp']) {
+    const ok = san.sanitizePlatformOpenshiftSpec({ [cloud]: { environment: 'e', network: 'web', publish: 'Internal', controlPlaneCount: 1, workerCount: 0 } });
+    assert.deepEqual(ok.spec[cloud], { environment: 'e', network: 'web', publish: 'Internal', controlPlaneCount: 1, workerCount: 0 });
+    // 0 control plane nodes used to pass on AWS and Google Cloud
+    assert.match(san.sanitizePlatformOpenshiftSpec({ [cloud]: { environment: 'e', controlPlaneCount: 0 } }).error, /controlPlaneCount.*from 1/);
+    assert.match(san.sanitizePlatformOpenshiftSpec({ [cloud]: { environment: 'e', workerCount: -1 } }).error, /workerCount/);
+  }
+  assert.match(san.sanitizePlatformOpenshiftSpec({ openstack: { environment: 'e', controlPlaneCount: 0 } }).error, /controlPlaneCount/);
+  assert.match(san.sanitizePlatformOpenshiftSpec({ networking: { clusterNetwork: 'fd00::/48' } }).error, /clusterNetwork must be an IPv4 prefix/);
+  assert.match(san.sanitizePlatformOpenshiftSpec({ networking: { hostPrefix: 30 } }).error, /hostPrefix must be an integer from 16 to 28/);
+  assert.match(san.sanitizePlatformOpenshiftSpec({ networking: 'x' }).error, /spec.networking must be an object/);
+  assert.equal(san.sanitizePlatformOpenshiftSpec({ networking: {} }).spec.networking, undefined);
+});
+
+test('networks pass platformAccess (a boolean); placements pass spec.use (booleans)', () => {
+  assert.equal(san.sanitizeHybridNetworkSpec({ prefixes: ['10.60.0.0/16'], platformAccess: false }).spec.platformAccess, false);
+  assert.equal('platformAccess' in san.sanitizeHybridNetworkSpec({ prefixes: ['10.60.0.0/16'] }).spec, false);
+  assert.match(san.sanitizeHybridNetworkSpec({ prefixes: ['10.60.0.0/16'], platformAccess: 'yes' }).error, /platformAccess/);
+  const base = { network: 'n', backend: { kind: 'CloudOSO', name: 'e' }, ipv4: { prefixLength: 24 } };
+  assert.deepEqual(san.sanitizeNetworkPlacementSpec({ ...base, use: { virtualMachines: false, routerAttachments: true } }).spec.use, {
+    virtualMachines: false,
+    routerAttachments: true,
+  });
+  assert.equal('use' in san.sanitizeNetworkPlacementSpec(base).spec, false);
+  assert.match(san.sanitizeNetworkPlacementSpec({ ...base, use: { routerAttachments: 1 } }).error, /spec\.use\.routerAttachments/);
+  assert.match(san.sanitizeNetworkPlacementSpec({ ...base, use: [] }).error, /spec\.use must be an object/);
+});
+
+test('raw writes: an edge connection of the platform kind is refused from tenants, in every body form', () => {
+  const p = '/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-example-corp/attachmentcircuits';
+  const refusal = /ceKind platform/;
+  assert.match(san.tenantWriteRefusal(p, 'POST', { spec: { ceKind: 'platform', network: 'n' } }), refusal);
+  assert.match(san.tenantWriteRefusal(`${p}/c1`, 'PUT', { spec: { ceKind: 'platform' } }), refusal);
+  assert.match(san.tenantWriteRefusal(`${p}/c1`, 'PATCH', { spec: { ceKind: 'platform' } }), refusal);
+  assert.match(san.tenantWriteRefusal(`${p}/c1`, 'PATCH', [{ op: 'replace', path: '/spec/ceKind', value: 'platform' }]), refusal);
+  assert.match(san.tenantWriteRefusal(`${p}/c1`, 'PATCH', [{ op: 'replace', path: '/spec', value: { ceKind: 'platform' } }]), refusal);
+  assert.match(san.tenantWriteRefusal(`${p}?dryRun=All`, 'POST', { spec: { ceKind: 'platform' } }), refusal);
+  assert.equal(san.tenantWriteRefusal(p, 'POST', { spec: { ceKind: 'customer', network: 'n' } }), null);
+  assert.equal(san.tenantWriteRefusal(p, 'POST', { spec: { network: 'n' } }), null);
+  assert.equal(san.tenantWriteRefusal(`${p}/c1`, 'DELETE', undefined), null);
+  assert.equal(san.tenantWriteRefusal('/apis/hybridsovereign.redhat/v1alpha1/namespaces/x/hybridnetworks', 'POST', { spec: { ceKind: 'platform' } }), null);
+  assert.throws(() => san.guardTenantWrite(p, 'POST', { spec: { ceKind: 'platform' } }), (e) => e.status === 403);
+  assert.doesNotThrow(() => san.guardTenantWrite(p, 'POST', { spec: { ceKind: 'customer' } }));
 });

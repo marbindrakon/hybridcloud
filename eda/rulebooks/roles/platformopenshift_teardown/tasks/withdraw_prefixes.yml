@@ -1,0 +1,65 @@
+---
+# The cluster's prefixes leave the platform's service routing domain (DESIGN cnet §4.3, §5): status.platformPrefixes
+# is cleared, the network is woken (it drops them and wakes the fabric), and the job checks that the fabric no longer
+# carries them for the network; while it still does, the step fails (status.deletion step service-prefixes) and the
+# teardown is retried. A network or fabric that is gone carries nothing.
+- name: Clear the cluster's prefixes
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ platformopenshift_cr_name }}"
+    cr_namespace: "{{ platformopenshift_cr_namespace }}"
+    cr_status_partial: true
+    patch_ignore_not_found: true
+    cr_status_body:
+      platformPrefixes: null
+
+- name: Read the network
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridNetwork
+    name: "{{ po_network }}"
+    namespace: "{{ platformopenshift_cr_namespace }}"
+  register: _wp_hn
+
+- name: Wake the network (it drops the prefixes)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridNetwork, namespace: "{{ platformopenshift_cr_namespace }}", name: "{{ po_network }}"}]
+  when: _wp_hn.resources | default([]) | length > 0
+
+- name: Wait until the fabric no longer carries them
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: HybridFabric
+    name: "{{ ((_wp_hn.resources | first).status | default({}, true)).fabric | default('', true) }}"
+    namespace: "{{ fabric_platform_namespace }}"
+  register: _wp_fab
+  until: >-
+    (((((_wp_fab.resources | default([]) | first | default({})).status | default({}, true)).realization
+       | default({}, true)).service | default({}, true)).networks | default([], true)
+     | selectattr('network', 'defined')
+     | selectattr('network', 'equalto', platformopenshift_cr_namespace ~ '/' ~ po_network)
+     | map(attribute='prefixes') | flatten | list) | intersect(po_platform_prefixes) | length == 0
+  retries: "{{ platformopenshift_service_wait_retries | int }}"
+  delay: "{{ platformopenshift_service_wait_delay | int }}"
+  failed_when: false
+  when:
+    - _wp_hn.resources | default([]) | length > 0
+    - (((_wp_hn.resources | first).status | default({}, true)).fabric | default('', true)) | length > 0
+
+- name: Fail while the fabric still carries the cluster's prefixes
+  ansible.builtin.fail:
+    msg: >-
+      The platform still reaches {{ po_platform_prefixes | join(', ') }} for HybridNetwork {{ po_network }}; the
+      teardown retries until the network and its fabric have dropped them.
+  when:
+    - _wp_fab is not skipped
+    - _wp_fab is failed

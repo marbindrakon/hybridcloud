@@ -125,3 +125,55 @@ test('phaseSinceOf falls back to the deciding transition time', () => {
   );
   assert.equal(phase.phaseSinceOf({ metadata: { deletionTimestamp: '2026-10-21T10:00:00Z' }, status: {} }), '2026-10-21T10:00:00Z');
 });
+
+// gate S8 UX 4: the specific refusal (which network, range or field) is shown where the tenant looks first
+test('detailOf: the deciding condition says what the summary does not', () => {
+  const failed = {
+    metadata: { name: 'r1', generation: 1 },
+    status: {
+      phase: 'Failed',
+      conditions: [
+        { type: 'Ready', status: 'False', reason: 'ExternalNetworkNotListed',
+          message: 'PlatformOpenshift r1: nosuch is not an external network of site site-a; listed: ext-a, ext-b' },
+        { type: 'Published', status: 'True', reason: 'Published', message: 'PlatformOpenshiftCreateRequested event e-1' },
+        { type: 'Preflight', status: 'False', reason: 'ExternalNetworkNotListed',
+          message: 'PlatformOpenshift r1: nosuch is not an external network of site site-a; listed: ext-a, ext-b' },
+      ],
+    },
+  };
+  assert.equal(phase.detailOf(failed), 'PlatformOpenshift r1: nosuch is not an external network of site site-a; listed: ext-a, ext-b');
+  // a waiting cluster: the Preflight condition's message
+  const waiting = {
+    metadata: { name: 'r10', generation: 1 },
+    status: { phase: 'Waiting', reason: 'WaitingForPlacement',
+      conditions: [{ type: 'Preflight', status: 'False', reason: 'WaitingForPlacement',
+        message: 'PlatformOpenshift r10: NetworkPlacement ns/p1: router attachments are not ready yet (state pending)' }] },
+  };
+  assert.match(phase.detailOf(waiting), /router attachments are not ready yet/);
+  // a degraded placement: the Degraded condition's message
+  const degraded = {
+    metadata: { name: 'p1', generation: 1 },
+    status: { phase: 'Degraded', conditions: [
+      { type: 'Ready', status: 'True', reason: 'Ready', message: '' },
+      { type: 'Degraded', status: 'True', reason: 'InUse', message: 'Turning this off waits until the environment no longer uses it: floating IP 192.0.2.15' }] },
+  };
+  assert.match(phase.detailOf(degraded), /floating IP 192\.0\.2\.15/);
+  // nothing to add: ready, a request message, or the summary itself
+  assert.equal(phase.detailOf({ metadata: { name: 'a' }, status: { phase: 'Ready', conditions: [] } }), undefined);
+  const queued = { metadata: { name: 'b', generation: 1 }, status: { phase: 'Creating', conditions: [
+    { type: 'Ready', status: 'False', reason: 'AwaitingEDA', message: 'PlatformOpenshiftCreateRequested event e-2' }] } };
+  assert.equal(phase.detailOf(queued), undefined);
+  const same = { metadata: { name: 'c', generation: 1 }, status: { phase: 'Failed', conditions: [
+    { type: 'Ready', status: 'False', reason: 'NetworkChoiceRequired', message: 'This site has no default external network. Choose a network.' }] } };
+  assert.equal(phase.detailOf(same), undefined);
+});
+
+// gate S8 UX 7: a ready cluster being deleted read "Being deleted · Ready. since 3m"
+test('deletingSummaryOf: nothing for a ready object, the wait otherwise', () => {
+  const ready = { metadata: { name: 'g1e', deletionTimestamp: '2026-11-11T19:33:48Z', generation: 2 },
+    status: { phase: 'Deleting', summary: 'Ready.', conditions: [{ type: 'Ready', status: 'True', reason: 'EDASucceeded' }] } };
+  assert.equal(phase.deletingSummaryOf(ready), '');
+  const blocked = { metadata: { name: 'p1', deletionTimestamp: '2026-11-11T18:00:00Z', generation: 2 },
+    status: { phase: 'Deleting', conditions: [{ type: 'DeletionBlocked', status: 'True', reason: 'ProtectedChildren' }] } };
+  assert.match(phase.deletingSummaryOf(blocked), /deletion protection/);
+});

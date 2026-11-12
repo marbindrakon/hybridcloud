@@ -248,5 +248,40 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(out["instances"], {})
 
 
+class ServiceSessions(unittest.TestCase):
+    """The service VRF's platform circuit sessions (root): read only when the root's configuration has the service VRF
+    (show bgp vrf <service> summary json); a CE missing from the summary counts as not established."""
+
+    def node(self, peers, rc=0):
+        n = Node()
+        conf = dict(ROOT_JSON, service={"vrf": "service", "circuits": [{"ce": "10.255.128.75"}, {"ce": "10.255.128.83"}]})
+        n.files["/etc/shc-fabric/root.json"] = json.dumps(conf)
+        run = n.run
+
+        def run2(cmd, t=None):
+            if cmd[:1] == ["vtysh"] and cmd[-1] == "show bgp vrf service summary json":
+                n.calls.append((list(cmd), t))
+                return rc, json.dumps({"ipv4Unicast": {"peers": peers}})
+            return run(cmd, t)
+        n.run = run2
+        return n
+
+    def test_read(self):
+        out = self.node({"10.255.128.75": {"state": "Established"}, "10.255.128.83": {"state": "Active"}}).read_node()
+        self.assertEqual(out["instances"]["root"]["serviceSessions"], {
+            "vrf": "service", "established": 1, "known": 2, "read": True, "links": [],
+            "peers": [{"address": "10.255.128.75", "state": "Established"}, {"address": "10.255.128.83", "state": "Active"}]})
+        out = self.node({}, rc=1).read_node()
+        self.assertEqual(out["instances"]["root"]["serviceSessions"]["established"], 0)
+        self.assertEqual(out["instances"]["root"]["serviceSessions"]["peers"][0]["state"], "Missing")
+
+    def test_none_without_the_service(self):
+        n = Node()
+        out = n.read_node()
+        self.assertIsNone(out["instances"]["root"]["serviceSessions"])
+        self.assertFalse([c for c, _ in n.calls if "show bgp vrf" in " ".join(c) and "summary json" in " ".join(c)
+                          and "ipv6" not in " ".join(c)])
+
+
 if __name__ == "__main__":
     unittest.main()

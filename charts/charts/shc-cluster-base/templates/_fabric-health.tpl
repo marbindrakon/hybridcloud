@@ -139,6 +139,27 @@ spec:
       annotations:
         summary: "CloudGateway {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no routing session with its site on {{ "{{" }} $labels.node {{ "}}" }}"
         description: "The node holds no session with the site. A site that is off on purpose is paused (CloudInfrastructure spec.paused), which this alert ignores."
+    # the fabric's service VRF: a node with a platform circuit but no established session with the hub's router
+    - alert: ShcFabricServiceSessionsDown
+      expr: >-
+        max by (namespace, name, node) (shc_fabric_node_reachable{customresource_kind="HybridFabric", reason="ServiceSessionsDown"})
+      for: {{ $f.alerts.serviceSessionsFor }}
+      labels:
+        severity: warning
+      annotations:
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no session with the hub's router on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "The node has a platform circuit (AttachmentCircuit ceKind platform) but no established BGP session on it; the platform reaches the clusters on tenant networks through the other nodes, or not at all when every node reports it."
+    # a network's service link: the node's platform circuit is up, the iBGP session between the service VRF and that
+    # network's VRF is not (the network's VRF on the node lacks the hub's ranges)
+    - alert: ShcFabricServiceLinkDown
+      expr: >-
+        max by (namespace, name, node) (shc_fabric_node_reachable{customresource_kind="HybridFabric", reason="ServiceLinkDown"})
+      for: {{ $f.alerts.serviceLinksFor }}
+      labels:
+        severity: warning
+      annotations:
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a network's session with the platform's connection is down on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "The node's platform circuit is up but the session over a network's service link is not, so that network's VRF on the node does not learn the hub's ranges; the network reaches the hub through the other nodes, or not at all when every node reports it. status.health names the network."
     - alert: ShcFabricIPv6EgressUpstreamDown
       expr: >-
         max by (namespace, name) (shc_fabric_condition{customresource_kind="HybridFabric", type="IPv6EgressUpstream", status="False"})

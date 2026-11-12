@@ -425,6 +425,10 @@ NAME = {"name": "net1.gateways.env1.acme.example.test", "address": GW6, "zone": 
 class Writer(unittest.TestCase):
     def test_publish_aaaa_then_ptr(self):
         out, calls = writer(publish=[NAME])
+        # the TTL reaches the helper as a number on ansible-core 2.20 and as its text on 2.16 (a number inside a
+        # nested mapping of task vars stays a string there); shc_dns.py casts it, so the value is what counts
+        for c in calls[1:]:
+            c["ttl"] = int(c["ttl"])
         self.assertEqual([c["action"] for c in calls], ["ptr-name", "ensure-record", "ensure-ptr"])
         self.assertEqual(calls[0]["zones"], [ZONE48])
         self.assertEqual(calls[1], {"action": "ensure-record", "project_id": DNSP, "zone": "env1.acme.example.test.",

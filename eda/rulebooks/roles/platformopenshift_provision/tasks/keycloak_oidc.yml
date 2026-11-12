@@ -5,12 +5,14 @@
 # Inputs (must be set by caller):
 #   cluster_name       - PlatformOpenshift CR name (e.g. ocp-ses4); the ManagedCluster's name
 #   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (shc AWS builds: shc-aws-<entity>-<name>)
+#   cluster_cr_name    - optional: the PlatformOpenshift's name when it differs from cluster_name (read by cluster_rbac.yml)
 #   cluster_console_url - https://console-openshift-console.apps.<slug>.<domain>
 #   cluster_api_url     - https://api.<slug>.<domain>:6443
 #   cluster_apps_url    - https://apps.<slug>.<domain>
 #   cluster_domain      - the cluster's DNS domain (<name>.<environment domain>); its OAuth server is
 #                         oauth-openshift.apps.<cluster_domain>. Empty: taken from cluster_api_url (https://api.<domain>:6443)
 #   cluster_namespace   - CR namespace (e.g. entity-acme-corp)
+#   (sets acm_base: the base of the ACM object names, read by cluster_rbac.yml)
 #   central_token       - Bearer token for central cluster API
 #
 # Reads:
@@ -59,6 +61,23 @@
 - name: Set OIDC client ID for this cluster
   ansible.builtin.set_fact:
     ocp_oidc_client_id: "{{ cluster_name }}-keycloak-oidc"
+  when: not (skip_oidc_setup | bool)
+
+# The cluster's ACM objects in openshift-gitops are named after acm_base: the build name when the policy names fit
+# ACM's limit (namespace and name together 62 characters), else a shorter form unique to the build
+# (files/po_preflight.py acm-names; the teardown derives the same names).
+- name: The names of the cluster's ACM objects
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: acm-names
+      buildName: "{{ cluster_name }}"
+      namespace: openshift-gitops
+  when: not (skip_oidc_setup | bool)
+
+- name: Keep the base of the ACM names
+  ansible.builtin.set_fact:
+    acm_base: "{{ po_result.base }}"
   when: not (skip_oidc_setup | bool)
 
 # The client accepts only the cluster's own OAuth callback (oauth2callback/<identity provider name>), exact, as every
@@ -200,7 +219,7 @@
       apiVersion: policy.open-cluster-management.io/v1
       kind: Policy
       metadata:
-        name: "{{ cluster_name }}-keycloak-oidc"
+        name: "{{ acm_base }}-keycloak-oidc"
         namespace: openshift-gitops
         annotations:
           policy.open-cluster-management.io/standards: "OIDC SSO"
@@ -214,7 +233,7 @@
               apiVersion: policy.open-cluster-management.io/v1
               kind: ConfigurationPolicy
               metadata:
-                name: "{{ cluster_name }}-oidc-client-secret"
+                name: "{{ acm_base }}-oidc-client-secret"
               spec:
                 remediationAction: enforce
                 severity: high
@@ -233,7 +252,7 @@
               apiVersion: policy.open-cluster-management.io/v1
               kind: ConfigurationPolicy
               metadata:
-                name: "{{ cluster_name }}-oidc-ca"
+                name: "{{ acm_base }}-oidc-ca"
               spec:
                 remediationAction: enforce
                 severity: high
@@ -251,7 +270,7 @@
               apiVersion: policy.open-cluster-management.io/v1
               kind: ConfigurationPolicy
               metadata:
-                name: "{{ cluster_name }}-oauth"
+                name: "{{ acm_base }}-oauth"
               spec:
                 remediationAction: enforce
                 severity: high
@@ -294,7 +313,7 @@
       apiVersion: cluster.open-cluster-management.io/v1beta1
       kind: Placement
       metadata:
-        name: "{{ cluster_name }}-keycloak-oidc-placement"
+        name: "{{ acm_base }}-keycloak-oidc-placement"
         namespace: openshift-gitops
       spec:
         predicates:
@@ -310,21 +329,21 @@
       apiVersion: policy.open-cluster-management.io/v1
       kind: PlacementBinding
       metadata:
-        name: "{{ cluster_name }}-keycloak-oidc-binding"
+        name: "{{ acm_base }}-keycloak-oidc-binding"
         namespace: openshift-gitops
       placementRef:
-        name: "{{ cluster_name }}-keycloak-oidc-placement"
+        name: "{{ acm_base }}-keycloak-oidc-placement"
         kind: Placement
         apiGroup: cluster.open-cluster-management.io
       subjects:
-        - name: "{{ cluster_name }}-keycloak-oidc"
+        - name: "{{ acm_base }}-keycloak-oidc"
           kind: Policy
           apiGroup: policy.open-cluster-management.io
   when: not (skip_oidc_setup | bool)
 
 - name: Check if ACM Policy already exists
   ansible.builtin.uri:
-    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ cluster_name }}-keycloak-oidc"
+    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ acm_base }}-keycloak-oidc"
     method: GET
     headers:
       Authorization: "Bearer {{ central_token }}"
@@ -351,7 +370,7 @@
 
 - name: Update ACM Policy on central cluster (idempotent patch)
   ansible.builtin.uri:
-    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ cluster_name }}-keycloak-oidc"
+    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ acm_base }}-keycloak-oidc"
     method: PATCH
     headers:
       Authorization: "Bearer {{ central_token }}"

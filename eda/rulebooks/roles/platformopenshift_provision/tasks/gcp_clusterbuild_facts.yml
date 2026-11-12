@@ -1,12 +1,23 @@
 ---
-# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<entity>-<name> is the cluster's identity on the platform:
-# Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, workload identity pool and Vault
+# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<entity>-<name>-<digest> (build_name.yml) is the
+# cluster's identity on the platform: Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, workload identity pool and Vault
 # prefix. Hive's install and uninstall pods in that namespace are the ones the hub's shc-central pool trusts
 # (namespaces shc-gcp-*). The OpenShift cluster itself is <name>.<environment's domain>.
+- name: The cluster's build name
+  ansible.builtin.include_tasks: build_name.yml
+  vars:
+    bn_entity: "{{ gcp_entity }}"
+    bn_name: "{{ ansible_operator_meta.name }}"
+    bn_prefix: shc-gcp
+    bn_max: 40
+    bn_recorded: >-
+      {{ (((platformopenshift_cr | default({})).resources | default([{}], true) | first).status | default({}, true)).buildName
+         | default('', true) }}
+
 - name: Derive cluster identifiers
   ansible.builtin.set_fact:
-    cb_app_name: "shc-gcp-{{ gcp_entity }}-{{ ansible_operator_meta.name }}"
-    cb_cluster_name: "shc-gcp-{{ gcp_entity }}-{{ ansible_operator_meta.name }}"
+    cb_app_name: "{{ bn_build_name }}"
+    cb_cluster_name: "{{ bn_build_name }}"
     cb_ocp_name: "{{ ansible_operator_meta.name }}"
     cb_cluster_domain: "{{ ansible_operator_meta.name }}.{{ gcp_domain }}"
     cb_install_base_domain: "{{ gcp_domain }}"
@@ -23,7 +34,8 @@
     cb_issuer_base: "{{ (gcp_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
     cb_issuer_namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
     cb_member_sa: "{{ gcp_real.memberServiceAccount | default('shc-automation') }}"
-    cb_machine_cidr: "10.0.0.0/16"
+    # the machine network: the placement's subnet (on a network) or the cluster's own (preflight_own_network.yml)
+    cb_machine_cidr: ""
     cb_vpc_name: ""
     cb_subnet_name: ""
     cb_vpc_id: ""
@@ -72,7 +84,7 @@
       - cb_app_name | length <= 40
       - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
     fail_msg: >-
-      Build name {{ cb_app_name }} (shc-gcp-<entity>-<name>) must be at most 40 characters of [a-z0-9-]; shorten the
+      Build name {{ cb_app_name }} (shc-gcp-<entity>-<name>-<digest>) must be at most 40 characters of [a-z0-9-]; shorten the
       PlatformOpenshift name.
 
 - name: Fail without a cluster-build chart

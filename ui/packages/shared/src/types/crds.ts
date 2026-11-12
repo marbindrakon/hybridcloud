@@ -188,10 +188,13 @@ export type Persona = K8sResource<PersonaSpec>;
 export interface PlatformOpenshiftOpenstackSpec {
   /** CloudOSO name providing the OpenStack environment */
   environment?: string;
+  /** Network (this namespace) the cluster is published on; excludes externalNetwork. Fixed once created. */
+  network?: string;
   controlPlaneCount?: number;
   workerCount?: number;
   controlPlaneFlavor?: string;
   workerFlavor?: string;
+  /** An external network of the environment's site that every project may use; excludes network. Fixed once created. */
   externalNetwork?: string;
   ocpImageSet?: string;
   pullSecretVaultPath?: string;
@@ -205,6 +208,9 @@ export interface PlatformOpenshiftAwsSpec {
   /** CloudAWS name providing the AWS environment */
   environment: string;
   region?: string;
+  /** HybridNetwork whose placement in the environment hosts the cluster's machines */
+  network?: string;
+  publish?: 'External' | 'Internal';
   clusterType?: 'standalone' | 'ha';
   controlPlaneCount?: number;
   workerCount?: number;
@@ -232,16 +238,54 @@ export interface PlatformOpenshiftToolRbac {
   clusterViewerRbac?: string[];
 }
 
+/** The cluster's own address ranges; each omitted one is the installation's default. Fixed once created. */
+export interface PlatformOpenshiftNetworking {
+  /** Pod network (IPv4, /8 to /22) */
+  clusterNetwork?: string;
+  /** Pod subnet size per node (16 to 28, longer than clusterNetwork) */
+  hostPrefix?: number;
+  /** Service network (IPv4, /12 to /24) */
+  serviceNetwork?: string;
+  /** Nodes' network (IPv4, /16 to /27); not with an AWS or Google Cloud network */
+  machineNetwork?: string;
+}
+
 export interface PlatformOpenshiftSpec {
-  type?: 'openstack' | 'aws';
+  type?: 'openstack' | 'aws' | 'gcp';
   openstack?: PlatformOpenshiftOpenstackSpec;
   aws?: PlatformOpenshiftAwsSpec;
   gcp?: PlatformOpenshiftGcpSpec;
+  networking?: PlatformOpenshiftNetworking;
   toolRbac?: PlatformOpenshiftToolRbac;
   clusterViewerRbac?: string[];
 }
 
-export type PlatformOpenshift = K8sResource<PlatformOpenshiftSpec>;
+/** A floating IP the cluster holds (OpenStack) */
+export interface ClusterFloatingIP {
+  address?: string;
+  id?: string;
+}
+
+export interface PlatformOpenshiftStatus extends OperatorStatus {
+  buildName?: string;
+  network?: string;
+  /** OpenStack without a network: the external network in effect */
+  externalNetwork?: string;
+  placement?: string;
+  publish?: 'External' | 'Internal' | string;
+  machineNetwork?: string;
+  clusterNetwork?: string;
+  serviceNetwork?: string;
+  /** What the platform must reach for this cluster */
+  platformPrefixes?: string[];
+  /** The install was started (an installed cluster keeps its floating IPs and prefixes on a refusal) */
+  installStarted?: boolean;
+  floatingIPs?: { network?: string; api?: ClusterFloatingIP; ingress?: ClusterFloatingIP };
+  apiURL?: string;
+  consoleURL?: string;
+}
+
+export type PlatformOpenshift = K8sResource<PlatformOpenshiftSpec, PlatformOpenshiftStatus>;
 
 /** Vault KV reference held by platform objects (never the secret itself) */
 export interface VaultPathRef {
@@ -681,9 +725,31 @@ export interface HybridNetworkSpec {
   mtu?: number;
   networkViewerRbac?: string[];
   egress?: { internet?: boolean };
+  /** The platform may reach the OpenShift clusters it builds on this network. Default true. */
+  platformAccess?: boolean;
 }
 
 export type EgressState = 'pending' | 'ready' | 'removing' | 'unavailable';
+
+/** One cluster address the platform reaches on a network */
+export interface PlatformAccessPrefix {
+  prefix: string;
+  cluster?: string;
+  state?: 'ready' | 'pending' | 'refused' | string;
+  reason?: string;
+  message?: string;
+}
+
+/** Whether the platform reaches the network, and what it reaches */
+export interface PlatformAccessStatus {
+  state?: 'off' | 'unavailable' | 'attachable' | 'attached' | string;
+  /** The platform's own address ranges (for the tenant's firewalls) */
+  sources?: string[];
+  ports?: number[];
+  prefixes?: PlatformAccessPrefix[];
+  reason?: string;
+  message?: string;
+}
 
 /** Where a network's IPv6 comes from: its own prefixes (Tenant), the platform (Platform) or nowhere (None). Derived from the spec. */
 export type Ipv6Mode = 'Tenant' | 'Platform' | 'None';
@@ -760,6 +826,7 @@ export interface HybridNetworkStatus extends OperatorStatus {
     /** IPv6 subnets cloud providers assigned to the network's placements, one per subnet; absent when none */
     providerPrefixes?: NetworkProviderPrefix[] | null;
   };
+  platformAccess?: PlatformAccessStatus;
   /** Informational; depends on the platform */
   realization?: Record<string, unknown>;
 }
@@ -810,13 +877,31 @@ export interface PlacementIpv6Status {
   translation?: PlacementTranslationStatus | null;
 }
 
-/** NetworkPlacement — puts a HybridNetwork on one cloud environment (all of spec is immutable) */
+/** How an OpenStack environment may use a placed network (changeable at any time) */
+export interface PlacementUse {
+  /** Workloads attach directly to the network. Default true. */
+  virtualMachines?: boolean;
+  /** Routers may take their external gateway and floating IPs on the network. Default false. */
+  routerAttachments?: boolean;
+}
+
+export type PlacementUseState = 'ready' | 'pending' | 'removing' | 'off';
+
+export interface PlacementUseStatusEntry {
+  state?: PlacementUseState | string;
+  reason?: string;
+  message?: string;
+}
+
+/** NetworkPlacement — puts a HybridNetwork on one cloud environment (spec.use can change; the rest is fixed) */
 export interface NetworkPlacementSpec {
   network: string;
   backend: { kind: NetworkPlacementBackendKind; name: string };
   /** At least one of ipv4 and ipv6 */
   ipv4?: PlacementSubnetRequest;
   ipv6?: PlacementIpv6Request;
+  /** OpenStack environments only */
+  use?: PlacementUse;
 }
 
 export interface NetworkPlacementStatus extends OperatorStatus {
@@ -837,6 +922,8 @@ export interface NetworkPlacementStatus extends OperatorStatus {
   gatewayReady?: boolean;
   validated?: boolean;
   lastValidatedAt?: string;
+  /** OpenStack environments: the state of each use */
+  use?: { virtualMachines?: PlacementUseStatusEntry; routerAttachments?: PlacementUseStatusEntry };
   /** Informational; depends on the platform */
   realization?: Record<string, unknown>;
 }

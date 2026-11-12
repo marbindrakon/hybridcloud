@@ -7,6 +7,7 @@ import { createRequire } from 'node:module';
 const UI = process.env.UI_ROOT;
 const { createApiK8sProxy, normaliseK8sPath } = await import(`${UI}/packages/shared/server/apiK8sProxy.js`);
 const tenantSafe = await import(`${UI}/packages/shared/server/tenantSafe.js`);
+const { guardTenantWrite } = await import(`${UI}/packages/tenant-dashboard/server/sanitizers.js`);
 const require = createRequire(`${UI}/package.json`);
 const express = require('express');
 
@@ -50,6 +51,7 @@ before(async () => {
   app = express();
   app.use('/t', createApiK8sProxy(apiUrl, { transformBody: tenantSafe.transformBody, maxBodyBytes: 4096 }));
   app.use('/plain', createApiK8sProxy(apiUrl));
+  app.use('/g', express.json(), createApiK8sProxy(apiUrl, { guardRequest: guardTenantWrite }));
   await new Promise((r) => { appServer = app.listen(0, '127.0.0.1', r); });
   appUrl = `http://127.0.0.1:${appServer.address().port}`;
 });
@@ -164,4 +166,21 @@ test('tenant hook: an answer over the size limit is refused with 502', async () 
 test('without a hook the answer passes unchanged', async () => {
   const r = await get('/plain/apis/x/broken');
   assert.equal(r.status, 200);
+});
+
+test('write guard: a refused write never reaches the API server, in any path spelling; others pass', async () => {
+  const post = (p, body) =>
+    fetch(`${appUrl}${p}`, { method: 'POST', headers: { ...H, 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
+  seen.length = 0;
+  for (const p of [`${BASE}/namespaces/entity-t1/attachmentcircuits`, `${BASE}//namespaces/entity-t1/attachment%63ircuits/`]) {
+    const r = await post(`/g${p}`, { spec: { ceKind: 'platform' } });
+    assert.equal(r.status, 403, p);
+    assert.match(await r.text(), /ceKind platform/);
+  }
+  assert.deepEqual(seen, []);
+  const ok = await post(`/g${BASE}/namespaces/entity-t1/attachmentcircuits`, { spec: { ceKind: 'customer', network: 'n' } });
+  assert.equal(ok.status, 200);
+  assert.equal(seen.length, 1);
+  const read = await get(`/g${BASE}/namespaces/entity-t1/attachmentcircuits`);
+  assert.equal(read.status, 200);
 });

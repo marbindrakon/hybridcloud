@@ -9,6 +9,18 @@
   ansible.builtin.include_tasks: gcp_clusterbuild_network.yml
   when: gcp_network | length > 0
 
+- name: Include the checks of the cluster's own network
+  ansible.builtin.include_tasks: preflight_own_network.yml
+  vars:
+    pon_site: "{{ gcp_site | default('', true) }}"
+  when: gcp_network | length == 0
+
+- name: Record the passed preflight (own network)
+  ansible.builtin.include_tasks: preflight_passed.yml
+  vars:
+    pp_passed_message: "Own network {{ cb_machine_cidr }}"
+  when: gcp_network | length == 0
+
 - name: Include the cluster's workload identity preparation
   ansible.builtin.include_tasks: gcp_clusterbuild_wif.yml
 

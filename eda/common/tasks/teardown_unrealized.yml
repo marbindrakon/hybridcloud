@@ -33,7 +33,9 @@
       CloudGCP: [project, projectNumber, dnsZoneId]
       NetworkPlacement: [realization, l3Vni, l2Vni, namespaces]
       AttachmentCircuit: [realization, vlan, sessions]
-      PlatformOpenshift: [apiURL, clusterInstalled, provisionStatus, awsHelperName, buildName, dns]
+      # floatingIPs / platformPrefixes: a cluster that allocated floating IPs or asked the platform to reach it
+      PlatformOpenshift: [apiURL, clusterInstalled, provisionStatus, awsHelperName, buildName, dns, floatingIPs,
+                          platformPrefixes]
     teardown_unrealized_reasons:
       - SiteTypeMismatch
       - EntityNotAllowed
@@ -50,6 +52,17 @@
       - NoAccount
       - NoProject
       - CredentialsMissing
+      # a cluster refused by its preflight before anything was built (the tenant acts)
+      - NetworkNotFound
+      - RouterAttachmentsOff
+      - PlacementHasNoIPv4
+      - PlatformAccessOff
+      - OutsideAttachableRanges
+      - AddressConflict
+      - PrefixReserved
+      - NetworkChoiceRequired
+      - ExternalNetworkNotListed
+      - NetworkNameNotUnique
 
 - name: Delete without site cleanup
   when: teardown_nothing_realized | bool

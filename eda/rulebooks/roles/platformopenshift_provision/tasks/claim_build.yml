@@ -1,0 +1,105 @@
+---
+# The cluster claims its build's namespace on the hub before anything is built under the build name (Review R2 H1):
+# the namespace is created with the label hybridsovereign.redhat/platformopenshift-uid=<this object's uid> and
+# never changed when it exists (common/tasks/central_create.yml: a POST, 201 or 409). Who finds it existing owns it
+# only when it carries this object's uid, or, for a build this object recorded before the label existed, when it
+# carries no owner label (the label is added then). Anything else is another cluster's: the build name is taken off
+# this object's record and the cluster is refused NamespaceTaken before it allocates, writes or installs anything.
+# Two objects that race for one name cannot both own it. The Helm release, the ClusterDeployment, the ManagedCluster,
+# the Vault paths and the floating IPs under the build name follow the namespace (the teardown checks the same label,
+# platformopenshift_teardown/tasks/hub_ownership.yml). Inputs: cb_app_name, po_uid (this PlatformOpenshift's uid),
+# cl_recorded (status.buildName as read before this run).
+- name: Require the cluster's identity
+  ansible.builtin.assert:
+    that:
+      - po_uid | default('', true) | length > 0
+      - cb_app_name | default('', true) | length > 0
+    fail_msg: "PlatformOpenshift {{ ansible_operator_meta.name }}: its uid and build name are needed to claim the build."
+
+- name: Create the build's namespace for this cluster
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/central_create.yml"
+  vars:
+    cc_path: /api/v1/namespaces
+    cc_body:
+      apiVersion: v1
+      kind: Namespace
+      metadata:
+        name: "{{ cb_app_name }}"
+        labels:
+          hybridsovereign.redhat/platformopenshift-uid: "{{ po_uid }}"
+          app.kubernetes.io/managed-by: eda-platformopenshift
+        annotations:
+          hybridsovereign.redhat/owner: "PlatformOpenshift {{ ansible_operator_meta.namespace }}/{{ ansible_operator_meta.name }}"
+
+- name: Read the namespace that exists
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: v1
+    kind: Namespace
+    name: "{{ cb_app_name }}"
+  register: _cl_ns
+  when: cc_status | int == 409
+
+- name: Whose namespace it is
+  ansible.builtin.include_tasks: po_call.yml
+  vars:
+    po_request:
+      action: hub-owner
+      claim: true
+      namespace: "{{ _cl_ns.resources | default([]) | first | default({}) }}"
+      uid: "{{ po_uid }}"
+      recorded: "{{ cl_recorded | default('', true) }}"
+      buildName: "{{ cb_app_name }}"
+  when: cc_status | int == 409
+
+- name: Keep the claim
+  ansible.builtin.set_fact:
+    cl_owner: "{{ po_result if cc_status | int == 409 else {'owned': true, 'adopt': false, 'reason': '', 'message': ''} }}"
+
+- name: Label a namespace this cluster recorded before the label existed
+  kubernetes.core.k8s:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    state: patched
+    api_version: v1
+    kind: Namespace
+    name: "{{ cb_app_name }}"
+    definition:
+      metadata:
+        labels:
+          hybridsovereign.redhat/platformopenshift-uid: "{{ po_uid }}"
+  when: cl_owner.adopt | bool
+
+# a build this object recorded whose namespace carries another uid (a restored or moved object): the record stays,
+# nothing is built, the refusal names the namespace and both uids (Review R3 N4; never adopted)
+- name: Refuse a build this object recorded that is marked for another uid
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: BuildOwnerMismatch
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ cl_owner.message }}"
+  when: cl_owner.reason | default('') == 'BuildOwnerMismatch'
+
+- name: Refuse a build name another cluster holds
+  when: not (cl_owner.owned | bool)
+  block:
+    - name: The build name is not this cluster's
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          buildName: null
+
+    - name: Refuse
+      ansible.builtin.include_tasks: preflight_stop.yml
+      vars:
+        ps_reason: NamespaceTaken
+        ps_message: >-
+          PlatformOpenshift {{ ansible_operator_meta.name }}: the build name {{ cb_app_name }} is already in use on the
+          platform; create the cluster with another name

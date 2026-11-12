@@ -38,8 +38,12 @@ before it changes anything, while:
 - a VRF that is not the instance's holds a routing table the configuration gives to one of the instance's VRFs (the
   egress VRF, a network's or a circuit's VRF; in a gateway namespace, a network's VNI): the VRF the run creates would
   share that table.
+- with the service VRF on the node: the host has a device whose name starts with `so` or `se` that is not one of the
+  service's veth pairs (`so<n>`/`se<n>`) and not a VRF: the service VRF's filter names its links by those patterns and
+  would drop that device's traffic. `check-fabric` refuses the same for the interfaces the realization names
+  (`nodes.trunkInterface`, `core.bridge`, `egress.parentInterface`, the bearers' `interface`) while `service.enabled`.
 
-The same two checks run in a gateway namespace that exists already. A refusal prints `shc-fabric-apply: <reason>`
+The first two checks run in a gateway namespace that exists already as well. A refusal prints `shc-fabric-apply: <reason>`
 and exits with status 4; the job's failure and the object's status message carry that line. What only the SRv6 core
 refuses is printed as `transport srv6: <reason>` ([SRv6 core transport](srv6-core-transport.md#what-a-node-needs)).
 
@@ -197,7 +201,8 @@ objects read Unknown/`NotChecked` and the stale alerts stay quiet. Two alerts wa
 schedule, AAP or the job is broken), and `ShcFabricNodesNotRead`, lower, when runs report but have not read the nodes
 (`checkedAt`) for `ops.fabricHealth.alerts.notReadIntervals` intervals because changes to the nodes held them off. Events
 come on transitions only (`NodeStartFailed`, `NodeServiceFailed`, `RoutingDaemonDown`, `RoutingDaemonRestarted`,
-`ConfigurationDrift`, `SiteSessionsDown`, `NodeUnreachable`, `NodeRebooted`, `NodeHealthRecovered`).
+`ConfigurationDrift`, `SiteSessionsDown`, `ServiceSessionsDown`, `ServiceLinkDown`, `NodeUnreachable`, `NodeRebooted`,
+`NodeHealthRecovered`).
 
 What a full run repairs wakes the job of the object it belongs to (the fabric for the root, the gateway for its
 instance) when that object is ready: a failed or inactive start, a unit not running or not started at boot at once,
@@ -205,6 +210,101 @@ drift once `health.wakeAfterChecks` consecutive checks found it; not again withi
 unreachable node, a daemon crash or site sessions down wake nothing: a full run would not repair them. A change of
 the nodes without IPv6 upstream wakes the networks with IPv6 egress; more free blocks in a pool (blocks leaving
 hold-down) wake the networks waiting for platform address space.
+
+## The service VRF
+
+With `service.enabled` and at least one edge connection of the platform kind planned, the root holds one more VRF,
+the service VRF (`service.vrf.name`, table `service.vrf.table`), through which the platform's management reaches the
+OpenShift clusters it builds on tenant networks ([platform access](platform-access.md)). It has no VPN, route
+target, SID or label: it never reaches the core and no tenant network imports it.
+
+| Object | Name | When |
+|---|---|---|
+| Service VRF | `service.vrf.name` | the service is on and a platform edge connection is planned |
+| Platform edge connection device | `<bearer interface>.<vlan>`, in the service VRF | per platform edge connection |
+| Network root VRF | `e<vpn target>` | as for egress and circuits, and while the network has an accepted cluster address |
+| Service veth pair | `se<vpn target>` (in `e<t>`) and `so<vpn target>` (in the service VRF) | while the network has an accepted cluster address |
+
+A network's objects come with its first cluster and go with its last; a network without clusters has none of them,
+whatever its platform access says. Each pair takes one /31 from the upper half of `egress.linkPool` by the network's
+root index (egress links keep the lower half); the addresses are next hops only, forwarded packets keep their
+sources. So with the service on there are at most as many root indexes as one half of `egress.linkPool` has /31s (and
+no more than the smallest NAT pool, as before). Where that half is the limit and a network already holds a higher
+index, turning the service on is refused by the fabric's ledger ("pool change refused: egress 0-<end> would drop
+allocated [...]"); a larger `egress.linkPool` resolves it, nothing is renumbered.
+
+Routes: in the service VRF, each accepted cluster address of a network via that network's `se` end (FRR static) and
+the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`). The network's VRF
+`e<t>` learns the hub's routes from the service VRF over its service link: an iBGP session between the two VRF
+instances on the node (the network side connects, the service VRF has a router ID of its own, the node's address on
+its first platform edge connection; TTL 255 only, `ttl-security hops 1`, and the root's input filter admits it from the
+link's other end only). The service VRF sends the hub's routes and nothing else (next hop its `so` end), the network
+VRF takes the hub's ranges and nothing else (weight 100, so its own beats the other node's in the network's VPN) and
+sends nothing. So the hub's ranges enter the network's VPN from a node only while that node holds them from a
+platform edge connection: a node whose connections are all down withdraws them, and the sites return the clusters'
+traffic to the node that can deliver it. The failover time is the time the node needs to see its sessions go down
+(at once when the connection's link goes down, at most the hold time of 30 seconds otherwise, a second with BFD on
+the connection) plus about a second for the withdrawal through the network's VPN. With every connection of every
+node down, no node announces the hub's ranges: the clusters lose the hub and nothing else changes (a reject route at
+distance 254 for each hub range in `e<t>` keeps the clusters' traffic to the hub off the network's other routes,
+its internet egress default among them). The service VRF's sessions announce the accepted addresses only, and only inside
+`service.attachableRanges`; they accept the hub's ranges only, and never a default route, the link pools, the core
+pools or an accepted address.
+
+What the networks and their sites see of the hub's routes: the hub's routes enter the service VRF without any
+community of the hub's router (standard, extended and large communities are removed on the platform edge connection:
+a route target among them would import the hub's ranges into another network's VRF, `no-export` or `no-advertise`
+would keep them from the networks) and without the hub router's own AS number (the edge connection's peer AS is
+removed from the AS path). The AS numbers the hub's router learned them through, if any, stay in the AS path: a
+tenant's site sees them behind the fabric's AS, and a site whose eBGP peer uses one of those numbers drops the hub's
+routes as an AS path loop. FRR 8.5 removes AS numbers only by name (`set as-path exclude <asn>`; there is no "all"),
+and replacing every AS number would put the fabric's own AS in the path, which the other nodes then drop as a loop.
+So a deployment whose hub routes carry further AS numbers keeps those numbers off its tenants' sites' peers, or has
+the hub's router originate (or aggregate) the hub's ranges itself.
+
+`service.attachableRanges` is required with `service.enabled` (an empty list fails the fabric with `InvalidSpec`,
+naming the setting): there is no implicit "any". Each platform edge connection's `status.ceConfig.advertisedRanges`
+lists exactly these ranges as `<range> le 32` for the hub's network team, so the hub's router can accept the
+platform's routes with a fixed filter and a maximum prefix length of 32. A deployment that wants every range writes
+`0.0.0.0/0`: the hub's router then accepts any route inside its tenants' address spaces that the reserved ranges do
+not cover, including more-specific routes of its own networks outside `infrastructure.hub`, which it would then send
+into a tenant network. What is announced is bounded further per cluster: an OpenStack cluster's addresses are /32s
+(its floating IPs and its router's gateway), an AWS or Google Cloud cluster's the subnet of its placement on the
+network, each inside the network's accepted address space; anything else is refused on the network's prefix row.
+
+The table `ip shc_service`, loaded before FRR takes the service VRF and replaced whole on every run, filters what
+crosses it, statelessly (the two directions may cross different nodes): from the hub's ranges TCP on
+`service.ports` and ICMP echo to a network's accepted addresses only; from those addresses TCP to
+`service.hubEndpoints` only; ICMP errors both ways, a network's only from its own accepted addresses; nothing from
+one `so*` device to another (the drops match the `so*` and `se*` devices by name, never by a list, so a pair a run
+has not yet removed is dropped too), so no network reaches
+another through the service VRF. The service VRF joins the root's input filter (`shc_root_in`): its connection
+devices are legs whose input `shc_service` filters itself (BGP, BFD and ICMP from the connection's link only,
+everything else dropped), and the `se*`/`so*` pairs get the filter's common answers. Each dropping rule counts its
+packets (`nft list table ip shc_service`).
+
+What the stateless filter cannot tell apart, and what remains of it: a reply is recognised by its shape (TCP from a
+service port with ACK set), not by a connection the hub opened, because the request and its reply may cross
+different nodes. So a cluster can send ACK-shaped segments (also with RST, FIN or data) from its own accepted
+addresses and a service port to any address and port in the hub's ranges. Nothing new is opened by them: a hub host
+with a stateful stack or firewall drops them or answers with a reset. Those resets come back to the cluster (they are
+addressed to a service port), so a cluster could map which hub addresses answer; the filter passes the hub's resets
+toward a network at no more than 10 per second (burst 20) per network and node, which slows such a scan down to a
+trickle without touching the hub's own connections. The cluster can never use another network's addresses (sources
+are bound to its own prefixes), never reach a hub port with a SYN, and never reach another network. Hub hosts that
+must not be seen at all from the clusters belong outside `infrastructure.hub` or behind a firewall that drops
+unsolicited ACKs silently.
+
+The health check reads `show bgp vrf <service> summary json` and reports `ServiceSessionsDown` on the fabric when a
+node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing: the
+node has withdrawn the hub's ranges from the networks already, the finding is for the platform team). The sessions
+over the service links do not count for it: the same read gives the session of each network's service link (the
+service VRF to the network's VRF), and one that is not established while the node's platform edge session is up is
+`ServiceLinkDown` on the fabric, naming the network (confirmed on a second check, degrading, alert
+`ShcFabricServiceLinkDown` after `ops.fabricHealth.alerts.serviceLinksFor`). With every platform edge session of the
+node down, only `ServiceSessionsDown` is reported. It wakes nothing either: a full run repairs only a missing link or
+neighbour, which the drift check reports and wakes for already. The
+apply's snapshot covers the VRF, the pairs and the table, so drift is reported as for the rest of the root.
 
 ## The orphan check on a node
 
@@ -229,7 +329,10 @@ The state the apply creates for the fabric's own transport and instances is not 
 A gateway's teardown stops and disables its unit, removes its namespace and core leg, its FRR instance and its files.
 The fabric's teardown, once its gateways are gone, stops and disables FRR, turns off the daemons the fabric turned on
 (`bgpd`, `isisd`, `bfdd`), leaves FRR a configuration without the fabric, removes the IPv6 egress guard (its timer
-and files) and the SRv6 core guard units, and removes the root instance and its files.
+and files) and the SRv6 core guard units, and removes the root instance and its files. A run of the fabric
+removes the `se*`/`so*` pairs of networks that no longer have cluster addresses, and the service VRF, its devices
+and `ip shc_service` once no platform edge connection is listed; the root's teardown removes whatever of them is
+left with the root instance.
 
 The last step of either teardown checks whether any instance of the fabric is left on the node: a root or gateway
 configuration, or a gateway unit that runs, has failed or is enabled. When none is, it stops and disables the root

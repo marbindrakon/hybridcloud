@@ -1,0 +1,315 @@
+# The router advertisement service on an OpenStack-on-OpenShift control plane, as an OpenShift template.
+#
+#   oc process -f router-advertisement.yaml -p NAMESPACE=... -p IMAGE=... (see README.md) | oc apply -f -
+#
+# The program itself is the ConfigMap router-advertisement-program, created from router_advertisement.py
+# (README.md, step 2). Everything a deployment names is a parameter; nothing here is specific to one site.
+apiVersion: template.openshift.io/v1
+kind: Template
+metadata:
+  name: router-advertisement
+  annotations:
+    description: >-
+      Router advertisement service: adds or removes the nat token of the OVN router port of a Neutron router
+      interface for the port's own project, and keeps it in place. Runs in the site's own Neutron server image.
+parameters:
+  - name: NAMESPACE
+    description: The namespace of the OpenStack control plane (where Neutron and the OVN databases run).
+    required: true
+  - name: IMAGE
+    description: The site's Neutron server image, exactly as the running Neutron API uses it.
+    required: true
+  - name: OVN_CA_ISSUER
+    description: The cert-manager Issuer in NAMESPACE that signs the OVN database certificates.
+    required: true
+  - name: OVN_NB_CONNECTION
+    description: The northbound database, ssl:<host>:<port>[,ssl:<host>:<port>...] (cluster-internal addresses).
+    required: true
+  - name: KEYSTONE_URL
+    description: The internal identity endpoint, for example https://<keystone internal host>:5000
+    required: true
+  - name: NEUTRON_URL
+    description: The internal network endpoint, for example https://<neutron internal host>:9696
+    required: true
+  - name: CA_BUNDLE_SECRET
+    description: >-
+      A Secret in NAMESPACE with the CA bundle that signs the internal endpoints (mounted when it exists).
+    required: true
+  - name: CA_BUNDLE_KEY
+    description: The key of the CA bundle in CA_BUNDLE_SECRET.
+    value: tls-ca-bundle.pem
+  - name: OS_CACERT
+    description: >-
+      The CA bundle path for the internal endpoints: /etc/router-advertisement/ca/<CA_BUNDLE_KEY>, or empty for
+      the image's system trust.
+    value: ""
+  - name: ROUTE_HOST
+    description: >-
+      The host name of the service's Route; empty lets the cluster choose one (required with
+      ROUTE_TERMINATION=passthrough: the certificate names it).
+    value: ""
+  - name: ROUTE_ALLOWED_SOURCES
+    description: >-
+      The source addresses the Route admits, space-separated CIDRs (the networks the platform's jobs call from).
+      Required: give 0.0.0.0/0 only for a cluster whose default ingress is not reachable from outside.
+    required: true
+  - name: ROUTE_TERMINATION
+    description: >-
+      reencrypt (default): the Route presents the cluster's default ingress certificate. passthrough: the pod
+      presents SERVING_CERT_SECRET itself (with route-certificate.yaml, a certificate from an issuer of your choice).
+    value: reencrypt
+  - name: SERVING_CERT_SECRET
+    description: >-
+      The Secret (tls.crt, tls.key) the pod serves: router-advertisement-tls (the cluster's service CA, default) or
+      router-advertisement-route-tls (route-certificate.yaml).
+    value: router-advertisement-tls
+  - name: GUARD_INTERVAL_SECONDS
+    description: Seconds between the guard's full passes over the marked router ports.
+    value: "60"
+  - name: INGRESS_NAMESPACE
+    description: >-
+      The namespace of the cluster's ingress routers (the only pods admitted to the service, besides the routers on the
+      host network, which OpenShift labels policy-group.network.openshift.io/ingress).
+    value: openshift-ingress
+objects:
+  - apiVersion: v1
+    kind: ServiceAccount
+    metadata:
+      name: router-advertisement
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+    automountServiceAccountToken: false
+
+  # The client certificate for the OVN northbound database, from the namespace's OVN CA.
+  - apiVersion: cert-manager.io/v1
+    kind: Certificate
+    metadata:
+      name: router-advertisement-ovn-client
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+    spec:
+      secretName: router-advertisement-ovn-client
+      commonName: router-advertisement
+      duration: 8760h
+      renewBefore: 720h
+      usages:
+        - digital signature
+        - key encipherment
+        - client auth
+      privateKey:
+        algorithm: ECDSA
+        size: 256
+        rotationPolicy: Always
+      issuerRef:
+        group: cert-manager.io
+        kind: Issuer
+        name: ${OVN_CA_ISSUER}
+
+  - apiVersion: v1
+    kind: Service
+    metadata:
+      name: router-advertisement
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+      annotations:
+        # The cluster's service CA issues the serving certificate; the Route re-encrypts to it.
+        service.beta.openshift.io/serving-cert-secret-name: router-advertisement-tls
+    spec:
+      selector:
+        app.kubernetes.io/name: router-advertisement
+      ports:
+        - name: https
+          port: 8443
+          targetPort: https
+          protocol: TCP
+
+  # Only the cluster's ingress routers reach the service (no other pod can hold its connections); the kubelet's probes
+  # come from the node, which a NetworkPolicy never blocks.
+  - apiVersion: networking.k8s.io/v1
+    kind: NetworkPolicy
+    metadata:
+      name: router-advertisement
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+    spec:
+      podSelector:
+        matchLabels:
+          app.kubernetes.io/name: router-advertisement
+      policyTypes:
+        - Ingress
+      ingress:
+        - from:
+            - namespaceSelector:
+                matchLabels:
+                  policy-group.network.openshift.io/ingress: ""
+            - namespaceSelector:
+                matchLabels:
+                  kubernetes.io/metadata.name: ${INGRESS_NAMESPACE}
+          ports:
+            - port: https
+              protocol: TCP
+
+  - apiVersion: route.openshift.io/v1
+    kind: Route
+    metadata:
+      name: router-advertisement
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+      annotations:
+        # only the platform's job sources reach the service through the cluster's ingress
+        haproxy.router.openshift.io/ip_whitelist: ${ROUTE_ALLOWED_SOURCES}
+    spec:
+      host: ${ROUTE_HOST}
+      to:
+        kind: Service
+        name: router-advertisement
+      port:
+        targetPort: https
+      tls:
+        termination: ${ROUTE_TERMINATION}
+        insecureEdgeTerminationPolicy: Redirect
+
+  - apiVersion: apps/v1
+    kind: Deployment
+    metadata:
+      name: router-advertisement
+      namespace: ${NAMESPACE}
+      labels:
+        app.kubernetes.io/name: router-advertisement
+    spec:
+      # One replica: the guard of a second one would only repeat the first one's work.
+      replicas: 1
+      strategy:
+        type: Recreate
+      selector:
+        matchLabels:
+          app.kubernetes.io/name: router-advertisement
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: router-advertisement
+        spec:
+          serviceAccountName: router-advertisement
+          automountServiceAccountToken: false
+          enableServiceLinks: false
+          terminationGracePeriodSeconds: 45
+          securityContext:
+            runAsNonRoot: true
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: router-advertisement
+              image: ${IMAGE}
+              imagePullPolicy: IfNotPresent
+              command: ["python3", "-I", "-B", "/opt/router-advertisement/router_advertisement.py"]
+              ports:
+                - name: https
+                  containerPort: 8443
+                  protocol: TCP
+                # the probes' own listener (plain HTTP, /healthz and /readyz only): never waits for a request slot
+                - name: probe
+                  containerPort: 8081
+                  protocol: TCP
+              env:
+                - name: OVN_NB_CONNECTION
+                  value: ${OVN_NB_CONNECTION}
+                - name: OVN_NB_PRIVATE_KEY
+                  value: /etc/router-advertisement/ovn/tls.key
+                - name: OVN_NB_CERTIFICATE
+                  value: /etc/router-advertisement/ovn/tls.crt
+                - name: OVN_NB_CA_CERT
+                  value: /etc/router-advertisement/ovn/ca.crt
+                - name: KEYSTONE_URL
+                  value: ${KEYSTONE_URL}
+                - name: NEUTRON_URL
+                  value: ${NEUTRON_URL}
+                - name: OS_CACERT
+                  value: ${OS_CACERT}
+                - name: LISTEN_ADDRESS
+                  value: 0.0.0.0
+                - name: LISTEN_PORT
+                  value: "8443"
+                - name: PROBE_PORT
+                  value: "8081"
+                - name: TLS_CERTIFICATE
+                  value: /etc/router-advertisement/tls/tls.crt
+                - name: TLS_PRIVATE_KEY
+                  value: /etc/router-advertisement/tls/tls.key
+                - name: GUARD_INTERVAL_SECONDS
+                  value: ${GUARD_INTERVAL_SECONDS}
+                - name: HOME
+                  value: /tmp
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                runAsNonRoot: true
+                capabilities:
+                  drop: ["ALL"]
+              resources:
+                requests:
+                  cpu: 20m
+                  memory: 64Mi
+                limits:
+                  cpu: 500m
+                  memory: 256Mi
+              livenessProbe:
+                httpGet:
+                  path: /healthz
+                  port: probe
+                  scheme: HTTP
+                initialDelaySeconds: 10
+                periodSeconds: 20
+                timeoutSeconds: 5
+                failureThreshold: 3
+              # Ready only while the northbound database is connected: a pod that cannot reach it takes no traffic.
+              readinessProbe:
+                httpGet:
+                  path: /readyz
+                  port: probe
+                  scheme: HTTP
+                periodSeconds: 10
+                timeoutSeconds: 5
+              volumeMounts:
+                - name: program
+                  mountPath: /opt/router-advertisement
+                  readOnly: true
+                - name: ovn-client
+                  mountPath: /etc/router-advertisement/ovn
+                  readOnly: true
+                - name: serving
+                  mountPath: /etc/router-advertisement/tls
+                  readOnly: true
+                - name: ca-bundle
+                  mountPath: /etc/router-advertisement/ca
+                  readOnly: true
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: program
+              configMap:
+                name: router-advertisement-program
+                defaultMode: 0444
+            - name: ovn-client
+              secret:
+                secretName: router-advertisement-ovn-client
+                defaultMode: 0440
+            - name: serving
+              secret:
+                secretName: ${SERVING_CERT_SECRET}
+                defaultMode: 0440
+            - name: ca-bundle
+              secret:
+                secretName: ${CA_BUNDLE_SECRET}
+                optional: true
+                defaultMode: 0444
+                items:
+                  - key: ${CA_BUNDLE_KEY}
+                    path: ${CA_BUNDLE_KEY}
+            - name: tmp
+              emptyDir:
+                sizeLimit: 16Mi

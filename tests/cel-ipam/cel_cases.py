@@ -425,6 +425,160 @@ CASES += [
 ]
 
 
+# ─── NetworkPlacement spec.use (CloudOSO only; defaults virtualMachines true, routerAttachments false) ─────────
+U = "placement-use"
+
+
+def np_use(kind="CloudOSO", use=None, name="p"):
+    o = np(name=name, kind=kind, ipv4=V4)
+    if use is not None:
+        o["spec"]["use"] = use
+    return o
+
+
+def use_is(vm, ra):
+    def fn(o):
+        got = (o.get("spec") or {}).get("use")
+        return None if got == {"virtualMachines": vm, "routerAttachments": ra} else f"spec.use reads {got}"
+    return fn
+
+
+NEED = "spec.use needs virtualMachines, routerAttachments or both"
+ONLY = "spec.use is offered only on CloudOSO; other environments use the defaults"
+CASES += [
+    C("USE-01", U, "CloudOSO without spec.use accepted (nothing defaulted)",
+      [("create", np_use(), "ok"),
+       ("check", ("networkplacements", "p", lambda o: None if "use" not in o["spec"] else "use appeared", None), "ok")]),
+    C("USE-02", U, "CloudOSO empty spec.use takes the defaults",
+      [("create", np_use(use={}), "ok"), ("check", ("networkplacements", "p", use_is(True, False), None), "ok")]),
+    C("USE-03", U, "CloudOSO router attachments on, VMs defaulted on",
+      [("create", np_use(use={"routerAttachments": True}), "ok"),
+       ("check", ("networkplacements", "p", use_is(True, True), None), "ok")]),
+    C("USE-04", U, "CloudOSO router attachments only",
+      [("create", np_use(use={"virtualMachines": False, "routerAttachments": True}), "ok")]),
+    C("USE-05", U, "CloudOSO with no use refused",
+      [("create", np_use(use={"virtualMachines": False}), f"deny:{NEED}")]),
+    C("USE-06", U, "CloudOSO use changed later (mutable)",
+      [("create", np_use(), "ok"),
+       upd("networkplacements", "p", setk(["use"], {"routerAttachments": True}))[:2] + ("ok",),
+       upd("networkplacements", "p", setk(["use"], {"virtualMachines": False, "routerAttachments": True}))[:2] + ("ok",),
+       upd("networkplacements", "p", delk(["use"]))[:2] + ("ok",)]),
+    C("USE-07", U, "CloudOSO turning the last use off refused",
+      [("create", np_use(use={"routerAttachments": True}), "ok"),
+       upd("networkplacements", "p", setk(["use"], {"virtualMachines": False, "routerAttachments": False}))[:2]
+       + (f"deny:{NEED}",)]),
+    C("USE-08", U, "CloudVirt with the defaults accepted",
+      [("create", np_use(kind="CloudVirt", use={"virtualMachines": True}), "ok")]),
+    C("USE-09", U, "CloudVirt router attachments refused",
+      [("create", np_use(kind="CloudVirt", use={"routerAttachments": True}), f"deny:{ONLY}")]),
+    C("USE-10", U, "CloudAWS without VMs refused",
+      [("create", np_use(kind="CloudAWS", use={"virtualMachines": False, "routerAttachments": True}), f"deny:{ONLY}")]),
+    C("USE-11", U, "CloudGCP router attachments refused",
+      [("create", np_use(kind="CloudGCP", use={"routerAttachments": True}), f"deny:{ONLY}")]),
+    C("USE-12", U, "status.use round-trips",
+      [("create", np_use(use={"routerAttachments": True}), "ok")]
+      + status_roundtrip("networkplacements", "p", {
+          "use": {"virtualMachines": {"state": "ready", "reason": "", "message": ""},
+                  "routerAttachments": {"state": "removing", "reason": "InUse",
+                                        "message": "Turning this off waits until the environment no longer uses it: "
+                                                   "floating IP 192.0.2.15"}}})),
+]
+
+
+# ─── platform access, platform circuits and the published ranges ─────────────
+PL = "cnet"
+
+
+def pcirc(name="hub", network=None, accept=None, ce_kind="platform", bgp=True):
+    s = {"edgeRef": {"name": "edge", "bearer": "b1"}, "routing": {"protocol": "bgp"}}
+    if ce_kind is not None:
+        s["ceKind"] = ce_kind
+    if bgp:
+        s["routing"]["bgp"] = {"peerAsn": 64512}
+    if network is not None:
+        s["network"] = network
+    if accept is not None:
+        s["routing"]["accept"] = accept
+    return {"apiVersion": API, "kind": "AttachmentCircuit", "metadata": {"name": name}, "spec": s}
+
+
+def pedge(kinds):
+    return {"apiVersion": API, "kind": "ProviderEdge", "metadata": {"name": "edge"},
+            "spec": {"fabricRef": {"name": "fab"}, "platform": "frr", "bearers": [{"name": "b1", "ceKinds": kinds}]}}
+
+
+def fabric_obj():
+    return {"apiVersion": API, "kind": "HybridFabric", "metadata": {"name": "fab"},
+            "spec": {"domainAsn": 65010, "overlayMtu": 1500, "vniPool": {"start": 1000, "end": 1999},
+                     "l2vniPool": {"start": 2000, "end": 2999},
+                     "borderGateway": {"nodes": [{"name": "node-1", "address": "192.0.2.10"}],
+                                       "credentialsRef": {"vaultPath": "x"}}}}
+
+
+def has_value(path, want):
+    def fn(o):
+        d = o
+        for k in path:
+            d = (d or {}).get(k) if isinstance(d, dict) else None
+        return None if d == want else f"{'.'.join(path)} is {json.dumps(d)}, not {json.dumps(want)}"
+    return fn
+
+
+RANGES = [{"prefix": "192.0.2.0/24", "purpose": "Networks the platform's management connects from", "rule": "Refused"},
+          {"prefix": "198.51.100.0/24", "purpose": "Addresses the site uses itself", "rule": "SteppedAround", "site": "site-a"}]
+NEED_NET = "spec.network is required for ceKind customer and not allowed for ceKind platform"
+CASES += [
+    C("PA-01", PL, "an existing network reads platformAccess true", [("create", net(prefixes=NET4), "ok"),
+        ("check", ("hybridnetworks", "n", has_value(["spec", "platformAccess"], True), ""), "ok")]),
+    C("PA-02", PL, "platformAccess can be turned off and on", [("create", net(prefixes=NET4, platformAccess=False), "ok"),
+        ("check", ("hybridnetworks", "n", has_value(["spec", "platformAccess"], False), ""), "ok"),
+        upd("hybridnetworks", "n", setk(["platformAccess"], True)), ]),
+    C("PA-03", PL, "status.platformAccess and PlatformReachable survive", [("create", net(prefixes=NET4), "ok")]
+        + status_roundtrip("hybridnetworks", "n", {"platformAccess": {
+            "state": "attached", "sources": ["192.0.2.0/24"], "ports": [6443, 443],
+            "prefixes": [{"prefix": "10.60.1.5/32", "cluster": "c1", "state": "ready", "reason": "", "message": ""}],
+            "reason": "", "message": "m"},
+            "conditions": [{"type": "PlatformReachable", "status": "True", "reason": "Attached", "message": "m",
+                            "lastTransitionTime": "2001-01-01T00:00:00Z"}]})),
+    C("PA-04", PL, "platformAccess must be a boolean", [("create", net(prefixes=NET4, platformAccess="yes"), "deny")]),
+    C("PL-01", PL, "a customer circuit without a network is refused", [("create", pcirc(ce_kind="customer", accept=["10.50.0.0/16"]), f"deny:{NEED_NET}")]),
+    C("PL-02", PL, "a circuit without ceKind is a customer one and needs a network", [("create", pcirc(ce_kind=None, accept=["10.50.0.0/16"]), f"deny:{NEED_NET}")]),
+    C("PL-03", PL, "a platform circuit without a network or accept list", [("create", pcirc(), "ok")]),
+    C("PL-04", PL, "a platform circuit with a network is refused", [("create", pcirc(network="n"), f"deny:{NEED_NET}")]),
+    C("PL-05", PL, "a platform circuit with an accept list is refused", [("create", pcirc(accept=["10.50.0.0/16 le 24"]), "deny:routing.accept is not allowed")]),
+    C("PL-06", PL, "a customer circuit without accept entries passes the schema (the job refuses it)",
+      [("create", pcirc(ce_kind="customer", network="n"), "ok"), ("create", pcirc(name="c2", ce_kind="customer", network="n", accept=[]), "ok")]),
+    C("PL-07", PL, "protocol bgp still needs routing.bgp", [("create", pcirc(bgp=False), "deny:protocol bgp needs routing.bgp")]),
+    C("PL-08", PL, "ceKind cannot change", [("create", pcirc(ce_kind="customer", network="n", accept=["10.50.0.0/16"]), "ok"),
+        ("update", ("attachmentcircuits", "hub", setk(["ceKind"], "platform")), "deny:spec.ceKind is immutable")]),
+    C("PL-09", PL, "an unknown ceKind is refused", [("create", pcirc(ce_kind="partner"), "deny:Unsupported value")]),
+    C("PL-10", PL, "a customer circuit as before (the sample) is accepted and defaults to customer",
+      [("create", acirc(["172.30.0.0/16 le 24"]), "ok"),
+       ("check", ("attachmentcircuits", "c", has_value(["spec", "ceKind"], "customer"), ""), "ok")]),
+    C("PL-11", PL, "the platform circuit's ceConfig ranges survive", [("create", pcirc(), "ok")]
+        + status_roundtrip("attachmentcircuits", "hub", {"ceConfig": {"vlan": 3001, "advertisedRanges": ["10.64.0.0/12 le 32"],
+                                                                      "acceptedRanges": ["192.0.2.0/24 le 32"]}})),
+    C("PL-12", PL, "a bearer offers ceKind platform", [("create", pedge(["customer", "platform"]), "ok")]),
+    C("PL-13", PL, "a bearer with an unknown ceKind is refused", [("create", pedge(["partner"]), "deny:Unsupported value")]),
+    C("PR-01", PL, "HybridFabric status.reservedRanges survives", [("create", fabric_obj(), "ok")]
+        + status_roundtrip("hybridfabrics", "fab", {"reservedRanges": RANGES})),
+    C("PR-02", PL, "a reserved range with an unknown rule is refused", [("create", fabric_obj(), "ok"),
+        ("status", ("hybridfabrics", "fab", {"reservedRanges": [dict(RANGES[0], rule="Maybe")]}), "deny:Unsupported value")]),
+    C("PR-03", PL, "TenantProfile reserved ranges, cluster ranges and external networks survive", [("create", tprofile(), "ok")]
+        + status_roundtrip("tenantprofiles", "shc", {
+            "reservedRanges": RANGES, "managedClusterRanges": ["10.64.0.0/12"],
+            "sites": [{"name": "site-a", "type": "openstack", "state": "Available", "capabilities": ["HybridNetworking"],
+                       "externalNetworks": [{"name": "public", "id": "6b0c0a52-0000-4000-8000-00000000000a",
+                                             "families": [4, 6], "default": True}]}]})),
+    C("PR-04", PL, "a TenantProfile reserved range needs a purpose", [("create", tprofile(), "ok"),
+        ("status", ("tenantprofiles", "shc", {"reservedRanges": [{"prefix": "192.0.2.0/24", "rule": "Refused"}]}), "deny:purpose")]),
+    C("PR-05", PL, "an external network's families are 4 or 6", [("create", tprofile(), "ok"),
+        ("status", ("tenantprofiles", "shc", {"sites": [{"name": "site-a", "type": "openstack", "state": "Available",
+                                                        "externalNetworks": [{"name": "x", "families": [5]}]}]}),
+         "deny:Unsupported value")]),
+]
+
+
 # ─── runner ──────────────────────────────────────────────────────────────────
 
 def expectation(exp, mode):

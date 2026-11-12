@@ -29,8 +29,6 @@
   vars:
     _os: "{{ platform_spec.openstack | default({}, true) }}"
   ansible.builtin.set_fact:
-    cb_app_name: "{{ ansible_operator_meta.name }}"
-    cb_cluster_name: "{{ ansible_operator_meta.name }}"
     cb_image_set: "{{ platform_spec.openstack.ocpImageSet | default(default_ocp_image_set, true) }}"
     cb_controller_flavor: "{{ oso_control_plane_flavor }}"
     cb_worker_flavor: "{{ oso_worker_flavor }}"
@@ -71,6 +69,11 @@
       Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
       (got '{{ mce_cluster_build_chart | trim }}').
 
+# shc (DESIGN cnet §4.2): the build name, the network choice, the floating IPs and (hybrid network) the cluster's
+# prefixes, each recorded before the next step uses it
+- name: The cluster's recorded build and addresses
+  ansible.builtin.include_tasks: openstack_cluster_addresses.yml
+
 - name: Clean up failed or stale Hive cluster build before reprovisioning
   ansible.builtin.include_tasks: cleanup_stale_clusterbuild.yml
 
@@ -81,6 +84,13 @@
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
       vars:
         vault_kv_path: "{{ cb_route53_vault_path }}"
+
+    - name: Record the Route53 records before they are created
+      ansible.builtin.include_tasks: dns_record.yml
+      vars:
+        dr_records:
+          - {zone: "{{ cb_base_domain }}", name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
+          - {zone: "{{ cb_base_domain }}", name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
 
     - name: Create Route53 A records for the API and apps wildcard
       amazon.aws.route53:
@@ -97,8 +107,8 @@
         AWS_SECRET_ACCESS_KEY: "{{ vault_kv_data['secret-access-key'] }}"
         AWS_DEFAULT_REGION: "us-east-1"
       loop:
-        - {name: "api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", ip: "{{ cb_api_vip }}"}
-        - {name: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", ip: "{{ cb_ingress_vip }}"}
+        - {name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", ip: "{{ cb_api_vip }}"}
+        - {name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", ip: "{{ cb_ingress_vip }}"}
       loop_control:
         label: "{{ item.name }}"
 
@@ -106,8 +116,8 @@
       ansible.builtin.set_fact:
         vault_kv_data: {}
         cb_dns_records:
-          - {zone: "{{ cb_base_domain }}", name: "api.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", type: A}
-          - {zone: "{{ cb_base_domain }}", name: "*.apps.{{ cb_cluster_name }}.{{ cb_cluster_domain }}", type: A}
+          - {zone: "{{ cb_base_domain }}", name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
+          - {zone: "{{ cb_base_domain }}", name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", type: A}
 
 - name: Create Designate DNS records for internet-facing cluster
   ansible.builtin.include_tasks: designate_dns.yml
@@ -195,6 +205,8 @@
       status: reconciling
       ready: false
       message: "OpenStack cluster build {{ cb_cluster_name }} in progress"
+      # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
+      installStarted: true
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
         accountVaultPath: null
@@ -332,3 +344,33 @@
 
 - name: Monitor cluster deployment and push secrets
   ansible.builtin.include_tasks: openstack_clusterbuild_monitor.yml
+
+# DESIGN cnet §4.5: on a hybrid network an install the hub never sees complete is most likely a network cause; say so
+- name: Name the network causes of an install the platform could not follow
+  ansible.builtin.set_fact:
+    po_fail_reason: EDAFailed
+  when:
+    - cb_platform_path | bool
+    - not (cb_hive_complete | default(false) | bool)
+    - cd_info is failed
+
+- name: Fail the build of a cluster on a hybrid network that did not install
+  ansible.builtin.fail:
+    msg: >-
+      The platform could not reach the cluster at {{ cb_api_vip }}. Clusters on a network need the platform's
+      connection to the network and a site that advertises floating IPs; the platform team can check both
+      (documentation: Platform access).
+  when:
+    - cb_platform_path | bool
+    - not (cb_hive_complete | default(false) | bool)
+    - cd_info is failed
+
+- name: The cluster router's gateway address joins the cluster's prefixes
+  ansible.builtin.include_tasks: router_gateway.yml
+  vars:
+    rg_infra_id: "{{ (cd_info.resources | default([]) | first | default({})).spec.clusterMetadata.infraID | default('', true) }}"
+  when:
+    - cb_platform_path | bool
+    - cb_cluster_installed | default(false) | bool
+    - (pf.service.hubEndpoints | default([], true)) | length > 0
+    - ((cd_info.resources | default([]) | first | default({})).spec.clusterMetadata.infraID | default('', true)) | length > 0

@@ -1,0 +1,24 @@
+---
+# One files/po_preflight.py decision (pure computation). Input: po_request (dict with `action`). Sets po_result;
+# fails only when the helper itself fails (a malformed request), never on a refusal (po_result.reason).
+# Included from this role and from platformopenshift_teardown (sibling path).
+- name: "PlatformOpenshift {{ po_request.action }}"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../platformopenshift_provision/files/po_preflight.py"
+    stdin: "{{ po_request | to_json }}"
+  register: _po_call
+  changed_when: false
+  failed_when: false
+
+- name: "PlatformOpenshift {{ po_request.action }}: parse the result"
+  ansible.builtin.set_fact:
+    po_result: >-
+      {{ (_po_call.stdout | from_json) if (_po_call.stdout | default('') | trim).startswith('{')
+         else {'error': (_po_call.stderr | default('') | trim)[-600:]} }}
+
+- name: "PlatformOpenshift {{ po_request.action }}: fail when the helper failed"
+  ansible.builtin.fail:
+    msg: "PlatformOpenshift {{ po_request.action }} failed: {{ po_result.error | default('rc ' ~ _po_call.rc) }}"
+  when: _po_call.rc != 0 or 'error' in po_result

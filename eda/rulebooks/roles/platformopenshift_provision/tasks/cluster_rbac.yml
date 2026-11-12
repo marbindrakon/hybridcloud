@@ -2,8 +2,10 @@
 # Push Keycloak-group ClusterRoleBindings to the provisioned cluster via ACM ConfigurationPolicy.
 #
 # Inputs (from caller / keycloak_oidc.yml):
-#   cluster_name         - CR name (e.g. ocp-ses4)
+#   cluster_name         - the ManagedCluster's name (the build name of OpenStack, AWS and GCP builds)
+#   cluster_cr_name      - optional: the PlatformOpenshift's name when it differs from cluster_name
 #   cluster_namespace    - CR namespace (entity namespace)
+#   acm_base             - the base of the ACM object names (keycloak_oidc.yml)
 #   central_api_server   - Central cluster API URL
 #   central_token        - Bearer token for central cluster
 
@@ -14,7 +16,7 @@
     validate_certs: false
     api_version: hybridsovereign.redhat/v1alpha1
     kind: PlatformOpenshift
-    name: "{{ cluster_name }}"
+    name: "{{ cluster_cr_name | default(cluster_name, true) }}"
     namespace: "{{ cluster_namespace }}"
   register: _plat_cr
 
@@ -218,7 +220,7 @@
 # ─── Idempotent create-or-update for RBAC Policy ─────────────────────────────
 - name: Check if cluster RBAC Policy already exists
   ansible.builtin.uri:
-    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ cluster_name }}-cluster-rbac"
+    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ acm_base }}-cluster-rbac"
     method: GET
     headers:
       Authorization: "Bearer {{ central_token }}"
@@ -240,7 +242,7 @@
       apiVersion: policy.open-cluster-management.io/v1
       kind: Policy
       metadata:
-        name: "{{ cluster_name }}-cluster-rbac"
+        name: "{{ acm_base }}-cluster-rbac"
         namespace: openshift-gitops
         annotations:
           policy.open-cluster-management.io/standards: "RBAC"
@@ -254,7 +256,7 @@
               apiVersion: policy.open-cluster-management.io/v1
               kind: ConfigurationPolicy
               metadata:
-                name: "{{ cluster_name }}-cluster-rbac"
+                name: "{{ acm_base }}-cluster-rbac"
               spec:
                 remediationAction: enforce
                 severity: high
@@ -267,7 +269,7 @@
 
 - name: Update cluster RBAC Policy (idempotent PATCH)
   ansible.builtin.uri:
-    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ cluster_name }}-cluster-rbac"
+    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/policies/{{ acm_base }}-cluster-rbac"
     method: PATCH
     headers:
       Authorization: "Bearer {{ central_token }}"
@@ -282,7 +284,7 @@
               apiVersion: policy.open-cluster-management.io/v1
               kind: ConfigurationPolicy
               metadata:
-                name: "{{ cluster_name }}-cluster-rbac"
+                name: "{{ acm_base }}-cluster-rbac"
               spec:
                 remediationAction: enforce
                 severity: high
@@ -296,7 +298,7 @@
 # ─── Idempotent create-or-skip for Placement (selector is immutable, skip if exists) ─
 - name: Check if cluster RBAC Placement already exists
   ansible.builtin.uri:
-    url: "{{ central_api_server }}/apis/cluster.open-cluster-management.io/v1beta1/namespaces/openshift-gitops/placements/{{ cluster_name }}-cluster-rbac-placement"
+    url: "{{ central_api_server }}/apis/cluster.open-cluster-management.io/v1beta1/namespaces/openshift-gitops/placements/{{ acm_base }}-cluster-rbac-placement"
     method: GET
     headers:
       Authorization: "Bearer {{ central_token }}"
@@ -318,7 +320,7 @@
       apiVersion: cluster.open-cluster-management.io/v1beta1
       kind: Placement
       metadata:
-        name: "{{ cluster_name }}-cluster-rbac-placement"
+        name: "{{ acm_base }}-cluster-rbac-placement"
         namespace: openshift-gitops
       spec:
         predicates:
@@ -335,7 +337,7 @@
 # ─── Idempotent create-or-skip for PlacementBinding ──────────────────────────
 - name: Check if cluster RBAC PlacementBinding already exists
   ansible.builtin.uri:
-    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/placementbindings/{{ cluster_name }}-cluster-rbac-binding"
+    url: "{{ central_api_server }}/apis/policy.open-cluster-management.io/v1/namespaces/openshift-gitops/placementbindings/{{ acm_base }}-cluster-rbac-binding"
     method: GET
     headers:
       Authorization: "Bearer {{ central_token }}"
@@ -357,14 +359,14 @@
       apiVersion: policy.open-cluster-management.io/v1
       kind: PlacementBinding
       metadata:
-        name: "{{ cluster_name }}-cluster-rbac-binding"
+        name: "{{ acm_base }}-cluster-rbac-binding"
         namespace: openshift-gitops
       placementRef:
-        name: "{{ cluster_name }}-cluster-rbac-placement"
+        name: "{{ acm_base }}-cluster-rbac-placement"
         kind: Placement
         apiGroup: cluster.open-cluster-management.io
       subjects:
-        - name: "{{ cluster_name }}-cluster-rbac"
+        - name: "{{ acm_base }}-cluster-rbac"
           kind: Policy
           apiGroup: policy.open-cluster-management.io
     validate_certs: false

@@ -2,8 +2,11 @@
 # The status body of the tenant's TenantProfile "shc": display name, contacts and the sites the tenant may use
 # (CloudInfrastructures in the platform namespace that are not being deleted, whose spec.entityRefs is empty or
 # names the tenant, and that Entity spec.allowedSites lists when it is set), in tenant words
-# (common/tasks/site_tenant_summary.yml), sorted by name, and the platform IPv6 offer of the tenant's fabric. Read
-# only.
+# (common/tasks/site_tenant_summary.yml), sorted by name, the platform IPv6 offer of the tenant's fabric, and the
+# address ranges of that fabric tenants may not use (reservedRanges: prefix, purpose, rule and site, copied from
+# HybridFabric status.reservedRanges) with the ranges a network must lie in to host clusters the platform manages
+# (managedClusterRanges: the fabric's realization.service.attachableRanges while it offers the service; required
+# then, 0.0.0.0/0 written out for "any"; absent = not offered, never "any"). Read only.
 #
 # Input:  entity_cr_name, entity_cr_namespace (the platform namespace), entity_spec (live), entity_generation,
 #         services_api_host/services_bearer_token (or services_kubeconfig, for the read-only render test)
@@ -82,6 +85,27 @@
       {{ (((_tp_fabric_objs[0].status | default({}, true)).realization | default({}, true)).ipam
            | default({}, true)).pools | default([], true) if _tp_fabric_objs | length == 1 else [] }}
 
+# only address ranges and their purpose leave the fabric: each row is rebuilt from its four keys. With none, several
+# or an unreadable list of fabrics the keys go as for ipv6Platform (removed, or left out of the patch)
+- name: The reserved ranges of the tenant's fabric
+  vars:
+    _fst: "{{ (_tp_fabric_objs[0].status | default({}, true)) if _tp_fabric_objs | length == 1 else {} }}"
+    _svc: "{{ (_fst.realization | default({}, true)).service | default({}, true) }}"
+  ansible.builtin.set_fact:
+    _tp_reserved: >-
+      {%- set out = [] -%}
+      {%- for r in _fst.reservedRanges | default([], true) -%}
+        {%- if r is mapping and (r.prefix | default('', true) | string) and (r.rule | default('') in ['Refused', 'SteppedAround']) -%}
+          {%- set row = {'prefix': r.prefix | string, 'purpose': r.purpose | default('', true) | string, 'rule': r.rule} -%}
+          {%- if r.site | default('', true) -%}{%- set _ = row.update({'site': r.site | string}) -%}{%- endif -%}
+          {%- set _ = out.append(row) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    _tp_cluster_ranges: >-
+      {{ (_svc.attachableRanges | default([], true) | map('string') | list)
+         if _svc.enabled | default(false) | bool else [] }}
+
 - name: The profile's status body
   ansible.builtin.set_fact:
     tenant_profile_status: >-
@@ -90,5 +114,7 @@
           'sites': site_tenant_summaries,
           'observedEntityGeneration': entity_generation | int,
           'lastUpdatedTime': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
-         | combine({'ipv6Platform': (ipv6_platform_offer if ipv6_platform_offer | length > 0 else none)}
+         | combine({'ipv6Platform': (ipv6_platform_offer if ipv6_platform_offer | length > 0 else none),
+                     'reservedRanges': (_tp_reserved if _tp_reserved | length > 0 else none),
+                     'managedClusterRanges': (_tp_cluster_ranges if _tp_cluster_ranges | length > 0 else none)}
                    if _tp_fabrics_read | bool else {}) }}

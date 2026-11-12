@@ -579,7 +579,7 @@ class NetworkStatus(unittest.TestCase):
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class FabricSelection(unittest.TestCase):
     def networks(self, nets, placements, v6on=True):
-        t = by_name(load(os.path.join(HF, "main.yml")), "Set the networks with internet egress or platform reach")
+        t = by_name(load(os.path.join(HF, "main.yml")), "Set the networks with internet egress")
         alloc = {"egress": {"HybridNetwork/acme/core": 0, "HybridNetwork/acme/t6": 1, "HybridNetwork/acme/v4": 2},
                  "vpnTarget": {"HybridNetwork/acme/core": 10000, "HybridNetwork/acme/t6": 10001, "HybridNetwork/acme/v4": 10002}}
         return run_play([t, write_out("hf_egress_networks")],

@@ -7,6 +7,16 @@
         networkplacement_observed_generation: "{{ _hybridsovereign_redhat_networkplacement.status.observedGeneration | default(0) | int }}"
         networkplacement_status: "{{ _hybridsovereign_redhat_networkplacement.status.status | default('') }}"
         networkplacement_ready: "{{ _hybridsovereign_redhat_networkplacement.status.ready | default(false) | bool }}"
+        # a ready placement that waits (a use turned off while still used, or a router advertisement the site did not
+        # confirm: condition Degraded InUse or RouterAdvertisementFailed):
+        # the job checks it again on every reconcile period until nothing waits
+        networkplacement_waits: >-
+          {{ ((_hybridsovereign_redhat_networkplacement.status | default({}, true)).use | default({}, true)).values()
+             | select('mapping') | selectattr('state', 'defined') | selectattr('state', 'equalto', 'removing')
+             | list | length > 0
+             or ((_hybridsovereign_redhat_networkplacement.status | default({}, true)).conditions | default([], true)
+                 | selectattr('type', 'equalto', 'Degraded') | selectattr('status', 'equalto', 'True')
+                 | selectattr('reason', 'in', ['InUse', 'RouterAdvertisementFailed']) | list | length > 0) }}
 
     - name: Read the Retry-now request
       ansible.builtin.include_role:
@@ -40,6 +50,7 @@
             and (networkplacement_observed_generation | int >= networkplacement_generation | int)
             and (networkplacement_status == 'ready')
             and (networkplacement_ready | bool)
+            and not (networkplacement_waits | bool)
           }}
 
     - name: Skip when already processed

@@ -1,0 +1,17 @@
+---
+# Record condition Preflight True (DESIGN cnet §2.2): every check passed and the cluster's prefixes, when it has any,
+# are carried. Input: pp_passed_message.
+- name: Record the passed preflight
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      conditions:
+        - type: Preflight
+          status: "True"
+          reason: PreflightPassed
+          message: "{{ pp_passed_message | string | truncate(1000, true, '') }}"

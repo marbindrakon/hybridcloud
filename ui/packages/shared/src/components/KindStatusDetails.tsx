@@ -30,13 +30,16 @@ import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6GuestReference } from './Ipv6GuestReference';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
 import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, networkProviderPrefixes, placementSubnets, placementTranslation } from '../forms/ipv6';
+import { placementUseOffered } from '../forms/placementUse';
+import { PlacementUses } from './PlacementTabs';
+import { NetworkPlatformSections } from './NetworkPlatformAccess';
 
 /** Status keys each kind's panel renders (left out of the generic status grid). */
 export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = {
   HybridFabric: ['nodes', 'allocated', 'available', 'ledger'],
   CloudGateway: ['nodes', 'wireguard', 'site'],
   CloudInfrastructure: ['capabilities', 'site'],
-  HybridNetwork: ['addressSpace', 'egress', 'fabric', 'mtu', 'placementCount', 'placementsReady', 'ipv6'],
+  HybridNetwork: ['addressSpace', 'egress', 'fabric', 'mtu', 'placementCount', 'placementsReady', 'ipv6', 'platformAccess'],
   NetworkPlacement: [
     'site',
     'cloudGateway',
@@ -51,6 +54,7 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
     'gatewayReady',
     'validated',
     'lastValidatedAt',
+    'use',
   ],
   // access: shown by the way-in panel (groups that can sign in)
   CloudVirt: ['site', 'namespaces', 'dns', 'storageClass', 'access'],
@@ -804,6 +808,7 @@ function HybridNetworkDetails({ item }: { item: HybridNetwork }): React.ReactEle
           </Table>
         )}
       </Section>
+      <NetworkPlatformSections network={item} />
     </>
   );
 }
@@ -876,6 +881,11 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
           {spec.backend ? objectLabel(t, { kind: spec.backend.kind, name: spec.backend.name }, { dense: true }) : undefined}
         </Fact>
         <Fact label={t('detail.placementRequest')}>{placementRequestText(spec, t)}</Fact>
+        {placementUseOffered(spec.backend?.kind) && (
+          <Fact label={t('detail.placementUses')}>
+            <PlacementUses placement={item} />
+          </Fact>
+        )}
         {[4, 6].map((family) => {
           const rows = subnets.filter((x) => Number(x.family) === family && x.prefix);
           const askedFor = family === 4 ? !!spec.ipv4 : !!spec.ipv6;

@@ -197,6 +197,39 @@ spec:
                   description: Free numbers per pool.
                   additionalProperties:
                     type: integer
+                reservedRanges:
+                  description: >-
+                    The address ranges tenants may not use on this fabric, with what the platform uses them for.
+                    The tenants' profiles publish the same list.
+                  type: array
+                  maxItems: 512
+                  x-kubernetes-list-type: atomic
+                  items:
+                    description: One range.
+                    type: object
+                    required:
+                      - prefix
+                      - purpose
+                      - rule
+                    properties:
+                      prefix:
+                        description: The address range (IPv4 or IPv6).
+                        type: string
+                        maxLength: 43
+                      purpose:
+                        description: What the platform uses the range for, in plain words.
+                        type: string
+                        maxLength: 256
+                      rule:
+                        description: >-
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
+                          SteppedAround (inside a network prefix, never allocated to a placement).
+                        type: string
+                        enum: [Refused, SteppedAround]
+                      site:
+                        description: The site the range applies to; absent when it applies everywhere.
+                        type: string
+                        maxLength: 63
                 realization:
                   type: object
                   description: How the platform realized the fabric (informational; depends on the platform).
@@ -289,15 +322,18 @@ spec:
                                   type: string
                                   description: >-
                                     The area: Reachability, Start (the configuration's start at boot), Service,
-                                    RoutingDaemon, Configuration (the node differs from its configuration) or
-                                    SiteSessions.
+                                    RoutingDaemon, Configuration (the node differs from its configuration),
+                                    SiteSessions or ServiceSessions.
                                 reason:
                                   type: string
                                   description: >-
                                     NodeUnreachable, ReadFailed (the node answered, its check did not complete),
                                     StartFailed, StartIncomplete, ServiceFailed, RoutingDaemonDown,
                                     RoutingDaemonRestarted, ConfigurationDrift, ConfigurationNotTaken (lines of the
-                                    routing configuration the node does not take) or SiteSessionsDown.
+                                    routing configuration the node does not take), SiteSessionsDown,
+                                    ServiceSessionsDown (no session with the platform's router for clusters on
+                                    networks) or ServiceLinkDown (a network's session with the platform's connection
+                                    is down while the node's own is up).
                                 message:
                                   type: string
                                 since:

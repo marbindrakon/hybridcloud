@@ -114,7 +114,13 @@ router bgp {{ fab_spec.domainAsn }}
 {% endif %}
 exit
 !
+{# the service VRF on this node (service-plan nodes; absent: none) and the service link of each network VRF #}
+{% set _svc = hf_node_service | default({}, true) %}
+{% set _svc_by_vrf = {} %}
+{% for v in hf_node_vrfs if v.service is defined %}{% set _ = _svc_by_vrf.update({v.vrf: v.service}) %}{% endfor %}
 {% if hf_node_egress.networks is defined %}
+{# (the second line names the platform reach of an earlier release, retired; kept as it was, so the file of a node
+   without the service VRF stays byte for byte what it was) #}
 ! provider internet egress: the hand-off's default route, and each network's NAT address back to its VRF;
 ! platform reach: each network's platform prefixes towards its VRF, and the platform's sources back to the hand-off
 {% if _e6 %}
@@ -129,7 +135,6 @@ exit
 {% set _nets4 = [] %}
 {% for n in hf_node_egress.networks %}
 {% if n.nat | default('') %}{% set _ = _nets4.append(n.nat ~ '/32') %}{% endif %}
-{% for c in n.platform | default([]) %}{% set _ = _nets4.append(c) %}{% endfor %}
 {% endfor %}
 vrf {{ hf_node_egress.vrf }}
 {% if _src4 and _nets4 %}
@@ -140,9 +145,6 @@ vrf {{ hf_node_egress.vrf }}
 {% if n.nat | default('') %}
  ip route {{ n.nat }}/32 {{ n.xeIp }}
 {% endif %}
-{% for c in n.platform | default([]) %}
- ip route {{ c }} {{ n.xeIp }}
-{% endfor %}
 {% endfor %}
 {% for r in (_e6.routed if _e6 else []) %}
  ipv6 route {{ r }} reject 254
@@ -154,9 +156,9 @@ vrf {{ n.vrf }}
 {% if n.internet | default(true) %}
  ip route 0.0.0.0/0 {{ n.xoIp }}
 {% endif %}
-{% if n.platform | default([]) %}
-{% for c in hf_node_egress.platformSources | default([]) %}
- ip route {{ c }} {{ n.xoIp }}
+{% if n.vrf in _svc_by_vrf %}
+{% for h in _svc.hub %}
+ ip route {{ h }} reject 254
 {% endfor %}
 {% endif %}
 {% if _e6 and n.ipv6 is defined %}
@@ -168,9 +170,6 @@ exit-vrf
 !
 {% endfor %}
 ip prefix-list SHC-EGRESS-DEFAULT seq 5 permit 0.0.0.0/0
-{% for c in hf_node_egress.platformSources | default([]) %}
-ip prefix-list SHC-EGRESS-DEFAULT seq {{ 10 + loop.index0 * 5 }} permit {{ c }}
-{% endfor %}
 !
 route-map SHC-EGRESS-DEFAULT permit 10
  match ip address prefix-list SHC-EGRESS-DEFAULT
@@ -269,6 +268,138 @@ exit
 {% endfor %}
 !
 {% endif %}
+{% if _svc %}
+{# the service VRF (no VPN, no route target, no SID or label): the hub's routes from the platform circuits (eBGP,
+   only the hub's ranges), a route to each accepted prefix of a network over its service link, announced to the hub
+   (only the accepted prefixes, only inside the attachable ranges). Each network with clusters learns the hub's
+   ranges from the service VRF over its service link (iBGP, the network VRF connecting, the service VRF passive):
+   only while this node holds them from a platform circuit, so a node whose circuits are all down withdraws them from
+   the network's VPN and the sites return the clusters' traffic to a node that can deliver it. A reject route at
+   distance 254 keeps the hub's ranges off any other route of the network (its internet egress default) while
+   neither node has them. Nothing else of the service VRF reaches a network VRF, so no route crosses between tenant
+   networks #}
+! the service VRF {{ _svc.vrf }}: the platform's management (the hub, {{ _svc.hub | join(', ') }}) reaches the clusters the
+! platform builds on tenant networks; handed off to the hub's network by the platform circuits
+{% for v in hf_node_vrfs if v.service is defined and not v.egress %}
+vrf {{ v.vrf }}
+{% for h in _svc.hub %}
+ ip route {{ h }} reject 254
+{% endfor %}
+exit-vrf
+!
+{% endfor %}
+{% set _svc_routes = [] %}
+{% for w in _svc.networks %}{% for p in w.prefixes %}{% set _ = _svc_routes.append([p, w.seIp]) %}{% endfor %}{% endfor %}
+{% if _svc_routes %}
+vrf {{ _svc.vrf }}
+{% for r in _svc_routes %}
+ ip route {{ r[0] }} {{ r[1] }}
+{% endfor %}
+exit-vrf
+!
+{% endif %}
+{% for h in _svc.hub %}
+ip prefix-list SHC-HUB4 seq {{ loop.index * 5 }} permit {{ h }} le 32
+{% endfor %}
+!
+route-map SVC-NET-IN permit 10
+ match ip address prefix-list SHC-HUB4
+ set weight 100
+exit
+route-map SVC-NET-OUT deny 10
+exit
+route-map SVC-TO-NET permit 10
+ match ip address prefix-list SHC-HUB4
+exit
+route-map SVC-FROM-NET deny 10
+exit
+!
+{% for e in _svc.accept %}
+ip prefix-list SVC-HUB seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+{% for e in _svc.deny %}
+ip prefix-list SVC-DENY seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+{% for e in _svc.advertise %}
+ip prefix-list SVC-ACCEPTED seq {{ loop.index * 5 }} permit {{ e }}
+{% else %}
+ip prefix-list SVC-ACCEPTED seq 5 deny 0.0.0.0/0 le 32
+{% endfor %}
+{% for e in _svc.attachable %}
+ip prefix-list SVC-ATTACHABLE seq {{ loop.index * 5 }} permit {{ e }}
+{% endfor %}
+!
+route-map SVC-STATIC permit 10
+ match ip address prefix-list SVC-ATTACHABLE
+exit
+!
+{% for c in _svc.circuits %}
+! platform circuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): the hub's ranges in, the
+! accepted cluster prefixes out. The hub's routes enter without the hub router's own AS number and without any
+! community (a route target among them would import them into another network's VRF; no-export or no-advertise would
+! keep them from the networks)
+route-map {{ c.id }}-IN deny 10
+ match ip address prefix-list SVC-DENY
+exit
+route-map {{ c.id }}-IN permit 20
+ match ip address prefix-list SVC-HUB
+ set as-path exclude {{ c.peerAsn }}
+ set community none
+ set extcommunity none
+ set large-community none
+exit
+{% if _svc.advertise %}
+route-map {{ c.id }}-OUT permit 10
+ match ip address prefix-list SVC-ACCEPTED
+exit
+{% else %}
+route-map {{ c.id }}-OUT deny 10
+exit
+{% endif %}
+!
+{% endfor %}
+{# its own router ID (the node's address on its first platform circuit): the network VRFs, with the loopback as
+   theirs, peer with it #}
+router bgp {{ fab_spec.domainAsn }} vrf {{ _svc.vrf }}
+ bgp router-id {{ _svc.circuits[0].ip }}
+ no bgp default ipv4-unicast
+{% for w in _svc.networks %}
+ neighbor {{ w.seIp }} remote-as {{ fab_spec.domainAsn }}
+ neighbor {{ w.seIp }} description service link of {{ w.network }}
+ neighbor {{ w.seIp }} ttl-security hops 1
+ neighbor {{ w.seIp }} passive
+ neighbor {{ w.seIp }} timers 10 30
+{% endfor %}
+{% for c in _svc.circuits %}
+ neighbor {{ c.ce }} remote-as {{ c.peerAsn }}
+ neighbor {{ c.ce }} description {{ c.id }} {{ c.circuit }}
+{% if c.authentication == 'md5' %}
+ neighbor {{ c.ce }} password {{ hf_circuit_passwords[c.circuit] }}
+{% endif %}
+ neighbor {{ c.ce }} timers 10 30
+{% if c.bfd %}
+ neighbor {{ c.ce }} bfd
+{% endif %}
+{% endfor %}
+ !
+ address-family ipv4 unicast
+  redistribute static route-map SVC-STATIC
+{% for c in _svc.circuits %}
+  neighbor {{ c.ce }} activate
+  neighbor {{ c.ce }} route-map {{ c.id }}-IN in
+  neighbor {{ c.ce }} route-map {{ c.id }}-OUT out
+  neighbor {{ c.ce }} maximum-prefix {{ c.maxPrefixes }}{{ ' warning-only' if c.maxPrefixAction == 'warning' else (' restart ' ~ hf_attach_restart if hf_attach_restart | int > 0 else '') }}
+{% endfor %}
+{% for w in _svc.networks %}
+  neighbor {{ w.seIp }} activate
+  neighbor {{ w.seIp }} next-hop-self
+  neighbor {{ w.seIp }} route-map SVC-FROM-NET in
+  neighbor {{ w.seIp }} route-map SVC-TO-NET out
+{% endfor %}
+ exit-address-family
+exit
+!
+{% endif %}
 {% for v in hf_node_vrfs %}
 {% for c in v.circuits %}
 ! AttachmentCircuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): routes from the CE in the
@@ -341,7 +472,7 @@ exit
 {% endfor %}
 {% for n in hf_node_vrfs %}
 {% set _fam = n.families | default([4]) | map('int') | list %}
-! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ' platform reach ' ~ n.platform | default([]) | join(',') if n.platform | default([]) else '' }}{{ ((' ' if n.egress else '') ~ 'attachment circuits ' ~ n.circuits | map(attribute='id') | join(',')) if n.circuits else '' }}{{ (' IPv6 internet egress (' ~ ('standby' if n.ipv6.standby else 'primary') ~ ' node)') if (_e6 and n.ipv6 is defined) else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
+! HybridNetwork {{ n.network }}: {{ ('internet egress (source NAT ' ~ n.nat ~ ' on this node)') if n.nat | default('') else '' }}{{ ((' ' if n.egress else '') ~ 'attachment circuits ' ~ n.circuits | map(attribute='id') | join(',')) if n.circuits else '' }}{{ (((' ' if n.egress or n.circuits else '') ~ 'clusters the platform reaches (' ~ n.service.prefixes | join(',') ~ ')')) if n.service is defined else '' }}{{ (' IPv6 internet egress (' ~ ('standby' if n.ipv6.standby else 'primary') ~ ' node)') if (_e6 and n.ipv6 is defined) else '' }} (VPN {{ fab_spec.domainAsn }}:{{ n.vpnTarget }})
 router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
  bgp router-id {{ hf_pe.loopbackIp }}
  no bgp default ipv4-unicast
@@ -355,6 +486,12 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
    that); the session stays on the link-local addresses the router advertisements exchange #}
  neighbor {{ n.xe }} interface v6only remote-as external
  neighbor {{ n.xe }} description IPv6 egress of {{ n.network }}
+{% endif %}
+{% if n.service is defined %}
+ neighbor {{ n.service.soIp }} remote-as {{ fab_spec.domainAsn }}
+ neighbor {{ n.service.soIp }} description the hub's routes from the service VRF
+ neighbor {{ n.service.soIp }} ttl-security hops 1
+ neighbor {{ n.service.soIp }} timers 10 30
 {% endif %}
 {% for c in n.circuits %}
  neighbor {{ c.ce }} remote-as {{ c.peerAsn }}
@@ -386,6 +523,11 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
 {% if n.egress %}
   redistribute static route-map SHC-EGRESS-DEFAULT
 {% endif %}
+{% if n.service is defined %}
+  neighbor {{ n.service.soIp }} activate
+  neighbor {{ n.service.soIp }} route-map SVC-NET-IN in
+  neighbor {{ n.service.soIp }} route-map SVC-NET-OUT out
+{% endif %}
 {# no soft-reconfiguration inbound: the routes the policy rejects would be kept, and maximum-prefix doesn't bound
    them (a CE could fill the node's memory); a policy change asks the CE to send its routes again (route refresh) #}
 {% for c in n.circuits %}
@@ -400,10 +542,11 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
   rd vpn export {{ n.rd or (hf_pe.loopbackIp ~ ':' ~ (n.vpnTarget | int % 65536)) }}
   rt vpn both {{ fab_spec.domainAsn }}:{{ n.vpnTarget }}
 {# FRR tracks an exported BGP route's next hop inside the VRF, where the loopback is unknown: with a CE's routes
-   in the VRF, the VPN routes keep their own next hop (announced as the node's own address) #}
+   (or the hub's, learned over the service link) in the VRF, the VPN routes keep their own next hop (announced as the
+   node's own address) #}
 {#- SRv6: the same rule, with the IPv6 loopback where a next hop is set (the SID is reached over IPv6); where none is
     set the routes go out with the session's local address, the IPv6 loopback, as next hop (extended next hop) #}
-{% if not n.circuits %}
+{% if not n.circuits and n.service is not defined %}
   nexthop vpn export {{ hf_pe.loopbackIp6 if _srv6 else hf_pe.loopbackIp }}
 {% endif %}
   export vpn

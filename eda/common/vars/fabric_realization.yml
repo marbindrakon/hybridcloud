@@ -142,7 +142,9 @@ fabric_realization_defaults:
     # a Warning event of an outage that lasts is repeated at most this often (IPv6EgressUpstreamDown)
     eventRepeatMinutes: 60
     # what is checked (each true by default)
-    checks: {units: true, routingDaemons: true, drift: true, upstream: true, siteSessions: true, pools: true}
+    # (serviceSessions: each node with a platform circuit has an established session with the hub's network)
+    checks: {units: true, routingDaemons: true, drift: true, upstream: true, siteSessions: true, serviceSessions: true,
+             pools: true}
   openstack:
     # platform-owned project on OpenStack sites for the placements' networks and routers (shared to tenants)
     platformProject: hybrid-fabric
@@ -210,6 +212,10 @@ fabric_realization_defaults:
     # subnets (OpenStack dns_nameservers, each subnet taking the addresses of its own family); a site not listed
     # leaves the subnets on the site's default
     resolversBySite: {}
+    # per site (CloudInfrastructure name): {url: "https://..."} of the site's router advertisement service, which
+    # holds the advertisement of floating IPs on a placed network for the placement and cluster jobs. Empty = none:
+    # a site without an entry has no service and the documented site requirement for floating IPs applies
+    routerAdvertisementBySite: {}
     # ranges of a site the allocator steps around, per backend kind, besides the site underlay and (OpenShift) the
     # cluster's cluster and service networks: OVN-Kubernetes' join (100.64.0.0/16), Layer2 user-defined network
     # join (100.65.0.0/16), transit switch (100.88.0.0/16) and masquerade (169.254.0.0/17) subnets and their IPv6
@@ -252,6 +258,37 @@ fabric_realization_defaults:
     listenPort: 51820
     mtu: 1420
     persistentKeepalive: 25
+  # address ranges of the deployment's own networks (either family). No tenant address space, edge connection route
+  # or cluster network may overlap them; tenants see them as reserved (with the other ranges they may not use).
+  infrastructure:
+    # the networks the platform's management (cluster installation and management) connects from. Empty = none
+    hub: []
+  # the service VRF: the platform's management reaches the clusters it builds on tenant networks through it, handed
+  # off to the hub's network by AttachmentCircuits of ceKind platform (an eBGP session per node and circuit: the hub's
+  # IPv4 ranges in, the clusters' prefixes out). A network takes part from its first cluster on: its VRF on every node
+  # gets a veth pair (se<vpnTarget> in the network's VRF, so<vpnTarget> in the service VRF) on its root index's
+  # service link (the upper half of egress.linkPool) over which it learns the hub's IPv4 ranges from the service VRF
+  # (announced into the network's VPN only while the node holds them from a platform circuit), and the service VRF a
+  # route to each of the cluster's prefixes; the nftables table ip shc_service admits only
+  # the hub to the clusters' prefixes on ports and the clusters to hubEndpoints, statelessly (the two directions may
+  # cross different nodes). IPv4 only. Needs attachments.enabled and an IPv4 infrastructure.hub range.
+  service:
+    enabled: false
+    # the VRF on every node's root (not the egress VRF's name, not e<digits>) and its table (not 253-255, not the
+    # egress VRF's, below egress.networkTableBase)
+    vrf: {name: service, table: 9001}
+    # TCP ports the hub may open toward a cluster's prefixes
+    ports: [6443, 443]
+    # destinations in the hub's ranges the clusters may open TCP connections to: [{prefix, ports}] (e.g. the hub's
+    # API). Empty = none: the clusters reach the hub by their network's own outbound path
+    hubEndpoints: []
+    # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF; the platform circuit announces nothing
+    # outside them, and its status.ceConfig gives them to the hub's network ("<range> le 32") to accept with a fixed
+    # filter. Required with service.enabled (check-fabric names it when empty): there is no implicit "any". A
+    # deployment that wants every range writes 0.0.0.0/0, and then the hub's network accepts any route inside its
+    # tenants' address spaces that the reserved ranges do not cover (more-specifics of its own networks outside
+    # infrastructure.hub included)
+    attachableRanges: []
   # attachment circuits (AttachmentCircuit on a ProviderEdge of platform frr): each circuit gets a VLAN from vlanPool
   # on its bearer and the next /linkPrefixLength of linkPool (node i takes host address i+1, the CE the next one);
   # the network's root VRF on every node peers with the CE over that VLAN. providerEdges.<edge>.bearers.<bearer>
@@ -287,7 +324,9 @@ fabric_realization_defaults:
     vrf: {name: egress, table: 9000}
     # Linux table of a network's VRF = networkTableBase + vpnTarget
     networkTableBase: 100000
-    # veth /31s between a network's VRF and the egress VRF, by egress index
+    # veth /31s between a network's VRF and the egress VRF, by egress index (the root index of the network); with the
+    # service VRF on, the pool's lower half holds these and its upper half the service links (below), so the root
+    # indexes are at most a quarter of the pool's addresses
     linkPool: 169.254.0.0/16
     parentInterface: ""       # an existing interface on every node (e.g. a VLAN device of the trunk)
     gateway: ""               # the next hop on that network
@@ -298,12 +337,6 @@ fabric_realization_defaults:
     denyDestinations: [0.0.0.0/8, 10.0.0.0/8, 100.64.0.0/10, 127.0.0.0/8, 169.254.0.0/16, 172.16.0.0/12,
                        192.0.0.0/24, 192.168.0.0/16, 198.18.0.0/15, 224.0.0.0/3]
     allowDestinations: []
-    # platform reach (a network annotated shc.signal9.gg/platform-reach): the platform's own source ranges (e.g. the
-    # network its automation runs from) that may open connections into such a network's platform prefixes, on
-    # platformPorts only (TCP), through the egress VRF; the circuits' and the networks' address checks also keep
-    # these ranges out of tenant space. [] = no platform reach (a network that asks for it is refused)
-    platformSources: []
-    platformPorts: [6443, 443]
     # IPv6 internet egress (routed, platform-assigned space only); off: the networks' IPv6 egress reads NotOffered.
     # On: the egress VRF of every node speaks eBGP (asn) with the upstream routers on the hand-off network, sends them
     # the placement prefixes of the networks with internet egress (IPv6 from the platform) and takes their default

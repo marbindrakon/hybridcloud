@@ -35,6 +35,10 @@ status. Argo CD on the central cluster deploys the whole platform from this repo
   gateway node on either core transport, what the host must not have, teardown.
 - [SRv6 core transport](docs/platform/srv6-core-transport.md): the fabric's core transport switch,
   the SID block, readiness and status.
+- [Platform access to tenant networks](docs/platform/platform-access.md): what a deployment needs so
+  the platform can build and manage OpenShift clusters on tenant networks.
+- [Router advertisement service](docs/platform/router-advertisement-service.md): the site component
+  that keeps floating IPs on placed networks advertised, why it is temporary, install, verify, remove.
 - [Bootstrap](bootstrap/README.md): build the charts and seed Argo CD on a new installation.
 - [Disconnected deploy](docs/disconnected-deploy.md): what a disconnected installation needs.
 - [Architecture](architecture/README.md) and its [index](architecture/docs/architecture.md).

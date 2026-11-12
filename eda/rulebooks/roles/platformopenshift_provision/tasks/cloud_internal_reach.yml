@@ -1,0 +1,45 @@
+---
+# An Internal AWS or Google Cloud cluster on a hybrid network (DESIGN cnet §5): the placement's IPv4 subnet is the
+# cluster's prefix in the platform's service routing domain (preflight step 5 of §4.2). Before the install a refusal
+# withdraws the prefix and fails the cluster (nothing of it is built yet); once the install was started
+# (status.installStarted, recorded just before the Helm release) or is done (status.clusterInstalled) the subnet is
+# part of the cluster: a refusal never withdraws it (the cluster keeps its prefix and its place), the cluster reports
+# the refusal and the platform team resolves it (Review R3 N2, as R2 M1 on OpenStack). While the fabric has not
+# carried the prefix the cluster waits. Input: cir_network.
+- name: Whether the cluster's install was started
+  vars:
+    _st: "{{ ((platformopenshift_cr | default({})).resources | default([{}], true) | first).status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cb_install_started: "{{ (_st.clusterInstalled | default(false) | bool) or (_st.installStarted | default(false) | bool) }}"
+
+- name: Carry the placement's subnet as the cluster's prefix
+  ansible.builtin.include_tasks: platform_prefixes.yml
+  vars:
+    pp_prefixes: ["{{ cb_machine_cidr }}"]
+    pp_network: "{{ cir_network }}"
+    pp_fabric: "{{ pf.fabric }}"
+
+- name: Withdraw a refused prefix (the install was not started)
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      platformPrefixes: null
+  when:
+    - not (pp_outcome.done | bool) and not (pp_outcome.wait | bool)
+    - not (cb_install_started | bool)
+
+- name: Refuse or wait
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: "{{ pp_outcome.reason }}"
+    ps_message: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: {{ pp_outcome.message }}{{
+      ('. The cluster keeps its prefix ' ~ cb_machine_cidr ~ ' (it is part of its installation); the platform team must'
+       ~ ' resolve the refusal.')
+      if (cb_install_started | bool) and not (pp_outcome.wait | bool) else '' }}
+  when: not (pp_outcome.done | bool)
