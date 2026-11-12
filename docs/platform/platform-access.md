@@ -339,8 +339,10 @@ on the network pages.
   gateway address is carried with the cluster's addresses; False `WaitingForPlatformAccess` while it is recorded and
   not carried yet; False with the fabric's refusal reason, or `Failed`, when it was not added (the message says why:
   no router or more than one with the installer's tag `openshiftClusterID=<infra id>` in the environment's project,
-  its gateway on another network, no IPv4 gateway address, or the step's own error). The cluster is still built and Ready; its own calls to the hub are then not admitted on
-  the platform's path and leave by the network's own path.
+  its gateway on another network, no IPv4 gateway address, or the step's own error). The cluster is still built and
+  Ready; its own calls to the hub are then not admitted on the platform's path and leave by the network's own path.
+  Every later run of the cluster (Retry now, the periodic reconcile) tries again while the condition is not True;
+  once it is True the cloud is not asked again.
 - `HybridFabric status.realization.service`: the domain, its connections and VLANs, the networks with their
   accepted addresses, and the refused ones with their reason.
 - The fabric health check reports `ServiceSessionsDown` when a node has no established session on a platform edge
