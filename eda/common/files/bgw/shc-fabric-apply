@@ -48,7 +48,7 @@
 #   when no circuit has address6 (a run that never had one issues no IPv6 command), and the device's IPv6 goes off.
 #   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed (the
 #   platform circuits' devices are the service's, below).
-#   service {vrf, table, mtu, range, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
+#   service {vrf, table, mtu, range, links, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
 #   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, seIp, soIp, prefixes}]} (the service VRF, through
 #   which the hub reaches the clusters the platform builds on tenant networks; absent = none, and a node that had it
 #   loses it all): the nftables table ip shc_service first (see service_nft: stateless, because the two directions of
@@ -1431,6 +1431,10 @@ if cdevs:
 out.append('    meta sdifname "so*" ip ttl != 255 counter drop comment "to the node over a service link: only its own session"')
 out.append("  }")
 out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
+# a service link's own addresses are no client source (the reverse path check admits the link's other end, a
+# connected route: Review R4 L1); names no client range
+if s.get("links"):
+    out.append(f'    meta sdifname "so*" ip saddr {s["links"]} counter drop comment "a service link\'s own addresses are no client source"')
 for n in ns:
     p = elements(n["prefixes"])
     if cdevs and rng:

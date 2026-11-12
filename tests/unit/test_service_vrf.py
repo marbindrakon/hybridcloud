@@ -898,6 +898,12 @@ class ServiceFilter(unittest.TestCase):
                 with self.subTest(src=src, **{k: str(v) for k, v in pk.items()}):
                     pk = dict({"daddr": "198.51.100.5"}, **pk)
                     self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=src, **pk), "drop")
+        # Review R4 L1: the link's other end (the network VRF's own address on the service link) is no client source
+        se = self.conf["service"]["networks"][0]["seIp"]
+        for pk in ({"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["ack"], "daddr": "198.51.100.5"},
+                   {"proto": "tcp", "sport": 40000, "dport": 6443, "flags": ["syn"], "daddr": "198.51.100.10"}):
+            with self.subTest(src=se, **{k: str(v) for k, v in pk.items()}):
+                self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=se, **pk), "drop")
         # the network VRF's own session over its link passes the reverse path check (the link is the route back)
         se = self.conf["service"]["networks"][0]["seIp"]
         self.assertEqual(self.rs.chain("raw_prerouting", {"iif": "so10002", "saddr": se, "daddr": "169.254.128.4",

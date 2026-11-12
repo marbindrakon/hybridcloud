@@ -1677,6 +1677,8 @@ def service_plan(req):
         if not mine:
             continue
         nodes[name] = {"vrf": cfg["vrf"], "table": cfg["table"], "range": cfg["range"], "ports": cfg["ports"],
+                       # the service links' own addresses (the upper half of egress.linkPool): never a client's source
+                       "links": str(list(pool.subnets(prefixlen_diff=1))[1]),
                        "hubEndpoints": cfg["hubEndpoints"], "mtu": mtu, "deny": deny, "accept": accept,
                        "advertise": [str(p) for p in all_prefixes], "refuse": refuse, "attachable": attach,
                        "circuits": [dict({k: v for k, v in c.items() if k != "nodes"},
