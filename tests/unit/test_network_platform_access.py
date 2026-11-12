@@ -459,6 +459,17 @@ class PlatformAccessTasks(unittest.TestCase):
         self.assertEqual(out["cond"]["reason"], "ServiceNotOffered")
         self.assertIn("service.range", out["cond"]["message"])
 
+    def test_the_rows_say_whether_the_cluster_installed(self):
+        # Review R4 M1: from the cluster's status (installStarted or clusterInstalled), on the job's own listing
+        c1 = self.poc("os1", "net", ["10.20.1.5/32"])
+        c1["status"]["installStarted"] = True
+        c2 = self.poc("os2", "net", ["10.20.1.6/32"])
+        c3 = self.poc("os3", "net", ["10.20.1.7/32"])
+        c3["status"]["clusterInstalled"] = True
+        out = self.run_tasks([c1, c2, c3])
+        self.assertEqual({r["cluster"]: r["installed"] for r in out["access"]["prefixes"]},
+                         {"os1": True, "os2": False, "os3": True})
+
     def test_accepted_rows_carry_no_reason(self):
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32", "10.30.0.1/32"])])
         rows = {r["prefix"]: r for r in out["access"]["prefixes"]}
