@@ -52,17 +52,18 @@ with open(os.path.join(ROOT, "eda", "common", "vars", "fabric_realization.yml"))
     DEFAULTS = yaml.safe_load(fh)["fabric_realization_defaults"]
 
 HUB = "198.51.100.0/24"
+RANGE = "198.51.100.0/28"
 NODES = ["bgw-1", "bgw-2"]
 FABRIC, PLAT = "lab", "platform"
 SPACE = "192.0.2.0/24"
 CIRCUIT_STATUS = [{"circuit": f"{PLAT}/hub-a", "vlan": 3099, "nodes": NODES, "rev": "r1"}]
 
 
-def realization(attachable=(SPACE,)):
+def realization(attachable=(SPACE,), rng=(RANGE,)):
     r = copy.deepcopy(DEFAULTS)
     r["attachments"]["enabled"] = True
     r["infrastructure"] = {"hub": [HUB]}
-    r["service"].update({"enabled": True, "attachableRanges": list(attachable), "hubEndpoints": []})
+    r["service"].update({"enabled": True, "attachableRanges": list(attachable), "hubEndpoints": [], "range": list(rng)})
     return r
 
 
@@ -103,7 +104,8 @@ def network_decision(key, prefixes, ledger, service_status, real, space=SPACE, p
         "network": key, "fabric": FABRIC, "platformAccess": platform_access, "space": [space], "overlaps": [],
         "hub": real["infrastructure"]["hub"],
         "service": {"enabled": real["service"]["enabled"], "ports": real["service"]["ports"],
-                    "attachableRanges": real["service"]["attachableRanges"]},
+                    "range": real["service"].get("range") or [],
+                    "attachableRanges": real["service"].get("attachableRanges") or []},
         "serviceStatus": service_status, "reserved": F.reserved_ranges(real),
         # a network off with no cluster on it (a cluster that names it holds platform access on)
         "clusters": [{"name": "c1", "prefixes": list(prefixes), "deleting": False}] if platform_access or prefixes else [],
@@ -253,6 +255,7 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
                     d = PA.platform_access(dict(network="acme/n1", fabric=FABRIC, platformAccess=True, space=[space],
                                                 overlaps=[{"prefix": space, "range": HUB, "purpose": "x"}],
                                                 hub=[HUB], service={"enabled": True, "ports": [6443],
+                                                                    "range": [RANGE],
                                                                     "attachableRanges": ["0.0.0.0/0"]},
                                                 serviceStatus=kw["service_status"], reserved=[], clusters=[],
                                                 ledger={}))
@@ -452,57 +455,224 @@ class RouterAdvertisementSetting(unittest.TestCase):
         self.assertIn("must be a mapping", self.errors(["https://x.example.org"])[0])
 
 
-class AttachableRangesRequired(unittest.TestCase):
-    """service.attachableRanges is required with the service and 0.0.0.0/0 is the explicit "any": the fabric's
-    check, the network job's decision, the fabric's plan and the cluster preflight all read an empty list as "not
-    offered", never as "any"."""
+def placement_obj():
+    return {"metadata": {"name": "p1", "namespace": "acme"},
+            "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"}, "use": {"routerAttachments": True}},
+            "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
+                       "use": {"routerAttachments": {"state": "ready"}},
+                       "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+
+
+def preflight_on_the_plan(real, plan, decision, hub_api="", cluster="c2"):
+    """The cluster preflight (po_preflight.py network) reading the fabric's status as service-plan wrote it and the
+    network's condition as platform-access wrote it."""
+    net = network_object("acme/n1", decision["prefixes"])
+    net["status"]["conditions"] = [dict(decision["condition"], lastTransitionTime="2001-01-01T00:00:00Z")]
+    fab = {"metadata": {"name": FABRIC}, "status": {"reservedRanges": F.reserved_ranges(real),
+                                                    "realization": {"service": plan["status"]}}}
+    return P.network({"kind": "CloudOSO", "environment": "env1", "namespace": "acme", "network": "n1",
+                      "networkObj": net, "placements": [placement_obj()], "fabric": fab, "needPlatform": True,
+                      "needRouterAttachments": True, "hubApi": hub_api, "cluster": cluster})
+
+
+class AttachableRangesOptional(unittest.TestCase):
+    """service.attachableRanges is optional: absent or empty = any range the platform does not refuse, the same in the
+    fabric's check, the network job's decision, the fabric's plan, the per-prefix verdict, the cluster preflight and
+    what the platform circuit tells the hub's router; set, it restricts on every side alike."""
 
     SPEC = {"domainAsn": 65010, "vniPool": {"start": 50000, "end": 50999}, "l2vniPool": {"start": 60000, "end": 60999},
             "borderGateway": {"nodes": [{"name": n} for n in NODES]}}
 
-    def test_empty_is_not_offered_everywhere(self):
-        real = realization(attachable=())
-        errs = F.check_fabric({"spec": self.SPEC, "realization": real})["errors"]
-        self.assertTrue([e for e in errs if "service.attachableRanges is required" in e], errs)
+    def round_trip(self, real, prefix, space=SPACE):
         led = Ledger()
         led.network("acme/n1", 10005, 3)
-        d = network_decision("acme/n1", ["192.0.2.15/32"], led, {"circuits": CIRCUIT_STATUS}, real)
-        self.assertEqual((d["condition"]["status"], d["condition"]["reason"]), ("False", "ServiceNotOffered"))
-        self.assertEqual(d["accepted"], [])
-        verdict = F.service_prefix_check({"prefixes": ["192.0.2.15/32"], "space": [SPACE], "ranges": [],
-                                          "attachableRanges": []})
-        self.assertEqual(verdict["prefixes"][0]["reason"], "OutsideAttachableRanges")
-        judged = PlatformReachableAndThePreflight().judge(
-            network_decision("acme/n1", [], led, {"circuits": CIRCUIT_STATUS}, realization()), SPACE)
-        self.assertEqual(judged["reason"], "")
-        fab = {"metadata": {"name": FABRIC}, "status": {"reservedRanges": [], "realization": {"service": {
-            "enabled": True, "sources": [HUB], "attachableRanges": [], "hubEndpoints": [], "circuits": CIRCUIT_STATUS}}}}
-        net = network_object("acme/n1", [])
-        net["status"]["conditions"] = [{"type": "PlatformReachable", "status": "True", "reason": "Attachable"}]
-        placement = {"metadata": {"name": "p1", "namespace": "acme"},
-                     "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"},
-                              "use": {"routerAttachments": True}},
-                     "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
-                                "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
-        out = P.network({"kind": "CloudOSO", "environment": "env1", "namespace": "acme", "network": "n1",
-                         "networkObj": net, "placements": [placement], "fabric": fab, "needPlatform": True,
-                         "needRouterAttachments": True, "hubApi": ""})
-        self.assertEqual(out["reason"], "ServiceNotOffered")
-
-    def test_any_written_out(self):
-        real = realization(attachable=("0.0.0.0/0",))
-        self.assertEqual([e for e in F.check_fabric({"spec": self.SPEC, "realization": real})["errors"]
-                          if "attachableRanges" in e], [])
-        led = Ledger()
-        led.network("acme/n1", 10005, 3)
-        d = network_decision("acme/n1", ["192.0.2.15/32"], led, {"circuits": CIRCUIT_STATUS}, real)
-        self.assertEqual([(r["state"], r["reason"]) for r in d["prefixes"]], [("pending", "")])
+        d = network_decision("acme/n1", [prefix], led, {"circuits": CIRCUIT_STATUS}, real, space=space)
         led.apply(d)
-        plan = fabric_plan(real, [network_object("acme/n1", d["prefixes"])], led)
-        self.assertEqual(plan["errors"], [])
-        self.assertEqual(plan["status"]["networks"][0]["prefixes"], ["192.0.2.15/32"])
-        self.assertEqual(plan["status"]["attachableRanges"], ["0.0.0.0/0"])
+        plan = fabric_plan(real, [network_object("acme/n1", d["prefixes"], space=space)], led)
+        return d, plan
+
+    def test_absent_or_empty_means_any_everywhere(self):
+        for att in ((), None, ("0.0.0.0/0",)):
+            with self.subTest(attachableRanges=att):
+                real = realization(attachable=att or ())
+                if att is None:
+                    del real["service"]["attachableRanges"]
+                self.assertEqual(F.check_fabric({"spec": self.SPEC, "realization": real})["errors"], [])
+                d, plan = self.round_trip(real, "203.0.113.15/32", space="203.0.113.0/24")
+                self.assertEqual(d["condition"]["reason"], "AttachPending")
+                self.assertEqual([(r["state"], r["reason"]) for r in d["prefixes"]], [("pending", "")])
+                self.assertEqual(plan["errors"], [])
+                self.assertEqual(plan["status"]["networks"][0]["prefixes"], ["203.0.113.15/32"])
+                verdict = F.service_prefix_check({"prefixes": ["203.0.113.15/32"], "space": ["203.0.113.0/24"],
+                                                  "realization": real})
+                self.assertEqual(verdict["prefixes"][0]["reason"], "")
+                ce = F.check_circuit({"ceKind": "platform", "namespace": PLAT, "fabricNamespace": PLAT,
+                                      "realization": real})["ceConfig"]
+                self.assertEqual(ce["advertisedRanges"], ["0.0.0.0/0 le 32"])
+                self.assertEqual(plan["nodes"]["bgw-1"]["attachable"], ce["advertisedRanges"])
+                pf = preflight_on_the_plan(real, plan, d)
+                self.assertEqual(pf["reason"], "", pf["message"])
+
+    def test_the_reserved_ranges_still_refuse_without_them(self):
+        real = realization(attachable=())
+        d, plan = self.round_trip(real, "198.51.100.20/32", space="198.51.100.0/24")
+        self.assertEqual(d["prefixes"][0]["reason"], "PrefixReserved")
+        self.assertEqual(plan["status"]["networks"], [])
+
+    def test_set_they_restrict_on_every_side(self):
+        real = realization(attachable=("192.0.2.0/26",))
+        d, plan = self.round_trip(real, "192.0.2.99/32")
+        self.assertEqual((d["prefixes"][0]["state"], d["prefixes"][0]["reason"]), ("refused", "OutsideAttachableRanges"))
+        self.assertEqual(plan["status"]["networks"], [])
+        verdict = F.service_prefix_check({"prefixes": ["192.0.2.99/32"], "space": [SPACE], "realization": real})
+        self.assertEqual(verdict["prefixes"][0]["reason"], "OutsideAttachableRanges")
+        # the preflight: the placement's subnet 192.0.2.0/25 is not inside 192.0.2.0/26
+        pf = preflight_on_the_plan(real, fabric_plan(real, [], Ledger()), network_decision(
+            "acme/n1", [], Ledger(), {"circuits": CIRCUIT_STATUS}, real))
+        self.assertEqual(pf["reason"], "OutsideAttachableRanges")
+        ce = F.check_circuit({"ceKind": "platform", "namespace": PLAT, "fabricNamespace": PLAT,
+                              "realization": real})["ceConfig"]
+        self.assertEqual(ce["advertisedRanges"], ["192.0.2.0/26 le 32"])
+
+
+class ServiceRange(unittest.TestCase):
+    """service.range on every side: the fabric's check names it, the plan carries it in status (range, sources), the
+    network job reads it (the real task's request), the preflight's hub endpoint check reads the plan's status, the
+    platform circuit job (the real tasks, through fabric_check.yml) tells the hub's router exactly what the nodes
+    accept and announce."""
+
+    def test_the_network_job_sends_the_range(self):
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        t = by_name(load(os.path.join(ROLES, "hybridnetwork_provision", "tasks", "platform_access.yml")),
+                    "Decide the network's platform access")
+        real = realization(attachable=())
+        v = {"fab_namespace": "acme", "fab_name": "n1", "hn_fabric_name": FABRIC, "fab_spec": {"prefixes": [SPACE]},
+             "hn_space": [], "hn_hub_check": {"overlaps": []}, "hn_hub": [HUB], "hn_service_real": real["service"],
+             "hn_service_status": {"circuits": CIRCUIT_STATUS}, "hn_fabric": {"status": {"reservedRanges": F.reserved_ranges(real)}},
+             "hn_clusters": [{"name": "c1", "prefixes": ["192.0.2.15/32"]}], "hn_placement_subnets": [],
+             "hn_service_ledger": {}}
+        sent = run_play([{"ansible.builtin.set_fact": {"x": t["ansible.builtin.command"]["stdin"]}}, write_out("x")], v)
+        sent = sent if isinstance(sent, dict) else json.loads(sent)
+        self.assertEqual(sent["service"]["range"], [RANGE])
+        self.assertEqual(sent["service"]["attachableRanges"], [])
+        out = PA.platform_access(sent)
+        self.assertEqual(out["sources"], [RANGE])
+        self.assertEqual(out["accepted"], ["192.0.2.15/32"])
+
+    def test_the_plan_status_and_the_preflight(self):
+        real = realization()
+        real["service"]["hubEndpoints"] = [{"prefix": "198.51.100.10/32", "ports": [6443]}]
+        plan = fabric_plan(real, [], Ledger())
+        self.assertEqual((plan["status"]["range"], plan["status"]["sources"]), ([RANGE], [RANGE]))
+        d = network_decision("acme/n1", [], Ledger(), {"circuits": CIRCUIT_STATUS}, real)
+        self.assertEqual(d["sources"], plan["status"]["sources"])
+        # the hub's API inside the service range: admitted by an endpoint, or refused; outside it (in the hub's range):
+        # not through the service VRF, no endpoint needed
+        self.assertEqual(preflight_on_the_plan(real, plan, d, hub_api="https://198.51.100.10:6443")["reason"], "")
+        self.assertEqual(preflight_on_the_plan(real, plan, d, hub_api="https://198.51.100.9:6443")["reason"],
+                         "HubEndpointNotAdmitted")
+        self.assertEqual(preflight_on_the_plan(real, plan, d, hub_api="https://198.51.100.99:6443")["reason"], "")
+
+    def test_the_hub_router_is_told_what_the_nodes_do(self):
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        tasks = load(os.path.join(ROLES, "attachmentcircuit_provision", "tasks", "platform_circuit.yml"))
+        picked = [copy.deepcopy(t) for t in tasks if t.get("name") in ("The hub router's filters",
+                                                                        "Keep the hub router's filters")]
+        for att, mp in (((), 1000), ((SPACE,), 1)):
+            with self.subTest(attachableRanges=att):
+                real = realization(attachable=att)
+                real["service"]["maxPrefixes"] = mp
+                v = {"role_path": os.path.join(ROLES, "attachmentcircuit_provision"), "fab_namespace": PLAT,
+                     "fabric_platform_namespace": PLAT, "fab_real": real}
+                ce = run_play(picked + [write_out("ac_platform_ce")], v)
+                led = Ledger()
+                led.network("acme/n1", 10005, 3)
+                led.alloc["servicePrefix"] = {"HybridNetwork/acme/n1/192.0.2.15/32": 1,
+                                              "HybridNetwork/acme/n1/192.0.2.16/32": 2}
+                rows = [{"prefix": p, "cluster": "c1", "state": "pending"} for p in ("192.0.2.15/32", "192.0.2.16/32")]
+                plan = fabric_plan(real, [network_object("acme/n1", rows)], led)
+                n = plan["nodes"]["bgw-1"]
+                # what the nodes accept from the hub's router = what it is told to announce; what they guard their own
+                # announcement with = what it is told to refuse, then accept; never more prefixes than its limit
+                self.assertEqual(ce["acceptedRanges"], n["accept"])
+                self.assertEqual(ce["refusedRanges"], n["refuse"])
+                self.assertEqual(ce["advertisedRanges"], n["attachable"])
+                self.assertEqual(ce["maxPrefixes"], mp)
+                self.assertLessEqual(len(n["advertise"]), ce["maxPrefixes"])
+
+
+class UpgradeWithTheServiceOn(unittest.TestCase):
+    """A deployment that had the service on with attachableRanges set keeps what it had once service.range is set
+    (compared with this round's base, 8acb5037); one with the service on and no service.range is refused by name on
+    every side."""
+
+    BASE = "8acb5037"
+
+    def base(self):
+        import subprocess
+        import tempfile
+        try:
+            text = subprocess.run(["git", "-C", ROOT, "show", f"{self.BASE}:eda/common/files/shc_fabric.py"],
+                                  capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.SubprocessError):
+            text = None
+        if text is None or text.returncode != 0:
+            self.skipTest(f"{self.BASE} not readable from Git")
+        path = os.path.join(tempfile.mkdtemp(prefix="shc-fabric-8acb-"), "shc_fabric_8acb.py")
+        with open(path, "w") as f:
+            f.write(text.stdout)
+        return _module("shc_fabric_8acb", path)
+
+    def test_attachable_ranges_set_keep_working(self):
+        old = self.base()
+        nets, led = [], Ledger()
+        for i, (key, prefixes) in enumerate((("acme/n1", ["192.0.2.15/32", "192.0.2.16/32"]),
+                                             ("acme/n2", ["192.0.2.15/32", "192.0.2.40/32"]),
+                                             ("acme/n3", ["192.0.2.200/32", "198.51.100.7/32"]))):
+            led.network(key, 10005 + i, 3 + i)
+            for p in prefixes:
+                led.alloc["servicePrefix"][f"HybridNetwork/{key}/{p}"] = len(led.alloc["servicePrefix"]) + 1
+            nets.append(network_object(key, [{"prefix": p, "cluster": "c1", "state": "pending"} for p in prefixes]))
+        before = realization(attachable=("192.0.2.0/25",))
+        del before["service"]["range"]
+        req = {"nodes": NODES, "fabric": FABRIC, "domainAsn": 65010, "networks": nets, "ledger": led.alloc,
+               "circuits": [platform_circuit_plan_entry()], "vrfs": {n: [] for n in NODES}, "previous": {}}
+        was = old.service_plan(dict(req, realization=before))
+        self.assertEqual(was["errors"], [])
+        # the same deployment with the range set to its hub: the same prefixes realized and refused, the same routes
+        # taken from the hub's routers
+        after = copy.deepcopy(before)
+        after["service"]["range"] = [HUB]
+        now = F.service_plan(dict(req, realization=after))
+        self.assertEqual(now["errors"], [])
+        self.assertEqual(now["status"]["networks"], was["status"]["networks"])
+        self.assertEqual(now["status"]["refused"], was["status"]["refused"])
+        self.assertTrue(now["status"]["refused"])
+        self.assertEqual(now["nodes"]["bgw-1"]["accept"], was["nodes"]["bgw-1"]["accept"])
+        self.assertEqual(now["nodes"]["bgw-1"]["advertise"], was["nodes"]["bgw-1"]["advertise"])
+        self.assertEqual(now["nodes"]["bgw-1"]["attachable"], was["nodes"]["bgw-1"]["attachable"])
+        self.assertEqual(now["nodes"]["bgw-1"]["networks"], was["nodes"]["bgw-1"]["networks"])
+
+    def test_no_range_is_refused_by_name(self):
+        real = realization()
+        del real["service"]["range"]
+        errs = F.check_fabric({"spec": AttachableRangesOptional.SPEC, "realization": real})["errors"]
+        self.assertTrue([e for e in errs if e.startswith("realization service.range is required with service.enabled")],
+                        errs)
+        plan = fabric_plan(real, [], Ledger())
+        self.assertTrue([e for e in plan["errors"] if "service.range" in e])
+        self.assertEqual(plan["nodes"], {})
+        d = network_decision("acme/n1", ["192.0.2.15/32"], Ledger(), {"circuits": CIRCUIT_STATUS}, real)
+        self.assertEqual(d["condition"]["reason"], "ServiceNotOffered")
+        self.assertIn("service.range", d["condition"]["message"])
+        # a fabric status written before the range (sources, no range): the preflight refuses a new cluster by name
+        old_status = {k: v for k, v in fabric_plan(realization(), [], Ledger())["status"].items() if k != "range"}
+        pf = preflight_on_the_plan(real, {"status": old_status},
+                                   network_decision("acme/n1", [], Ledger(), {"circuits": CIRCUIT_STATUS}, realization()))
+        self.assertEqual(pf["reason"], "ServiceNotOffered")
+        self.assertIn("service.range", pf["message"])
 
 
 class PlatformSideDown(unittest.TestCase):
@@ -583,7 +753,7 @@ class ClusterPrefixShapes(unittest.TestCase):
         led.network("acme/n1", 10005, 3)
         return PA.platform_access({
             "network": "acme/n1", "fabric": FABRIC, "platformAccess": True, "space": [SPACE], "overlaps": [],
-            "hub": [HUB], "service": {"enabled": True, "ports": [6443], "attachableRanges": ["0.0.0.0/0"]},
+            "hub": [HUB], "service": {"enabled": True, "ports": [6443], "range": [RANGE], "attachableRanges": ["0.0.0.0/0"]},
             "serviceStatus": {"circuits": CIRCUIT_STATUS}, "reserved": F.reserved_ranges(real),
             "clusters": lst["clusters"], "placements": lst["subnets"], "ledger": {}})
 
