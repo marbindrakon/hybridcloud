@@ -23,6 +23,7 @@ with open(os.path.join(ROOT, "eda", "common", "vars", "fabric_realization.yml"))
     DEFAULTS = yaml.safe_load(fh)["fabric_realization_defaults"]
 
 HUB = "198.51.100.0/24"
+RANGE = "198.51.100.0/28"
 NODES = ["bgw-1", "bgw-2"]
 
 
@@ -35,7 +36,7 @@ def real(**over):
     r = copy.deepcopy(DEFAULTS)
     r["attachments"]["enabled"] = True
     r["infrastructure"] = {"hub": [HUB]}
-    r["service"].update({"enabled": True, "attachableRanges": ["192.0.2.0/24", "203.0.113.0/24"],
+    r["service"].update({"enabled": True, "attachableRanges": ["192.0.2.0/24", "203.0.113.0/24"], "range": [RANGE],
                          "hubEndpoints": [{"prefix": "198.51.100.10/32", "ports": [6443]}]})
     for k, v in over.items():
         if isinstance(v, dict) and isinstance(r.get(k), dict):
@@ -124,7 +125,8 @@ class Realization(unittest.TestCase):
         self.assertEqual(r["errors"], [])
         self.assertEqual(r["poolSize"]["egressPool"], 0)
         self.assertEqual(DEFAULTS["service"], {"enabled": False, "vrf": {"name": "service", "table": 9001},
-                                               "ports": [6443, 443], "hubEndpoints": [], "attachableRanges": []})
+                                               "range": [], "ports": [6443, 443], "hubEndpoints": [],
+                                               "attachableRanges": [], "maxPrefixes": 1000})
         self.assertEqual(DEFAULTS["infrastructure"], {"hub": []})
         self.assertNotIn("platformSources", DEFAULTS["egress"])
         self.assertNotIn("platformPorts", DEFAULTS["egress"])
@@ -163,7 +165,18 @@ class Realization(unittest.TestCase):
             (real(service={"vrf": {"name": "service", "table": 100000}}), "below egress.networkTableBase 100000"),
             (real(service={"ports": []}), "realization service.ports must hold TCP ports"),
             (real(service={"hubEndpoints": [{"prefix": "192.0.2.10/32", "ports": [6443]}]}),
-             "realization service.hubEndpoints[0].prefix 192.0.2.10/32 is not inside infrastructure.hub"),
+             "realization service.hubEndpoints[0].prefix 192.0.2.10/32 is not inside service.range"),
+            # inside the hub's range, outside the service range
+            (real(service={"hubEndpoints": [{"prefix": "198.51.100.200/32", "ports": [6443]}]}),
+             "realization service.hubEndpoints[0].prefix 198.51.100.200/32 is not inside service.range"),
+            (real(service={"range": []}), "realization service.range is required with service.enabled"),
+            (real(service={"range": None}), "realization service.range is required with service.enabled"),
+            (real(service={"range": ["192.0.2.0/28"]}),
+             "realization service.range[0] 192.0.2.0/28 is not inside an IPv4 range of infrastructure.hub"),
+            (real(service={"range": ["198.51.100.1/28"]}), "realization service.range[0] '198.51.100.1/28' is not an IPv4"),
+            (real(service={"range": ["2001:db8:5::/64"]}), "realization service.range[0] '2001:db8:5::/64' is not an IPv4"),
+            (real(service={"maxPrefixes": 0}), "realization service.maxPrefixes 0 must be a whole number from 1"),
+            (real(service={"maxPrefixes": "many"}), "realization service.maxPrefixes 'many' must be a whole number"),
             (real(service={"hubEndpoints": [{"prefix": "198.51.100.10/32", "ports": []}]}),
              "realization service.hubEndpoints[0].ports must hold TCP ports"),
             (real(service={"attachableRanges": ["2001:db8::/32"]}),
@@ -245,19 +258,23 @@ class Plan(unittest.TestCase):
         self.assertEqual((w["soAddr"], w["seAddr"], w["vrf"], w["table"], w["se"], w["so"]),
                          ("169.254.128.8/31", "169.254.128.9/31", "e10005", 110005, "se10005", "so10005"))
         self.assertEqual(w["prefixes"], ["192.0.2.15/32", "192.0.2.16/32"])
-        self.assertEqual(n["hub"], [HUB])
-        self.assertEqual(n["accept"], ["198.51.100.0/24 le 32"])
+        self.assertNotIn("hub", n)
+        self.assertEqual(n["range"], [RANGE])
+        self.assertEqual(n["accept"], ["198.51.100.0/28 le 32"])
         self.assertEqual(n["deny"], ["0.0.0.0/0", "10.255.128.0/20 le 32", "10.255.0.0/24 le 32", "10.255.1.0/24 le 32",
                                      "169.254.0.0/16 le 32", "192.0.2.15/32", "192.0.2.16/32"])
         self.assertEqual(n["advertise"], ["192.0.2.15/32", "192.0.2.16/32"])
         self.assertEqual(n["attachable"], ["192.0.2.0/24 le 32", "203.0.113.0/24 le 32"])
+        # what is announced is guarded as the hub's routers filter it: never inside a published range
+        self.assertEqual(n["refuse"][0], "198.51.100.0/24 le 32")
         self.assertEqual(n["circuits"][0]["address"], "10.255.128.9/29")
         self.assertEqual(out["nodes"]["bgw-2"]["circuits"][0]["address"], "10.255.128.10/29")
         st = out["status"]
         self.assertEqual(st["networks"], [{"network": "acme/n1", "vpnTarget": 10005, "index": 4,
                                            "prefixes": ["192.0.2.15/32", "192.0.2.16/32"]}])
         self.assertEqual(st["refused"], [])
-        self.assertEqual((st["enabled"], st["vrf"], st["sources"], st["ports"]), (True, "service", [HUB], [443, 6443]))
+        self.assertEqual((st["enabled"], st["vrf"], st["range"], st["sources"], st["ports"]),
+                         (True, "service", [RANGE], [RANGE], [443, 6443]))
         self.assertEqual(st["hubEndpoints"], [{"prefix": "198.51.100.10/32", "ports": [6443]}])
         self.assertEqual(st["circuits"][0]["circuit"], "platform/hub-a")
         self.assertEqual(st["circuits"][0]["nodes"], NODES)
@@ -314,19 +331,20 @@ class Plan(unittest.TestCase):
         self.assertEqual(by["10.1.0.5/32"]["reason"], "OutsideAddressSpace")
         self.assertEqual(by["2001:db8::1/128"]["reason"], "FamilyUnavailable")
         self.assertEqual(out["status"]["networks"][0]["prefixes"], ["192.0.2.15/32"])
-        # without attachable ranges nothing is planned (check-fabric names the setting: no implicit "any"); every
-        # range is written explicitly, and then any prefix that passes the other checks
-        r = real(service={"attachableRanges": []})
-        out = plan(r, nets, alloc)
-        self.assertEqual(out["errors"], ["realization service.attachableRanges is required with service.enabled: the "
-                                         "IPv4 ranges a cluster's prefixes must lie in, announced to the hub's network "
-                                         "(0.0.0.0/0 admits every range the other checks admit)"])
-        self.assertEqual(out["nodes"], {})
-        r = real(service={"attachableRanges": ["0.0.0.0/0"]})
+        # without attachable ranges any prefix that passes the other checks is accepted (first come first served),
+        # and the announcement is guarded by the published ranges only; 0.0.0.0/0 written out reads the same
         alloc["servicePrefix"]["HybridNetwork/acme/n1/100.64.10.5/32"] = 2
-        out = plan(r, nets, alloc)
-        self.assertEqual(out["status"]["networks"][0]["prefixes"], ["100.64.10.5/32", "192.0.2.15/32"])
-        self.assertEqual(out["nodes"]["bgw-1"]["attachable"], ["0.0.0.0/0 le 32"])
+        for att in ([], None, ["0.0.0.0/0"]):
+            with self.subTest(attachableRanges=att):
+                r = real(service={"attachableRanges": att})
+                out = plan(r, nets, alloc)
+                self.assertEqual(out["errors"], [])
+                self.assertEqual(out["status"]["networks"][0]["prefixes"], ["100.64.10.5/32", "192.0.2.15/32"])
+                self.assertEqual(out["nodes"]["bgw-1"]["attachable"], ["0.0.0.0/0 le 32"])
+                self.assertEqual(out["status"]["attachableRanges"], att or [])
+                # the hub's range stays refused whatever the attachable ranges say
+                self.assertEqual({x["prefix"]: x["reason"] for x in out["status"]["refused"]}["198.51.100.20/32"],
+                                 "PrefixReserved")
         self.assertTrue(set(out["status"]["refused"][0].keys()) >= {"network", "prefix", "reason"})
         self.assertTrue(all(r["reason"] in F.SERVICE_PREFIX_REASONS for r in out["status"]["refused"]))
 
@@ -378,6 +396,85 @@ class Plan(unittest.TestCase):
     def test_invalid_realization_fails_the_plan(self):
         out = plan(real(infrastructure={"hub": []}), [], {})
         self.assertTrue(out["errors"])
+
+
+class ServiceRange(unittest.TestCase):
+    """The service filter after the owner's word on it: service.range required and narrow (the only sources toward the
+    clusters, the only destinations and routes from the hub), attachableRanges optional (absent = any range the
+    platform does not refuse, first come first served), a maximum-prefix figure the platform keeps to."""
+
+    def test_valid_without_attachable_ranges(self):
+        for att in (None, []):
+            r = real(service={"attachableRanges": att})
+            if att is None:
+                del r["service"]["attachableRanges"]
+            self.assertEqual(F.check_fabric({"spec": spec(), "realization": r})["errors"], [])
+
+    def test_range_may_equal_the_hub(self):
+        self.assertEqual(F.check_fabric({"spec": spec(), "realization": real(service={"range": [HUB]})})["errors"], [])
+        # an address is a /32; several ranges, each inside some hub range
+        r = real(infrastructure={"hub": [HUB, "203.0.113.0/24"]}, service={"range": ["198.51.100.10/32", "203.0.113.0/28"],
+                                                                            "attachableRanges": ["192.0.2.0/24"]})
+        self.assertEqual(F.check_fabric({"spec": spec(), "realization": r})["errors"], [])
+
+    def test_the_service_off_needs_no_range(self):
+        r = copy.deepcopy(DEFAULTS)
+        r["infrastructure"] = {"hub": [HUB]}
+        del r["service"]["range"]
+        self.assertEqual(F.check_fabric({"spec": spec(), "realization": r})["errors"], [])
+
+    def test_in_out_and_the_guard(self):
+        nets = [network("n1", ["192.0.2.0/24"], [("192.0.2.15/32", {})])]
+        alloc = ledger({("acme/n1", "192.0.2.15/32"): 1}, {"acme/n1": 10005}, {"acme/n1": 4})
+        r = real(service={"attachableRanges": []}, network={"exclusiveRanges": ["100.127.0.0/16"]})
+        n = plan(r, nets, alloc)["nodes"]["bgw-1"]
+        # in: the service range only (never the rest of the hub's range)
+        self.assertEqual(n["accept"], ["198.51.100.0/28 le 32"])
+        self.assertEqual(n["range"], [RANGE])
+        # out, guarded: refuse every published range (any length), then anything up to /32
+        self.assertEqual(n["refuse"][:2], ["198.51.100.0/24 le 32", "100.127.0.0/16 le 32"])
+        self.assertIn("192.0.0.8/32", n["refuse"])
+        self.assertTrue(all(":" not in e for e in n["refuse"]))
+        self.assertEqual(n["attachable"], ["0.0.0.0/0 le 32"])
+
+    def test_at_most_max_prefixes_in_the_ledger_order(self):
+        nets = [network("a", ["192.0.2.0/24"], [("192.0.2.15/32", {}), ("192.0.2.16/32", {})], ns="t-a"),
+                network("b", ["203.0.113.0/24"], [("203.0.113.5/32", {})], ns="t-b")]
+        alloc = ledger({("t-a/a", "192.0.2.15/32"): 3, ("t-a/a", "192.0.2.16/32"): 9, ("t-b/b", "203.0.113.5/32"): 5},
+                       {"t-a/a": 10001, "t-b/b": 10002}, {"t-a/a": 1, "t-b/b": 2})
+        out = plan(real(service={"maxPrefixes": 2}), nets, alloc)
+        self.assertEqual([(w["network"], w["prefixes"]) for w in out["status"]["networks"]],
+                         [("t-a/a", ["192.0.2.15/32"]), ("t-b/b", ["203.0.113.5/32"])])
+        self.assertEqual(out["status"]["refused"], [])
+        self.assertEqual([(p["prefix"], p["why"]) for p in out["pending"] if p.get("prefix")],
+                         [("192.0.2.16/32", "the platform announces at most service.maxPrefixes 2 prefixes")])
+        self.assertEqual(out["nodes"]["bgw-1"]["advertise"], ["192.0.2.15/32", "203.0.113.5/32"])
+        # the default holds them all
+        out = plan(real(), nets, alloc)
+        self.assertEqual(sum(len(w["prefixes"]) for w in out["status"]["networks"]), 3)
+
+    def test_ce_config_in_the_hub_routers_order(self):
+        r = real(service={"attachableRanges": [], "maxPrefixes": 200})
+        ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
+                              "realization": r})["ceConfig"]
+        self.assertEqual(list(ce), ["acceptedRanges", "refusedRanges", "advertisedRanges", "maxPrefixes"])
+        self.assertEqual(ce["acceptedRanges"], ["198.51.100.0/28 le 32"])
+        self.assertEqual(ce["refusedRanges"][0], "198.51.100.0/24 le 32")
+        self.assertEqual(ce["advertisedRanges"], ["0.0.0.0/0 le 32"])
+        self.assertEqual(ce["maxPrefixes"], 200)
+        ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
+                              "realization": real(service={"range": ["198.51.100.10/32"]})})["ceConfig"]
+        self.assertEqual((ce["acceptedRanges"], ce["advertisedRanges"], ce["maxPrefixes"]),
+                         (["198.51.100.10/32"], ["192.0.2.0/24 le 32", "203.0.113.0/24 le 32"], 1000))
+
+    def test_prefix_check_without_attachable_ranges(self):
+        out = F.service_prefix_check({"realization": real(service={"attachableRanges": []}),
+                                      "space": ["100.64.0.0/24", "198.51.100.0/24"],
+                                      "prefixes": ["100.64.0.5/32", "198.51.100.200/32"]})
+        self.assertEqual([(p["state"], p["reason"]) for p in out["prefixes"]], [("pending", ""), ("refused", "PrefixReserved")])
+        rows = F.reserved_ranges(real())
+        out = F.service_prefix_check({"ranges": rows, "space": ["100.64.0.0/24"], "prefixes": ["100.64.0.5/32"]})
+        self.assertEqual(out["prefixes"][0]["reason"], "")
 
 
 class PrefixCheck(unittest.TestCase):

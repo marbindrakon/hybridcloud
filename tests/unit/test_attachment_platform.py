@@ -15,7 +15,7 @@ import test_attachment_ipv6 as T  # noqa: E402
 from test_attachment_ipv6 import shc_fabric as F  # noqa: E402
 
 HUB = "198.51.100.0/24"
-SERVICE = {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": [6443, 443], "hubEndpoints": [],
+SERVICE = {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": [6443, 443], "hubEndpoints": [], "range": ["198.51.100.0/28"],
            "attachableRanges": ["192.0.2.0/24", "203.0.113.0/25"]}
 REAL = {"service": SERVICE, "infrastructure": {"hub": [HUB, "2001:db8:5::/48"]}}
 
@@ -49,14 +49,21 @@ class CheckCircuit(unittest.TestCase):
     def test_accepted(self):
         out = self.check()
         self.assertEqual((out["errors"], out["reason"]), ([], ""))
-        self.assertEqual(out["ceConfig"], {"advertisedRanges": ["192.0.2.0/24 le 32", "203.0.113.0/25 le 32"],
-                                           "acceptedRanges": ["198.51.100.0/24 le 32"]})
+        # what the hub's router configures, in its order: announce the service range, refuse the published ranges
+        # from the platform (any length), then accept the attachable ranges (or any other IPv4 prefix up to /32), and
+        # a maximum-prefix figure
+        ce = out["ceConfig"]
+        self.assertEqual(list(ce), ["acceptedRanges", "refusedRanges", "advertisedRanges", "maxPrefixes"])
+        self.assertEqual(ce["acceptedRanges"], ["198.51.100.0/28 le 32"])
+        self.assertEqual(ce["refusedRanges"][0], "198.51.100.0/24 le 32")
+        self.assertTrue(all(":" not in e for e in ce["refusedRanges"]))
+        self.assertEqual(ce["advertisedRanges"], ["192.0.2.0/24 le 32", "203.0.113.0/25 le 32"])
+        self.assertEqual(ce["maxPrefixes"], 1000)
         r = copy.deepcopy(REAL)
-        r["service"]["attachableRanges"] = []
-        # never "any": what the platform announces is exactly the listed ranges (check-fabric requires them)
-        self.assertEqual(self.check(realization=r)["ceConfig"]["advertisedRanges"], [])
-        r["service"]["attachableRanges"] = ["0.0.0.0/0"]
-        self.assertEqual(self.check(realization=r)["ceConfig"]["advertisedRanges"], ["0.0.0.0/0 le 32"])
+        for att in ([], ["0.0.0.0/0"]):
+            r["service"]["attachableRanges"] = att
+            # without attachable ranges: refuse the published ranges, then any other IPv4 prefix up to /32
+            self.assertEqual(self.check(realization=r)["ceConfig"]["advertisedRanges"], ["0.0.0.0/0 le 32"])
         self.assertTrue(self.check(advertise=["192.0.2.0/24"])["notes"])
 
     def test_refusals(self):

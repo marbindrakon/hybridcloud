@@ -26,8 +26,8 @@
 #    first served by the ledger (kind servicePrefix) (status.realization.service); the job wakes the networks whose
 #    realized or refused prefixes changed and the platform circuits whose realization changed.
 # 7. The ranges tenants may not use (status.reservedRanges: the realization's infrastructure, core and pool ranges,
-#    and each site's own); when they or the ranges a cluster may take (service.attachableRanges) change, the Entities
-#    are woken to copy them into the tenants' profiles.
+#    and each site's own); when they or the ranges a cluster may take (service.attachableRanges; none = any range not
+#    reserved) change, the Entities are woken to copy them into the tenants' profiles.
 # 8. Wakes from other jobs that came during the run waited for it (the controller does not let them supersede a job
 #    in flight): the job has the controller publish them once it has written its status (deferred_wakes.yml).
 - block:
@@ -682,6 +682,10 @@
       vars:
         fab_outcome: ready
         fab_reason: Ready
+        # the cluster prefixes the platform does not announce yet: service.maxPrefixes reached (they wait in order)
+        _svc_capped: >-
+          {{ ((hf_service | default({})).pending | default([])) | selectattr('prefix', 'defined')
+             | selectattr('why', 'search', 'service.maxPrefixes') | list }}
         fab_message: >-
           Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
           ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }}){{
@@ -695,7 +699,8 @@
           if fab_real.attachments.enabled | default(false) | bool else '' }}{{
           ('; service VRF with ' ~ hf_service.status.circuits | length ~ ' platform circuit(s) for '
            ~ hf_service.status.networks | length ~ ' network(s)'
-           ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else ''))
+           ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else '')
+           ~ ((', waiting for service.maxPrefixes: ' ~ _svc_capped | length ~ ' prefix(es)') if _svc_capped else ''))
           if (hf_service | default({})).enabled | default(false) else '' }}{{
           ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}{{
           '; SRv6 core' if (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6' else '' }}
