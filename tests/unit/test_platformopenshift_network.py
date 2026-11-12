@@ -10,6 +10,7 @@
 Documentation ranges and example names only.
 """
 import importlib.util
+import json
 import os
 import sys
 import unittest
@@ -1504,3 +1505,24 @@ class PlatformSideDownWaits(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class InstallStartedWakesTheNetwork(unittest.TestCase):
+    """Review R4 NM1: when the cluster job records installStarted it wakes the network, so the network's row says
+    installed before the fabric's next plan."""
+
+    def check(self, file, when_word):
+        import yaml
+        tasks = yaml.safe_load(open(os.path.join(ROOT, "eda", "rulebooks", "roles", "platformopenshift_provision",
+                                                 "tasks", file)))
+        idx = next(i for i, t in enumerate(tasks) if "installStarted" in json.dumps(t.get("vars", {})))
+        nxt = tasks[idx + 1]
+        self.assertIn("nudge_cr.yml", nxt.get("ansible.builtin.include_tasks", ""))
+        self.assertEqual(nxt["vars"]["nudge_crs"][0]["kind"], "HybridNetwork")
+        self.assertIn(when_word, json.dumps(nxt.get("when")))
+
+    def test_openstack(self):
+        self.check("openstack_clusterbuild.yml", "cb_platform_path")
+
+    def test_aws_and_gcp(self):
+        self.check("aws_clusterbuild_deploy.yml", "Internal")

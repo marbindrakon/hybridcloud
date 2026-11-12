@@ -88,16 +88,18 @@ service:
   existing ones included. `infrastructure.hub` stays the hub's own range, refused to tenants altogether.
 - **`service.maxPrefixes`** (default 1000): the most cluster addresses the platform announces over a platform edge
   connection, given to the hub's network as its maximum-prefix figure. It is shared fairly and atomically: a
-  cluster's addresses are admitted all or none; clusters whose install has started or completed keep their slots,
-  the others take what is left in the order they came (a cluster that waits keeps its place in the order but holds
-  no slot); the rest wait, with `ServiceLimitReached` on the network's row and the numbers in its message, and the
-  fabric's message counts them.
-- **`service.tenantShare`** (default 0.5): while two or more tenants ask, one tenant's clusters that have not
-  installed yet may not take it past this part of `service.maxPrefixes` (`ServiceShareReached`, waiting, with the
-  numbers); a tenant alone may use all of it, and installed clusters are never pushed out. With the default, a
-  tenant that asks while another holds many addresses still finds half the pool closed to the other's new clusters.
-  A tenant that filled the pool with installed clusters while it was alone keeps them: the others wait until its
-  clusters go (or the setting grows).
+  cluster's addresses are admitted all or none, and an admitted cluster keeps its slot (below); the others take what
+  is left in the order they came (a cluster that waits keeps its place in the order but holds no slot); the rest
+  wait, with `ServiceLimitReached` on the network's row and the numbers in its message, and the fabric's message
+  counts them.
+- **`service.tenantShare`** (default 0.5): while two or more tenants ask, one tenant's clusters not yet admitted may
+  not take it past this part of `service.maxPrefixes` (`ServiceShareReached`, waiting, with the numbers); a tenant
+  alone may use all of it, and an admitted cluster is never pushed out by a newcomer. A tenant that filled the pool
+  while it was alone keeps what it holds: the others wait until its clusters go (or the setting grows).
+- **`service.admissionHoldMinutes`** (default 60): an admitted cluster keeps its slot from its admission; once its
+  install has started (the cluster job tells its network at once) it keeps it for good; until then for this long,
+  after which it counts as not admitted (the share applies to it again). A refused or deleted cluster gives its slot
+  back at once.
 
 ### The default, the allow-list or any range
 

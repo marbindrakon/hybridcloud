@@ -132,7 +132,8 @@ class Realization(unittest.TestCase):
                                                "range": [], "ports": [6443, 443], "hubEndpoints": [],
                                                "attachableRanges": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
                                                                     "100.64.0.0/10"],
-                                               "hubRoutedRanges": [], "maxPrefixes": 1000, "tenantShare": 0.5})
+                                               "hubRoutedRanges": [], "maxPrefixes": 1000, "tenantShare": 0.5,
+                                               "admissionHoldMinutes": 60})
         self.assertEqual(DEFAULTS["infrastructure"], {"hub": []})
         self.assertNotIn("platformSources", DEFAULTS["egress"])
         self.assertNotIn("platformPorts", DEFAULTS["egress"])
@@ -805,6 +806,79 @@ class HubRoutedRanges(unittest.TestCase):
         self.assertIn("172.18.0.0/16 le 32", ce["refusedRanges"])
         errs = F.check_fabric({"spec": spec(), "realization": real(service={"hubRoutedRanges": "172.18.0.0/16"})})
         self.assertTrue([e for e in errs.get("serviceErrors", []) if "service.hubRoutedRanges" in e])
+
+
+class AdmittedClustersKeepTheirSlots(unittest.TestCase):
+    """Review R4 NM1: a slot is held from admission (the plan's previous status records each admitted cluster and
+    since when); the share limits only what is not yet admitted; an admission that never leads to an install is held
+    for service.admissionHoldMinutes (default 60), then it counts as not admitted; a refused or deleted cluster has
+    no rows, so it holds nothing."""
+
+    T0, LATER, MUCH_LATER = "2026-11-12T10:00:00Z", "2026-11-12T10:20:00Z", "2026-11-12T11:30:00Z"
+
+    def run_plan(self, clusters, cap, previous=None, now=None, hold=None):
+        nets, entries, targets, index, v = {}, {}, {}, {}, 0
+        for tenant, cluster, prefixes, installed in clusters:
+            key = f"{tenant}/net"
+            nets.setdefault(key, [])
+            for p in prefixes:
+                v += 1
+                entries[(key, p)] = v
+                nets[key].append((p, {"cluster": cluster, "installed": installed}))
+            targets.setdefault(key, 10001 + len(targets))
+            index.setdefault(key, len(index))
+        objs = [network("net", ["10.0.0.0/8"], rows, ns=key.split("/")[0]) for key, rows in nets.items()]
+        over = {"attachableRanges": ["0.0.0.0/0"], "maxPrefixes": cap}
+        if hold is not None:
+            over["admissionHoldMinutes"] = hold
+        return F.service_plan({"realization": real(service=over), "nodes": NODES, "fabric": "lab", "domainAsn": 65010,
+                               "networks": objs, "ledger": ledger(entries, targets, index), "circuits": [circuit()],
+                               "vrfs": {n: [] for n in NODES}, "previous": previous or {}, "now": now or self.T0})
+
+    A = [("t-a", "c1", ["10.1.0.1/32", "10.1.0.2/32"], False), ("t-a", "c2", ["10.1.0.3/32", "10.1.0.4/32"], False)]
+    B = [("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], False)]
+
+    def carried(self, out):
+        return {w["network"]: w["prefixes"] for w in out["status"]["networks"]}
+
+    def test_a_second_tenant_arriving_mid_install(self):
+        first = self.run_plan(self.A, cap=4)
+        self.assertEqual(len(self.carried(first)["t-a/net"]), 4)
+        self.assertEqual({(a["network"], a["cluster"]) for a in first["status"]["admitted"]},
+                         {("t-a/net", "c1"), ("t-a/net", "c2")})
+        # B arrives while A's c2 installs (its row not yet marked installed): A keeps every admitted slot, B waits
+        out = self.run_plan(self.A + self.B, cap=4, previous=first["status"], now=self.LATER)
+        self.assertEqual(len(self.carried(out)["t-a/net"]), 4)
+        self.assertEqual({w["cluster"]: w["reason"] for w in out["status"]["waiting"]}, {"b1": "ServiceLimitReached"})
+        # the admission time is kept from the first run
+        self.assertEqual({a["since"] for a in out["status"]["admitted"]}, {self.T0})
+
+    def test_two_tenants_each_waiting_on_the_other(self):
+        a = [("t-a", "c1", ["10.1.0.1/32", "10.1.0.2/32"], True), ("t-a", "c2", ["10.1.0.3/32", "10.1.0.4/32"], False)]
+        b = [("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], True), ("t-b", "b2", ["10.2.0.3/32", "10.2.0.4/32"], False)]
+        out = self.run_plan(a + b, cap=4)
+        self.assertEqual(sorted(w["cluster"] for w in out["status"]["waiting"]), ["b2", "b2", "c2", "c2"])
+        # B's installed cluster goes: B's waiting one is admitted (no deadlock, no share in the way of the other)
+        out = self.run_plan(a + [b[1]], cap=4, previous=out["status"], now=self.LATER)
+        self.assertEqual(self.carried(out)["t-b/net"], ["10.2.0.3/32", "10.2.0.4/32"])
+        self.assertEqual(sorted({w["cluster"] for w in out["status"]["waiting"]}), ["c2"])
+
+    def test_an_install_that_never_starts_is_held_for_a_bounded_time(self):
+        first = self.run_plan(self.A, cap=4)
+        held = self.run_plan(self.A + self.B, cap=4, previous=first["status"], now=self.LATER)
+        self.assertEqual(len(self.carried(held)["t-a/net"]), 4)
+        # past the bound (60 minutes by default) an admission that never led to an install counts as not admitted:
+        # the share applies again (2 of 4 while two tenants ask)
+        late = self.run_plan(self.A + self.B, cap=4, previous=held["status"], now=self.MUCH_LATER)
+        self.assertEqual(self.carried(late), {"t-a/net": ["10.1.0.1/32", "10.1.0.2/32"],
+                                              "t-b/net": ["10.2.0.1/32", "10.2.0.2/32"]})
+        # an installed one is held for good
+        a = [("t-a", "c1", ["10.1.0.1/32", "10.1.0.2/32"], True), ("t-a", "c2", ["10.1.0.3/32", "10.1.0.4/32"], True)]
+        late = self.run_plan(a + self.B, cap=4, previous=held["status"], now=self.MUCH_LATER)
+        self.assertEqual(len(self.carried(late)["t-a/net"]), 4)
+        # the setting is checked
+        errs = F.check_fabric({"spec": spec(), "realization": real(service={"admissionHoldMinutes": 0})})
+        self.assertTrue([e for e in errs.get("serviceErrors", []) if "service.admissionHoldMinutes" in e])
 
 
 class PrefixCheck(unittest.TestCase):

@@ -146,6 +146,15 @@
     cr_status_body:
       installStarted: true
 
+# the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
+- name: Wake the network now the install starts
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ cb_network | default(aws_network | default('')) }}"}]
+  when: >-
+    (cb_network | default(aws_network | default(''))) | length > 0
+    and (cb_publish | default(aws_publish | default('External'))) == 'Internal'
+
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
     argv:

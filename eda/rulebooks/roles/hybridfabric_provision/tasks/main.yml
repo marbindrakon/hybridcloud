@@ -438,6 +438,8 @@
           vrfs: "{{ hf_attach_plan.vrfs | default({}) }}"
           previous: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
           sites: "{{ hf_sites }}"
+          # (the admissions' age: service.admissionHoldMinutes)
+          now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
 
     - name: Refuse an unusable service plan
       ansible.builtin.set_fact:

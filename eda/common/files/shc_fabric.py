@@ -1318,6 +1318,10 @@ def service_settings_check(real):
             n = _net(v)
             if n is None or n.version != 4:
                 errors.append(f"realization service.hubRoutedRanges[{i}] {v!r} is not an IPv4 network")
+    ah = sv.get("admissionHoldMinutes", 60)
+    if isinstance(ah, bool) or not str(ah).strip().isdigit() or int(ah) < 1:
+        errors.append(f"realization service.admissionHoldMinutes {ah!r} must be a whole number of minutes from 1 (how "
+                      "long an admitted cluster keeps its slot before its install starts)")
     ts = sv.get("tenantShare", 0.5)
     try:
         ts_ok = not isinstance(ts, bool) and 0 < float(ts) <= 1
@@ -1417,7 +1421,8 @@ def service_settings(real):
             "hub": [str(n) for n in hub4], "range": [str(n) for n in rng],
             "ports": sorted({int(p) for p in sv.get("ports") or [6443, 443]}),
             "hubEndpoints": eps, "attachable": [str(n) for n in att], "maxPrefixes": int(sv.get("maxPrefixes") or 1000),
-            "tenantShare": float(sv.get("tenantShare") if sv.get("tenantShare") is not None else 0.5)}
+            "tenantShare": float(sv.get("tenantShare") if sv.get("tenantShare") is not None else 0.5),
+            "admissionHoldMinutes": int(sv.get("admissionHoldMinutes") or 60)}
 
 
 def prefix_entry(n):
@@ -1529,14 +1534,29 @@ def service_link(pool, index):
 SERVICE_WAIT_REASONS = ("ServiceLimitReached", "ServiceShareReached")
 
 
-def service_limit(first, clusters_of, cfg):
+def _minutes_between(a, b):
+    """Minutes from timestamp a to b (RFC 3339, Z), None when either is unreadable."""
+    import datetime
+    try:
+        ta = datetime.datetime.strptime(str(a)[:19], "%Y-%m-%dT%H:%M:%S")
+        tb = datetime.datetime.strptime(str(b)[:19], "%Y-%m-%dT%H:%M:%S")
+    except ValueError:
+        return None
+    return (tb - ta).total_seconds() / 60
+
+
+def service_limit(first, clusters_of, cfg, previous=None, now=""):
     """service.maxPrefixes, fair and atomic (Review R4 M1). first: {network: [candidates]} after first come first
     served; clusters_of: {(network, prefix): {cluster: installed}}. A cluster's prefixes are admitted all or none (a
     prefix two clusters share counts once). Clusters whose install started or completed come first, in the ledger's
     order (their lowest value), and keep their slots; then the others in the same order, with what is left: a cluster
     that waits keeps its place in the order but holds no slot. While two or more tenants (the networks' namespaces)
     ask, a tenant's not-yet-installed clusters may not take it past service.tenantShare of the pool; alone, a tenant
-    may use all of it. -> ({network: [candidates]}, waiting rows {network, prefix, cluster, reason, message})."""
+    may use all of it. A slot is held from admission (Review R4 NM1): a cluster admitted before (previous status
+    admitted, with since) keeps its place like an installed one, for service.admissionHoldMinutes after its admission
+    while its install has not started (installed: for good); a refused or deleted cluster has no rows and holds
+    nothing. -> ({network: [candidates]}, waiting rows {network, prefix, cluster, reason, message}, admitted
+    [{network, cluster, since}])."""
     cap = cfg["maxPrefixes"]
     by_text = {(k, c["text"]): c for k, lst in first.items() for c in lst}
     units = {}
@@ -1548,8 +1568,16 @@ def service_limit(first, clusters_of, cfg):
             u["order"] = c["order"] if u["order"] is None else min(u["order"], c["order"])
     tenants = {k.split("/")[0] for k in first}
     share = cap if len(tenants) <= 1 else max(1, int(cap * cfg["tenantShare"]))
+    since = {(str(a.get("network")), str(a.get("cluster"))): str(a.get("since") or "")
+             for a in (previous or {}).get("admitted") or [] if isinstance(a, dict)}
+    for u in units.values():
+        when = since.get((u["network"], u["cluster"]))
+        age = _minutes_between(when, now) if when else None
+        u["since"] = when or now
+        # held: installed, or admitted before and within the bound (an unreadable time counts as within it)
+        u["held"] = u["installed"] or (when is not None and (age is None or age < cfg["admissionHoldMinutes"]))
     admitted, per_tenant, waiting = set(), {}, []
-    for u in sorted(units.values(), key=lambda u: (not u["installed"], u["order"])):
+    for u in sorted(units.values(), key=lambda u: (not u["held"], u["order"])):
         k, tenant = u["network"], u["network"].split("/")[0]
         need = sorted(t for t in u["texts"] if (k, t) not in admitted)
         if not need:
@@ -1559,7 +1587,7 @@ def service_limit(first, clusters_of, cfg):
             reason = "ServiceLimitReached"
             why = (f"the platform reaches at most {cap} cluster addresses and {len(admitted)} are in use; cluster "
                    f"{u['cluster']} needs {len(need)} and waits its turn")
-        elif not u["installed"] and held + len(need) > share:
+        elif not u["held"] and held + len(need) > share:
             reason = "ServiceShareReached"
             why = (f"this tenant's clusters hold {held} of the {share} cluster addresses one tenant may hold while other "
                    f"tenants use the platform's connection too; cluster {u['cluster']} needs {len(need)} and waits its "
@@ -1578,7 +1606,10 @@ def service_limit(first, clusters_of, cfg):
             accepted[k] = mine
     # a prefix another cluster of the network got admitted with is carried: it waits for nothing
     waiting = [w for w in waiting if (w["network"], w["prefix"]) not in admitted]
-    return accepted, sorted(waiting, key=lambda w: (w["network"], w["prefix"], w["cluster"]))
+    kept = sorted(({"network": u["network"], "cluster": u["cluster"], "since": u["since"]} for u in units.values()
+                   if u["texts"] and all((u["network"], t) in admitted for t in u["texts"])),
+                  key=lambda a: (a["network"], a["cluster"]))
+    return accepted, sorted(waiting, key=lambda w: (w["network"], w["prefix"], w["cluster"])), kept
 
 
 def service_plan(req):
@@ -1671,7 +1702,8 @@ def service_plan(req):
                                        "routing domain"})
             continue
         first.setdefault(c["network"], []).append(c)
-    accepted, waiting = service_limit(first, clusters_of, cfg)
+    accepted, waiting, admitted_units = service_limit(first, clusters_of, cfg, req.get("previous") or {},
+                                                      str(req.get("now") or ""))
     circuits = [c for c in req.get("circuits") or [] if c.get("nodes")]
     with_circuit = {n for c in circuits for n in c["nodes"]}
     networks, status_nets = [], []
@@ -1733,7 +1765,7 @@ def service_plan(req):
         vrfs[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
     status = {"enabled": True, "vrf": cfg["vrf"], "range": cfg["range"], "sources": cfg["range"], "ports": cfg["ports"],
               "hubEndpoints": cfg["hubEndpoints"], "attachableRanges": cfg["attachable"], "circuits": st_circuits,
-              "networks": status_nets, "waiting": waiting,
+              "networks": status_nets, "waiting": waiting, "admitted": admitted_units,
               "refused": sorted(refused, key=lambda r: (r["network"], r["prefix"]))}
     return {"errors": [], "enabled": True, "nodes": nodes, "status": status, "vrfs": vrfs, "pending": pending}
 

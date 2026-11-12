@@ -302,13 +302,17 @@ fabric_realization_defaults:
     # NotForManagedClusters. infrastructure.hub stays the hub's own range tenants are refused outright
     hubRoutedRanges: []
     # the most cluster prefixes the platform announces to the hub's network over a platform circuit (its
-    # maximum-prefix, status.ceConfig.maxPrefixes). A cluster's prefixes are admitted all or none; clusters whose
-    # install has started keep their slots, the others take what is left in the order they came; the rest wait
+    # maximum-prefix, status.ceConfig.maxPrefixes). A cluster's prefixes are admitted all or none; an admitted cluster
+    # keeps its slot (see admissionHoldMinutes), the others take what is left in the order they came; the rest wait
     # (ServiceLimitReached on the network's row)
     maxPrefixes: 1000
-    # the part of maxPrefixes one tenant's not yet installed clusters may take while two or more tenants ask
+    # the part of maxPrefixes one tenant's not yet admitted clusters may take while two or more tenants ask
     # (ServiceShareReached beyond it); a tenant alone may use all of it. Above 0, at most 1
     tenantShare: 0.5
+    # how long a cluster admitted to the limit keeps its slot before its install starts (minutes): an admitted
+    # cluster is never pushed out by a newcomer meanwhile; once its install has started it keeps it for good, and a
+    # refused or deleted cluster gives it back at once
+    admissionHoldMinutes: 60
   # attachment circuits (AttachmentCircuit on a ProviderEdge of platform frr): each circuit gets a VLAN from vlanPool
   # on its bearer and the next /linkPrefixLength of linkPool (node i takes host address i+1, the CE the next one);
   # the network's root VRF on every node peers with the CE over that VLAN. providerEdges.<edge>.bearers.<bearer>

@@ -214,6 +214,13 @@
         records: "{{ cb_dns_records | default([]) }}"
       vaultPaths: null
 
+# the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
+- name: Wake the network now the install starts
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ oso_network }}"}]
+  when: cb_platform_path | default(false) | bool
+
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:
     content: "{{ lookup('template', 'build-values.yaml.j2') }}"
