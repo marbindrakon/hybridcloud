@@ -73,7 +73,7 @@ export interface TenantProfileStatus {
   ipv6Platform?: { blockLengths?: number[]; defaultBlockLength?: number };
   /** Address ranges reserved by the platform */
   reservedRanges?: TenantReservedRange[];
-  /** Ranges a network must lie in to host clusters the platform manages; absent = any */
+  /** Ranges a network must lie in to host clusters the platform manages; absent = any range not reserved */
   managedClusterRanges?: string[];
   observedEntityGeneration?: number;
   lastUpdatedTime?: string;
