@@ -922,6 +922,19 @@ class AWrongSettingKeepsTheService(unittest.TestCase):
         self.assertEqual(out["nodes"]["bgw-1"]["refuse"], [])
         self.assertIn("service.range", out["status"]["settingsError"])
 
+    def test_kept_from_the_previous_status_and_the_nodes_own_blocks(self):
+        # the fabric job gives the plan the previous status only; each node step keeps the block the node runs
+        nets, alloc, good = self.realized()
+        out = F.service_plan({"realization": real(service={"tenantShare": "0,5"}), "nodes": NODES, "fabric": "lab",
+                              "domainAsn": 65010, "networks": nets, "ledger": alloc, "circuits": [circuit()],
+                              "vrfs": {n: [] for n in NODES}, "previous": good["status"]})
+        self.assertEqual((out["kept"], out["nodes"]), (True, {}))
+        k = F.service_kept({"block": good["nodes"]["bgw-1"], "vrfs": []})
+        self.assertIs(k["block"]["keep"], True)
+        self.assertEqual(k["vrfs"][0]["service"], good["vrfs"]["bgw-1"][0]["service"])
+        self.assertEqual(F.service_kept({"block": {}, "vrfs": [{"vrf": "e1", "vpnTarget": 1}]}),
+                         {"errors": [], "block": {}, "vrfs": [{"vrf": "e1", "vpnTarget": 1}]})
+
     def test_without_a_previous_block_nothing_is_realized(self):
         nets, alloc, _ = self.realized()
         out = plan(real(service={"range": []}), nets, alloc)

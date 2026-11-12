@@ -170,6 +170,27 @@ class FabricJob(unittest.TestCase):
         out = run_play(play + [write_out("c")], v)
         self.assertEqual([c for c in out if c["type"] == "ServiceRouting"], [])
 
+    def test_a_node_keeps_the_service_it_runs(self):
+        # Review R4 NM2: inside the node loop, the node's own root.json service block is kept (marked keep)
+        import base64
+        real, (egp, att, vrfs, svc) = S.service_setup()
+        names = ["{{ bgw_node.name }}: read the service the node runs, to keep it while a setting is wrong",
+                 "{{ bgw_node.name }}: keep the service the node runs", "{{ bgw_node.name }}: the kept service"]
+        tasks = [node_task(n) for n in names]
+        doc = json.dumps({"type": "root", "service": svc["bgw-1"]})
+        tasks[0] = {"name": names[0], "ansible.builtin.set_fact": {"_hf_root_now": {
+            "content": base64.b64encode(doc.encode()).decode()}}, "when": tasks[0]["when"]}
+        v = {"role_path": HF.rsplit("/tasks", 1)[0], "bgw_node": {"name": "bgw-1"}, "hf_service": {"kept": True}}
+        # (node_root.yml sets these as facts; an extra variable would win over the step's set_fact)
+        tasks = [{"ansible.builtin.set_fact": {"hf_node_service": {}, "hf_node_vrfs": []}}] + tasks
+        out = run_play(tasks + [write_out("[hf_node_service, hf_node_vrfs]")], v)
+        self.assertIs(out[0]["keep"], True)
+        self.assertEqual(out[0]["networks"], svc["bgw-1"]["networks"])
+        self.assertEqual([x["vrf"] for x in out[1]], [w["vrf"] for w in svc["bgw-1"]["networks"]])
+        # not kept: nothing read, nothing changed
+        out = run_play(tasks + [write_out("hf_node_service")], dict(v, hf_service={}))
+        self.assertEqual(out, {})
+
     def test_status(self):
         t = main_task("Report the fabric ready")
         real, (egp, att, vrfs, svc) = S.service_setup()

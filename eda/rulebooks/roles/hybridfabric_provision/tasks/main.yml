@@ -423,28 +423,6 @@
       ansible.builtin.set_fact:
         hf_reserved: "{{ fab_check_result.ranges }}"
 
-    # a wrong service setting never tears down a service that runs (Review R4 NM2): the plan keeps each node's last
-    # applied service block, read here from the node (its root.json), untouched; only then, so a fabric whose settings
-    # are right does not touch the nodes before its node steps
-    - name: Read the service each node runs, to keep it while a setting is wrong
-      ansible.builtin.slurp:
-        src: /etc/shc-fabric/root.json
-      delegate_to: "{{ item }}"
-      loop: "{{ fab_spec.borderGateway.nodes | map(attribute='name') | list }}"
-      register: _hf_root_now
-      failed_when: false
-      when: hf_service_errors | length > 0
-
-    - name: Keep the service each node runs
-      ansible.builtin.set_fact:
-        hf_previous_nodes: >-
-          {%- set out = {} -%}
-          {%- for r in _hf_root_now.results | default([]) if r.content is defined -%}
-            {%- set doc = r.content | b64decode | from_json -%}
-            {%- if (doc.service | default({})).vrf is defined -%}{%- set _ = out.update({r.item: doc.service}) -%}{%- endif -%}
-          {%- endfor -%}
-          {{ out }}
-
     # the service VRF: the networks' cluster prefixes (status.platformAccess) on every node with a platform circuit,
     # the root VRFs of the networks gaining their service links
     - name: Plan the service VRF on the nodes
@@ -464,7 +442,6 @@
           sites: "{{ hf_sites }}"
           # (the admissions' age: service.admissionHoldMinutes)
           now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
-          previousNodes: "{{ hf_previous_nodes | default({}) }}"
 
     - name: Refuse an unusable service plan
       ansible.builtin.set_fact:

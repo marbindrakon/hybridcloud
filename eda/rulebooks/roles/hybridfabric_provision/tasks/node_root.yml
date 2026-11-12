@@ -25,6 +25,40 @@
     hf_node_vrfs: "{{ (hf_attach.vrfs | default({})).get(bgw_node.name, []) }}"
     hf_node_service: "{{ ((hf_service | default({})).nodes | default({})).get(bgw_node.name, {}) }}"
 
+# a wrong service setting never tears down a service that runs (Review R4 NM2): the plan then keeps the service
+# (hf_service.kept) without node blocks; each node keeps the block it last applied, read from it here (only then), as
+# it is and marked keep (the apply runs no service step; the template renders what it rendered)
+- name: "{{ bgw_node.name }}: read the service the node runs, to keep it while a setting is wrong"
+  ansible.builtin.slurp:
+    src: /etc/shc-fabric/root.json
+  delegate_to: "{{ bgw_node.name }}"
+  register: _hf_root_now
+  failed_when: false
+  when:
+    - (hf_service | default({})).kept | default(false) | bool
+    - hf_node_service | length == 0
+
+- name: "{{ bgw_node.name }}: keep the service the node runs"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+  vars:
+    fab_check:
+      action: service-kept
+      block: >-
+        {{ ((_hf_root_now.content | b64decode | from_json).service | default({}))
+           if _hf_root_now.content is defined else {} }}
+      vrfs: "{{ hf_node_vrfs }}"
+  when:
+    - (hf_service | default({})).kept | default(false) | bool
+    - hf_node_service | length == 0
+
+- name: "{{ bgw_node.name }}: the kept service"
+  ansible.builtin.set_fact:
+    hf_node_service: "{{ fab_check_result.block }}"
+    hf_node_vrfs: "{{ fab_check_result.vrfs }}"
+  when:
+    - (hf_service | default({})).kept | default(false) | bool
+    - hf_node_service | length == 0
+
 # a circuit's IPv6 routes reach the sites only as IPv6 VPN routes, which need the dual-stack core (the IPv6 loopback
 # is their next hop); the planner offers IPv6 on circuits only with it, so this is a guard, not a policy
 - name: "{{ bgw_node.name }}: IPv6 on attachment circuits needs the IPv6 core"

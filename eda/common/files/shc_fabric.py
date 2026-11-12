@@ -1639,6 +1639,20 @@ def kept_service_block(block):
     return b
 
 
+def service_kept(req):
+    """A node's last applied service block (service-kept, for the fabric job's node step while a service setting is
+    wrong): {block: the node's root.json service, vrfs: the node's root VRFs} -> {block: kept_service_block or {},
+    vrfs: with the kept networks' service links}."""
+    block = req.get("block") if isinstance(req.get("block"), dict) and (req.get("block") or {}).get("vrf") else None
+    vrfs = list(req.get("vrfs") or [])
+    if block is None:
+        return {"errors": [], "block": {}, "vrfs": vrfs}
+    kept = kept_service_block(block)
+    out = service_vrfs(["n"], {"n": kept}, {"n": vrfs})["n"]
+    # (a network VRF the node holds only for its service link: IPv4, as the fabric job gives it)
+    return {"errors": [], "block": kept, "vrfs": [dict({"families": [4]}, **v) for v in out]}
+
+
 def service_plan(req):
     """The service VRF on the border gateway nodes' root instance (service-plan, see the module docstring)."""
     real = req.get("realization") or {}
@@ -1655,7 +1669,8 @@ def service_plan(req):
     wrong = service_settings_check(real)
     kept = {n: kept_service_block(b) for n, b in (req.get("previousNodes") or {}).items()
             if n in node_names and isinstance(b, dict) and b.get("vrf")}
-    if wrong and kept:
+    ran = bool(kept) or bool((req.get("previous") or {}).get("circuits"))
+    if wrong and ran:
         # a wrong setting never tears down a service that runs (Review R4 NM2): every node keeps its last applied
         # block untouched (keep: no service step on the node; the template renders what it rendered), the status
         # stays the last realized one, loud by name (settingsError: the fabric's ServiceRouting condition, an event,
@@ -1666,7 +1681,7 @@ def service_plan(req):
         return {"errors": [], "enabled": True, "realized": False, "kept": True, "nodes": kept,
                 "status": status, "vrfs": service_vrfs(node_names, kept, vrfs_in), "pending": []}
     if wrong:
-        # never realized (no node has a block): not realized, and its status says why by name (Review R4 M2)
+        # never realized (no platform circuit was realized): not realized, and its status says why by name (Review R4 M2)
         return {"errors": [], "enabled": True, "realized": False, "nodes": {},
                 "status": dict(service_status_off(), reason="InvalidSpec", message="; ".join(wrong)),
                 "vrfs": {n: list(vrfs_in.get(n) or []) for n in node_names}, "pending": []}
@@ -2656,7 +2671,7 @@ def orphan_report(req):
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-network": check_network,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
            "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
-           "circuit-plan": circuit_plan, "check-circuit": check_circuit, "attachments-plan": attachments_plan,
+           "circuit-plan": circuit_plan, "service-kept": service_kept, "check-circuit": check_circuit, "attachments-plan": attachments_plan,
            "reserved-ranges": reserved_ranges_action, "service-plan": service_plan,
            "service-prefix-check": service_prefix_check, "check-cluster-networks": check_cluster_networks}
 

@@ -349,7 +349,7 @@ hub's routing (above) is the deployment's to verify.
 - **The service on, `attachableRanges` set**: keeps working once `service.range` is set; the allow-list restricts as
   before.
 - **The service on, no `service.range`** (or any other wrong `service.*` setting): nothing that runs is torn down.
-  The fabric keeps each node's service as it was last applied (it reads the node's configuration and passes it on
+  The fabric keeps each node's service as it was last applied (each node step reads the node's configuration and passes it on
   marked as kept: the node applies no service step, so the filter, the links and the sessions stay exactly as they
   are, the previous release's filter by `infrastructure.hub` included), keeps the last realized status, carries no
   new cluster address, and goes on with everything else (networks, egress, edge connections). It is loud: the
