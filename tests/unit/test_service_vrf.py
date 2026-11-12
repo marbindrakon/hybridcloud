@@ -756,6 +756,8 @@ class ServiceFilter(unittest.TestCase):
 
     @classmethod
     def setUpClass(cls):
+        if not __import__("shutil").which("jq"):
+            raise unittest.SkipTest("jq not installed (the node script reads its configuration with jq)")
         nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32"]),
                 hn("lab2", ["192.0.2.0/24"], internet=False, rows=["192.0.2.99/32"])]
         led = copy.deepcopy(LEDGER)
