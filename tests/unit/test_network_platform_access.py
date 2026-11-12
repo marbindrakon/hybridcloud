@@ -132,6 +132,17 @@ class Eligibility(unittest.TestCase):
                 self.assertIn("service.range", out["message"])
                 self.assertEqual(out["accepted"], [])
 
+    def test_a_service_the_fabric_does_not_realize(self):
+        # Review R4 M2: the fabric realizes no service for a wrong setting and says why in its status; the network
+        # says so by name (ServiceNotOffered), its accepted prefixes keep their place
+        sst = dict(CIRCUITS, circuits=[], reason="InvalidSpec",
+                   message="realization service.vrf.table 254 must be a table other than 253-255")
+        led = {"HybridNetwork/tenant-a/net/10.20.1.5/32": 3}
+        out = run(serviceStatus=sst, clusters=[cl("c1", "10.20.1.5/32")], ledger=led)
+        self.assertEqual(self.cond(out), ("False", "ServiceNotOffered", "unavailable"))
+        self.assertIn("service.vrf.table", out["message"])
+        self.assertEqual((out["kept"], out["release"]), (["10.20.1.5/32"], []))
+
     def test_the_sources_are_the_service_range(self):
         # the only addresses the platform's management opens connections from, for the tenant's own firewalls
         self.assertEqual(run()["sources"], ["192.0.2.0/28"])

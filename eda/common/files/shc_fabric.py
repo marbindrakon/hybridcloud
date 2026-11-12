@@ -208,13 +208,16 @@ def check_fabric(req):
                       spec.get("domainAsn"), core, service_on)
     errors += eg["errors"]
     size["egressPool"] = eg["poolSize"]
-    errors += service_check(real)
+    errors += infrastructure_check(real)
+    # the service VRF's own settings stop the service only (Review R4 M2): the plan realizes none and says why
+    service_errors = service_settings_check(real)
     errors += router_advertisement_check(real)
     at = attachments_check(real.get("attachments") or {}, [n.get("name") for n in (spec.get("borderGateway") or {}).get("nodes") or []], core)
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
     t = core_transport(core)
-    return {"errors": errors, "poolSize": size, "peIndexMax": pe_max, "transport": t if t in TRANSPORTS else ""}
+    return {"errors": errors, "serviceErrors": service_errors, "poolSize": size, "peIndexMax": pe_max,
+            "transport": t if t in TRANSPORTS else ""}
 
 
 TRANSPORTS = ("mpls", "srv6")
@@ -1172,10 +1175,11 @@ def realization_pools(real):
     return out
 
 
-def service_check(real):
-    """The realization's infrastructure ranges and service VRF (check-fabric). Always: infrastructure.hub entries are
-    networks of either family, no realization pool overlaps one, and the retired egress.platformSources and
-    egress.platformPorts are not set. With service.enabled: attachments.enabled, an IPv4 hub range, a VRF name (a
+def infrastructure_check(real):
+    """The realization's infrastructure ranges (check-fabric, fatal: they decide every tenant network, circuit and the
+    published list): infrastructure.hub entries are networks of either family, no realization pool overlaps one, and
+    the retired egress.platformSources and egress.platformPorts are not set. service_settings_check, with
+    service.enabled: attachments.enabled, an IPv4 hub range, a VRF name (a
     Linux device name, not the egress VRF's, not e<digits>), a table not 253-255, not the egress table and below
     egress.networkTableBase, the ports, service.range (required: IPv4 networks, addresses as /32, each inside an IPv4
     hub range), every hubEndpoints prefix an IPv4 network inside service.range with its ports, service.maxPrefixes a
@@ -1204,11 +1208,27 @@ def service_check(real):
         for h in hub:
             if h.version == n.version and h.overlaps(n):
                 errors.append(f"realization {key} {n} overlaps infrastructure.hub {h}")
+    return errors
+
+
+def service_check(real):
+    """infrastructure_check and service_settings_check together (both lists)."""
+    return infrastructure_check(real) + service_settings_check(real)
+
+
+def service_settings_check(real):
+    """The service VRF's own settings (with service.enabled; see infrastructure_check for the rest). A refusal here is
+    the service's only (Review R4 M2): check-fabric reports it apart (serviceErrors), the plan realizes no service and
+    says why in the fabric's status, and the fabric's other work goes on."""
+    real = real or {}
+    errors = []
     sv = real.get("service") or {}
     if not isinstance(sv, dict):
-        return errors + ["realization service must be a mapping"]
+        return ["realization service must be a mapping"]
     if not bool(sv.get("enabled")):
         return errors
+    eg = real.get("egress") or {}
+    hub = hub_nets(real)
     if not (real.get("attachments") or {}).get("enabled"):
         errors.append("realization service.enabled needs attachments.enabled (the platform circuits)")
     # the service table drops by wildcard (the service links so<n>/se<n>): an interface the realization names, and the
@@ -1469,10 +1489,17 @@ def service_plan(req):
     if not sv.get("enabled"):
         return {"errors": [], "enabled": False, "nodes": {}, "status": service_status_off(),
                 "vrfs": {n: list(vrfs_in.get(n) or []) for n in node_names}, "pending": []}
-    errors = service_check(real)
+    errors = infrastructure_check(real)
     if errors:
         return {"errors": errors, "enabled": True, "nodes": {}, "status": service_status_off(), "vrfs": vrfs_in,
                 "pending": []}
+    wrong = service_settings_check(real)
+    if wrong:
+        # the service is not realized (no node gets it, a node that had it loses it) and its status says why by
+        # name; every other part of the fabric is planned as usual (Review R4 M2)
+        return {"errors": [], "enabled": True, "realized": False, "nodes": {},
+                "status": dict(service_status_off(), reason="InvalidSpec", message="; ".join(wrong)),
+                "vrfs": {n: list(vrfs_in.get(n) or []) for n in node_names}, "pending": []}
     cfg = service_settings(real)
     eg, at, core = real.get("egress") or {}, real.get("attachments") or {}, real.get("core") or {}
     base = int(eg.get("networkTableBase") or 100000)

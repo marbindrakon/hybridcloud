@@ -455,6 +455,38 @@
         hf_service: "{{ fab_check_result }}"
         hf_service_before: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
 
+    # a wrong service setting stops the service only (Review R4 M2): the plan realizes none and its status says why;
+    # the fabric says so once per change of the reason as a Warning event, and its other work goes on
+    - name: Report the service routing domain not realized
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Event
+          metadata:
+            name: "{{ fab_name }}-service-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+            namespace: "{{ fab_namespace }}"
+          involvedObject:
+            apiVersion: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ fab_name }}"
+            namespace: "{{ fab_namespace }}"
+            uid: "{{ fab_obj.metadata.uid }}"
+          type: Warning
+          reason: ServiceNotRealized
+          message: "The service routing domain is not realized: {{ hf_service.status.message }}"
+          source: {component: shc-hybridfabric}
+          reportingComponent: shc-hybridfabric
+          firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          count: 1
+      when:
+        - (hf_service.status | default({})).reason | default('', true) | length > 0
+        - (hf_service_before.message | default('', true)) != hf_service.status.message
+
     # what tenants see of these (the ranges and the ranges a managed cluster's prefixes must lie in) joins the offer
     # the Entities were told (status.realization.ipam.tenantOffer), so a change wakes them
     - name: Tell the Entities of the ranges tenants may not use
@@ -710,7 +742,9 @@
           ('; service VRF with ' ~ hf_service.status.circuits | length ~ ' platform circuit(s) for '
            ~ hf_service.status.networks | length ~ ' network(s)'
            ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else '')
-           ~ ((', waiting for service.maxPrefixes: ' ~ _svc_capped | length ~ ' prefix(es)') if _svc_capped else ''))
+           ~ ((', waiting for service.maxPrefixes: ' ~ _svc_capped | length ~ ' prefix(es)') if _svc_capped else '')
+           if not ((hf_service.status | default({})).reason | default('', true))
+           else ('; service VRF not realized: ' ~ hf_service.status.message))
           if (hf_service | default({})).enabled | default(false) else '' }}{{
           ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}{{
           '; SRv6 core' if (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6' else '' }}

@@ -120,7 +120,9 @@ class ReservedRanges(unittest.TestCase):
 
 class Realization(unittest.TestCase):
     def errs(self, r):
-        return F.check_fabric({"spec": spec(), "realization": r})["errors"]
+        # the fabric's and the service's own (Review R4 M2: reported apart, see ServiceRefusalStaysWithTheService)
+        out = F.check_fabric({"spec": spec(), "realization": r})
+        return out["errors"] + out["serviceErrors"]
 
     def test_defaults_are_inert(self):
         r = F.check_fabric({"spec": spec(), "realization": copy.deepcopy(DEFAULTS)})
@@ -394,8 +396,11 @@ class Plan(unittest.TestCase):
         self.assertIn("outside the service links (0-3)", out["pending"][0]["why"])
 
     def test_invalid_realization_fails_the_plan(self):
-        out = plan(real(infrastructure={"hub": []}), [], {})
+        # an invalid infrastructure range fails it; a wrong service setting only leaves the service unrealized
+        out = plan(real(infrastructure={"hub": ["198.51.100.1/24"]}), [], {})
         self.assertTrue(out["errors"])
+        out = plan(real(infrastructure={"hub": []}), [], {})
+        self.assertEqual((out["errors"], out["nodes"], out["status"]["reason"]), ([], {}, "InvalidSpec"))
 
 
 class ServiceRange(unittest.TestCase):
@@ -561,6 +566,54 @@ class DefaultRouteRefused(unittest.TestCase):
         alloc = ledger({("acme/n1", "192.0.2.15/32"): 1}, {"acme/n1": 10005}, {"acme/n1": 4})
         n = plan(real(service={"attachableRanges": []}), nets, alloc)["nodes"]["bgw-1"]
         self.assertEqual(n["refuse"], ce["refusedRanges"])
+
+
+class ServiceRefusalStaysWithTheService(unittest.TestCase):
+    """Review R4 M2: a wrong service.* setting never stops the fabric for everything else: check-fabric keeps it out of
+    its errors (serviceErrors), the plan realizes no service and says why in its status; the infrastructure ranges stay
+    fatal (they decide every tenant network, circuit and the published list)."""
+
+    def fabric(self, r):
+        return F.check_fabric({"spec": spec(), "realization": r})
+
+    def test_service_errors_are_not_the_fabrics(self):
+        for over, word in (({"range": []}, "service.range"), ({"vrf": {"name": "egress", "table": 9001}}, "service.vrf.name"),
+                           ({"maxPrefixes": 0}, "service.maxPrefixes"), ({"ports": []}, "service.ports"),
+                           ({"hubEndpoints": [{"prefix": "192.0.2.10/32", "ports": [6443]}]}, "service.hubEndpoints"),
+                           ({"attachableRanges": ["2001:db8::/32"]}, "service.attachableRanges")):
+            with self.subTest(word=word):
+                out = self.fabric(real(service=over))
+                self.assertEqual(out["errors"], [])
+                self.assertTrue([e for e in out["serviceErrors"] if word in e], out["serviceErrors"])
+        out = self.fabric(real(attachments={"enabled": False}))
+        self.assertEqual(out["errors"], [])
+        self.assertTrue([e for e in out["serviceErrors"] if "attachments.enabled" in e])
+        out = self.fabric(real(nodes={"trunkInterface": "se0"}))
+        self.assertEqual(out["errors"], [])
+        self.assertTrue(out["serviceErrors"])
+
+    def test_the_infrastructure_ranges_stay_fatal(self):
+        out = self.fabric(real(infrastructure={"hub": ["10.255.0.0/16"]}))
+        self.assertTrue([e for e in out["errors"] if "overlaps infrastructure.hub" in e])
+        out = self.fabric(real(infrastructure={"hub": ["198.51.100.1/24"]}))
+        self.assertTrue([e for e in out["errors"] if "infrastructure.hub" in e])
+        r = copy.deepcopy(DEFAULTS)
+        r["egress"]["platformSources"] = []
+        self.assertTrue(self.fabric(r)["errors"])
+
+    def test_the_plan_realizes_no_service_and_says_why(self):
+        nets = [network("n1", ["192.0.2.0/24"], [("192.0.2.15/32", {})])]
+        alloc = ledger({("acme/n1", "192.0.2.15/32"): 1}, {"acme/n1": 10005}, {"acme/n1": 4})
+        vrfs = {"bgw-1": [{"vrf": "e10000", "vpnTarget": 10000}], "bgw-2": []}
+        out = plan(real(service={"range": []}), nets, alloc, vrfs=vrfs)
+        self.assertEqual(out["errors"], [])
+        self.assertEqual(out["nodes"], {})
+        self.assertEqual(out["vrfs"], vrfs)
+        st = out["status"]
+        self.assertEqual((st["enabled"], st["networks"], st["circuits"], st["reason"]), (False, [], [], "InvalidSpec"))
+        self.assertIn("service.range", st["message"])
+        # the service off: the status as it always was (no reason key)
+        self.assertNotIn("reason", plan(copy.deepcopy(DEFAULTS), nets, alloc)["status"])
 
 
 class PrefixCheck(unittest.TestCase):

@@ -183,6 +183,11 @@ def platform_access(req):
         reason, message = "ServiceNotOffered", (
             f"HybridFabric {fabric} does not offer the platform's connection for clusters on networks; ask the "
             "platform team.")
+    elif sst.get("reason"):
+        # the fabric does not realize the service, by name (a wrong setting of the platform's)
+        reason, message = "ServiceNotOffered", (
+            f"HybridFabric {fabric} does not realize the platform's connection for clusters on networks: "
+            f"{sst.get('message') or sst.get('reason')}; ask the platform team.")
     elif not rng:
         # the service needs its range (check-fabric refuses it without one): nothing reaches a cluster without it
         reason, message = "ServiceNotOffered", (

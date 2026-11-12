@@ -161,6 +161,22 @@
     msg: "{{ fab_fail_msg }}"
   when: not (ac_service.enabled | default(false) | bool) or ac_hub4 | length == 0
 
+# the fabric realizes no service while one of its settings is wrong (it says which in its status): so does the circuit
+- name: Refuse a platform circuit while the fabric does not realize the service
+  vars:
+    _svc_st: "{{ ((ac_fabric.status | default({}, true)).realization | default({}, true)).service | default({}, true) }}"
+  ansible.builtin.set_fact:
+    fab_fail_reason: ServiceNotOffered
+    fab_fail_msg: >-
+      AttachmentCircuit {{ fab_name }}: HybridFabric {{ ac_fabric.metadata.name }} does not realize the service
+      routing domain: {{ _svc_st.message | default(_svc_st.reason) }}
+  when: _svc_st.reason | default('', true) | length > 0
+
+- name: Stop on a platform circuit while the fabric does not realize the service
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: fab_fail_reason | default('') == 'ServiceNotOffered'
+
 - name: Require the service routing domain's name
   ansible.builtin.fail:
     msg: "AttachmentCircuit {{ fab_name }}: the realization's service.vrf.name is not set"

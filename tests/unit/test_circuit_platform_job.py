@@ -142,6 +142,13 @@ class Refusals(unittest.TestCase):
         self.assertEqual(out["ce"]["refusedRanges"],
                          ["0.0.0.0/0"] + [F.prefix_entry(r[0]) for r in F.service_refusal_rows(F.rows_of(rows))])
 
+    def test_a_service_the_fabric_does_not_realize(self):
+        # Review R4 M2: the fabric realizes no service for a wrong setting; the circuit says so by name
+        out = front(fabric_status={"realization": {"service": {"enabled": False, "reason": "InvalidSpec",
+                                                               "message": "realization service.vrf.table 254 must be ..."}}})
+        self.assertEqual((out["refused"], out["reason"]), (True, "ServiceNotOffered"))
+        self.assertIn("service.vrf.table", out["msg"])
+
     def test_the_service_range_is_required(self):
         for svc in (dict(SERVICE, range=[]), {k: v for k, v in SERVICE.items() if k != "range"},
                     dict(SERVICE, range=["2001:db8:f::/64"])):

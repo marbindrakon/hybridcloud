@@ -216,6 +216,15 @@ class NetworkJudge(unittest.TestCase):
         self.assertEqual(judge(fabric=f)["reason"], "")
         self.assertEqual(judge(fabric=fabric(ranges=("203.0.113.0/24",)))["reason"], "OutsideAttachableRanges")
 
+    def test_a_service_the_fabric_does_not_realize(self):
+        # Review R4 M2: the fabric's status says which setting; the preflight names it
+        f = fabric()
+        f["status"]["realization"]["service"].update(enabled=False, reason="InvalidSpec",
+                                                     message="realization service.vrf.table 254 must be ...")
+        r = judge(fabric=f)
+        self.assertEqual(r["reason"], "ServiceNotOffered")
+        self.assertIn("service.vrf.table", r["message"])
+
     def test_no_service_range_is_not_offered(self):
         # a fabric with the service on and no service range (its status from before the range, or refused): a new
         # cluster is refused by name, one the network holds addresses for waits

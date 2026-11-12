@@ -343,8 +343,10 @@ def network(req):
              "could not be read")
         return done()
     if not svc.get("enabled"):
+        why = (f"it does not realize its service routing domain: {svc.get('message') or svc.get('reason')}"
+               if svc.get("reason") else "its service routing domain is off")
         return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
-                         "networks (its service routing domain is off)") or done()
+                         f"networks ({why})") or done()
     if not [r for r in svc.get("range") or [] if v4(r)]:
         # the service range is required with the service (check-fabric): no address of the hub reaches a cluster
         # without it (a fabric status from before it: the fabric's next run writes it, or refuses the fabric by name)

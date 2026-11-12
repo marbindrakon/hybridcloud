@@ -117,6 +117,27 @@ class FabricJob(unittest.TestCase):
         c = run_play(pre + [t, write_out("hf_tenant_offer")], base)
         self.assertEqual(a[1], c)
 
+    def test_a_service_not_realized_is_reported_once_and_named(self):
+        # Review R4 M2: an event per change of the reason, and the Ready message names it
+        t = main_task("Report the service routing domain not realized")
+        probe = {"name": t["name"], "when": t["when"], "ansible.builtin.set_fact": {"evented": True}}
+        st = {"enabled": False, "reason": "InvalidSpec", "message": "realization service.range is required"}
+        for before, want in (({}, True), ({"enabled": True}, True), (dict(st), False)):
+            out = run_play([probe, write_out("evented | default(false)")],
+                           {"hf_service": {"status": st}, "hf_service_before": before})
+            self.assertEqual(out, want, before)
+        out = run_play([probe, write_out("evented | default(false)")],
+                       {"hf_service": {"status": {"enabled": True}}, "hf_service_before": {}})
+        self.assertFalse(out)
+        msg = main_task("Report the fabric ready")["vars"]["fab_message"]
+        v = {"fab_name": "lab", "hf_node_results": [], "hf_changed_nodes": [], "hf_egress": {"networks": []},
+             "hf_egress_status": [], "hf_egress6_status": {"enabled": False}, "hf_attach": {"status": [], "skipped": []},
+             "hf_ipam": {"refused": ""}, "fab_real": {"egress": {}, "attachments": {}},
+             "hf_service": {"enabled": True, "pending": [], "status": dict(st, circuits=[], networks=[], refused=[])},
+             "_svc_capped": []}
+        text = run_play([{"ansible.builtin.set_fact": {"m": msg}}, write_out("m")], v)
+        self.assertIn("service VRF not realized: realization service.range is required", text)
+
     def test_status(self):
         t = main_task("Report the fabric ready")
         real, (egp, att, vrfs, svc) = S.service_setup()

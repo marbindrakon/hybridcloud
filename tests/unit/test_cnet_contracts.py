@@ -722,12 +722,20 @@ class UpgradeWithTheServiceOn(unittest.TestCase):
     def test_no_range_is_refused_by_name(self):
         real = realization()
         del real["service"]["range"]
-        errs = F.check_fabric({"spec": AttachableRangesOptional.SPEC, "realization": real})["errors"]
+        out = F.check_fabric({"spec": AttachableRangesOptional.SPEC, "realization": real})
+        # Review R4 M2: the service's own refusal, not the fabric's (everything else on the fabric goes on)
+        self.assertEqual(out["errors"], [])
+        errs = out["serviceErrors"]
         self.assertTrue([e for e in errs if e.startswith("realization service.range is required with service.enabled")],
                         errs)
         plan = fabric_plan(real, [], Ledger())
-        self.assertTrue([e for e in plan["errors"] if "service.range" in e])
+        self.assertEqual(plan["errors"], [])
+        self.assertIn("service.range", plan["status"]["message"])
         self.assertEqual(plan["nodes"], {})
+        # the network reads the fabric's status: not offered, by name
+        d = network_decision("acme/n1", ["192.0.2.15/32"], Ledger(), plan["status"], realization())
+        self.assertEqual(d["condition"]["reason"], "ServiceNotOffered")
+        self.assertIn("service.range", d["condition"]["message"])
         d = network_decision("acme/n1", ["192.0.2.15/32"], Ledger(), {"circuits": CIRCUIT_STATUS}, real)
         self.assertEqual(d["condition"]["reason"], "ServiceNotOffered")
         self.assertIn("service.range", d["condition"]["message"])
