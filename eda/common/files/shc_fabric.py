@@ -216,8 +216,11 @@ def check_fabric(req):
     errors += at["errors"]
     size["attachVlanPool"], size["attachLinks"] = at["vlanPool"], at["links"]
     t = core_transport(core)
-    return {"errors": errors, "serviceErrors": service_errors, "poolSize": size, "peIndexMax": pe_max,
-            "transport": t if t in TRANSPORTS else ""}
+    out = {"errors": errors, "poolSize": size, "peIndexMax": pe_max, "transport": t if t in TRANSPORTS else ""}
+    if service_errors:
+        # (only when there are any: a fabric whose service is right answers as before)
+        out["serviceErrors"] = service_errors
+    return out
 
 
 TRANSPORTS = ("mpls", "srv6")

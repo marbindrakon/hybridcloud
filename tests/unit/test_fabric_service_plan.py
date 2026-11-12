@@ -122,7 +122,7 @@ class Realization(unittest.TestCase):
     def errs(self, r):
         # the fabric's and the service's own (Review R4 M2: reported apart, see ServiceRefusalStaysWithTheService)
         out = F.check_fabric({"spec": spec(), "realization": r})
-        return out["errors"] + out["serviceErrors"]
+        return out["errors"] + out.get("serviceErrors", [])
 
     def test_defaults_are_inert(self):
         r = F.check_fabric({"spec": spec(), "realization": copy.deepcopy(DEFAULTS)})
@@ -585,13 +585,13 @@ class ServiceRefusalStaysWithTheService(unittest.TestCase):
             with self.subTest(word=word):
                 out = self.fabric(real(service=over))
                 self.assertEqual(out["errors"], [])
-                self.assertTrue([e for e in out["serviceErrors"] if word in e], out["serviceErrors"])
+                self.assertTrue([e for e in out.get("serviceErrors", []) if word in e], out.get("serviceErrors", []))
         out = self.fabric(real(attachments={"enabled": False}))
         self.assertEqual(out["errors"], [])
-        self.assertTrue([e for e in out["serviceErrors"] if "attachments.enabled" in e])
+        self.assertTrue([e for e in out.get("serviceErrors", []) if "attachments.enabled" in e])
         out = self.fabric(real(nodes={"trunkInterface": "se0"}))
         self.assertEqual(out["errors"], [])
-        self.assertTrue(out["serviceErrors"])
+        self.assertTrue(out.get("serviceErrors", []))
 
     def test_the_infrastructure_ranges_stay_fatal(self):
         out = self.fabric(real(infrastructure={"hub": ["10.255.0.0/16"]}))
@@ -706,15 +706,15 @@ class FairLimit(unittest.TestCase):
     def test_the_share_setting_is_checked(self):
         for v in (0, 1.5, "half", True):
             with self.subTest(v=v):
-                errs = F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": v})})["serviceErrors"]
+                errs = F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": v})}).get("serviceErrors", [])
                 self.assertTrue([e for e in errs if "service.tenantShare" in e], errs)
-        self.assertEqual(F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": 1})})["serviceErrors"], [])
+        self.assertEqual(F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": 1})}).get("serviceErrors", []), [])
 
 
 class ScalarRange(unittest.TestCase):
     def test_a_scalar_range_is_refused_by_name(self):
         # Review R4 L2: a string passed check-fabric and the plan, and the network and circuit jobs read its characters
-        errs = F.check_fabric({"spec": spec(), "realization": real(service={"range": "198.51.100.0/28"})})["serviceErrors"]
+        errs = F.check_fabric({"spec": spec(), "realization": real(service={"range": "198.51.100.0/28"})}).get("serviceErrors", [])
         self.assertTrue([e for e in errs if "service.range must be a list" in e], errs)
 
 

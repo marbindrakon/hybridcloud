@@ -777,7 +777,7 @@ class UpgradeWithTheServiceOn(unittest.TestCase):
         out = F.check_fabric({"spec": AttachableRangesOptional.SPEC, "realization": real})
         # Review R4 M2: the service's own refusal, not the fabric's (everything else on the fabric goes on)
         self.assertEqual(out["errors"], [])
-        errs = out["serviceErrors"]
+        errs = out.get("serviceErrors", [])
         self.assertTrue([e for e in errs if e.startswith("realization service.range is required with service.enabled")],
                         errs)
         plan = fabric_plan(real, [], Ledger())
