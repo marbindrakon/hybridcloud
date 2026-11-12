@@ -287,7 +287,7 @@ back over that same link (a network's own accepted addresses). How that last che
 of `shc-fabric-apply`, `SERVICE_SOURCE_CHECK`: `fib` (default) puts a reverse path rule in the table (`fib saddr .
 iif oif missing`; it needs a kernel whose nftables `fib` looks a VRF slave's source up in the VRF's table, upstream
 6.2, else every cluster packet is dropped), `rp_filter` sets the kernel's strict reverse path filter on each `so*`
-link instead (set and checked on every run; sound there because those links carry nothing decapsulated, unlike the
+link instead (set and checked on every run, refused before any write where the host's `all.rp_filter` is 2; sound there because those links carry nothing decapsulated, unlike the
 network VRFs, which run without it on SRv6); nothing from
 one `so*` device to another (the drops match the `so*` and `se*` devices by name, never by a list, so a pair a run
 has not yet removed is dropped too), so no network reaches

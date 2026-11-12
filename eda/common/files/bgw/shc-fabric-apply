@@ -560,8 +560,15 @@ precheck() {
 # never a packet's sdifname, and the raw notrack on its name leaves a connection already tracked as it is
 service_precheck() {
   local t
-  # the switch is one of its two values, before the run's first write
+  # the switch is one of its two values, before the run's first write; rp_filter is strict only while the host's
+  # all.rp_filter is not 2 (the kernel takes the larger value: 2 makes every link loose, so a source of another
+  # network routed elsewhere in the service VRF would pass)
   service_source_check rule >/dev/null
+  if [ "$SERVICE_SOURCE_CHECK" = rp_filter ] && [ "$(sysctl -n net.ipv4.conf.all.rp_filter 2>/dev/null)" = 2 ]; then
+    echo "shc-fabric-apply: SERVICE_SOURCE_CHECK rp_filter: net.ipv4.conf.all.rp_filter is 2 (loose) on this host;" \
+      "set it to 0 or 1, or use fib" >&2
+    exit 4
+  fi
   t=$(ip -j -d link show | jq -r '[.[] | select(.ifname != null) | select(.ifname | test("^s[eo]"))
       | select((.linkinfo.info_kind // "") != "vrf")
       | select(((.ifname | test("^s[eo][0-9]+$")) and ((.linkinfo.info_kind // "") == "veth")) | not) | .ifname]
@@ -1383,7 +1390,8 @@ SV=$(opt .service.vrf)
 #   rp_filter  the kernel's strict reverse path filter on each so<t> (net.ipv4.conf.<so>.rp_filter=1, set by the
 #              apply on every run, after udev handled the new device). Sound on these links: their packets come from
 #              the network's VRF over a veth, never decapsulated (the SRv6 reason the network VRFs e<t> run without
-#              it does not apply), and the kernel takes the larger of all and the device's, so all=0 (SRv6) is fine
+#              it does not apply), and the kernel takes the larger of all and the device's, so all=0 (SRv6) is fine;
+#              all=2 (loose) would make every link loose: the run refuses it before its first write
 # The lead sets it from the node probe (default fib); SHC_SERVICE_SOURCE_CHECK overrides it (the unit tests)
 SERVICE_SOURCE_CHECK=fib
 SERVICE_SOURCE_CHECK=${SHC_SERVICE_SOURCE_CHECK:-$SERVICE_SOURCE_CHECK}

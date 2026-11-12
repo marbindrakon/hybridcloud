@@ -1000,6 +1000,23 @@ class ServiceSourceCheckSwitch(A.ApplyCase):
         self.assertIn("SERVICE_SOURCE_CHECK must be fib or rp_filter", err)
         self.assertEqual(A.writes(log), [])
 
+    def test_rp_filter_is_refused_where_the_host_keeps_it_loose(self):
+        # Review R4 NL1: the kernel takes the larger of all and the device's value: all=2 makes every link loose, and a
+        # forged source of another network would pass; refused before the run's first write, naming the sysctl
+        real, (egp, att, vrfs, svc) = service_setup()
+        st = blade()
+        st["ns"][""]["sysctl"]["net/ipv4/conf/all/rp_filter"] = "2"
+        self.h.set_state(st)
+        self.h.conf("root", service_conf(real, egp, att, svc))
+        with mock.patch.dict(os.environ, {"SHC_SERVICE_SOURCE_CHECK": "rp_filter"}):
+            rc, out, err, log = self.h.run("root")
+        self.assertEqual(rc, 4, err)
+        self.assertIn("net.ipv4.conf.all.rp_filter is 2", err)
+        self.assertEqual(A.writes(log), [])
+        # fib (the default) does not depend on it
+        rc, out, err, log = self.h.run("root")
+        self.assertEqual(rc, 0, err)
+
     def test_the_default_is_fib(self):
         with open(os.path.join(ROOT, "eda", "common", "files", "bgw", "shc-fabric-apply")) as f:
             self.assertIn("\nSERVICE_SOURCE_CHECK=fib\n", f.read())
