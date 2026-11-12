@@ -120,7 +120,8 @@ class FabricJob(unittest.TestCase):
     def test_a_service_not_realized_is_reported_once_and_named(self):
         # Review R4 M2: an event per change of the reason, and the Ready message names it
         t = main_task("Report the service routing domain not realized")
-        probe = {"name": t["name"], "when": t["when"], "ansible.builtin.set_fact": {"evented": True}}
+        probe = {"name": t["name"], "when": t["when"], "vars": t.get("vars", {}),
+                 "ansible.builtin.set_fact": {"evented": True}}
         st = {"enabled": False, "reason": "InvalidSpec", "message": "realization service.range is required"}
         for before, want in (({}, True), ({"enabled": True}, True), (dict(st), False)):
             out = run_play([probe, write_out("evented | default(false)")],
@@ -137,6 +138,37 @@ class FabricJob(unittest.TestCase):
              "_svc_capped": []}
         text = run_play([{"ansible.builtin.set_fact": {"m": msg}}, write_out("m")], v)
         self.assertIn("service VRF not realized: realization service.range is required", text)
+
+    def test_a_wrong_setting_keeps_the_service_loudly(self):
+        # Review R4 NM2: the nodes keep the last applied service; the event once per change; the condition
+        # ServiceRouting False InvalidSpec naming the setting (the alert reads it); the Ready message says it
+        t = main_task("Report the service routing domain kept while a setting is wrong")
+        probe = {"name": t["name"], "when": t["when"], "vars": t.get("vars", {}),
+                 "ansible.builtin.set_fact": {"evented": True, "why": "{{ _why }}"}}
+        st = {"enabled": True, "circuits": [{"circuit": "p/hub-a"}], "networks": [], "refused": [],
+              "settingsError": "realization service.tenantShare '0,5' must be a fraction"}
+        for before, want in (({"enabled": True}, True), (dict(st), False)):
+            out = run_play([probe, write_out("evented | default(false)")],
+                           {"hf_service": {"status": st, "kept": True}, "hf_service_before": before})
+            self.assertEqual(out, want, before)
+        rt = main_task("Report the fabric ready")
+        ct = main_task("The service routing domain's condition")
+        v = {"fab_name": "lab", "hf_node_results": [], "hf_changed_nodes": [], "hf_egress": {"networks": []},
+             "hf_egress_status": [], "hf_egress6_status": {"enabled": False}, "hf_attach": {"status": [], "skipped": []},
+             "hf_ipam": {"refused": ""}, "fab_real": {"egress": {}, "attachments": {}}, "fab_st": {},
+             "hf_service": {"enabled": True, "kept": True, "pending": [], "status": st}}
+        play = [ct, {"ansible.builtin.set_fact": {"m": rt["vars"]["fab_message"], "c": rt["vars"]["fab_conditions"]},
+                     "vars": {k: rt["vars"][k] for k in rt["vars"] if k.startswith("_")}}]
+        out = run_play(play + [write_out("[m, c]")], v)
+        self.assertIn("kept as last applied: realization service.tenantShare", out[0])
+        cond = next(c for c in out[1] if c["type"] == "ServiceRouting")
+        self.assertEqual((cond["status"], cond["reason"]), ("False", "InvalidSpec"))
+        self.assertIn("service.tenantShare", cond["message"])
+        self.assertIn("keep the service as last applied", cond["message"])
+        # the service off and never on: no condition at all (nothing changes)
+        v["hf_service"] = {"enabled": False, "status": {"enabled": False}}
+        out = run_play(play + [write_out("c")], v)
+        self.assertEqual([c for c in out if c["type"] == "ServiceRouting"], [])
 
     def test_status(self):
         t = main_task("Report the fabric ready")

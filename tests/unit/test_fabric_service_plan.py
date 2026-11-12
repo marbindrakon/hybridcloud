@@ -881,6 +881,53 @@ class AdmittedClustersKeepTheirSlots(unittest.TestCase):
         self.assertTrue([e for e in errs.get("serviceErrors", []) if "service.admissionHoldMinutes" in e])
 
 
+class AWrongSettingKeepsTheService(unittest.TestCase):
+    """Review R4 NM2: with a wrong service.* setting and the service realized before, the plan keeps every node's last
+    applied service block as it is (marked keep: the node applies no service step) and the previous status, loud by
+    name; only without a previous block is the service not realized; only service.enabled false removes it."""
+
+    def realized(self):
+        nets = [network("n1", ["192.0.2.0/24"], [("192.0.2.15/32", {})])]
+        alloc = ledger({("acme/n1", "192.0.2.15/32"): 1}, {"acme/n1": 10005}, {"acme/n1": 4})
+        good = plan(real(), nets, alloc)
+        return nets, alloc, good
+
+    def test_the_last_realized_service_stays(self):
+        nets, alloc, good = self.realized()
+        bad = real(service={"tenantShare": "0,5"})
+        out = F.service_plan({"realization": bad, "nodes": NODES, "fabric": "lab", "domainAsn": 65010, "networks": nets,
+                              "ledger": alloc, "circuits": [circuit()], "vrfs": {n: [] for n in NODES},
+                              "previous": good["status"], "previousNodes": good["nodes"]})
+        self.assertEqual(out["errors"], [])
+        for n in NODES:
+            self.assertEqual({k: v for k, v in out["nodes"][n].items() if k != "keep"}, good["nodes"][n])
+            self.assertIs(out["nodes"][n]["keep"], True)
+        # the networks' VRFs keep their service links (the template renders the same)
+        self.assertEqual(out["vrfs"]["bgw-1"][0]["service"], good["vrfs"]["bgw-1"][0]["service"])
+        self.assertEqual(out["status"]["networks"], good["status"]["networks"])
+        self.assertIn("service.tenantShare", out["status"]["settingsError"])
+        self.assertNotIn("reason", out["status"])
+
+    def test_a_block_from_before_the_service_range_keeps_its_hub_filter(self):
+        nets, alloc, good = self.realized()
+        old = {n: {k: v for k, v in b.items() if k not in ("range", "refuse", "links")} for n, b in good["nodes"].items()}
+        for b in old.values():
+            b["hub"] = [HUB]
+        bad = real()
+        del bad["service"]["range"]
+        out = F.service_plan({"realization": bad, "nodes": NODES, "fabric": "lab", "domainAsn": 65010, "networks": nets,
+                              "ledger": alloc, "circuits": [circuit()], "vrfs": {n: [] for n in NODES},
+                              "previous": good["status"], "previousNodes": old})
+        self.assertEqual(out["nodes"]["bgw-1"]["range"], [HUB])
+        self.assertEqual(out["nodes"]["bgw-1"]["refuse"], [])
+        self.assertIn("service.range", out["status"]["settingsError"])
+
+    def test_without_a_previous_block_nothing_is_realized(self):
+        nets, alloc, _ = self.realized()
+        out = plan(real(service={"range": []}), nets, alloc)
+        self.assertEqual((out["nodes"], out["status"]["reason"]), ({}, "InvalidSpec"))
+
+
 class PrefixCheck(unittest.TestCase):
     def test_rows(self):
         out = F.service_prefix_check({"realization": real(), "space": ["192.0.2.0/24", "100.64.0.0/24"],

@@ -87,7 +87,7 @@ class FabricJobWiring(unittest.TestCase):
         realized for a wrong setting, review R4 M2, once per change); nothing else."""
         reasons = {t["kubernetes.core.k8s"]["definition"]["reason"] for t in walk(load(FABRIC))
                    if (t.get("kubernetes.core.k8s") or {}).get("definition", {}).get("kind") == "Event"}
-        self.assertEqual(reasons, {"IPv6EgressUpstreamDown", "ServiceNotRealized"})
+        self.assertEqual(reasons, {"IPv6EgressUpstreamDown", "ServiceNotRealized", "ServiceSettingInvalid"})
 
     def test_every_included_task_file_exists(self):
         tasks_dir = os.path.dirname(FABRIC)

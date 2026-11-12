@@ -183,6 +183,7 @@ export const PART_REASONS: Record<string, ReasonEntry> = {
   "ServiceNotOffered": { actor: "P", class: "ready", summary: "The platform's connection for clusters on networks is not offered here. Ask the platform team." },
   "ServiceNotRealized": { actor: "P", class: "ready", summary: "The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts." },
   "ServicePrefixInUse": { actor: "T", class: "ready", summary: "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team." },
+  "ServiceSettingInvalid": { actor: "P", class: "ready", summary: "A setting of the platform's connection for clusters on networks is wrong; the nodes keep it as last applied. The platform team acts." },
   "ServiceShareReached": { actor: "T", class: "ready", summary: "Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn." },
   "UpstreamDown": { actor: "P", class: "ready", summary: "IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted." },
 };

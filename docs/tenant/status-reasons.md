@@ -274,6 +274,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
 | `ServiceNotRealized` | The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts. | The platform team |
 | `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
+| `ServiceSettingInvalid` | A setting of the platform's connection for clusters on networks is wrong; the nodes keep it as last applied. The platform team acts. | The platform team |
 | `ServiceShareReached` | Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn. | You (the tenant) |
 | `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
 <!-- reasons:end -->

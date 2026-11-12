@@ -57,6 +57,8 @@
 
     - name: Keep the pool sizes
       ansible.builtin.set_fact:
+        # a wrong service setting stops the service's changes only (Review R4 M2, NM2)
+        hf_service_errors: "{{ fab_check_result.serviceErrors | default([]) }}"
         hf_pools: "{{ fab_check_result.poolSize }}"
         hf_pe_max: "{{ fab_check_result.peIndexMax | int }}"
 
@@ -421,6 +423,28 @@
       ansible.builtin.set_fact:
         hf_reserved: "{{ fab_check_result.ranges }}"
 
+    # a wrong service setting never tears down a service that runs (Review R4 NM2): the plan keeps each node's last
+    # applied service block, read here from the node (its root.json), untouched; only then, so a fabric whose settings
+    # are right does not touch the nodes before its node steps
+    - name: Read the service each node runs, to keep it while a setting is wrong
+      ansible.builtin.slurp:
+        src: /etc/shc-fabric/root.json
+      delegate_to: "{{ item }}"
+      loop: "{{ fab_spec.borderGateway.nodes | map(attribute='name') | list }}"
+      register: _hf_root_now
+      failed_when: false
+      when: hf_service_errors | length > 0
+
+    - name: Keep the service each node runs
+      ansible.builtin.set_fact:
+        hf_previous_nodes: >-
+          {%- set out = {} -%}
+          {%- for r in _hf_root_now.results | default([]) if r.content is defined -%}
+            {%- set doc = r.content | b64decode | from_json -%}
+            {%- if (doc.service | default({})).vrf is defined -%}{%- set _ = out.update({r.item: doc.service}) -%}{%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+
     # the service VRF: the networks' cluster prefixes (status.platformAccess) on every node with a platform circuit,
     # the root VRFs of the networks gaining their service links
     - name: Plan the service VRF on the nodes
@@ -440,6 +464,7 @@
           sites: "{{ hf_sites }}"
           # (the admissions' age: service.admissionHoldMinutes)
           now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          previousNodes: "{{ hf_previous_nodes | default({}) }}"
 
     - name: Refuse an unusable service plan
       ansible.builtin.set_fact:
@@ -485,9 +510,47 @@
           firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
           lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
           count: 1
+      vars:
+        _why: "{{ (hf_service.status | default({})).settingsError | default((hf_service.status | default({})).message | default('', true), true) }}"
+        _was: "{{ hf_service_before.settingsError | default(hf_service_before.message | default('', true), true) }}"
       when:
         - (hf_service.status | default({})).reason | default('', true) | length > 0
-        - (hf_service_before.message | default('', true)) != hf_service.status.message
+        - _was != _why
+
+    - name: Report the service routing domain kept while a setting is wrong
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Event
+          metadata:
+            name: "{{ fab_name }}-service-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+            namespace: "{{ fab_namespace }}"
+          involvedObject:
+            apiVersion: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ fab_name }}"
+            namespace: "{{ fab_namespace }}"
+            uid: "{{ fab_obj.metadata.uid }}"
+          type: Warning
+          reason: ServiceSettingInvalid
+          message: >-
+            The service routing domain is kept as last applied on the nodes, unchanged, while a setting is wrong:
+            {{ hf_service.status.settingsError }}
+          source: {component: shc-hybridfabric}
+          reportingComponent: shc-hybridfabric
+          firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          count: 1
+      vars:
+        _why: "{{ (hf_service.status | default({})).settingsError | default((hf_service.status | default({})).message | default('', true), true) }}"
+        _was: "{{ hf_service_before.settingsError | default(hf_service_before.message | default('', true), true) }}"
+      when:
+        - hf_service.kept | default(false) | bool
+        - _was != _why
 
     # what tenants see of these (the ranges and the ranges a managed cluster's prefixes must lie in) joins the offer
     # the Entities were told (status.realization.ipam.tenantOffer), so a change wakes them
@@ -721,6 +784,29 @@
                                  if (not hf_wake_entities | bool) or (we_entities_listed | default(false) | bool)
                                  else none}) }}
 
+    # the service routing domain's condition (only with the service on, or once it was): False, InvalidSpec, while
+    # a setting is wrong (the nodes keep the last applied service, or it was never realized), naming the setting
+    # (Review R4 NM2; the alert ShcFabricServiceSettingInvalid reads it)
+    - name: The service routing domain's condition
+      vars:
+        _svc_st: "{{ (hf_service | default({})).status | default({}) }}"
+        _svc_why: >-
+          {{ _svc_st.settingsError | default('', true)
+             or (_svc_st.message | default('', true) if _svc_st.reason | default('', true) else '') }}
+      ansible.builtin.set_fact:
+        hf_service_condition: >-
+          {{ [{'type': 'ServiceRouting', 'status': 'False' if _svc_why else 'True',
+               'reason': 'InvalidSpec' if _svc_why else 'Ready',
+               'message': (('a service setting is wrong (' ~ _svc_why ~ '); '
+                            ~ ('the nodes keep the service as last applied' if (hf_service | default({})).kept | default(false)
+                               else 'the service is not realized')) if _svc_why
+                           else 'the service routing domain is realized as configured')}]
+             if (hf_service | default({})).enabled | default(false)
+             else ([{'type': 'ServiceRouting', 'status': 'Unknown', 'reason': 'NotEnabled',
+                     'message': 'the service routing domain is off on this fabric'}]
+                   if fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'ServiceRouting')
+                      | list | length > 0 else []) }}
+
     - name: Report the fabric ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
@@ -745,6 +831,8 @@
            ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else '')
            ~ ((', waiting for service.maxPrefixes or a tenant share: ' ~ _svc_capped | length ~ ' prefix(es)')
               if _svc_capped else '')
+           ~ (('; kept as last applied: ' ~ hf_service.status.settingsError)
+              if (hf_service.status | default({})).settingsError | default('', true) else '')
            if not ((hf_service.status | default({})).reason | default('', true))
            else ('; service VRF not realized: ' ~ hf_service.status.message))
           if (hf_service | default({})).enabled | default(false) else '' }}{{
@@ -753,7 +841,7 @@
         # the IPv6 egress condition (only with IPv6 egress): True while every node has an upstream session and the
         # default route; Degraded otherwise (the networks' rows say the same)
         fab_conditions: >-
-          {{ ([{'type': 'IPv6EgressUpstream',
+          {{ hf_service_condition | default([]) + ([{'type': 'IPv6EgressUpstream',
                'status': 'False' if hf_egress6_status.degraded | default(false) else 'True',
                'reason': 'Degraded' if hf_egress6_status.degraded | default(false) else 'Ready',
                'message': (('no upstream session or default route on ' ~ hf_egress6_status.degradedNodes | join(', ')

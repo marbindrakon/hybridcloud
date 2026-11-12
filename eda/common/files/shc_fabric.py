@@ -1612,6 +1612,33 @@ def service_limit(first, clusters_of, cfg, previous=None, now=""):
     return accepted, sorted(waiting, key=lambda w: (w["network"], w["prefix"], w["cluster"])), kept
 
 
+def service_vrfs(node_names, nodes, vrfs_in):
+    """The root VRFs per node, with the service link of each network the node's service block lists."""
+    vrfs = {}
+    for name in node_names:
+        by_vrf = {v["vrf"]: dict(v) for v in vrfs_in.get(name) or []}
+        for w in (nodes.get(name) or {}).get("networks") or []:
+            link = {k: w.get(k) for k in ("se", "so", "seAddr", "soAddr", "seIp", "soIp", "prefixes")}
+            v = by_vrf.setdefault(w["vrf"], {"network": w.get("network", ""), "vpnTarget": w.get("vpnTarget"),
+                                             "vrf": w["vrf"], "table": w.get("table"), "nat": "", "egress": False,
+                                             "rd": w.get("rd", ""), "circuits": []})
+            v["service"] = link
+        vrfs[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
+    return vrfs
+
+
+def kept_service_block(block):
+    """A node's last applied service block (its root.json), kept as it is while a setting is wrong: the node applies
+    no service step (keep), the template renders what it rendered. A block from before the service range (hub, no
+    range) keeps its filter by the hub's ranges."""
+    b = dict(block)
+    if "range" not in b and "hub" in b:
+        b["range"] = list(b.get("hub") or [])
+    b.setdefault("refuse", [])
+    b["keep"] = True
+    return b
+
+
 def service_plan(req):
     """The service VRF on the border gateway nodes' root instance (service-plan, see the module docstring)."""
     real = req.get("realization") or {}
@@ -1626,9 +1653,20 @@ def service_plan(req):
         return {"errors": errors, "enabled": True, "nodes": {}, "status": service_status_off(), "vrfs": vrfs_in,
                 "pending": []}
     wrong = service_settings_check(real)
+    kept = {n: kept_service_block(b) for n, b in (req.get("previousNodes") or {}).items()
+            if n in node_names and isinstance(b, dict) and b.get("vrf")}
+    if wrong and kept:
+        # a wrong setting never tears down a service that runs (Review R4 NM2): every node keeps its last applied
+        # block untouched (keep: no service step on the node; the template renders what it rendered), the status
+        # stays the last realized one, loud by name (settingsError: the fabric's ServiceRouting condition, an event,
+        # an alert); every other part of the fabric is planned as usual. Only service.enabled false removes it
+        status = dict(req.get("previous") or service_status_off(), settingsError="; ".join(wrong))
+        status.pop("reason", None)
+        status.pop("message", None)
+        return {"errors": [], "enabled": True, "realized": False, "kept": True, "nodes": kept,
+                "status": status, "vrfs": service_vrfs(node_names, kept, vrfs_in), "pending": []}
     if wrong:
-        # the service is not realized (no node gets it, a node that had it loses it) and its status says why by
-        # name; every other part of the fabric is planned as usual (Review R4 M2)
+        # never realized (no node has a block): not realized, and its status says why by name (Review R4 M2)
         return {"errors": [], "enabled": True, "realized": False, "nodes": {},
                 "status": dict(service_status_off(), reason="InvalidSpec", message="; ".join(wrong)),
                 "vrfs": {n: list(vrfs_in.get(n) or []) for n in node_names}, "pending": []}
@@ -1751,18 +1789,7 @@ def service_plan(req):
                                          ip=c["nodes"][name])
                                     for c in mine],
                        "networks": networks}
-    # the root VRFs per node, with the service link of each network that has accepted prefixes there
-    vrfs = {}
-    for name in node_names:
-        by_vrf = {v["vrf"]: dict(v) for v in vrfs_in.get(name) or []}
-        if name in nodes:
-            for w in networks:
-                link = {k: w[k] for k in ("se", "so", "seAddr", "soAddr", "seIp", "soIp", "prefixes")}
-                v = by_vrf.setdefault(w["vrf"], {"network": w["network"], "vpnTarget": w["vpnTarget"], "vrf": w["vrf"],
-                                                 "table": w["table"], "nat": "", "egress": False, "rd": w["rd"],
-                                                 "circuits": []})
-                v["service"] = link
-        vrfs[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
+    vrfs = service_vrfs(node_names, nodes, vrfs_in)
     status = {"enabled": True, "vrf": cfg["vrf"], "range": cfg["range"], "sources": cfg["range"], "ports": cfg["ports"],
               "hubEndpoints": cfg["hubEndpoints"], "attachableRanges": cfg["attachable"], "circuits": st_circuits,
               "networks": status_nets, "waiting": waiting, "admitted": admitted_units,

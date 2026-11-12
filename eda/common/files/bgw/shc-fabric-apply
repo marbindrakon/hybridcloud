@@ -1693,7 +1693,9 @@ root)
     fi
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
-    if [ -n "$SV" ]; then service_up; else service_down; fi
+    # (keep: the fabric keeps the last applied service while one of its settings is wrong: no service step at all)
+    if [ -n "$SV" ] && [ "$(opt .service.keep)" = true ]; then echo "service kept as applied (a setting is wrong)"
+    elif [ -n "$SV" ]; then service_up; else service_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf,
       (.service.networks // [])[].vrf] | unique | .[]' "$CONF")"
     step "the root VRFs' IPv4 ICMP source" root_icmp4

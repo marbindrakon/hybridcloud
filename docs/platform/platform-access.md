@@ -348,14 +348,16 @@ hub's routing (above) is the deployment's to verify.
   read only with the service on).
 - **The service on, `attachableRanges` set**: keeps working once `service.range` is set; the allow-list restricts as
   before.
-- **The service on, no `service.range`** (or any other wrong `service.*` setting): the service is not realized and
-  everything else on the fabric goes on (networks, egress, edge connections). `HybridFabric
-  status.realization.service` carries `reason: InvalidSpec` and a message naming the setting ("realization
-  service.range is required with service.enabled"), the fabric's Ready message repeats it, a Warning event
-  `ServiceNotRealized` is written once per change, the networks read `PlatformReachable` False `ServiceNotOffered`
-  and the platform edge connections are refused `ServiceNotOffered`, both naming it; the nodes lose the service VRF
-  until it is set (clusters that hold addresses keep their place and wait; new ones are refused). Set
-  `service.range` in the installation's `FABRIC_REALIZATION` before the upgrade, to the hub's addresses that reach
-  the clusters (at most `infrastructure.hub`), move every `service.hubEndpoints` entry inside it, and let
+- **The service on, no `service.range`** (or any other wrong `service.*` setting): nothing that runs is torn down.
+  The fabric keeps each node's service as it was last applied (it reads the node's configuration and passes it on
+  marked as kept: the node applies no service step, so the filter, the links and the sessions stay exactly as they
+  are, the previous release's filter by `infrastructure.hub` included), keeps the last realized status, carries no
+  new cluster address, and goes on with everything else (networks, egress, edge connections). It is loud: the
+  fabric's condition `ServiceRouting` is False `InvalidSpec` naming the setting, the alert
+  `ShcFabricServiceSettingInvalid` fires, a Warning event `ServiceSettingInvalid` is written once per change and the
+  fabric's Ready message repeats it. A service never applied is not realized (`ServiceNotRealized`, the networks and
+  edge connections `ServiceNotOffered`, naming the setting). Only `service.enabled: false` removes the service. Set
+  `service.range` in the installation's `FABRIC_REALIZATION` to the hub's addresses that reach the clusters (at
+  most `infrastructure.hub`), move every `service.hubEndpoints` entry inside it, and let
   the fabric run again. Then give the hub's network team the connections' new `status.ceConfig`: the routes they
   announce shrink to `acceptedRanges`, and they add `refusedRanges` and `maxPrefixes` to their import filter.

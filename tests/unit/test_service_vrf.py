@@ -630,6 +630,20 @@ class ServiceApply(A.ApplyCase):
         self.assertTrue(out.strip().endswith("changed=no"), out)
         self.assertEqual([w for w in A.writes(log) if re.search(r"service|s[eo]\d+|3099", w)], [])
 
+    def test_a_kept_block_applies_no_service_step(self):
+        # Review R4 NM2: the fabric keeps the last applied service (a wrong setting): no service write at all
+        h = self.h
+        h.conf("root", self.conf())
+        h.ok(self, "root")
+        before = h.get_state()["ns"][""]
+        c = self.conf()
+        c["service"] = dict(c["service"], keep=True, ports=[1])  # a kept block: whatever it says, nothing is applied
+        h.conf("root", c)
+        out, log = h.ok(self, "root")
+        self.assertEqual([w for w in A.writes(log) if re.search(r"shc_service|service|s[eo]\d+|3099", w)], [])
+        self.assertEqual(h.get_state()["ns"][""]["nft"]["ip shc_service"], before["nft"]["ip shc_service"])
+        self.assertIn("service kept", out)
+
     def test_down(self):
         h = self.h
         h.conf("root", self.conf())
