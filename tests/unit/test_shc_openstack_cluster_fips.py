@@ -3,6 +3,7 @@ found by description first (a re-run after a failure at any step creates nothing
 network; one on another network refused; duplicates of a description released; the release by recorded ids and by
 description, a missing id counted as released, another project's floating IP never touched. Also provision without
 the environment's floating IP pair. Addresses are documentation space only."""
+import importlib.util
 import os
 import sys
 import types
@@ -290,3 +291,63 @@ class AccountAsConfigured(unittest.TestCase):
                 self.assertEqual(kw["auth"], entry["auth"])          # scope keys kept: the credential's own
             finally:
                 os.unlink(fh.name)
+
+
+class ProjectRouters(unittest.TestCase):
+    """fix-routergw (gate F10): the cluster's router read through the helper, not a collection module the job's
+    execution environment lacks. The site account scoped to the environment's project lists the routers of the name in
+    that project only, in the shape files/po_preflight.py router-gateway judges."""
+
+    def run_it(self, routers, **req):
+        conn = mock.MagicMock()
+        seen = []
+
+        def listing(**f):
+            seen.append(f)
+            return [r for r in routers if all(getattr(r, k, None) == v for k, v in f.items())]
+        conn.network.routers.side_effect = listing
+        acct = mock.Mock()
+        acct.project.return_value = conn
+        with mock.patch.object(S, "Account", return_value=acct):
+            out = S.ACTIONS["project-routers"]({"action": "project-routers", "clouds_yaml": "/dev/null",
+                                                "project_id": PROJECT, "name": "c1-x7k2p-external-router", **req})
+        acct.project.assert_called_once_with(PROJECT)
+        self.assertEqual(seen, [{"name": "c1-x7k2p-external-router", "project_id": PROJECT}])
+        conn.network.update_router.assert_not_called()
+        return out
+
+    @staticmethod
+    def router(rid, project=PROJECT, name="c1-x7k2p-external-router", net=NET, addrs=("192.0.2.30",)):
+        gw = {"network_id": net, "enable_snat": True,
+              "external_fixed_ips": [{"subnet_id": "sn-1", "ip_address": a} for a in addrs]} if net else None
+        return Obj(id=rid, name=name, project_id=project, external_gateway_info=gw)
+
+    def test_the_projects_router_with_its_gateway(self):
+        out = self.run_it([self.router("r-1", addrs=("2001:db8::30", "192.0.2.30")),
+                           self.router("r-2", project="proj-other"), self.router("r-3", name="other-router")])
+        self.assertEqual(out, {"routers": [{"id": "r-1", "name": "c1-x7k2p-external-router", "project_id": PROJECT,
+                                            "external_gateway_info": {"network_id": NET, "external_fixed_ips": [
+                                                {"subnet_id": "sn-1", "ip_address": "2001:db8::30"},
+                                                {"subnet_id": "sn-1", "ip_address": "192.0.2.30"}]}}]})
+        # the role's judge takes this shape unchanged
+        spec = importlib.util.spec_from_file_location(
+            "po_preflight", os.path.join(ROOT, "eda", "rulebooks", "roles", "platformopenshift_provision", "files",
+                                         "po_preflight.py"))
+        P = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(P)
+        judged = P.router_gateway({"routers": out["routers"], "name": "c1-x7k2p-external-router", "network_id": NET})
+        self.assertEqual(judged, {"address": "192.0.2.30", "note": ""})
+
+    def test_no_gateway_and_two_of_a_name(self):
+        out = self.run_it([self.router("r-1", net=None)])
+        self.assertEqual(out["routers"][0]["external_gateway_info"], {"network_id": "", "external_fixed_ips": []})
+        out = self.run_it([self.router("r-1"), self.router("r-2")])
+        self.assertEqual([r["id"] for r in out["routers"]], ["r-1", "r-2"])
+
+    def test_needs_the_project_and_the_name(self):
+        for req in ({"project_id": ""}, {"name": ""}, {"project_id": None}):
+            with self.subTest(req=req), mock.patch.object(S, "Account") as acct:
+                with self.assertRaises(ValueError):
+                    S.project_routers({"clouds_yaml": "/dev/null", "project_id": PROJECT,
+                                       "name": "c1-x7k2p-external-router", **req})
+                acct.assert_not_called()

@@ -806,30 +806,110 @@ class AccountFilesGoOnFailure(unittest.TestCase):
                    pnn_hybrid=True, pnn_credential="oso/projects/env1/clouds-config")
 
 
+GW_ROUTER = {"id": "r-1", "name": "c1-x7k2p-external-router", "project_id": "proj-1",
+             "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}
+
+
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class RouterGatewayFile(unittest.TestCase):
+    """The router's gateway /32 after the install (DESIGN cnet §4.2 step 7). Gate F10: the router is read through
+    shc_openstack.py project-routers (the job's execution environment has no OpenStack collection), and whatever
+    happens the file ends without failing the job, with condition RouterGateway saying what happened (the cluster is
+    built; the role's final write makes it Ready)."""
+
+    def run_rg(self, fab, routers=(GW_ROUTER,), fakes=None, **kw):
+        v = dict(addr_vars(), rg_infra_id="c1-x7k2p", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16",
+                 fake_os={"project-routers": {"routers": list(routers) if routers is not None else None}})
+        v.update(kw)
+        return H.run("platformopenshift_provision", "router_gateway.yml", v, k8s=k8s(fab=fab), result="rg_address",
+                     fakes=fakes)
+
+    def condition(self, tr):
+        conds = [p["body"]["conditions"] for p in H.patches(tr) if "conditions" in p["body"]]
+        self.assertEqual(len(conds), 1, conds)
+        self.assertEqual(len(conds[0]), 1)
+        c = conds[0][0]
+        self.assertEqual(c["type"], "RouterGateway")
+        return c["status"], c["reason"], c["message"]
+
+    def prefixes(self, tr):
+        return [p["body"]["platformPrefixes"] for p in H.patches(tr) if "platformPrefixes" in p["body"]]
+
     def test_gateway_joins_the_prefixes(self):
         fab = fabric(networks=[{"network": f"{NS}/n1", "prefixes": ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]}])
-        v = dict(addr_vars(), rg_infra_id="c1-x7k2p", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16")
-        routers = [{"name": "c1-x7k2p-external-router",
-                    "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}]
-        rc, tr, out = H.run("platformopenshift_provision", "router_gateway.yml", v, k8s=k8s(fab=fab), routers=routers,
-                            result="rg_address")
+        rc, tr, out = self.run_rg(fab)
         self.assertEqual(rc, 0, out)
-        self.assertEqual([t for t in tr if "routers_info" in t][0], {"routers_info": "c1-x7k2p-external-router",
-                                                                     "project": "proj-1", "scope": []})
-        self.assertEqual(H.patches(tr)[0]["body"]["platformPrefixes"], ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"])
-        self.assertEqual(len(H.patches(tr)), 1)
+        # the site account scoped to the environment's project, through the helper (no collection module)
+        self.assertEqual(H.os_calls(tr), [{"action": "project-routers", "project_id": "proj-1",
+                                           "name": "c1-x7k2p-external-router"}])
+        self.assertEqual([t["as"] for t in tr if "os" in t], ["sites/site1"])
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("True", "AsExpected"))
+        self.assertIn("192.0.2.30", msg)
+        self.assertEqual(tr[-1], {"result": "192.0.2.30"})
+        # every patch is partial: the role's final write decides Ready
+        self.assertTrue(all(p["partial"] for p in H.patches(tr)))
 
     def test_refused_gateway_is_taken_out_not_fatal(self):
         fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.30/32", "reason": "ServicePrefixInUse"}])
-        v = dict(addr_vars(), rg_infra_id="c1-x7k2p", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16")
-        routers = [{"name": "c1-x7k2p-external-router",
-                    "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}]
-        rc, tr, out = H.run("platformopenshift_provision", "router_gateway.yml", v, k8s=k8s(fab=fab), routers=routers,
-                            result="rg_address")
+        rc, tr, out = self.run_rg(fab)
         self.assertEqual(rc, 0, out)
-        self.assertEqual(H.patches(tr)[-1]["body"]["platformPrefixes"], ["192.0.2.15/32", "192.0.2.16/32"])
+        self.assertEqual(self.prefixes(tr)[-1], ["192.0.2.15/32", "192.0.2.16/32"])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "ServicePrefixInUse"))
+        self.assertIn("not admitted on the platform's path", msg)
+
+    def test_not_carried_yet_waits_recorded(self):
+        rc, tr, out = self.run_rg(fabric())
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "WaitingForPlatformAccess"))
+        self.assertIn("is recorded and not carried yet", msg)
+        self.assertIn("192.0.2.30/32", msg)
+
+    def test_no_usable_router(self):
+        other = dict(GW_ROUTER, external_gateway_info={"network_id": "net-other",
+                                                       "external_fixed_ips": [{"ip_address": "192.0.2.31"}]})
+        v6only = dict(GW_ROUTER, external_gateway_info={"network_id": "net-1",
+                                                        "external_fixed_ips": [{"ip_address": "2001:db8::30"}]})
+        # on 2.16 a None the helper never sends would arrive as "" or None: both mean no router
+        for routers, words in (([], "no IPv4 gateway address"), (None, "no IPv4 gateway address"),
+                               ([GW_ROUTER, dict(GW_ROUTER, id="r-2")], "2 routers named c1-x7k2p-external-router"),
+                               ([other], "has its gateway on another network"), ([v6only], "no IPv4 gateway address")):
+            with self.subTest(words=words, n=len(routers or [])):
+                rc, tr, out = self.run_rg(fabric(), routers=routers)
+                self.assertEqual(rc, 0, out)
+                self.assertEqual(self.prefixes(tr), [])
+                st, reason, msg = self.condition(tr)
+                self.assertEqual((st, reason), ("False", "Failed"))
+                self.assertIn(words, msg)
+                self.assertIn("The cluster is built and works", msg)
+                self.assertEqual(tr[-1], {"result": ""})
+
+    def test_a_failed_read_is_a_condition_not_the_jobs_failure(self):
+        tag = f"shc-oso-rg-{os.getpid()}"
+        path = f"/tmp/eda-po-router-{tag}-clouds.yaml"
+        rc, tr, out = self.run_rg(fabric(), fakes=ACCOUNT_FILE_FAKES, cb_app_name=tag)
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(os.path.exists(path), f"router_gateway.yml left {path}")
+        self.assertEqual(self.prefixes(tr), [])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "Failed"))
+        self.assertIn("it could not be read: the cloud did not answer", msg)
+        self.assertIn("calls to the hub are not admitted on the platform's path", msg)
+        self.assertEqual(tr[-1], {"result": ""})
+
+    def test_a_failure_after_the_record_takes_the_gateway_out(self):
+        # the network's wake fails after the three prefixes were recorded
+        rc, tr, out = self.run_rg(fabric(), fakes={"nudge_cr.yml": "- ansible.builtin.fail:\n    msg: services API down\n"})
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"],
+                                             ["192.0.2.15/32", "192.0.2.16/32"]])
+        st, reason, msg = self.condition(tr)
+        self.assertEqual((st, reason), ("False", "Failed"))
+        self.assertIn("services API down", msg)
 
 
 def cloud_vars(cloud, publish, **kw):

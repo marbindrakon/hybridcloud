@@ -57,6 +57,9 @@ Actions (request["action"]):
                 The calls carry a Keystone token of the router's project (never logged or returned).
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
+  project-routers  read only, the site account scoped to the environment's project (project_id): the routers named
+                `name` that belong to that project, each with its external gateway (network and fixed addresses), for
+                the PlatformOpenshift role's router gateway step (files/po_preflight.py router-gateway judges them).
 """
 import ipaddress
 import json
@@ -1036,12 +1039,36 @@ def platform_inventory(req):
     return {"found": True, "projectId": proj.id, "networks": nets, "routers": routers}
 
 
+def project_routers(req):
+    """Read only. {project_id, name} -> {routers: [{id, name, project_id, external_gateway_info: {network_id,
+    external_fixed_ips: [{subnet_id, ip_address}]}}]}: the routers of that name in the environment's project, with the
+    site account scoped to it. Routers of other projects are never listed (the account may see them all), so a name
+    is judged unique in the project only (files/po_preflight.py router-gateway)."""
+    pid = str(req.get("project_id") or "")
+    name = str(req.get("name") or "")
+    if not pid or not name:
+        raise ValueError("project-routers needs project_id and name")
+    conn = Account(req).project(pid)
+    out = []
+    for r in conn.network.routers(name=name, project_id=pid):
+        if r.name != name or (getattr(r, "project_id", None) or pid) != pid:
+            continue
+        gw = getattr(r, "external_gateway_info", None) or {}
+        out.append({"id": r.id, "name": r.name, "project_id": getattr(r, "project_id", None) or pid,
+                    "external_gateway_info": {
+                        "network_id": gw.get("network_id") or "",
+                        "external_fixed_ips": [{"subnet_id": (f or {}).get("subnet_id") or "",
+                                                "ip_address": (f or {}).get("ip_address") or ""}
+                                               for f in gw.get("external_fixed_ips") or []]}})
+    return {"routers": out}
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
            "cluster-fips": cluster_fips, "router-advertisement": router_advertisement,
            "network-name-check": network_name_check,
-           "platform-inventory": platform_inventory}
+           "platform-inventory": platform_inventory, "project-routers": project_routers}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

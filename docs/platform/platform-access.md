@@ -335,6 +335,12 @@ on the network pages.
 - The cluster's condition `Preflight`: refusals the tenant fixes, waits, and the platform team's
   (`ServiceNotOffered`, `CircuitNotDeployed`, `HubEndpointNotAdmitted`). A refusal creates nothing (no floating IP,
   DNS record or install). [Status reasons](../tenant/status-reasons.md) lists them.
+- An OpenStack cluster's condition `RouterGateway` (with hub endpoints set, after the install): True when its router's
+  gateway address is carried with the cluster's addresses; False `WaitingForPlatformAccess` while it is recorded and
+  not carried yet; False with the fabric's refusal reason, or `Failed`, when it was not added (the message says why:
+  no unique router of the installer's name in the environment's project, no IPv4 gateway on the cluster's network,
+  or the step's own error). The cluster is still built and Ready; its own calls to the hub are then not admitted on
+  the platform's path and leave by the network's own path.
 - `HybridFabric status.realization.service`: the domain, its connections and VLANs, the networks with their
   accepted addresses, and the refused ones with their reason.
 - The fabric health check reports `ServiceSessionsDown` when a node has no established session on a platform edge
