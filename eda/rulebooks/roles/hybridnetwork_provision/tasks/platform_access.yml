@@ -4,7 +4,7 @@
 # 1. The PlatformOpenshifts of the namespace that name the network (spec.<type>.network) and are not fully deleted,
 #    with the prefixes they ask for (status.platformPrefixes, written by the cluster job).
 # 2. files/shc_platform_access.py platform-access: the network's eligibility (condition PlatformReachable), each
-#    prefix checked (inside the network's IPv4 space, inside service.attachableRanges, clear of the reserved ranges
+#    prefix checked (inside the network's IPv4 space, inside service.attachableRanges when set, clear of the reserved ranges
 #    and of prefixes accepted earlier for other networks) and the ledger changes. Nothing is reserved or announced for
 #    a network without such a cluster.
 # 3. The ledger (kind servicePrefix, owner HybridNetwork/<ns>/<name>/<prefix>) records each accepted prefix when it
@@ -94,6 +94,7 @@
           'overlaps': hn_hub_check.overlaps | default([]), 'hub': hn_hub,
           'service': {'enabled': hn_service_real.enabled | default(false) | bool,
                       'ports': hn_service_real.ports | default([], true),
+                      'range': hn_service_real.range | default([], true),
                       'attachableRanges': hn_service_real.attachableRanges | default([], true)},
           'serviceStatus': hn_service_status,
           'reserved': (hn_fabric.status | default({}, true)).reservedRanges | default([], true),

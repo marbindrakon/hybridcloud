@@ -29,7 +29,7 @@ PA = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(PA)
 
 HUB = ["192.0.2.0/24"]
-SERVICE = {"enabled": True, "ports": [6443, 443], "attachableRanges": ["10.0.0.0/8"]}
+SERVICE = {"enabled": True, "ports": [6443, 443], "range": ["192.0.2.0/28"], "attachableRanges": ["10.0.0.0/8"]}
 CIRCUITS = {"circuits": [{"circuit": "platform-ns/hub-a", "vlan": 3001}], "networks": [], "refused": []}
 RESERVED = [{"prefix": "192.0.2.0/24", "purpose": "Networks the platform's management connects from", "rule": "Refused"},
             {"prefix": "198.51.100.0/24", "purpose": "Addresses inside the platform's network nodes", "rule": "SteppedAround"},
@@ -60,7 +60,8 @@ class Eligibility(unittest.TestCase):
         out = run()
         self.assertEqual(self.cond(out), ("True", "Attachable", "attachable"))
         self.assertEqual(out["reason"], "")
-        self.assertEqual(out["sources"], ["192.0.2.0/24"])
+        # the service range: the only addresses the platform opens connections from (not the whole hub)
+        self.assertEqual(out["sources"], ["192.0.2.0/28"])
         self.assertEqual(out["ports"], [6443, 443])
         self.assertEqual((out["prefixes"], out["accepted"], out["allocate"], out["release"]), ([], [], [], []))
         self.assertFalse(out["wakeFabric"])
@@ -107,12 +108,35 @@ class Eligibility(unittest.TestCase):
     def test_one_prefix_inside_is_enough(self):
         self.assertEqual(run(space=["172.16.0.0/16", "10.20.0.0/16"])["condition"]["reason"], "Attachable")
 
-    def test_any_range_is_written_out_and_empty_is_not_offered(self):
-        # service.attachableRanges is required with the service; 0.0.0.0/0 is the explicit "any", empty never is
-        self.assertEqual(run(space=["172.16.0.0/16"], service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]))
-                         ["condition"]["reason"], "Attachable")
-        self.assertEqual(run(space=["172.16.0.0/16"], service=dict(SERVICE, attachableRanges=[]))["condition"]["reason"],
-                         "ServiceNotOffered")
+    def test_absent_or_empty_attachable_ranges_mean_any(self):
+        # service.attachableRanges is optional: absent or empty = any range the platform does not refuse (0.0.0.0/0
+        # written out reads the same); set, it restricts as before
+        for att in ({"attachableRanges": ["0.0.0.0/0"]}, {"attachableRanges": []}, {"attachableRanges": None}, {}):
+            svc = {k: v for k, v in SERVICE.items() if k != "attachableRanges"}
+            svc.update(att)
+            with self.subTest(service=str(att)):
+                self.assertEqual(run(space=["172.16.0.0/16"], service=svc)["condition"]["reason"], "Attachable")
+                out = run(space=["172.16.0.0/16"], service=svc, clusters=[cl("c1", "172.16.0.9/32")])
+                self.assertEqual(out["accepted"], ["172.16.0.9/32"])
+        # the reserved ranges still refuse: the hub's range and the published rows
+        out = run(space=["172.16.0.0/16", "198.51.100.0/24"], service=dict(SERVICE, attachableRanges=[]),
+                  clusters=[cl("c1", "198.51.100.7/32")])
+        self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
+
+    def test_no_service_range_is_not_offered(self):
+        # the service needs its range (check-fabric names it); the network says so and accepts nothing
+        for rng in ([], None):
+            with self.subTest(range=rng):
+                out = run(service=dict(SERVICE, range=rng), clusters=[cl("c1", "10.20.1.5/32")])
+                self.assertEqual(self.cond(out), ("False", "ServiceNotOffered", "unavailable"))
+                self.assertIn("service.range", out["message"])
+                self.assertEqual(out["accepted"], [])
+
+    def test_the_sources_are_the_service_range(self):
+        # the only addresses the platform's management opens connections from, for the tenant's own firewalls
+        self.assertEqual(run()["sources"], ["192.0.2.0/28"])
+        # the service off: as before (the hub's IPv4 ranges)
+        self.assertEqual(run(service=dict(SERVICE, enabled=False))["sources"], HUB)
 
 
 class Prefixes(unittest.TestCase):
@@ -383,6 +407,18 @@ class PlatformAccessTasks(unittest.TestCase):
         self.assertFalse(out["wake"])
         self.assertFalse(out["ledger_read"])
         self.assertEqual(out["recorded"], [])
+
+    def test_the_job_passes_the_range_and_no_attachable_ranges_mean_any(self):
+        # the realization's service.range reaches the decision (sources; without it: not offered, by name), and a
+        # realization without attachableRanges accepts any range the platform does not refuse
+        svc = {k: v for k, v in SERVICE.items() if k != "attachableRanges"}
+        out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], real={"service": svc})
+        self.assertEqual(out["access"]["sources"], ["192.0.2.0/28"])
+        self.assertEqual([(r["prefix"], r["state"], r["reason"]) for r in out["access"]["prefixes"]],
+                         [("10.20.1.5/32", "pending", "")])
+        out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], real={"service": dict(svc, range=[])})
+        self.assertEqual(out["cond"]["reason"], "ServiceNotOffered")
+        self.assertIn("service.range", out["cond"]["message"])
 
     def test_accepted_rows_carry_no_reason(self):
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32", "10.30.0.1/32"])])
@@ -655,7 +691,7 @@ class FirstComeFirstServedSurvivesOutages(unittest.TestCase):
                 "core": {"loopbackPool": "100.126.0.0/24", "linkSubnet": "100.126.1.0/24"},
                 "egress": {"linkPool": "169.254.0.0/16", "networkTableBase": 100000, "vrf": {"name": "egress", "table": 9000}},
                 "service": {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": [6443, 443],
-                            "hubEndpoints": [], "attachableRanges": ["10.0.0.0/8"]}}
+                            "range": ["192.0.2.0/28"], "hubEndpoints": [], "attachableRanges": ["10.0.0.0/8"]}}
         alloc = {"vpnTarget": {"HybridNetwork/" + self.A: 10001, "HybridNetwork/" + self.B: 10002},
                  "egress": {"HybridNetwork/" + self.A: 1, "HybridNetwork/" + self.B: 2}, "servicePrefix": dict(self.ledger)}
         circ = [{"circuit": "platform-ns/hub-a", "vlan": 3001, "nodes": {"bgw-1": "100.127.0.2"}, "device": "bond1.3001",

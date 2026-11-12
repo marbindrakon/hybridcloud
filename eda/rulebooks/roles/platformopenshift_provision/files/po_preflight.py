@@ -35,8 +35,9 @@ Actions (request["action"]):
                  needRouterAttachments, hubApi, hubPort, cluster}  a cluster on a hybrid network: the network and its
                  placement in the environment (ready; router attachments ready when asked; an IPv4 subnet); with
                  needPlatform the network's condition PlatformReachable, the fabric's service routing domain
-                 (status.realization.service), the subnet inside service.attachableRanges and the hub's API address
-                 admitted by service.hubEndpoints when it lies in the hub's ranges (service.sources). While the
+                 (status.realization.service) with its service range, the subnet inside service.attachableRanges
+                 when the fabric names them (none named: any range the network accepted) and the hub's API address
+                 admitted by service.hubEndpoints when it lies in the service range (service.sources). While the
                  platform's side is down (ServiceNotOffered, CircuitNotDeployed) a cluster the network keeps rows
                  for (status.platformAccess.prefixes, its name, pending or ready) waits; a new one is refused.
                  Every check runs that its inputs allow, and a refusal wins over a wait (a wait is reported only when
@@ -344,12 +345,14 @@ def network(req):
     if not svc.get("enabled"):
         return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
                          "networks (its service routing domain is off)") or done()
+    if not [r for r in svc.get("range") or [] if v4(r)]:
+        # the service range is required with the service (check-fabric): no address of the hub reaches a cluster
+        # without it (a fabric status from before it: the fabric's next run writes it, or refuses the fabric by name)
+        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no addresses the platform reaches "
+                         "clusters from (service.range)") or done()
+    # optional: none named = any range (the network job has judged the prefixes against the reserved ranges)
     ranges = [str(r) for r in svc.get("attachableRanges") or []]
-    if not ranges:
-        # required with the service (check-fabric); never read as "any range"
-        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on "
-                         "networks") or done()
-    if subnet4 and not inside(subnet4, ranges):
+    if subnet4 and ranges and not inside(subnet4, ranges):
         return result("OutsideAttachableRanges", f"NetworkPlacement {pref}: subnet {subnet4} lies outside the ranges "
                       f"the platform reaches ({', '.join(ranges)})", **out)
     sources = [s for s in svc.get("sources") or [] if v4(s)]

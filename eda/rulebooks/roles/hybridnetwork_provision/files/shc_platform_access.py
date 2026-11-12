@@ -19,7 +19,7 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       space          the network's address space (both families)
       overlaps       hub-check's overlaps (grandfathered prefixes inside the hub's ranges)
       hub            infrastructure.hub
-      service        the realization's service keys {enabled, ports, attachableRanges}
+      service        the realization's service keys {enabled, ports, range, attachableRanges}
       serviceStatus  HybridFabric status.realization.service {circuits, networks, refused}
       reserved       HybridFabric status.reservedRanges rows {prefix, purpose, rule, site?}; site rows do not apply
       clusters       [{name, prefixes, deleting, type?}] the PlatformOpenshifts that name the network (not fully
@@ -29,10 +29,12 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       ledger         the fabric ledger's servicePrefix allocations {owner: value}
       fabric         the fabric's name (messages)
     A prefix is accepted when the network is eligible and the prefix is IPv4, inside the network's space, inside
-    service.attachableRanges (required with the service; 0.0.0.0/0 is the explicit "everything"), clear of the reserved ranges and of every prefix accepted earlier for another
-    network (first come first served: the ledger value, the lower the earlier; a prefix the fabric realizes counts as
-    accepted). Returns {state, reason, message, condition, sources, ports, prefixes, accepted, kept, allocate,
-    release, held, attached, wakeFabric}.
+    service.attachableRanges when the realization sets them (absent or empty: any range the platform does not
+    refuse), clear of the reserved ranges and of every prefix accepted earlier for another network (first come first
+    served: the ledger value, the lower the earlier; a prefix the fabric realizes counts as accepted). The sources are
+    the service range (service.range: the only addresses the platform's management opens connections from) while the
+    service is on, the hub's IPv4 ranges otherwise. Returns {state, reason, message, condition, sources, ports,
+    prefixes, accepted, kept, allocate, release, held, attached, wakeFabric}.
 
     The order lives in the ledger: an accepted prefix keeps its entry (and so its place) for as long as a cluster of
     the network asks for it, whatever happens on the platform's side meanwhile (the service turned off, no platform
@@ -152,8 +154,10 @@ def platform_access(req):
     space = nets(req.get("space"))
     space4 = [n for n in space if n.version == 4]
     hub = nets(req.get("hub"))
-    sources = [str(h) for h in hub if h.version == 4]
+    rng = [n for n in nets(svc.get("range")) if n.version == 4]
+    sources = [str(h) for h in (rng if svc.get("enabled") else hub) if h.version == 4]
     ports = [int(p) for p in (svc.get("ports") or [])]
+    # empty: any range the platform does not refuse (the reserved ranges, first come first served)
     attachable = [n for n in nets(svc.get("attachableRanges")) if n.version == 4]
     ledger = {str(k): v for k, v in (req.get("ledger") or {}).items()}
     clusters = sorted(req.get("clusters") or [], key=lambda c: str(c.get("name")))
@@ -175,10 +179,10 @@ def platform_access(req):
         reason, message = "ServiceNotOffered", (
             f"HybridFabric {fabric} does not offer the platform's connection for clusters on networks; ask the "
             "platform team.")
-    elif not attachable:
-        # the service needs its attachable ranges (check-fabric refuses it without them); never an implicit "any"
+    elif not rng:
+        # the service needs its range (check-fabric refuses it without one): nothing reaches a cluster without it
         reason, message = "ServiceNotOffered", (
-            f"HybridFabric {fabric} names no ranges for clusters on networks (service.attachableRanges); ask the "
+            f"HybridFabric {fabric} names no addresses the platform reaches clusters from (service.range); ask the "
             "platform team.")
     elif not (sst.get("circuits") or []):
         reason, message = "CircuitNotDeployed", (
@@ -192,7 +196,7 @@ def platform_access(req):
         reason, message = "InfrastructureOverlap", (
             f"The network's address space {o['prefix']} overlaps {o['range']} ({o['purpose']}); the platform cannot "
             "reach it. Clusters the platform manages need a network clear of that range.")
-    elif not any(overlaps(n, a) for n in space4 for a in attachable):
+    elif attachable and not any(overlaps(n, a) for n in space4 for a in attachable):
         reason, message = "OutsideAttachableRanges", (
             "Clusters the platform manages need a network with addresses inside "
             + ", ".join(str(a) for a in attachable) + " (TenantProfile status.managedClusterRanges).")
@@ -267,7 +271,7 @@ def platform_access(req):
                            message=message)
                 keep(row, n)
                 continue
-            if not any(n.subnet_of(a) for a in attachable):
+            if attachable and not any(n.subnet_of(a) for a in attachable):
                 row.update(reason="OutsideAttachableRanges",
                            message=f"{n} is outside the ranges for clusters the platform manages ("
                                    + ", ".join(str(a) for a in attachable) + ")")

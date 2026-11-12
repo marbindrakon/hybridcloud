@@ -5,8 +5,9 @@
 # (common/tasks/site_tenant_summary.yml), sorted by name, the platform IPv6 offer of the tenant's fabric, and the
 # address ranges of that fabric tenants may not use (reservedRanges: prefix, purpose, rule and site, copied from
 # HybridFabric status.reservedRanges) with the ranges a network must lie in to host clusters the platform manages
-# (managedClusterRanges: the fabric's realization.service.attachableRanges while it offers the service; required
-# then, 0.0.0.0/0 written out for "any"; absent = not offered, never "any"). Read only.
+# (managedClusterRanges: the fabric's realization.service.attachableRanges while it offers the service; absent when
+# the fabric names none, which means no restriction beyond the reserved ranges, or when it offers no service: the
+# network's PlatformReachable says which). Read only.
 #
 # Input:  entity_cr_name, entity_cr_namespace (the platform namespace), entity_spec (live), entity_generation,
 #         services_api_host/services_bearer_token (or services_kubeconfig, for the read-only render test)

@@ -48,13 +48,14 @@ def placement(kind="CloudOSO", env="env1", ready=True, ra=True, ra_state="ready"
 
 
 def fabric(enabled=True, ranges=("192.0.2.0/24",), endpoints=({"prefix": "198.18.0.10/32", "ports": [6443]},),
-           networks=(), refused=()):
+           networks=(), refused=(), rng=("198.18.0.0/24",)):
     return {"metadata": {"name": "f1", "namespace": PLAT},
             "status": {"reservedRanges": [{"prefix": HUB, "purpose": "Networks the platform's management connects from",
                                            "rule": "Refused"},
                                           {"prefix": "100.64.0.0/16", "purpose": "Addresses the site uses itself",
                                            "rule": "SteppedAround", "site": "other-site"}],
-                       "realization": {"service": {"enabled": enabled, "sources": [HUB], "ports": [6443, 443],
+                       "realization": {"service": {"enabled": enabled, "range": list(rng), "sources": list(rng),
+                                                   "ports": [6443, 443],
                                                    "hubEndpoints": list(endpoints), "attachableRanges": list(ranges),
                                                    "networks": list(networks), "refused": list(refused)}}}}
 
@@ -206,10 +207,28 @@ class NetworkJudge(unittest.TestCase):
     def test_attach_pending_does_not_hold_a_new_cluster(self):
         self.assertEqual(judge(networkObj=network_obj(reach=("False", "AttachPending", "")))["reason"], "")
 
-    def test_any_range_only_when_written_out(self):
-        # the ranges are required with the service: 0.0.0.0/0 is "any", an empty list is not offered
+    def test_no_attachable_ranges_mean_any(self):
+        # optional: none named (or 0.0.0.0/0 written out) = any range the network accepted; named, they restrict
         self.assertEqual(judge(fabric=fabric(ranges=("0.0.0.0/0",)))["reason"], "")
-        self.assertEqual(judge(fabric=fabric(ranges=()))["reason"], "ServiceNotOffered")
+        self.assertEqual(judge(fabric=fabric(ranges=()))["reason"], "")
+        f = fabric()
+        del f["status"]["realization"]["service"]["attachableRanges"]
+        self.assertEqual(judge(fabric=f)["reason"], "")
+        self.assertEqual(judge(fabric=fabric(ranges=("203.0.113.0/24",)))["reason"], "OutsideAttachableRanges")
+
+    def test_no_service_range_is_not_offered(self):
+        # a fabric with the service on and no service range (its status from before the range, or refused): a new
+        # cluster is refused by name, one the network holds addresses for waits
+        r = judge(fabric=fabric(rng=()))
+        self.assertEqual(r["reason"], "ServiceNotOffered")
+        self.assertIn("service.range", r["message"])
+
+    def test_hub_api_inside_the_hub_outside_the_range_needs_no_endpoint(self):
+        # the clusters reach only the service range through the service VRF; the hub's other addresses by the
+        # network's own outbound path
+        self.assertEqual(judge(fabric=fabric(endpoints=()), hubApi="https://198.19.0.5:6443")["reason"], "")
+        self.assertEqual(judge(fabric=fabric(endpoints=()), hubApi="https://198.18.0.5:6443")["reason"],
+                         "HubEndpointNotAdmitted")
 
     def test_hub_outside_its_ranges_needs_no_endpoint(self):
         self.assertEqual(judge(fabric=fabric(endpoints=()), hubApi="https://203.0.113.9:6443")["reason"], "")
