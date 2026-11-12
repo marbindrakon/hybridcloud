@@ -234,22 +234,24 @@ index, turning the service on is refused by the fabric's ledger ("pool change re
 allocated [...]"); a larger `egress.linkPool` resolves it, nothing is renumbered.
 
 Routes: in the service VRF, each accepted cluster address of a network via that network's `se` end (FRR static) and
-the hub's routes from the platform edge connections (eBGP, filtered to `infrastructure.hub`). The network's VRF
-`e<t>` learns the hub's routes from the service VRF over its service link: an iBGP session between the two VRF
+the service range's routes from the platform edge connections (eBGP, filtered to `service.range`: the hub's
+addresses the service VRF carries, inside `infrastructure.hub`). The network's VRF `e<t>` learns them from the service
+VRF over its service link: an iBGP session between the two VRF
 instances on the node (the network side connects, the service VRF has a router ID of its own, the node's address on
 its first platform edge connection; TTL 255 only, `ttl-security hops 1`, and the root's input filter admits it from the
-link's other end only). The service VRF sends the hub's routes and nothing else (next hop its `so` end), the network
-VRF takes the hub's ranges and nothing else (weight 100, so its own beats the other node's in the network's VPN) and
-sends nothing. So the hub's ranges enter the network's VPN from a node only while that node holds them from a
+link's other end only). The service VRF sends the service range's routes and nothing else (next hop its `so` end),
+the network VRF takes the service range and nothing else (weight 100, so its own beats the other node's in the
+network's VPN) and sends nothing. So the service range enters the network's VPN from a node only while that node holds it from a
 platform edge connection: a node whose connections are all down withdraws them, and the sites return the clusters'
 traffic to the node that can deliver it. The failover time is the time the node needs to see its sessions go down
 (at once when the connection's link goes down, at most the hold time of 30 seconds otherwise, a second with BFD on
 the connection) plus about a second for the withdrawal through the network's VPN. With every connection of every
-node down, no node announces the hub's ranges: the clusters lose the hub and nothing else changes (a reject route at
-distance 254 for each hub range in `e<t>` keeps the clusters' traffic to the hub off the network's other routes,
-its internet egress default among them). The service VRF's sessions announce the accepted addresses only, and only inside
-`service.attachableRanges`; they accept the hub's ranges only, and never a default route, the link pools, the core
-pools or an accepted address.
+node down, no node announces the service range: the clusters lose the hub and nothing else changes (a reject route at
+distance 254 for each `service.range` entry in `e<t>` keeps the clusters' traffic to it off the network's other
+routes, its internet egress default among them). The service VRF's sessions announce the accepted addresses only,
+never inside a published reserved range and, when `service.attachableRanges` is set, only inside it; they accept
+routes inside the service range only, and never a default route, the link pools, the core pools or an accepted
+address.
 
 What the networks and their sites see of the hub's routes: the hub's routes enter the service VRF without any
 community of the hub's router (standard, extended and large communities are removed on the platform edge connection:
@@ -262,20 +264,27 @@ and replacing every AS number would put the fabric's own AS in the path, which t
 So a deployment whose hub routes carry further AS numbers keeps those numbers off its tenants' sites' peers, or has
 the hub's router originate (or aggregate) the hub's ranges itself.
 
-`service.attachableRanges` is required with `service.enabled` (an empty list fails the fabric with `InvalidSpec`,
-naming the setting): there is no implicit "any". Each platform edge connection's `status.ceConfig.advertisedRanges`
-lists exactly these ranges as `<range> le 32` for the hub's network team, so the hub's router can accept the
-platform's routes with a fixed filter and a maximum prefix length of 32. A deployment that wants every range writes
-`0.0.0.0/0`: the hub's router then accepts any route inside its tenants' address spaces that the reserved ranges do
-not cover, including more-specific routes of its own networks outside `infrastructure.hub`, which it would then send
-into a tenant network. What is announced is bounded further per cluster: an OpenStack cluster's addresses are /32s
-(its floating IPs and its router's gateway), an AWS or Google Cloud cluster's the subnet of its placement on the
-network, each inside the network's accepted address space; anything else is refused on the network's prefix row.
+`service.range` is required with `service.enabled` (the fabric fails with `InvalidSpec` naming it).
+`service.attachableRanges` is optional. Each platform edge connection's `status.ceConfig` gives the hub's router
+its filters in order: `acceptedRanges` (what it announces: the service range), `refusedRanges` (the published
+reserved ranges as `<range> le 32`: refused from the platform at any length), `advertisedRanges` (then accepted:
+`0.0.0.0/0 le 32` without `attachableRanges`, else each of them as `<range> le 32`) and `maxPrefixes`
+(`service.maxPrefixes`, which the plan never exceeds: later addresses wait). The nodes guard their own announcement
+the same way (prefix list `SVC-ATTACHABLE` on the redistribution). Without `attachableRanges`, a cluster address is
+any address the reserved ranges leave, so those ranges must cover everything the hub's network routes itself: a
+more-specific route from the platform inside one of the hub network's own ranges would draw that traffic into a
+tenant network (see [Platform access](platform-access.md#the-refused-ranges-or-an-allow-list)). What is announced
+is bounded further per cluster: an OpenStack cluster's addresses are /32s (its floating IPs and its router's
+gateway), an AWS or Google Cloud cluster's the subnet of its placement on the network, each inside the network's
+accepted address space; anything else is refused on the network's prefix row.
 
 The table `ip shc_service`, loaded before FRR takes the service VRF and replaced whole on every run, filters what
-crosses it, statelessly (the two directions may cross different nodes): from the hub's ranges TCP on
-`service.ports` and ICMP echo to a network's accepted addresses only; from those addresses TCP to
-`service.hubEndpoints` only; ICMP errors both ways, a network's only from its own accepted addresses; nothing from
+crosses it, statelessly (the two directions may cross different nodes): from a platform edge connection, sources
+inside `service.range` only (set `service_range`), TCP on `service.ports` and ICMP echo to a network's accepted
+addresses only; from a network's link, by destination, packets to `service.range` only (replies from the service
+ports, TCP to `service.hubEndpoints`, ICMP errors and echo replies), no rule naming a client range, and only from a
+source the service VRF routes back over that same link (a reverse path check in the table, `fib saddr . iif`,
+whatever the host's `rp_filter`: a network's own accepted addresses); nothing from
 one `so*` device to another (the drops match the `so*` and `se*` devices by name, never by a list, so a pair a run
 has not yet removed is dropped too), so no network reaches
 another through the service VRF. The service VRF joins the root's input filter (`shc_root_in`): its connection
@@ -286,18 +295,18 @@ packets (`nft list table ip shc_service`).
 What the stateless filter cannot tell apart, and what remains of it: a reply is recognised by its shape (TCP from a
 service port with ACK set), not by a connection the hub opened, because the request and its reply may cross
 different nodes. So a cluster can send ACK-shaped segments (also with RST, FIN or data) from its own accepted
-addresses and a service port to any address and port in the hub's ranges. Nothing new is opened by them: a hub host
+addresses and a service port to any address and port in the service range. Nothing new is opened by them: a hub host
 with a stateful stack or firewall drops them or answers with a reset. Those resets come back to the cluster (they are
 addressed to a service port), so a cluster could map which hub addresses answer; the filter passes the hub's resets
 toward a network at no more than 10 per second (burst 20) per network and node, which slows such a scan down to a
-trickle without touching the hub's own connections. The cluster can never use another network's addresses (sources
-are bound to its own prefixes), never reach a hub port with a SYN, and never reach another network. Hub hosts that
-must not be seen at all from the clusters belong outside `infrastructure.hub` or behind a firewall that drops
-unsolicited ACKs silently.
+trickle without touching the hub's own connections. The cluster can never use another network's addresses (the
+reverse path check), never reach a hub port with a SYN other than a hub endpoint's, never reach a hub address outside
+`service.range`, and never reach another network. Hub hosts that must not be seen at all from the clusters belong
+outside `service.range` or behind a firewall that drops unsolicited ACKs silently.
 
 The health check reads `show bgp vrf <service> summary json` and reports `ServiceSessionsDown` on the fabric when a
 node has no established session on a platform edge connection (confirmed on a second check; it wakes nothing: the
-node has withdrawn the hub's ranges from the networks already, the finding is for the platform team). The sessions
+node has withdrawn the service range from the networks already, the finding is for the platform team). The sessions
 over the service links do not count for it: the same read gives the session of each network's service link (the
 service VRF to the network's VRF), and one that is not established while the node's platform edge session is up is
 `ServiceLinkDown` on the fabric, naming the network (confirmed on a second check, degrading, alert

@@ -30,13 +30,17 @@ infrastructure:
 service:
   enabled: true
   vrf: {name: service, table: 9001}
+  # the hub's addresses the service routing domain carries, inside infrastructure.hub (may be the same)
+  range: [198.51.100.0/27]
   # TCP ports the hub may open toward a cluster's addresses
   ports: [6443, 443]
-  # addresses in the hub's ranges the clusters may open TCP connections to (the hub's API for cluster management)
+  # addresses in the service range the clusters may open TCP connections to (the hub's API for cluster management)
   hubEndpoints:
     - {prefix: 198.51.100.10/32, ports: [6443]}
-  # the ranges a cluster's addresses must lie in; the platform announces nothing outside them
+  # optional: the ranges a cluster's addresses must lie in (absent: any range the platform does not refuse)
   attachableRanges: [10.64.0.0/10]
+  # the most cluster addresses the platform announces to the hub's network
+  maxPrefixes: 1000
 ```
 
 - **`infrastructure.hub`**: every range the hub's management connects from, either family. No tenant address space,
@@ -46,22 +50,59 @@ service:
   `InfrastructureOverlap`. The traffic of Hive and ACM toward a cluster must leave the hub from addresses inside
   these ranges: when the hub's nodes translate their pods' traffic to the node addresses, the node network belongs
   here.
-- **`service.enabled`** needs `attachments.enabled` and a non-empty IPv4 `infrastructure.hub`.
+- **`service.enabled`** needs `attachments.enabled`, a non-empty IPv4 `infrastructure.hub` and `service.range`.
+- **`service.range`** (required with `service.enabled`): the hub's IPv4 addresses the service routing domain
+  carries, as prefixes (an address is written `/32`), each inside an IPv4 `infrastructure.hub` range. These are the
+  only sources the border gateway nodes admit toward a cluster, the only destinations a cluster reaches through the
+  domain, and the only routes the nodes accept from the hub's routers and offer to the tenant networks that host
+  clusters. Keep it to what needs it: the addresses Hive and ACM connect from (the hub's node network when the hub's
+  nodes translate their pods' traffic) and the hub endpoints. `infrastructure.hub` keeps its one meaning, the ranges
+  tenants are refused; a deployment may set both to the same value. A missing value fails the fabric with
+  `InvalidSpec` naming `service.range`.
 - **`service.vrf`**: a name other than the egress VRF's and not of the form `e<digits>`; a table outside 253–255,
   not the egress table and below `egress.networkTableBase`.
 - **`service.ports`**: what the hub may open toward a cluster's addresses. ICMP echo is admitted too.
 - **`service.hubEndpoints`**: what a cluster may open toward the hub. Each prefix must lie inside
-  `infrastructure.hub`. Empty: the clusters reach the hub through their network's own outbound path (internet
+  `service.range`. Empty: the clusters reach the hub through their network's own outbound path (internet
   egress), and the hub's API address must then be reachable that way. When the hub's API address lies inside the
-  hub's ranges and no entry admits it on 6443, a cluster on a network is refused before it is built
+  service range and no entry admits it on 6443, a cluster on a network is refused before it is built
   (`HubEndpointNotAdmitted`), because cluster management could not reach the hub from it. With entries set, an
   OpenStack cluster's router gateway address joins the cluster's addresses after the install, so the nodes' own
   traffic to the endpoints is admitted.
-- **`service.attachableRanges`** (required with `service.enabled`): IPv4 ranges a cluster's addresses must lie in,
-  clear of the reserved ranges. The platform announces nothing outside them, so the hub's network can accept them
-  with a fixed filter. `0.0.0.0/0` is the explicit "any range that passes the other checks" (the hub's network then
-  accepts any prefix up to /32 from the platform); an empty list fails the fabric with `InvalidSpec`. Tenants see the list as "Ranges for clusters managed by the platform"; a
-  network with no IPv4 prefix inside it reads `PlatformReachable` False `OutsideAttachableRanges`.
+- **`service.attachableRanges`** (optional): IPv4 ranges a cluster's addresses must lie in, clear of the reserved
+  ranges. Absent or empty: any IPv4 address that passes the other checks (inside the network's own address space,
+  the provider's prefix shape, clear of every reserved range, not already taken for another network: first come,
+  first served); `0.0.0.0/0` written out reads the same. Set, it is an allow-list: the platform announces nothing
+  outside it, tenants see it as "Ranges for clusters managed by the platform", and a network with no IPv4 prefix
+  inside it reads `PlatformReachable` False `OutsideAttachableRanges`. See
+  [choosing between the two](#the-refused-ranges-or-an-allow-list).
+- **`service.maxPrefixes`** (default 1000): the most cluster addresses the platform announces over a platform edge
+  connection, given to the hub's network as its maximum-prefix figure. Beyond it, later addresses wait (first come,
+  first served) until earlier ones go or the setting grows; the fabric's message counts them.
+
+### The refused ranges or an allow-list
+
+The hub's network learns each cluster's addresses from the platform as routes up to /32. A route that is more
+specific than one the hub's network has for its own addresses wins there: a cluster address inside a range the
+hub's network routes (its own servers, DNS, proxies, another site) would draw that traffic to the tenant network
+instead of to the real destination. Something must keep cluster addresses out of everything the hub's network
+routes. There are two ways:
+
+- **The refused ranges** (no `attachableRanges`): the refused ranges must cover everything the hub's network routes
+  itself, because the hub's routers then accept any other prefix up to /32 from the platform. Declare those ranges
+  as `infrastructure.hub` (the ranges the platform's management connects from) and `network.exclusiveRanges` (the
+  other ranges the deployment keeps for itself); the other published reserved ranges count too. A tenant network or
+  cluster address inside any of them is refused, and the hub's routers refuse them from the platform at any length
+  (`refusedRanges` below). Choose this when the hub's network has a known, stable set of its own ranges and tenants
+  should be free to number their networks as they like.
+- **An allow-list** (`attachableRanges` set): clusters on networks must lie inside ranges agreed with the hub's
+  network team, which the hub's network does not use itself. Choose this when the hub's network cannot list all it
+  routes (a large or shared enterprise network), or when its team wants a fixed import filter that does not change
+  with the platform's reserved ranges. Tenants then see the ranges and must number networks for managed clusters
+  inside them.
+
+Either way the platform refuses what lies inside a reserved range, and either way the hub's routers should keep the
+refusal as a second guard.
 
 The settings that replace them, `egress.platformSources` and `egress.platformPorts`, are refused by the fabric while
 they are still set ("replaced by infrastructure.hub and service.ports").
@@ -84,8 +125,8 @@ spec:
       ceKinds: [platform]
 ```
 
-An edge connection of the platform kind names no network and accepts no routes of its own: it accepts the hub's
-ranges and announces the clusters' addresses. It lives in the fabric's namespace (tenants cannot write there, and
+An edge connection of the platform kind names no network and accepts no routes of its own: it accepts routes inside
+the service range only and announces the clusters' addresses. It lives in the fabric's namespace (tenants cannot write there, and
 the tenant dashboard refuses the platform kind); it is refused when the service domain is off
 (`ServiceNotOffered`) and for IPv6 (`FamilyUnavailable`). Two connections (two hub routers, or two bearers) give
 redundancy; all of them sit in the service domain.
@@ -108,9 +149,16 @@ spec:
 ```
 
 The connection's `status.ceConfig` is what the hub-side router needs: the VLAN, the platform's AS number, the link
-addresses and session per border gateway node, `advertisedRanges` (the prefix list of what the platform announces:
-each `service.attachableRanges` entry up to /32) and `acceptedRanges` (the IPv4
-`infrastructure.hub` ranges up to /32). `status.sessions` shows each node's session.
+addresses and session per border gateway node, and its filters in the order it applies them:
+
+| Key | The hub-side router |
+|---|---|
+| `acceptedRanges` | announces these to the platform (`service.range`, up to /32); the platform accepts nothing else |
+| `refusedRanges` | refuses these from the platform, at any length (the published reserved ranges, IPv4) |
+| `advertisedRanges` | then accepts these from the platform: `0.0.0.0/0 le 32` (any other IPv4 prefix up to /32), or each `service.attachableRanges` entry up to /32 when set |
+| `maxPrefixes` | sets this as its maximum-prefix for the session (`service.maxPrefixes`) |
+
+`status.sessions` shows each node's session.
 
 ## Cluster builds on the hub
 
@@ -145,16 +193,22 @@ hub-side router:
 1. A VLAN interface on the bearer's link for each connection, with the router's link address from `status.ceConfig`.
 2. An eBGP session with every border gateway node listed in `status.ceConfig` (password, timers and BFD as the
    connection says).
-3. Import: accept `advertisedRanges` only, with a fixed filter; the platform never announces anything else.
-4. Export: announce the hub's ranges (`acceptedRanges`); the platform accepts nothing else.
-5. Route the learned cluster addresses toward the connections from the hub's node and service networks, so that
-   the hub's traffic to a cluster (Hive's install, ACM's import and management) takes them.
+3. Import, in this order: deny `refusedRanges` (each entry as written, at any length), then permit
+   `advertisedRanges`, deny the rest; `maximum-prefix` `maxPrefixes`. The platform never announces anything else,
+   and the refusal stays a second guard if a reserved range is added later.
+4. Export: announce `acceptedRanges` (the service range); the platform accepts nothing else.
+5. Route the learned cluster addresses toward the connections from the addresses in the service range, so that the
+   hub's traffic to a cluster (Hive's install, ACM's import and management) takes them, and leaves from those
+   addresses.
 
-What the platform admits through the domain: from the hub's ranges, TCP on `service.ports` and ICMP echo, only to
-the cluster addresses it accepted; from a cluster's addresses, TCP to `service.hubEndpoints` only; ICMP errors both
-ways. No tenant network reaches another through the domain, and no route crosses from it into a tenant network
-beyond the hub's ranges, which a network learns only while it hosts a cluster. The filter is stateless (the two
-directions of a connection may cross different nodes).
+What the platform admits through the domain, by destination on the tenant side: from the hub's routers, only
+sources inside `service.range`, only to the cluster addresses it accepted, TCP on `service.ports` and ICMP echo;
+from a tenant network, only packets to `service.range`: replies from the service ports, connections to
+`service.hubEndpoints`, ICMP errors and echo replies, and only with a source the domain routes back to that network
+(its accepted cluster addresses). No tenant network reaches another through the domain, and no route crosses from it
+into a tenant network beyond the service range, which a network learns only while it hosts a cluster. The filter is
+stateless (the two directions of a connection may cross different nodes); what that leaves open (reply-shaped
+segments, resets at a limited rate) is bounded by the service range.
 
 ## OpenStack sites: floating IPs on placed networks
 
@@ -202,7 +256,8 @@ install and the import.
 The fabric computes every range a tenant prefix is refused in or stepped around into `HybridFabric
 status.reservedRanges`; each tenant's profile copies the list of its fabric (`oc get tenantprofile shc -n
 entity-<tenant> -o yaml`, `status.reservedRanges`, and `status.managedClusterRanges` for
-`service.attachableRanges`). The dashboard shows both on the network pages.
+`service.attachableRanges`, absent when none are set: then any range not reserved will do). The dashboard shows both
+on the network pages.
 
 | Source | Rule | Purpose shown to tenants |
 |---|---|---|
@@ -216,8 +271,9 @@ entity-<tenant> -o yaml`, `status.reservedRanges`, and `status.managedClusterRan
 
 ## What tenants and the platform team see
 
-- The network's condition `PlatformReachable` and `status.platformAccess` (state, the hub's ranges and ports for the
-  tenant's own firewalls, the cluster addresses and their state). False with `ServiceNotOffered` or
+- The network's condition `PlatformReachable` and `status.platformAccess` (state, the service range and ports for
+  the tenant's own firewalls (`sources`: the only addresses the platform's management connects from), the cluster
+  addresses and their state). False with `ServiceNotOffered` or
   `CircuitNotDeployed` is the platform team's: the domain is off, or no edge connection of the platform kind is
   realized on the fabric.
 - The cluster's condition `Preflight`: refusals the tenant fixes, waits, and the platform team's
@@ -227,7 +283,7 @@ entity-<tenant> -o yaml`, `status.reservedRanges`, and `status.managedClusterRan
   accepted addresses, and the refused ones with their reason.
 - The fabric health check reports `ServiceSessionsDown` when a node has no established session on a platform edge
   connection, and `ServiceLinkDown` when, on a node whose edge session is up, a network's session with the service
-  domain is down (that network learns the hub's ranges through the other nodes only).
+  domain is down (that network learns the service range through the other nodes only).
 
 There is no live reachability probe: "the platform reaches this network" means the domain is offered, an edge
 connection of the platform kind is realized and the network is eligible, not that packets were seen to flow. The
@@ -236,15 +292,31 @@ hub's routing (above) is the deployment's to verify.
 ## Checklist
 
 1. `infrastructure.hub` lists every range the hub's management connects from, and nothing of a tenant's.
-2. `service.enabled` with `attachments.enabled`; `service.ports`; `service.hubEndpoints` admitting the hub's API on
-   6443 when it lies in the hub's ranges; `service.attachableRanges` as agreed with the hub's network team.
+2. `service.enabled` with `attachments.enabled`; `service.range` (the hub's addresses Hive, ACM and the hub
+   endpoints use); `service.ports`; `service.hubEndpoints` admitting the hub's API on 6443 when it lies in the
+   service range; either the refused ranges covering everything the hub's network routes, or
+   `service.attachableRanges` as agreed with the hub's network team; `service.maxPrefixes`.
    `egress.platformSources` and `egress.platformPorts` removed.
 3. A provider edge bearer with `ceKinds: [platform]` and at least one `AttachmentCircuit` with `ceKind: platform` in
    the fabric's namespace, Ready, with its sessions established from every node.
-4. The hub's network peers with every node, accepts `advertisedRanges` with a fixed filter, announces the hub's
-   ranges and routes the cluster addresses through the connections.
+4. The hub's network peers with every node, refuses `refusedRanges`, accepts `advertisedRanges`, sets
+   `maxPrefixes`, announces `acceptedRanges` and routes the cluster addresses through the connections.
 5. OpenStack sites: OVN 25.03 or later with `nat` in the EVPN router port's `dynamic-routing-redistribute`; the
    global external networks listed in the site's status.
 6. The hub's resolvers return private answers for the environments' zones.
 7. Before the upgrade that brings these settings: delete the tenant OpenStack clusters and the AWS or Google Cloud
    clusters that publish Internal.
+
+## Upgrading to the service range
+
+- **The service off**: nothing changes and nothing new is required (`service.range` and `service.maxPrefixes` are
+  read only with the service on).
+- **The service on, `attachableRanges` set**: keeps working once `service.range` is set; the allow-list restricts as
+  before.
+- **The service on, no `service.range`**: the fabric is refused (`InvalidSpec`, "realization service.range is
+  required with service.enabled"), its nodes keep what the last good run applied, and the platform edge connections
+  and the networks read `ServiceNotOffered` naming `service.range`; new clusters on networks are refused, clusters
+  that hold addresses wait. Set `service.range` in the installation's `FABRIC_REALIZATION` to the hub's addresses
+  that reach the clusters (at most `infrastructure.hub`), move every `service.hubEndpoints` entry inside it, and let
+  the fabric run again. Then give the hub's network team the connections' new `status.ceConfig`: the routes they
+  announce shrink to `acceptedRanges`, and they add `refusedRanges` and `maxPrefixes` to their import filter.
