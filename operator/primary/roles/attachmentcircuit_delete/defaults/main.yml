@@ -1,0 +1,3 @@
+---
+# The platform's namespace (see roles/attachmentcircuit/defaults/main.yml): set by the deployment (PLATFORM_NAMESPACE).
+attachmentcircuit_platform_namespace: "{{ lookup('ansible.builtin.env', 'PLATFORM_NAMESPACE') }}"

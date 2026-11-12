@@ -40,6 +40,9 @@ spec:
               value: "{{ .Values.namespace }},{{ .Values.pluginsNamespace }}"
             - name: ANSIBLE_GATHERING
               value: explicit
+            # the platform's namespace: the operator realizes the platform's AttachmentCircuits only there
+            - name: PLATFORM_NAMESPACE
+              value: "{{ .Values.namespace }}"
             - name: NAMESPACE_OPERATOR_IMAGE
               value: "{{ .Values.namespaceOperator.image.repository }}:{{ .Values.namespaceOperator.image.tag }}"
             {{- if .Values.amqKafka.enabled }}

@@ -162,6 +162,10 @@ the tenant dashboard refuses the platform kind); it is refused when the service 
 (`ServiceNotOffered`) and for IPv6 (`FamilyUnavailable`). Two connections (two hub routers, or two bearers) give
 redundancy; all of them sit in the service domain.
 
+The platform's operator realizes these connections in the fabric's namespace and only of `ceKind: platform`: any
+other circuit created there is refused at once (`InvalidSpec`, phase Failed, nothing realized; delete it), because a
+tenant network's connection (`ceKind: customer`) belongs in the tenant's namespace.
+
 ```yaml
 apiVersion: hybridsovereign.redhat/v1alpha1
 kind: AttachmentCircuit

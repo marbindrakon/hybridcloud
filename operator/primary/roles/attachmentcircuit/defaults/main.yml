@@ -1,0 +1,5 @@
+---
+# The platform's namespace: the only namespace in which this operator realizes AttachmentCircuits (ceKind platform;
+# a tenant's circuits are the namespace operator's). The primary operator's deployment sets PLATFORM_NAMESPACE to the
+# namespace it runs in; without it the reconcile fails naming the setting.
+attachmentcircuit_platform_namespace: "{{ lookup('ansible.builtin.env', 'PLATFORM_NAMESPACE') }}"
