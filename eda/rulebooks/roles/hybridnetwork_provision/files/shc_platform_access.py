@@ -128,10 +128,10 @@ def reserved_rows(req):
         if n is None:
             continue
         why = str(r.get("purpose") or "")
-        rows.append((n, why + (f" (site {r['site']})" if r.get("site") else "")))
+        rows.append((n, why + (f" (site {r['site']})" if r.get("site") else ""), str(r.get("rule") or "")))
     for h in nets(req.get("hub")):
-        if not any(n == h for n, _ in rows):
-            rows.append((h, HUB_PURPOSE))
+        if not any(n == h for n, _, _ in rows):
+            rows.append((h, HUB_PURPOSE, "Refused"))
     return rows
 
 
@@ -296,7 +296,14 @@ def platform_access(req):
                                    + ", ".join(str(a) for a in attachable) + ")")
                 keep(row, n)
                 continue
-            hit = next(((r, why) for r, why in reserved if overlaps(n, r)), None)
+            hit = next(((r, why, rule) for r, why, rule in reserved if overlaps(n, r)), None)
+            if hit and hit[2] == "NotForManagedClusters":
+                # a range a tenant network may use but a cluster address announced to the hub's network may not
+                row.update(reason="NotForManagedClusters",
+                           message=f"{n} overlaps {hit[0]} ({hit[1][:1].lower() + hit[1][1:]}): a cluster the platform "
+                                   "manages cannot have an address there")
+                keep(row, n)
+                continue
             if hit:
                 row.update(reason="PrefixReserved",
                            message=f"{n} overlaps {hit[0]}, reserved by the platform: {hit[1]}")

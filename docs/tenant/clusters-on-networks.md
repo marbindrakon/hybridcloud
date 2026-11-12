@@ -105,6 +105,9 @@ Your tenant profile lists the ranges the platform reserves (`oc get tenantprofil
 - **Refused**: no network, edge connection route or cluster range of yours may overlap it. The network form marks
   a prefix inside one before you create the network.
 - **Not allocated**: the platform does not give subnets from it (on the site named, where a row names one).
+- **Not for managed clusters**: your networks may use it, but a cluster the platform manages cannot have its
+  addresses there (the platform's management network routes it): such an address is refused with
+  `NotForManagedClusters`.
 
 **Ranges for clusters managed by the platform** (`status.managedClusterRanges`): a network must have addresses in
 them, outside the ranges refused above, to host clusters the platform manages (on OpenStack the floating IPs, on

@@ -631,6 +631,7 @@ class ServiceRefusalSet(unittest.TestCase):
 
     def real(self):
         r = realization(attachable=("0.0.0.0/0",))
+        r["service"]["hubRoutedRanges"] = ["172.18.0.0/16"]
         r["egress"].update({"enabled": True, "parentInterface": "bond1.100", "gateway": "203.0.113.1",
                             "prefixLength": 24, "linkPool": "169.254.0.0/16",
                             "nodes": {"bgw-1": {"address": "203.0.113.11", "natPool": "203.0.113.64/26"},
@@ -654,7 +655,8 @@ class ServiceRefusalSet(unittest.TestCase):
         verdict = [F.prefix_entry(r[0]) for r in F.service_rows(real, self.SITES)]
         self.assertEqual(json.dumps(ce["refusedRanges"]), json.dumps(guard))
         self.assertEqual(guard, ["0.0.0.0/0"] + verdict)
-        for want in ("10.30.0.0/16 le 32", "10.40.0.0/16 le 32", "203.0.113.64/26 le 32", "127.0.0.0/8 le 32"):
+        for want in ("10.30.0.0/16 le 32", "10.40.0.0/16 le 32", "203.0.113.64/26 le 32", "127.0.0.0/8 le 32",
+                     "172.18.0.0/16 le 32"):
             self.assertIn(want, guard)
 
     def test_one_verdict_per_prefix(self):
@@ -662,8 +664,10 @@ class ServiceRefusalSet(unittest.TestCase):
         published = F.reserved_ranges(real, self.SITES)
         for prefix, space, want in (("10.40.0.20/32", "10.40.0.0/24", "PrefixReserved"),
                                     ("10.30.5.5/32", "10.30.5.0/24", "PrefixReserved"),
-                                    ("203.0.113.70/32", "203.0.113.64/27", "PrefixReserved"),
-                                    ("240.0.0.9/32", "240.0.0.0/24", "PrefixReserved"),
+                                    # (Review R4 NM3: free for networks, not for a managed cluster's address)
+                                    ("203.0.113.70/32", "203.0.113.64/27", "NotForManagedClusters"),
+                                    ("240.0.0.9/32", "240.0.0.0/24", "NotForManagedClusters"),
+                                    ("172.18.5.5/32", "172.18.5.0/24", "NotForManagedClusters"),
                                     ("192.0.2.15/32", SPACE, "")):
             with self.subTest(prefix=prefix):
                 led = Ledger()

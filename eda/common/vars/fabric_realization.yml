@@ -296,6 +296,11 @@ fabric_realization_defaults:
     # internet's, so every range the hub's network routes itself must then be declared (service.hubRoutedRanges).
     # Not empty (refused by name: an empty list would read as "none" or as "any")
     attachableRanges: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
+    # the IPv4 ranges the hub's network routes itself (its servers, proxies, other sites, cloud-side subnets the fabric
+    # does not know): no cluster address may lie in them (a cluster's /32 would be preferred there over the real
+    # one), but tenant networks may use them (each network is its own VRF). Published to tenants as
+    # NotForManagedClusters. infrastructure.hub stays the hub's own range tenants are refused outright
+    hubRoutedRanges: []
     # the most cluster prefixes the platform announces to the hub's network over a platform circuit (its
     # maximum-prefix, status.ceConfig.maxPrefixes). A cluster's prefixes are admitted all or none; clusters whose
     # install has started keep their slots, the others take what is left in the order they came; the rest wait

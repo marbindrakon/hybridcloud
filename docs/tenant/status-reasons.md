@@ -196,6 +196,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
 | `NodeUnreachable` | A network node does not answer. Traffic takes the other nodes; the platform team is alerted. | The platform team |
+| `NotForManagedClusters` | An address of this cluster lies in a range the platform's management network routes. Use another network or address. | You (the tenant) |
 | `NotPlatformNamespace` | Platform circuits are accepted only in the platform's namespace. Connect a network with ceKind customer. | You (the tenant) |
 | `NotRealizable` | The request cannot be realized on the chosen site. | You (the tenant) |
 | `OperatorFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
@@ -260,6 +261,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NodeStartFailed` | The network configuration did not start on a node. | The platform team |
 | `NotChecked` | The nodes have not been checked yet. | Nobody: it continues by itself |
 | `NotEnabled` | Not turned on for this fabric. | Nobody: it continues by itself |
+| `NotForManagedClusters` | This address lies in a range the platform's management network routes: no managed cluster's address may. | You (the tenant) |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 | `NotReported` | The site does not report this health check. | Nobody: it continues by itself |
 | `NotRequested` | The platform may not reach this network. Allow platform access on the network to build clusters the platform manages. | You (the tenant) |

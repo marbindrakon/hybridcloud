@@ -931,7 +931,8 @@ def check_network(req):
     # from before a range became exclusive keeps working, the network job tells)
     overlaps_out = []
     for n, purpose, rule, site in rows_of(req.get("ranges")):
-        if site and site != str(req.get("site") or ""):
+        if (site and site != str(req.get("site") or "")) or rule == NOT_MANAGED:
+            # (NotForManagedClusters: only a cluster address may not lie there, never a tenant network)
             continue
         for a in mine:
             if a.version != n.version:
@@ -959,6 +960,9 @@ def check_network(req):
 # to tenants and the rule. Refused: no tenant prefix, circuit route or cluster network may overlap them; SteppedAround:
 # the address management steps around them (a prefix inside one has nothing to give out)
 REFUSED, STEPPED = "Refused", "SteppedAround"
+# a range a cluster the platform manages may not have an address in (it is announced to the hub's network), which is
+# otherwise free for tenants: a tenant network, a circuit route or a cluster's own networks may use it (Review R4 NM3)
+NOT_MANAGED = "NotForManagedClusters"
 PURPOSE_HUB = "Networks the platform's management connects from"
 RANGE_KEYS = (
     ("infrastructure.hub", PURPOSE_HUB, REFUSED),
@@ -976,14 +980,17 @@ PURPOSE_SITE = "Addresses the site uses itself"
 PURPOSE_SERVICE = "The platform's management addresses that reach clusters"
 PURPOSE_HANDOFF = "The platform's internet hand-off"
 PURPOSE_SPECIAL = "Special-purpose addresses that are never routed"
+PURPOSE_HUB_ROUTED = "Addresses the platform's management network routes"
 # IPv4 space no prefix is ever announced in: "this network", loopback, link-local, multicast, reserved (RFC 6890)
 SPECIAL4 = ("0.0.0.0/8", "127.0.0.0/8", "169.254.0.0/16", "224.0.0.0/4", "240.0.0.0/4")
 
 
 def platform_extra_rows(real):
     """The addresses the platform uses that RANGE_KEYS does not name, and the special-purpose IPv4 space:
-    [(key, network, purpose, rule)]: service.range (the service on), each egress node's NAT pool and its hand-off
-    network (address/prefixLength; egress on), SPECIAL4. All Refused."""
+    [(key, network, purpose, rule)]: service.range (the service on; Refused, inside the hub's range anyway), and,
+    NotForManagedClusters (a cluster address may not lie there; a tenant network may: Review R4 NM3), the ranges the
+    hub's network routes (service.hubRoutedRanges, the service on), each egress node's NAT pool and its hand-off
+    network (address/prefixLength; egress on), SPECIAL4."""
     real = real or {}
     out = []
     sv = real.get("service") if isinstance(real.get("service"), dict) else {}
@@ -993,21 +1000,26 @@ def platform_extra_rows(real):
             n = _net(v)
             if n is not None:
                 out.append(("service.range", n, PURPOSE_SERVICE, REFUSED))
+        raw = sv.get("hubRoutedRanges") or []
+        for v in (raw if isinstance(raw, list) else []):
+            n = _net(v)
+            if n is not None:
+                out.append(("service.hubRoutedRanges", n, PURPOSE_HUB_ROUTED, NOT_MANAGED))
     eg = real.get("egress") if isinstance(real.get("egress"), dict) else {}
     if eg.get("enabled"):
         for name, node in sorted((eg.get("nodes") or {}).items()):
             node = node if isinstance(node, dict) else {}
             n = _net(node.get("natPool"))
             if n is not None:
-                out.append((f"egress.nodes.{name}.natPool", n, PURPOSE_HANDOFF, REFUSED))
+                out.append((f"egress.nodes.{name}.natPool", n, PURPOSE_HANDOFF, NOT_MANAGED))
             try:
                 h = ipaddress.ip_network(f"{node.get('address')}/{int(eg.get('prefixLength') or 24)}", strict=False)
             except (TypeError, ValueError):
                 h = None
             if h is not None:
-                out.append((f"egress.nodes.{name}.address", h, PURPOSE_HANDOFF, REFUSED))
+                out.append((f"egress.nodes.{name}.address", h, PURPOSE_HANDOFF, NOT_MANAGED))
     for v in SPECIAL4:
-        out.append(("special-purpose", ipaddress.ip_network(v), PURPOSE_SPECIAL, REFUSED))
+        out.append(("special-purpose", ipaddress.ip_network(v), PURPOSE_SPECIAL, NOT_MANAGED))
     return out
 # a site's type (CloudInfrastructure spec.type) -> the backend kind of placement.siteReserved
 SITE_KINDS = {"openshift": "CloudVirt", "openstack": "CloudOSO", "aws": "CloudAWS", "gcp": "CloudGCP"}
@@ -1113,7 +1125,8 @@ def range_clash(net, rows, site=None):
     for n, purpose, rule, s in rows:
         if s and s != site:
             continue
-        if n.version != net.version:
+        if n.version != net.version or rule == NOT_MANAGED:
+            # (a range only a cluster address may not lie in: service_refusal_rows)
             continue
         if (rule == REFUSED and n.overlaps(net)) or (rule != REFUSED and net.subnet_of(n)):
             return n, purpose, rule
@@ -1128,7 +1141,7 @@ def reserved_message(what, net, clash):
 # ---------------------------------------------------------------------------------------------------- service VRF
 SERVICE_NAME = re.compile(r"^[A-Za-z][A-Za-z0-9_-]{0,14}$")
 SERVICE_PREFIX_REASONS = ("ServicePrefixInUse", "PrefixReserved", "OutsideAttachableRanges", "OutsideAddressSpace",
-                          "FamilyUnavailable")
+                          "FamilyUnavailable", "NotForManagedClusters")
 
 
 def _ports(v, what, errors):
@@ -1297,6 +1310,14 @@ def service_settings_check(real):
         elif not any(n.subnet_of(r) for r in rng):
             errors.append(f"realization service.hubEndpoints[{i}].prefix {n} is not inside service.range")
         _ports((ep or {}).get("ports") if isinstance(ep, dict) else None, f"service.hubEndpoints[{i}].ports", errors)
+    hr = sv.get("hubRoutedRanges")
+    if hr not in (None, []) and not isinstance(hr, list):
+        errors.append(f"realization service.hubRoutedRanges must be a list of IPv4 prefixes, not {hr!r}")
+    else:
+        for i, v in enumerate(hr or []):
+            n = _net(v)
+            if n is None or n.version != 4:
+                errors.append(f"realization service.hubRoutedRanges[{i}] {v!r} is not an IPv4 network")
     ts = sv.get("tenantShare", 0.5)
     try:
         ts_ok = not isinstance(ts, bool) and 0 < float(ts) <= 1
@@ -1357,10 +1378,10 @@ def service_refusal_rows(rows):
     The planner's verdict (prefix_verdict), the node guard (service.refuse) and the hub router's refusedRanges
     (platform_ce_ranges) all read this list."""
     out, seen = [], set()
-    for n, purpose, _rule, site in rows:
+    for n, purpose, rule, site in rows:
         if n.version == 4 and n not in seen:
             seen.add(n)
-            out.append((n, purpose, site))
+            out.append((n, purpose, site, rule))
     return out
 
 
@@ -1450,9 +1471,13 @@ def prefix_verdict(text, space, srows, attachable):
         return net, "OutsideAddressSpace", f"{net} is not inside the network's IPv4 address space"
     clash = service_clash(net, srows)
     if clash is not None:
-        n, purpose, site = clash
+        n, purpose, site, rule = clash
+        where = f" (site {site})" if site else ""
+        if rule == NOT_MANAGED:
+            return net, "NotForManagedClusters", (f"prefix {net} overlaps {n} ({lower_first(purpose)}{where}): a cluster "
+                                                  "the platform manages cannot have an address there")
         return net, "PrefixReserved", (f"prefix {net} overlaps {n}, reserved by the platform: {lower_first(purpose)}"
-                                       + (f" (site {site})" if site else ""))
+                                       + where)
     if attachable and not any(net.subnet_of(a) for a in attachable):
         return net, "OutsideAttachableRanges", (f"{net} is outside the ranges the platform reaches "
                                                 f"({', '.join(str(a) for a in attachable)})")
@@ -1747,7 +1772,8 @@ def check_cluster_networks(req):
     def clash_with_ranges(f):
         c = None
         for n, purpose, rule, s in rows:
-            if s and s != site:
+            if (s and s != site) or rule == NOT_MANAGED:
+                # (NotForManagedClusters: a cluster's own networks are inside the cluster, never announced)
                 continue
             if n.version == nets[f].version and n.overlaps(nets[f]):
                 c = (n, purpose, rule)
@@ -1982,7 +2008,7 @@ def check_circuit(req):
     reserved_errors = []
     for e, (net, ge, le) in entries:
         for q, purpose, rule, site in rows_of(req.get("ranges")):
-            if site or q.version != net.version:
+            if site or q.version != net.version or rule == NOT_MANAGED:
                 continue
             if net.subnet_of(q):
                 reserved_errors.append(f"accept entry '{e}' lies inside {q}, reserved by the platform: {lower_first(purpose)}")

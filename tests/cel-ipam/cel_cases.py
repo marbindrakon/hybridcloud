@@ -525,7 +525,9 @@ def has_value(path, want):
 
 
 RANGES = [{"prefix": "192.0.2.0/24", "purpose": "Networks the platform's management connects from", "rule": "Refused"},
-          {"prefix": "198.51.100.0/24", "purpose": "Addresses the site uses itself", "rule": "SteppedAround", "site": "site-a"}]
+          {"prefix": "198.51.100.0/24", "purpose": "Addresses the site uses itself", "rule": "SteppedAround", "site": "site-a"},
+          {"prefix": "203.0.113.0/24", "purpose": "Addresses the platform's management network routes",
+           "rule": "NotForManagedClusters"}]
 NEED_NET = "spec.network is required for ceKind customer and not allowed for ceKind platform"
 CASES += [
     C("PA-01", PL, "an existing network reads platformAccess true", [("create", net(prefixes=NET4), "ok"),

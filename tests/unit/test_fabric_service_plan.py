@@ -132,7 +132,7 @@ class Realization(unittest.TestCase):
                                                "range": [], "ports": [6443, 443], "hubEndpoints": [],
                                                "attachableRanges": ["10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16",
                                                                     "100.64.0.0/10"],
-                                               "maxPrefixes": 1000, "tenantShare": 0.5})
+                                               "hubRoutedRanges": [], "maxPrefixes": 1000, "tenantShare": 0.5})
         self.assertEqual(DEFAULTS["infrastructure"], {"hub": []})
         self.assertNotIn("platformSources", DEFAULTS["egress"])
         self.assertNotIn("platformPorts", DEFAULTS["egress"])
@@ -528,7 +528,7 @@ class ServiceRefusal(unittest.TestCase):
                               ("240.0.0.5/32", "240.0.0.0/24"), ("127.0.0.5/32", "127.0.0.0/24"),
                               ("224.0.0.5/32", "224.0.0.0/24"), ("0.0.0.5/32", "0.0.0.0/24")):
             with self.subTest(prefix=prefix):
-                self.assertEqual(self.plan_one(prefix, space)["status"]["refused"][0]["reason"], "PrefixReserved")
+                self.assertEqual(self.plan_one(prefix, space)["status"]["refused"][0]["reason"], "NotForManagedClusters")
 
     def test_three_users_one_set(self):
         out = self.plan_one("192.0.2.15/32", "192.0.2.0/24")
@@ -549,8 +549,9 @@ class ServiceRefusal(unittest.TestCase):
         rows = F.reserved_ranges(self.real(), self.SITES)
         by = {(r["prefix"], r.get("site", "")): r["rule"] for r in rows}
         self.assertEqual(by[("10.40.0.0/16", "site-b")], "SteppedAround")
-        self.assertEqual(by[("203.0.113.64/26", "")], "Refused")
-        self.assertEqual(by[("127.0.0.0/8", "")], "Refused")
+        # (Review R4 NM3: only a cluster address may not lie there; a tenant network may)
+        self.assertEqual(by[("203.0.113.64/26", "")], "NotForManagedClusters")
+        self.assertEqual(by[("127.0.0.0/8", "")], "NotForManagedClusters")
         self.assertNotIn(("198.51.100.0/28", ""), by)  # inside the hub's row
         # a tenant network on site A may hold site B's range (a site's own ranges only constrain placements there)
         out = F.check_network({"prefixes": ["10.40.0.0/24"], "ranges": rows, "site": "site-a"})
@@ -760,6 +761,50 @@ class PublicSpaceNotByDefault(unittest.TestCase):
         self.assertEqual(F.check_fabric({"spec": spec(), "realization": r}).get("serviceErrors"), None)
         self.assertEqual(F.service_plan({"realization": r, "nodes": NODES, "networks": [], "vrfs": {}})["status"],
                          F.service_status_off())
+
+
+class HubRoutedRanges(unittest.TestCase):
+    """Review R4 NM3: service.hubRoutedRanges, the ranges the hub's network routes itself: a cluster address may not
+    overlap them (the verdict, the guard, refusedRanges), a tenant network may (it is isolated in its own VRF). Published
+    with the rule NotForManagedClusters, as are the platform's other ranges that only constrain the service (the
+    hand-off, the special-purpose space): none of them refuses a tenant network or a cluster's own networks."""
+
+    def real(self):
+        r = real(service={"hubRoutedRanges": ["172.18.0.0/16", "203.0.113.0/24"], "attachableRanges": ["0.0.0.0/0"]},
+                 egress={"enabled": True, "parentInterface": "bond1.100", "gateway": "192.0.2.254", "prefixLength": 24,
+                         "linkPool": "169.254.0.0/16",
+                         "nodes": {"bgw-1": {"address": "192.0.2.11", "natPool": "192.0.2.64/26"},
+                                   "bgw-2": {"address": "192.0.2.12", "natPool": "192.0.2.128/26"}}})
+        return r
+
+    def test_published_with_their_own_rule(self):
+        rows = {r["prefix"]: r for r in F.reserved_ranges(self.real())}
+        for p in ("172.18.0.0/16", "203.0.113.0/24"):
+            self.assertEqual((rows[p]["rule"], rows[p]["purpose"]),
+                             ("NotForManagedClusters", "Addresses the platform's management network routes"))
+        for p in ("192.0.2.64/26", "192.0.2.0/24", "127.0.0.0/8", "240.0.0.0/4"):
+            self.assertEqual(rows[p]["rule"], "NotForManagedClusters", p)
+
+    def test_a_tenant_network_may_use_them(self):
+        rows = F.reserved_ranges(self.real())
+        out = F.check_network({"prefixes": ["172.18.5.0/24", "203.0.113.0/25", "192.0.2.0/25"], "ranges": rows})
+        self.assertEqual((out["errors"], out.get("reason", "")), ([], ""))
+        out = F.check_cluster_networks({"ranges": rows, "provider": "openstack", "network": True,
+                                        "space": ["10.0.0.0/16"], "clusterNetwork": "10.128.0.0/14",
+                                        "serviceNetwork": "172.18.0.0/16", "machineNetwork": "203.0.113.0/24"})
+        self.assertEqual(out["reason"], "")
+
+    def test_a_cluster_address_may_not(self):
+        r = self.real()
+        out = F.service_prefix_check({"prefixes": ["172.18.5.9/32", "192.0.2.70/32", "10.9.9.9/32"],
+                                      "space": ["172.18.5.0/24", "192.0.2.64/26", "10.9.9.0/24"], "realization": r})
+        self.assertEqual([p["reason"] for p in out["prefixes"]], ["NotForManagedClusters", "NotForManagedClusters", ""])
+        self.assertIn("cannot have an address", out["prefixes"][0]["message"])
+        ce = F.check_circuit({"ceKind": "platform", "namespace": "platform", "fabricNamespace": "platform",
+                              "realization": r})["ceConfig"]
+        self.assertIn("172.18.0.0/16 le 32", ce["refusedRanges"])
+        errs = F.check_fabric({"spec": spec(), "realization": real(service={"hubRoutedRanges": "172.18.0.0/16"})})
+        self.assertTrue([e for e in errs.get("serviceErrors", []) if "service.hubRoutedRanges" in e])
 
 
 class PrefixCheck(unittest.TestCase):

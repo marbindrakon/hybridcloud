@@ -39,6 +39,8 @@ service:
     - {prefix: 198.51.100.10/32, ports: [6443]}
   # the ranges a cluster's addresses may lie in (default: the private and shared blocks; 0.0.0.0/0: any)
   attachableRanges: [10.64.0.0/10]
+  # what the hub's network routes itself: no cluster address there, tenant networks may use it
+  hubRoutedRanges: [198.18.0.0/15, 203.0.113.0/24]
   # the most cluster addresses the platform announces to the hub's network
   maxPrefixes: 1000
 ```
@@ -77,6 +79,13 @@ service:
   `OutsideAttachableRanges`. A deployment whose tenants run clusters on other space sets its own list. `0.0.0.0/0`
   is the one way to say any range the platform does not refuse; an empty list is refused by name. See
   [choosing](#the-default-the-allow-list-or-any-range).
+- **`service.hubRoutedRanges`** (default none): the IPv4 ranges the hub's network routes itself (its servers, proxies,
+  other sites, cloud-side subnets the fabric does not know, public ranges it reaches directly). No cluster address
+  may lie in them, and the hub's routers refuse them from the platform; tenant networks may use them (each network
+  is its own VRF, and a network is never announced to the hub's network, only a cluster's addresses are), existing
+  networks included. Tenants see them as "not for managed clusters", and a cluster address there is refused with
+  `NotForManagedClusters`. Do not use `network.exclusiveRanges` for this: that refuses tenant networks outright,
+  existing ones included. `infrastructure.hub` stays the hub's own range, refused to tenants altogether.
 - **`service.maxPrefixes`** (default 1000): the most cluster addresses the platform announces over a platform edge
   connection, given to the hub's network as its maximum-prefix figure. It is shared fairly and atomically: a
   cluster's addresses are admitted all or none; clusters whose install has started or completed keep their slots,
@@ -103,20 +112,23 @@ tenant network instead of to the real destination. What keeps cluster addresses 
   range, `network.exclusiveRanges`, the platform's own pools (`core.loopbackPool`, `core.linkSubnet`,
   `core.icmpSource4`, `attachments.linkPool`, `egress.linkPool`), the internet hand-off (each egress node's NAT pool
   and its hand-off network), every site's underlay and its `placement.siteReserved` ranges, and the special-purpose
-  space (0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 224.0.0.0/4, 240.0.0.0/4, and the default route itself). A site's
+  space (0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 224.0.0.0/4, 240.0.0.0/4, and the default route itself), and
+  `service.hubRoutedRanges`. The hand-off, the special-purpose space and `service.hubRoutedRanges` are published with
+  the rule `NotForManagedClusters`: they constrain a cluster's addresses only, never a tenant network or a cluster's
+  own pod, service and machine networks. A site's
   own ranges count for every cluster, on every site: a cluster address is announced to the hub's network, which
   routes every site. (A tenant network is judged differently: a site's own ranges only constrain its placements on
   that site.)
 - **The default allow-list**, the private and shared blocks: no cluster address in public space, so a hub that
   reaches the internet by a default route never prefers a cluster's address over the internet's. The private ranges
-  the hub's network routes itself still need declaring (below).
+  the hub's network routes itself still need declaring, in `service.hubRoutedRanges`.
 - **Your own allow-list**: ranges agreed with the hub's network team that it does not use itself. Choose it when the
   hub's network cannot list all it routes (a large or shared enterprise network), or when its team wants an import
   filter that does not change with the platform's reserved ranges.
 - **Any range** (`[0.0.0.0/0]`): tenants number networks as they like, public space included. The hub's routers then
   accept any /32 from the platform: where the hub reaches the internet by a default route, a cluster's address is
   preferred over the internet's (the hub's traffic to that internet address goes to the tenant), so choose it only
-  for a hub without a default route, and declare everything its network routes.
+  for a hub without a default route, and declare everything its network routes in `service.hubRoutedRanges`.
 
 Either way the platform refuses what lies inside a reserved range, and either way the hub's routers should keep the
 refusal as a second guard.
@@ -285,6 +297,9 @@ on the network pages.
 | `core.icmpSource6`, `core.icmpSource4` | Refused | Addresses of the platform's network nodes |
 | `core.loopbackPool`, `core.linkSubnet`, `attachments.linkPool`, `egress.linkPool` | Not allocated | Addresses inside the platform's network nodes |
 | `placement.siteReserved` per site, the site's underlay | Not allocated, on that site | Addresses the site uses itself |
+| `service.hubRoutedRanges` | Not for managed clusters | Addresses the platform's management network routes |
+| each egress node's NAT pool and hand-off network | Not for managed clusters | The platform's internet hand-off |
+| 0.0.0.0/8, 127.0.0.0/8, 169.254.0.0/16, 224.0.0.0/4, 240.0.0.0/4 | Not for managed clusters | Special-purpose addresses that are never routed |
 
 ## What tenants and the platform team see
 

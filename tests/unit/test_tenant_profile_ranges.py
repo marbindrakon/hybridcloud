@@ -125,7 +125,7 @@ class CrdText(unittest.TestCase):
         st = doc["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["status"]["properties"]
         rr = st["reservedRanges"]["items"]
         self.assertEqual(sorted(rr["properties"]), ["prefix", "purpose", "rule", "site"])
-        self.assertEqual(rr["properties"]["rule"]["enum"], ["Refused", "SteppedAround"])
+        self.assertEqual(rr["properties"]["rule"]["enum"], ["Refused", "SteppedAround", "NotForManagedClusters"])
         self.assertIn("managedClusterRanges", st)
         xn = st["sites"]["items"]["properties"]["externalNetworks"]["items"]["properties"]
         self.assertEqual(sorted(xn), ["default", "families", "id", "name"])

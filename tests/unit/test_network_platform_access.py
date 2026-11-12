@@ -226,6 +226,18 @@ class Prefixes(unittest.TestCase):
         self.assertIn("10.20.200.0/24", out["prefixes"][0]["message"])
         self.assertIn("site-a", out["prefixes"][0]["message"])
 
+    def test_a_range_the_hub_routes_refuses_a_cluster_address_only(self):
+        # Review R4 NM3: published NotForManagedClusters: the cluster's address is refused with its own reason
+        rows = RESERVED + [{"prefix": "10.20.100.0/24", "purpose": "Addresses the platform's management network routes",
+                            "rule": "NotForManagedClusters"}]
+        out = run(reserved=rows, clusters=[cl("c1", "10.20.100.5/32", "10.20.1.5/32")])
+        by = {r["prefix"]: r for r in out["prefixes"]}
+        self.assertEqual(by["10.20.100.5/32"]["reason"], "NotForManagedClusters")
+        self.assertIn("cannot have an address there", by["10.20.100.5/32"]["message"])
+        self.assertEqual(out["accepted"], ["10.20.1.5/32"])
+        # the network itself is not affected
+        self.assertEqual(out["condition"]["reason"], "AttachPending")
+
     def test_the_hub_refuses_without_a_published_row(self):
         out = run(space=["192.0.2.0/24", "10.20.0.0/16"], reserved=[], clusters=[cl("c1", "192.0.2.9/32")],
                   service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]))

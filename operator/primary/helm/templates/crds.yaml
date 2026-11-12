@@ -4709,10 +4709,12 @@ spec:
                         maxLength: 256
                       rule:
                         description: >-
-                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
-                          SteppedAround (inside a network prefix, never allocated to a placement).
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it),
+                          SteppedAround (inside a network prefix, never allocated to a placement) or
+                          NotForManagedClusters (a network may use it, but an address of a cluster the platform
+                          manages may not lie in it).
                         type: string
-                        enum: [Refused, SteppedAround]
+                        enum: [Refused, SteppedAround, NotForManagedClusters]
                       site:
                         description: The site the range applies to; absent when it applies everywhere.
                         type: string
@@ -9938,10 +9940,12 @@ spec:
                         maxLength: 256
                       rule:
                         description: >-
-                          Refused (a network prefix, edge connection route or cluster network may not overlap it) or
-                          SteppedAround (inside a network prefix, never allocated to a placement).
+                          Refused (a network prefix, edge connection route or cluster network may not overlap it),
+                          SteppedAround (inside a network prefix, never allocated to a placement) or
+                          NotForManagedClusters (a network may use it, but an address of a cluster the platform
+                          manages may not lie in it).
                         type: string
-                        enum: [Refused, SteppedAround]
+                        enum: [Refused, SteppedAround, NotForManagedClusters]
                       site:
                         description: The site the range applies to; absent when it applies everywhere.
                         type: string

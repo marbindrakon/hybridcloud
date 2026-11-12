@@ -95,7 +95,7 @@
     _tp_reserved: >-
       {%- set out = [] -%}
       {%- for r in _fst.reservedRanges | default([], true) -%}
-        {%- if r is mapping and (r.prefix | default('', true) | string) and (r.rule | default('') in ['Refused', 'SteppedAround']) -%}
+        {%- if r is mapping and (r.prefix | default('', true) | string) and (r.rule | default('') in ['Refused', 'SteppedAround', 'NotForManagedClusters']) -%}
           {%- set row = {'prefix': r.prefix | string, 'purpose': r.purpose | default('', true) | string, 'rule': r.rule} -%}
           {%- if r.site | default('', true) -%}{%- set _ = row.update({'site': r.site | string}) -%}{%- endif -%}
           {%- set _ = out.append(row) -%}

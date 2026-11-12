@@ -47,11 +47,12 @@ export interface TenantSiteExternalNetwork {
   default?: boolean;
 }
 
-/** An address range tenants may not use (Refused) or that the platform does not allocate from (SteppedAround) */
+/** An address range tenants may not use (Refused), that the platform does not allocate from (SteppedAround), or that
+ *  a network may use but a cluster the platform manages may not have an address in (NotForManagedClusters) */
 export interface TenantReservedRange {
   prefix: string;
   purpose?: string;
-  rule?: 'Refused' | 'SteppedAround' | string;
+  rule?: 'Refused' | 'SteppedAround' | 'NotForManagedClusters' | string;
   /** Only on this site */
   site?: string;
 }
