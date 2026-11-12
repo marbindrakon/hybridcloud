@@ -39,7 +39,9 @@
         {%- if ty and (sp[ty] | default({}, true)).network | default('', true) == fab_name
               and not (st.deletionComplete | default(false, true) | bool) -%}
           {%- set _ = out.append({'name': c.metadata.name, 'prefixes': st.platformPrefixes | default([], true),
-                                  'deleting': c.metadata.deletionTimestamp is defined, 'type': ty}) -%}
+                                  'deleting': c.metadata.deletionTimestamp is defined, 'type': ty,
+                                  'installed': (st.installStarted | default(false, true) | bool)
+                                               or (st.clusterInstalled | default(false, true) | bool)}) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ out }}

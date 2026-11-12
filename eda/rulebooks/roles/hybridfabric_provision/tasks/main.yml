@@ -724,10 +724,9 @@
       vars:
         fab_outcome: ready
         fab_reason: Ready
-        # the cluster prefixes the platform does not announce yet: service.maxPrefixes reached (they wait in order)
-        _svc_capped: >-
-          {{ ((hf_service | default({})).pending | default([])) | selectattr('prefix', 'defined')
-             | selectattr('why', 'search', 'service.maxPrefixes') | list }}
+        # the cluster prefixes the platform does not announce yet: service.maxPrefixes or a tenant's share reached
+        # (status.realization.service.waiting; they wait in order)
+        _svc_capped: "{{ ((hf_service | default({})).status | default({})).waiting | default([], true) }}"
         fab_message: >-
           Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
           ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }}){{
@@ -742,7 +741,8 @@
           ('; service VRF with ' ~ hf_service.status.circuits | length ~ ' platform circuit(s) for '
            ~ hf_service.status.networks | length ~ ' network(s)'
            ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else '')
-           ~ ((', waiting for service.maxPrefixes: ' ~ _svc_capped | length ~ ' prefix(es)') if _svc_capped else '')
+           ~ ((', waiting for service.maxPrefixes or a tenant share: ' ~ _svc_capped | length ~ ' prefix(es)')
+              if _svc_capped else '')
            if not ((hf_service.status | default({})).reason | default('', true))
            else ('; service VRF not realized: ' ~ hf_service.status.message))
           if (hf_service | default({})).enabled | default(false) else '' }}{{

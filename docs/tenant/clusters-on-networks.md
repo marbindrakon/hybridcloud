@@ -152,6 +152,7 @@ install). [Status reasons](status-reasons.md) lists every reason and who acts.
 | `AddressConflict` | Two of the cluster's ranges, or a range and the network's space, overlap; the message names both. |
 | `PrefixReserved` | A range overlaps a range the platform reserves; the message names it and its purpose. |
 | `ServicePrefixInUse` | An address of the cluster is already reached by the platform for another network. Create the cluster again (new addresses are chosen) or ask the platform team. |
+| `ServiceLimitReached`, `ServiceShareReached` (on the network's address rows; the cluster waits) | The platform reaches as many cluster addresses as it may, or your clusters hold the share one tenant may hold while others use the platform's connection; the message gives the numbers. The cluster waits its turn; deleting another of your clusters frees its share. |
 | `NetworkChoiceRequired` | The site has no default external network: choose a network. |
 | `ExternalNetworkNotListed` | The external network named is not one of the site's. |
 | `NetworkNameNotUnique` | The environment sees another network with the same name as the cluster's network, and the installer finds the network by its name. Rename or remove the other network; a network shared with the environment by someone else: ask the platform team. |

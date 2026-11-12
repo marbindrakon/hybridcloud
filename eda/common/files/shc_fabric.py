@@ -1291,6 +1291,14 @@ def service_settings_check(real):
         elif not any(n.subnet_of(r) for r in rng):
             errors.append(f"realization service.hubEndpoints[{i}].prefix {n} is not inside service.range")
         _ports((ep or {}).get("ports") if isinstance(ep, dict) else None, f"service.hubEndpoints[{i}].ports", errors)
+    ts = sv.get("tenantShare", 0.5)
+    try:
+        ts_ok = not isinstance(ts, bool) and 0 < float(ts) <= 1
+    except (TypeError, ValueError):
+        ts_ok = False
+    if not ts_ok:
+        errors.append(f"realization service.tenantShare {ts!r} must be a fraction above 0 and at most 1 (the part of "
+                      "service.maxPrefixes one tenant's new clusters may take while other tenants ask)")
     mp = sv.get("maxPrefixes", 1000)
     if isinstance(mp, bool) or not isinstance(mp, (int, str)) or not str(mp).strip().isdigit() or int(mp) < 1:
         errors.append(f"realization service.maxPrefixes {mp!r} must be a whole number from 1 (the most cluster prefixes "
@@ -1376,7 +1384,8 @@ def service_settings(real):
     return {"vrf": str(vrf.get("name") or "service"), "table": int(vrf.get("table") or 9001),
             "hub": [str(n) for n in hub4], "range": [str(n) for n in rng],
             "ports": sorted({int(p) for p in sv.get("ports") or [6443, 443]}),
-            "hubEndpoints": eps, "attachable": [str(n) for n in att], "maxPrefixes": int(sv.get("maxPrefixes") or 1000)}
+            "hubEndpoints": eps, "attachable": [str(n) for n in att], "maxPrefixes": int(sv.get("maxPrefixes") or 1000),
+            "tenantShare": float(sv.get("tenantShare") if sv.get("tenantShare") is not None else 0.5)}
 
 
 def prefix_entry(n):
@@ -1470,7 +1479,8 @@ def accepted_row(row):
     """A row of HybridNetwork status.platformAccess.prefixes the network accepted into the service VRF: state ready,
     or state pending with no reason."""
     state = str(row.get("state") or "")
-    return state == "ready" or (state == "pending" and not str(row.get("reason") or ""))
+    # a row that waits for the limit (service_limit) stays a candidate: it keeps its place in the order
+    return state == "ready" or (state == "pending" and str(row.get("reason") or "") in ("",) + SERVICE_WAIT_REASONS)
 
 
 def service_link(pool, index):
@@ -1478,6 +1488,61 @@ def service_link(pool, index):
     upper = int(pool.network_address) + pool.num_addresses // 2
     so = ipaddress.ip_address(upper + 2 * index)
     return so, so + 1
+
+
+SERVICE_WAIT_REASONS = ("ServiceLimitReached", "ServiceShareReached")
+
+
+def service_limit(first, clusters_of, cfg):
+    """service.maxPrefixes, fair and atomic (Review R4 M1). first: {network: [candidates]} after first come first
+    served; clusters_of: {(network, prefix): {cluster: installed}}. A cluster's prefixes are admitted all or none (a
+    prefix two clusters share counts once). Clusters whose install started or completed come first, in the ledger's
+    order (their lowest value), and keep their slots; then the others in the same order, with what is left: a cluster
+    that waits keeps its place in the order but holds no slot. While two or more tenants (the networks' namespaces)
+    ask, a tenant's not-yet-installed clusters may not take it past service.tenantShare of the pool; alone, a tenant
+    may use all of it. -> ({network: [candidates]}, waiting rows {network, prefix, cluster, reason, message})."""
+    cap = cfg["maxPrefixes"]
+    by_text = {(k, c["text"]): c for k, lst in first.items() for c in lst}
+    units = {}
+    for (k, text), c in by_text.items():
+        for cl, installed in (clusters_of.get((k, text)) or {f"prefix {text}": False}).items():
+            u = units.setdefault((k, cl), {"network": k, "cluster": cl, "installed": False, "texts": [], "order": None})
+            u["installed"] = u["installed"] or installed
+            u["texts"].append(text)
+            u["order"] = c["order"] if u["order"] is None else min(u["order"], c["order"])
+    tenants = {k.split("/")[0] for k in first}
+    share = cap if len(tenants) <= 1 else max(1, int(cap * cfg["tenantShare"]))
+    admitted, per_tenant, waiting = set(), {}, []
+    for u in sorted(units.values(), key=lambda u: (not u["installed"], u["order"])):
+        k, tenant = u["network"], u["network"].split("/")[0]
+        need = sorted(t for t in u["texts"] if (k, t) not in admitted)
+        if not need:
+            continue
+        held = per_tenant.get(tenant, 0)
+        if len(admitted) + len(need) > cap:
+            reason = "ServiceLimitReached"
+            why = (f"the platform reaches at most {cap} cluster addresses and {len(admitted)} are in use; cluster "
+                   f"{u['cluster']} needs {len(need)} and waits its turn")
+        elif not u["installed"] and held + len(need) > share:
+            reason = "ServiceShareReached"
+            why = (f"this tenant's clusters hold {held} of the {share} cluster addresses one tenant may hold while other "
+                   f"tenants use the platform's connection too; cluster {u['cluster']} needs {len(need)} and waits its "
+                   "turn")
+        else:
+            admitted |= {(k, t) for t in need}
+            per_tenant[tenant] = held + len(need)
+            continue
+        for t in need:
+            waiting.append({"network": k, "prefix": t, "cluster": u["cluster"], "reason": reason,
+                            "message": f"{t} waits: {why}"})
+    accepted = {}
+    for k, lst in first.items():
+        mine = [c for c in lst if (k, c["text"]) in admitted]
+        if mine:
+            accepted[k] = mine
+    # a prefix another cluster of the network got admitted with is carried: it waits for nothing
+    waiting = [w for w in waiting if (w["network"], w["prefix"]) not in admitted]
+    return accepted, sorted(waiting, key=lambda w: (w["network"], w["prefix"], w["cluster"]))
 
 
 def service_plan(req):
@@ -1514,7 +1579,8 @@ def service_plan(req):
     prev = {(str(w.get("network")), str(p)) for w in ((req.get("previous") or {}).get("networks") or [])
             for p in w.get("prefixes") or []}
     sprefix = alloc.get("servicePrefix") or {}
-    pending, refused, cands = [], [], []
+    pending, refused, cands, waiting = [], [], [], []
+    clusters_of = {}
     nets = {}
     for n in sorted(req.get("networks") or [], key=lambda o: ((o.get("metadata") or {}).get("namespace", ""),
                                                              (o.get("metadata") or {}).get("name", ""))):
@@ -1542,6 +1608,11 @@ def service_plan(req):
         for r in rows_in:
             net, reason, msg = prefix_verdict(r["prefix"], space, rows, attachable)
             text = str(net) if net is not None else str(r["prefix"])
+            # the clusters that ask for the prefix (two clusters of a network may share an AWS/GCP subnet), and
+            # whether their install has started (the network's row installed)
+            who = clusters_of.setdefault((key, text), {})
+            cl = str(r.get("cluster") or "") or f"prefix {text}"
+            who[cl] = who.get(cl, False) or r.get("installed") is True
             if text in seen:
                 continue
             seen.add(text)
@@ -1556,21 +1627,15 @@ def service_plan(req):
     # first come first served: the ledger's order (the networks keep a prefix's entry while a cluster asks for it,
     # through any outage of the platform's side; the previous status is only a tie-break, it is empty after a run
     # without a platform circuit)
-    accepted, count = {}, 0
+    first = {}
     for c in sorted(cands, key=lambda c: c["order"]):
-        if any(o["net"].overlaps(c["net"]) for k, lst in accepted.items() if k != c["network"] for o in lst):
+        if any(o["net"].overlaps(c["net"]) for k, lst in first.items() if k != c["network"] for o in lst):
             refused.append({"network": c["network"], "prefix": c["text"], "reason": "ServicePrefixInUse",
                             "message": f"{c['text']} is already in use by another network on the platform's service "
                                        "routing domain"})
             continue
-        if count >= cfg["maxPrefixes"]:
-            # the hub's routers take at most service.maxPrefixes from a platform circuit (status.ceConfig): the later
-            # ones wait, in the ledger's order, until earlier ones go or the setting grows
-            pending.append({"network": c["network"], "prefix": c["text"],
-                            "why": f"the platform announces at most service.maxPrefixes {cfg['maxPrefixes']} prefixes"})
-            continue
-        count += 1
-        accepted.setdefault(c["network"], []).append(c)
+        first.setdefault(c["network"], []).append(c)
+    accepted, waiting = service_limit(first, clusters_of, cfg)
     circuits = [c for c in req.get("circuits") or [] if c.get("nodes")]
     with_circuit = {n for c in circuits for n in c["nodes"]}
     networks, status_nets = [], []
@@ -1630,7 +1695,7 @@ def service_plan(req):
         vrfs[name] = sorted(by_vrf.values(), key=lambda v: int(v["vpnTarget"]))
     status = {"enabled": True, "vrf": cfg["vrf"], "range": cfg["range"], "sources": cfg["range"], "ports": cfg["ports"],
               "hubEndpoints": cfg["hubEndpoints"], "attachableRanges": cfg["attachable"], "circuits": st_circuits,
-              "networks": status_nets,
+              "networks": status_nets, "waiting": waiting,
               "refused": sorted(refused, key=lambda r: (r["network"], r["prefix"]))}
     return {"errors": [], "enabled": True, "nodes": nodes, "status": status, "vrfs": vrfs, "pending": pending}
 

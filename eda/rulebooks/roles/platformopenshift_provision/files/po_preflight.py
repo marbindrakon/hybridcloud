@@ -432,6 +432,12 @@ def service_wait(req):
             return dict(result(r.get("reason") or "ServicePrefixInUse",
                                r.get("message") or f"HybridNetwork {mine.split('/')[-1]} refused {r['prefix']}"),
                         done=False)
+    # waiting for the platform's limit (Review R4 M1): the cluster waits; the message says why, with the numbers
+    for r in svc.get("waiting") or []:
+        if isinstance(r, dict) and r.get("network") == mine and r.get("prefix") and str(net(r["prefix"])) in want:
+            return dict(result("WaitingForPlatformAccess", f"HybridNetwork {mine.split('/')[-1]}: "
+                               f"{r.get('reason') or 'ServiceLimitReached'}: {r.get('message') or r['prefix']}"),
+                        done=False)
     have = set()
     for row in svc.get("networks") or []:
         if isinstance(row, dict) and row.get("network") == mine:

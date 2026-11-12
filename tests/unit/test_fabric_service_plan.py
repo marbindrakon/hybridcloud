@@ -130,7 +130,7 @@ class Realization(unittest.TestCase):
         self.assertEqual(r["poolSize"]["egressPool"], 0)
         self.assertEqual(DEFAULTS["service"], {"enabled": False, "vrf": {"name": "service", "table": 9001},
                                                "range": [], "ports": [6443, 443], "hubEndpoints": [],
-                                               "attachableRanges": [], "maxPrefixes": 1000})
+                                               "attachableRanges": [], "maxPrefixes": 1000, "tenantShare": 0.5})
         self.assertEqual(DEFAULTS["infrastructure"], {"hub": []})
         self.assertNotIn("platformSources", DEFAULTS["egress"])
         self.assertNotIn("platformPorts", DEFAULTS["egress"])
@@ -447,13 +447,14 @@ class ServiceRange(unittest.TestCase):
                 network("b", ["203.0.113.0/24"], [("203.0.113.5/32", {})], ns="t-b")]
         alloc = ledger({("t-a/a", "192.0.2.15/32"): 3, ("t-a/a", "192.0.2.16/32"): 9, ("t-b/b", "203.0.113.5/32"): 5},
                        {"t-a/a": 10001, "t-b/b": 10002}, {"t-a/a": 1, "t-b/b": 2})
-        out = plan(real(service={"maxPrefixes": 2}), nets, alloc)
+        # (Review R4 M1: a cluster's prefixes together; see FairLimit) cluster c1 of t-a first, all of it, then t-b's
+        out = plan(real(service={"maxPrefixes": 2, "tenantShare": 1}), nets, alloc)
         self.assertEqual([(w["network"], w["prefixes"]) for w in out["status"]["networks"]],
-                         [("t-a/a", ["192.0.2.15/32"]), ("t-b/b", ["203.0.113.5/32"])])
+                         [("t-a/a", ["192.0.2.15/32", "192.0.2.16/32"])])
         self.assertEqual(out["status"]["refused"], [])
-        self.assertEqual([(p["prefix"], p["why"]) for p in out["pending"] if p.get("prefix")],
-                         [("192.0.2.16/32", "the platform announces at most service.maxPrefixes 2 prefixes")])
-        self.assertEqual(out["nodes"]["bgw-1"]["advertise"], ["192.0.2.15/32", "203.0.113.5/32"])
+        self.assertEqual([(w["prefix"], w["reason"]) for w in out["status"]["waiting"]],
+                         [("203.0.113.5/32", "ServiceLimitReached")])
+        self.assertEqual(out["nodes"]["bgw-1"]["advertise"], ["192.0.2.15/32", "192.0.2.16/32"])
         # the default holds them all
         out = plan(real(), nets, alloc)
         self.assertEqual(sum(len(w["prefixes"]) for w in out["status"]["networks"]), 3)
@@ -614,6 +615,100 @@ class ServiceRefusalStaysWithTheService(unittest.TestCase):
         self.assertIn("service.range", st["message"])
         # the service off: the status as it always was (no reason key)
         self.assertNotIn("reason", plan(copy.deepcopy(DEFAULTS), nets, alloc)["status"])
+
+
+class FairLimit(unittest.TestCase):
+    """Review R4 M1: service.maxPrefixes is shared fairly and atomically. A cluster's prefixes are admitted all or
+    none; slots go first to clusters whose install has started or completed (row installed), a waiting cluster keeps
+    its place in the order but holds no slot; while two or more tenants ask, one tenant's not-yet-installed clusters
+    may not take it past service.tenantShare of the pool (a single tenant may use all of it). What waits is in
+    status.realization.service.waiting with its reason and the numbers."""
+
+    def setup(self, clusters, cap, share=None):
+        """clusters: [(tenant, cluster, [prefixes], installed)] in ledger order."""
+        nets, entries, targets, index = {}, {}, {}, {}
+        v = 0
+        for tenant, cluster, prefixes, installed in clusters:
+            key = f"{tenant}/net"
+            nets.setdefault(key, [])
+            for p in prefixes:
+                v += 1
+                entries[(key, p)] = v
+                nets[key].append((p, {"cluster": cluster, "installed": installed}))
+            targets.setdefault(key, 10001 + len(targets))
+            index.setdefault(key, len(index))
+        objs = [network("net", ["10.0.0.0/8"], rows, ns=key.split("/")[0]) for key, rows in nets.items()]
+        over = {"attachableRanges": [], "maxPrefixes": cap}
+        if share is not None:
+            over["tenantShare"] = share
+        return plan(real(service=over), objs, ledger(entries, targets, index))
+
+    def carried(self, out):
+        return {w["network"]: w["prefixes"] for w in out["status"]["networks"]}
+
+    def waiting(self, out):
+        return {(w["network"], w["prefix"]): w["reason"] for w in out["status"]["waiting"]}
+
+    def test_a_clusters_prefixes_together(self):
+        out = self.setup([("t-a", "a1", ["10.1.0.1/32", "10.1.0.2/32", "10.1.0.3/32"], True),
+                          ("t-a", "a2", ["10.1.0.4/32", "10.1.0.5/32"], False)], cap=4)
+        self.assertEqual(self.carried(out), {"t-a/net": ["10.1.0.1/32", "10.1.0.2/32", "10.1.0.3/32"]})
+        self.assertEqual(self.waiting(out), {("t-a/net", "10.1.0.4/32"): "ServiceLimitReached",
+                                             ("t-a/net", "10.1.0.5/32"): "ServiceLimitReached"})
+        msg = out["status"]["waiting"][0]["message"]
+        self.assertIn("at most 4", msg)
+        self.assertIn("3 are in use", msg)
+        self.assertEqual(out["status"]["waiting"][0]["cluster"], "a2")
+
+    def test_installed_clusters_hold_the_slots(self):
+        # b1 came first but never installed: it keeps its place in the order, not a slot
+        out = self.setup([("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], False),
+                          ("t-a", "a1", ["10.1.0.1/32", "10.1.0.2/32"], True)], cap=2)
+        self.assertEqual(self.carried(out), {"t-a/net": ["10.1.0.1/32", "10.1.0.2/32"]})
+        self.assertEqual(set(self.waiting(out).values()), {"ServiceLimitReached"})
+        # with room, the waiting one is carried too, in its order
+        out = self.setup([("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], False),
+                          ("t-a", "a1", ["10.1.0.1/32", "10.1.0.2/32"], True)], cap=4)
+        self.assertEqual(len(self.carried(out)), 2)
+
+    def test_one_tenant_may_not_exhaust_it(self):
+        out = self.setup([("t-a", "a1", ["10.1.0.1/32", "10.1.0.2/32"], False),
+                          ("t-a", "a2", ["10.1.0.3/32", "10.1.0.4/32"], False),
+                          ("t-a", "a3", ["10.1.0.5/32", "10.1.0.6/32"], False),
+                          ("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], False)], cap=10, share=0.5)
+        self.assertEqual(self.carried(out), {"t-a/net": ["10.1.0.1/32", "10.1.0.2/32", "10.1.0.3/32", "10.1.0.4/32"],
+                                             "t-b/net": ["10.2.0.1/32", "10.2.0.2/32"]})
+        self.assertEqual(set(self.waiting(out)), {("t-a/net", "10.1.0.5/32"), ("t-a/net", "10.1.0.6/32")})
+        w = out["status"]["waiting"][0]
+        self.assertEqual(w["reason"], "ServiceShareReached")
+        self.assertIn("4 of the 5", w["message"])
+        # the default share (0.5) is the same
+        out2 = self.setup([("t-a", "a1", ["10.1.0.1/32", "10.1.0.2/32"], False),
+                           ("t-a", "a2", ["10.1.0.3/32", "10.1.0.4/32"], False),
+                           ("t-a", "a3", ["10.1.0.5/32", "10.1.0.6/32"], False),
+                           ("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], False)], cap=10)
+        self.assertEqual(self.carried(out2), self.carried(out))
+
+    def test_a_single_tenant_may_use_all_of_it(self):
+        out = self.setup([("t-a", f"a{i}", [f"10.1.0.{2 * i + 1}/32", f"10.1.0.{2 * i + 2}/32"], False)
+                          for i in range(5)], cap=10)
+        self.assertEqual(len(self.carried(out)["t-a/net"]), 10)
+        self.assertEqual(out["status"]["waiting"], [])
+
+    def test_installed_clusters_over_the_share_are_kept(self):
+        out = self.setup([("t-a", f"a{i}", [f"10.1.0.{2 * i + 1}/32", f"10.1.0.{2 * i + 2}/32"], True) for i in range(4)]
+                         + [("t-a", "a9", ["10.1.0.99/32"], False), ("t-b", "b1", ["10.2.0.1/32", "10.2.0.2/32"], False)],
+                         cap=10)
+        self.assertEqual(len(self.carried(out)["t-a/net"]), 8)
+        self.assertEqual(self.carried(out)["t-b/net"], ["10.2.0.1/32", "10.2.0.2/32"])
+        self.assertEqual(self.waiting(out), {("t-a/net", "10.1.0.99/32"): "ServiceShareReached"})
+
+    def test_the_share_setting_is_checked(self):
+        for v in (0, 1.5, "half", True):
+            with self.subTest(v=v):
+                errs = F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": v})})["serviceErrors"]
+                self.assertTrue([e for e in errs if "service.tenantShare" in e], errs)
+        self.assertEqual(F.check_fabric({"spec": spec(), "realization": real(service={"tenantShare": 1})})["serviceErrors"], [])
 
 
 class PrefixCheck(unittest.TestCase):

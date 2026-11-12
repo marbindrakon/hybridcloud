@@ -5399,6 +5399,11 @@ spec:
                           cluster:
                             type: string
                             description: The PlatformOpenshift (this namespace) that asks for it.
+                          installed:
+                            type: boolean
+                            description: >-
+                              Whether that cluster's install has started or completed. Installed clusters keep their
+                              place when the platform reaches as many addresses as it may.
                           state:
                             type: string
                             description: >-

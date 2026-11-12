@@ -23,8 +23,9 @@ platform-access {network, platformAccess, space, overlaps, hub, service, service
       serviceStatus  HybridFabric status.realization.service {circuits, networks, refused}
       reserved       HybridFabric status.reservedRanges rows {prefix, purpose, rule, site?}: every row refuses a cluster
                      prefix that overlaps it, whatever its rule and site (the fabric's service_refusal_rows)
-      clusters       [{name, prefixes, deleting, type?}] the PlatformOpenshifts that name the network (not fully
-                     deleted); with type (spec.type), each prefix has the shape its provider gives: openstack /32s
+      clusters       [{name, prefixes, deleting, type?, installed?}] the PlatformOpenshifts that name the network (not
+                     fully deleted; installed: its install started or completed, written on its rows for the fabric's
+                     limit); with type (spec.type), each prefix has the shape its provider gives: openstack /32s
                      (floating IPs, the router's gateway), aws and gcp a subnet of the network's placements
       placements     the IPv4 subnets of the network's placements (status.subnets, status.prefixes)
       ledger         the fabric ledger's servicePrefix allocations {owner: value}
@@ -173,6 +174,10 @@ def platform_access(req):
     realized = {str(n) for n in nets((mine or {}).get("prefixes"))}
     fabric_refused = {str(net(r.get("prefix"))): str(r.get("reason") or "ServicePrefixInUse")
                       for r in sst.get("refused") or [] if r.get("network") == key and net(r.get("prefix"))}
+    # what waits for the fabric's limit (service.maxPrefixes and the tenant's share): pending with the reason, the
+    # place kept, still a candidate for the fabric
+    fabric_waiting = {str(net(r.get("prefix"))): r for r in sst.get("waiting") or []
+                      if isinstance(r, dict) and r.get("network") == key and net(r.get("prefix"))}
 
     # the network's own eligibility, in the order a reader acts on it
     reason, message = "", ""
@@ -240,7 +245,7 @@ def platform_access(req):
         for p in c.get("prefixes") or []:
             n = net(p)
             row = {"prefix": str(n) if n else str(p), "cluster": str(c.get("name")), "state": "refused",
-                   "reason": "", "message": ""}
+                   "reason": "", "message": "", "installed": c.get("installed") is True}
             rows.append(row)
             if n is None:
                 row.update(reason="InvalidSpec", message=f"{p} is not an address prefix")
@@ -295,6 +300,13 @@ def platform_access(req):
             if str(n) in fabric_refused:
                 row.update(reason=fabric_refused[str(n)], message=f"{n} is refused by the platform")
                 keep(row, n)
+                continue
+            w = fabric_waiting.get(str(n))
+            if w is not None and str(n) not in realized:
+                row.update(state="pending", reason=str(w.get("reason") or "ServiceLimitReached"),
+                           message=str(w.get("message") or f"{n} waits for the platform's limit"))
+                if str(n) not in kept:
+                    kept.append(str(n))
                 continue
             if str(n) not in accepted:
                 accepted.append(str(n))

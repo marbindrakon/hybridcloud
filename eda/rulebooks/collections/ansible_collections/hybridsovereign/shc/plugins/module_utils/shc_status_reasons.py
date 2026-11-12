@@ -224,6 +224,8 @@ PART_REASONS = {
     # a row of status.platformAccess.prefixes (a cluster's address the platform should reach)
     "ServicePrefixInUse": _r("T", READY, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
     "OutsideAddressSpace": _r("T", READY, "The cluster's address lies outside the network's address space."),
+    "ServiceLimitReached": _r("P", READY, "The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team."),
+    "ServiceShareReached": _r("T", READY, "Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn."),
     # an OpenShift cluster's condition Preflight when every check passed (Ready decides the phase)
     "PreflightPassed": _r("A", READY, "Every check before the build passed."),
 }

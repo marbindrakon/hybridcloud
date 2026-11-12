@@ -143,6 +143,27 @@ class Eligibility(unittest.TestCase):
         self.assertIn("service.vrf.table", out["message"])
         self.assertEqual((out["kept"], out["release"]), (["10.20.1.5/32"], []))
 
+    def test_a_row_says_whether_its_cluster_installed(self):
+        # Review R4 M1: the fabric gives slots of the limit to installed clusters first
+        out = run(clusters=[dict(cl("c1", "10.20.1.5/32"), installed=True), cl("c2", "10.20.1.6/32")])
+        self.assertEqual({r["cluster"]: r["installed"] for r in out["prefixes"]}, {"c1": True, "c2": False})
+
+    def test_a_prefix_waiting_for_the_limit(self):
+        # Review R4 M1: the fabric's waiting rows: pending with the reason and the numbers, the place kept, a candidate
+        # for the fabric still (no reason it gives back)
+        led = {"HybridNetwork/tenant-a/net/10.20.1.5/32": 3}
+        sst = dict(CIRCUITS, waiting=[{"network": "tenant-a/net", "prefix": "10.20.1.5/32", "cluster": "c1",
+                                       "reason": "ServiceShareReached",
+                                       "message": "10.20.1.5/32 waits: this tenant's clusters hold 5 of the 5 ..."}])
+        out = run(serviceStatus=sst, clusters=[cl("c1", "10.20.1.5/32")], ledger=led)
+        row = out["prefixes"][0]
+        self.assertEqual((row["state"], row["reason"]), ("pending", "ServiceShareReached"))
+        self.assertIn("5 of the 5", row["message"])
+        self.assertEqual((out["accepted"], out["kept"], out["release"]), ([], ["10.20.1.5/32"], []))
+        sys.path.insert(0, os.path.join(ROOT, "eda", "common", "files"))
+        import shc_fabric as F
+        self.assertTrue(F.accepted_row(row))
+
     def test_the_sources_are_the_service_range(self):
         # the only addresses the platform's management opens connections from, for the tenant's own firewalls
         self.assertEqual(run()["sources"], ["192.0.2.0/28"])
@@ -662,7 +683,7 @@ class CrdText(unittest.TestCase):
         self.assertEqual((pa["type"], pa["default"]), ("boolean", True))
         st = props["status"]["properties"]["platformAccess"]["properties"]
         self.assertEqual(sorted(st), ["message", "ports", "prefixes", "reason", "sources", "state"])
-        self.assertEqual(sorted(st["prefixes"]["items"]["properties"]), ["cluster", "message", "prefix", "reason", "state"])
+        self.assertEqual(sorted(st["prefixes"]["items"]["properties"]), ["cluster", "installed", "message", "prefix", "reason", "state"])
         # API text only
         text = json.dumps(pa) + json.dumps(props["status"]["properties"]["platformAccess"])
         for word in ("DESIGN", "OD1", "2026", "fabric_realization", "infrastructure.hub", "service VRF"):

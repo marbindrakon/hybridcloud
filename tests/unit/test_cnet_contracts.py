@@ -667,6 +667,58 @@ class ServiceRefusalSet(unittest.TestCase):
                 self.assertEqual(verdict["prefixes"][0]["reason"], want)
 
 
+class FairLimitAcrossTheJobs(unittest.TestCase):
+    """Review R4 M1 across the jobs: the fabric's waiting rows reach the network (pending, the reason and the numbers,
+    the place kept), stay candidates of the next plan, and the cluster's wait says why; when the other tenant's
+    clusters go, the waiting one is carried."""
+
+    def test_round_trip(self):
+        real = realization(attachable=())
+        real["service"]["maxPrefixes"] = 4
+        led = Ledger()
+        led.network("t-a/n1", 10005, 3)
+        led.network("t-b/n2", 10006, 4)
+
+        def decide(key, clusters, status):
+            return PA.platform_access({
+                "network": key, "fabric": FABRIC, "platformAccess": True, "space": [SPACE], "overlaps": [], "hub": [HUB],
+                "service": {"enabled": True, "ports": [6443], "range": [RANGE], "attachableRanges": []},
+                "serviceStatus": status, "reserved": F.reserved_ranges(real), "clusters": clusters,
+                "ledger": {o: v for o, v in led.alloc["servicePrefix"].items()}})
+
+        a = [{"name": "a1", "prefixes": ["192.0.2.1/32", "192.0.2.2/32"]},
+             {"name": "a2", "prefixes": ["192.0.2.3/32", "192.0.2.4/32"]}]
+        b = [{"name": "b1", "prefixes": ["192.0.2.101/32", "192.0.2.102/32"]}]
+        st = {"circuits": CIRCUIT_STATUS}
+        da, db = decide("t-a/n1", a, st), decide("t-b/n2", b, st)
+        led.apply(da)
+        led.apply(db)
+        objs = [network_object("t-a/n1", da["prefixes"]), network_object("t-b/n2", db["prefixes"])]
+        objs[0]["metadata"]["namespace"], objs[1]["metadata"]["namespace"] = "t-a", "t-b"
+        plan = fabric_plan(real, objs, led)
+        status = dict(plan["status"], circuits=CIRCUIT_STATUS)
+        # share 2 of 4 while both ask: a1 and b1 carried, a2 waits for t-a's share
+        self.assertEqual({w["network"]: w["prefixes"] for w in plan["status"]["networks"]},
+                         {"t-a/n1": ["192.0.2.1/32", "192.0.2.2/32"], "t-b/n2": ["192.0.2.101/32", "192.0.2.102/32"]})
+        da = decide("t-a/n1", a, status)
+        rows = {r["prefix"]: r for r in da["prefixes"]}
+        self.assertEqual((rows["192.0.2.3/32"]["state"], rows["192.0.2.3/32"]["reason"]), ("pending", "ServiceShareReached"))
+        self.assertIn("2 of the 2", rows["192.0.2.3/32"]["message"])
+        self.assertEqual(da["release"], [])
+        wait = P.service_wait({"network": "t-a/n1", "prefixes": ["192.0.2.3/32", "192.0.2.4/32"], "service": status,
+                               "rows": da["prefixes"]})
+        self.assertEqual((wait["done"], wait["reason"]), (False, "WaitingForPlatformAccess"))
+        self.assertIn("ServiceShareReached", wait["message"])
+        # t-b's cluster goes: the waiting rows are still candidates and are carried
+        led.apply(decide("t-b/n2", [], status))
+        objs = [network_object("t-a/n1", da["prefixes"])]
+        objs[0]["metadata"]["namespace"] = "t-a"
+        plan = fabric_plan(real, objs, led)
+        self.assertEqual(plan["status"]["networks"][0]["prefixes"],
+                         ["192.0.2.1/32", "192.0.2.2/32", "192.0.2.3/32", "192.0.2.4/32"])
+        self.assertEqual(plan["status"]["waiting"], [])
+
+
 class UpgradeWithTheServiceOn(unittest.TestCase):
     """A deployment that had the service on with attachableRanges set keeps what it had once service.range is set
     (compared with this round's base, 8acb5037); one with the service on and no service.range is refused by name on
