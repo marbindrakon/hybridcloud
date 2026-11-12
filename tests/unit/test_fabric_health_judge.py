@@ -513,6 +513,15 @@ class ServiceSessionsTest(unittest.TestCase):
         self.assertEqual(f["health"]["nodes"][0]["findings"][0]["check"], "ServiceSessions")
         self.assertFalse(a["fabric"]["wake"])
 
+    def test_a_node_with_nothing_kept_is_named(self):
+        # Review R4 V2-M1: no service on this node while the fabric keeps it elsewhere: its own finding says so
+        r = inst(serviceSessions={"vrf": "", "established": 0, "known": 1, "peers": [], "links": [],
+                                  "missing": "no service applied here to keep"})
+        f = J.judge(req([node("bgw-2", root=r)]))["fabric"]["status"]
+        fd = f["health"]["nodes"][0]["findings"][0]
+        self.assertEqual(fd["reason"], "ServiceSessionsDown")
+        self.assertIn("no service on this node: no service applied here to keep", fd["message"])
+
     def test_one_session_up_or_no_service(self):
         for r in (self.root(1), inst(serviceSessions=None), self.root(0, known=0)):
             f = J.judge(req([node("bgw-1", root=r)]))["fabric"]["status"]

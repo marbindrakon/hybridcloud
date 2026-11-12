@@ -59,6 +59,18 @@
     - (hf_service | default({})).kept | default(false) | bool
     - hf_node_service | length == 0
 
+# a node that had the service (its circuits listed it) but has no block to keep (rebuilt, or new): it cannot have the
+# service until the setting is fixed; the fabric's condition names it (hf_service_unkept), and its root.json carries
+# serviceMissing for its health finding; the node's other work goes on
+- name: "{{ bgw_node.name }}: a node with no service to keep"
+  ansible.builtin.set_fact:
+    hf_service_unkept: "{{ hf_service_unkept | default([]) + [bgw_node.name] }}"
+  when:
+    - (hf_service | default({})).kept | default(false) | bool
+    - hf_node_service | length == 0
+    - bgw_node.name in (((hf_service.status | default({})).circuits | default([])) | map(attribute='nodes')
+                        | flatten | list)
+
 # a circuit's IPv6 routes reach the sites only as IPv6 VPN routes, which need the dual-stack core (the IPv6 loopback
 # is their next hop); the planner offers IPv6 on circuits only with it, so this is a guard, not a policy
 - name: "{{ bgw_node.name }}: IPv6 on attachment circuits needs the IPv6 core"
@@ -176,6 +188,8 @@
                             if hf_node_egress | length > 0 else {})
          | combine({'attachments': hf_node_attach} if hf_node_attach | length > 0 else {})
          | combine({'service': hf_node_service | default({})} if hf_node_service | default({}) | length > 0 else {})
+         | combine({'serviceMissing': 'a service setting is wrong and this node has no applied service to keep'}
+                   if bgw_node.name in hf_service_unkept | default([]) else {})
          | combine({'loopback6': hf_pe.loopback6 | default(''), 'icmp6': _hf_icmp6,
                     'loopbackPool6': fab_real.core.loopbackPool6 | default('', true),
                     'icmpSource6': fab_real.core.icmpSource6 | default('', true)})

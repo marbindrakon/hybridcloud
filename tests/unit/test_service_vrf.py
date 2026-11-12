@@ -644,6 +644,24 @@ class ServiceApply(A.ApplyCase):
         self.assertEqual(h.get_state()["ns"][""]["nft"]["ip shc_service"], before["nft"]["ip shc_service"])
         self.assertIn("service kept", out)
 
+    def test_a_kept_block_is_rebuilt_where_the_node_lost_it(self):
+        # Review R4 V2-M1: the boot apply (or anything that removed the service) with a kept block rebuilds the service
+        # from it, in the normal order; where it is present nothing is written (test_a_kept_block_applies_no_service_step)
+        h = self.h
+        c = self.conf()
+        c["service"] = dict(c["service"], keep=True)
+        h.conf("root", c)
+        out, log = h.ok(self, "root")
+        st = h.get_state()["ns"][""]
+        self.assertIn("ip shc_service", st["nft"])
+        self.assertEqual(st["links"]["so10002"]["master"], "service")
+        self.assertIn("rebuilt from the kept block", out)
+        load = A.index(log, r"^W \[root\] nft -f -$")
+        self.assertLess(load, A.index(log, r"ip link add se10002 "))
+        out, log = h.ok(self, "root")
+        self.assertTrue(out.strip().endswith("changed=no"), out)
+        self.assertIn("service kept as applied", out)
+
     def test_down(self):
         h = self.h
         h.conf("root", self.conf())
@@ -1134,6 +1152,12 @@ class ServiceInterrupted(unittest.TestCase):
         gone = A.index(log, r"^W \[root\] ip link del se10002$")
         self.assertLess(gone, A.index(log, r"^W \[root\] ip addr add %s dev so10003" % re.escape(lab["soAddr"])))
         self.assertLess(gone, A.index(log, r"^W \[root\] ip link add se10003 "))
+
+    def test_a_kept_block_after_a_boot(self):
+        # Review R4 V2-M1: the boot apply rebuilds a kept service with the same guarantees at every step
+        kept = copy.deepcopy(self.both)
+        kept["service"]["keep"] = True
+        self.walk(None, kept)
 
     def test_fresh_node(self):
         self.walk(None, self.both)

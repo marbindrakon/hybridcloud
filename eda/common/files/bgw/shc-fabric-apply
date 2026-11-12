@@ -1506,6 +1506,18 @@ print("\n".join(out))
 PY
 }
 
+# whether the node holds the service this configuration names: its marker, its table, its VRF, each circuit's device
+# in the VRF and each network's link (a kept block is applied again where any of them is missing)
+service_present() {
+  local d
+  [ -r "$MARKS" ] && [ "$(<"$MARKS")" = "$SV" ] || return 1
+  nft list table ip shc_service >/dev/null 2>&1 || return 1
+  ip link show "$SV" >/dev/null 2>&1 || return 1
+  for d in $(service_devices) $(jq -r '.service.networks // [] | .[].so' "$CONF"); do
+    [ "$(ip -j link show dev "$d" 2>/dev/null | jq -r '.[0].master // empty')" = "$SV" ] || return 1
+  done
+}
+
 # the service VRF, its circuits' devices and the networks' service links as configured (for the snapshot); no command
 # at all while the service was never applied and is not asked for
 service_state() {
@@ -1693,8 +1705,13 @@ root)
     fi
     if jq -e '.egress.vrf' "$CONF" >/dev/null 2>&1; then egress_up; else egress_down; fi
     if jq -e '.attachments' "$CONF" >/dev/null 2>&1; then attach_up; else attach_down; fi
-    # (keep: the fabric keeps the last applied service while one of its settings is wrong: no service step at all)
-    if [ -n "$SV" ] && [ "$(opt .service.keep)" = true ]; then echo "service kept as applied (a setting is wrong)"
+    # (keep: the fabric keeps the last applied service while one of its settings is wrong: no service step while the
+    # node holds it; where it does not (the boot apply, or anything that removed it), it is rebuilt from the kept
+    # block, which is what the node last applied, by the normal step and its order)
+    if [ -n "$SV" ] && [ "$(opt .service.keep)" = true ] && service_present; then
+      echo "service kept as applied (a setting is wrong)"
+    elif [ -n "$SV" ] && [ "$(opt .service.keep)" = true ]; then
+      echo "service kept: rebuilt from the kept block (it was not on the node)"; service_up
     elif [ -n "$SV" ]; then service_up; else service_down; fi
     root_vrfs_prune "$(jq -r '[(.egress.networks // [])[].vrf, (.attachments.circuits // [])[].vrf,
       (.service.networks // [])[].vrf] | unique | .[]' "$CONF")"

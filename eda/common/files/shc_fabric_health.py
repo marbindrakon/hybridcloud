@@ -168,7 +168,9 @@ def instance_findings(inst, kind, cfg):
         # through this node (a fabric finding: the networks' conditions are not changed; no wake, a run repairs no
         # session)
         s = inst.get("serviceSessions")
-        if s is not None and (s.get("known") or 0) > 0 and (s.get("established") or 0) == 0:
+        if s is not None and s.get("missing"):
+            found.append(("ServiceSessionsDown", "no service on this node: %s" % s["missing"]))
+        elif s is not None and (s.get("known") or 0) > 0 and (s.get("established") or 0) == 0:
             down = ", ".join("%s %s" % (p.get("address"), p.get("state")) for p in s.get("peers") or [])
             found.append(("ServiceSessionsDown", "no platform circuit session is established in the service VRF %s%s"
                           % (s.get("vrf") or "", (" (" + down + ")") if down else "")))

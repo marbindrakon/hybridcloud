@@ -776,7 +776,11 @@
                'reason': 'InvalidSpec' if _svc_why else 'Ready',
                'message': (('a service setting is wrong (' ~ _svc_why ~ '); '
                             ~ ('the nodes keep the service as last applied' if (hf_service | default({})).kept | default(false)
-                               else 'the service is not realized')) if _svc_why
+                               else 'the service is not realized')
+                            ~ ((', no service on ' ~ hf_service_unkept | join(', ') ~ ' (nothing applied there to keep)')
+                               if hf_service_unkept | default([]) else '')
+                            ~ '; what needs the service planned again (a network or cluster leaving, new cluster '
+                              'addresses) waits until the setting is fixed') if _svc_why
                            else 'the service routing domain is realized as configured')}]
              if (hf_service | default({})).enabled | default(false)
              else ([{'type': 'ServiceRouting', 'status': 'Unknown', 'reason': 'NotEnabled',

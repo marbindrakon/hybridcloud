@@ -253,6 +253,10 @@ def service_sessions(run, conf):
     established). links: the iBGP session of each network's service link, the service VRF's end (its neighbour is the
     network VRF's address on the link), from the same summary; a session missing from it is "Missing"."""
     sv = (conf or {}).get("service") or {}
+    if (conf or {}).get("serviceMissing") and not (isinstance(sv, dict) and sv.get("vrf")):
+        # the fabric keeps the service while a setting is wrong, and this node has no block to keep (Review R4 V2-M1)
+        return {"vrf": "", "established": 0, "known": 1, "read": False, "peers": [], "links": [],
+                "missing": str(conf["serviceMissing"])}
     if not isinstance(sv, dict) or not sv.get("vrf") or not sv.get("circuits"):
         return None
     want = [str(c.get("ce")) for c in sv["circuits"] if c.get("ce")]

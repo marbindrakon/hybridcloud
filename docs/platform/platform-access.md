@@ -350,8 +350,11 @@ hub's routing (above) is the deployment's to verify.
   before.
 - **The service on, no `service.range`** (or any other wrong `service.*` setting): nothing that runs is torn down.
   The fabric keeps each node's service as it was last applied (each node step reads the node's configuration and passes it on
-  marked as kept: the node applies no service step, so the filter, the links and the sessions stay exactly as they
-  are, the previous release's filter by `infrastructure.hub` included), keeps the last realized status, carries no
+  marked as kept: the node applies no service step while it holds the service, so the filter, the links and the
+  sessions stay exactly as they are, the previous release's filter by `infrastructure.hub` included; a node that
+  lost it, at a reboot for one, rebuilds it from that block, which survives in its configuration file; a node with
+  no block to keep, rebuilt or new, has no service until the setting is fixed, and the condition and the node's
+  health finding `ServiceSessionsDown` name it), keeps the last realized status, carries no
   new cluster address, and goes on with everything else (networks, egress, edge connections). It is loud: the
   fabric's condition `ServiceRouting` is False `InvalidSpec` naming the setting, the alert
   `ShcFabricServiceSettingInvalid` fires, a Warning event `ServiceSettingInvalid` is written once per change and the

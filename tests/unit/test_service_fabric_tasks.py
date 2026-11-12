@@ -165,6 +165,11 @@ class FabricJob(unittest.TestCase):
         self.assertEqual((cond["status"], cond["reason"]), ("False", "InvalidSpec"))
         self.assertIn("service.tenantShare", cond["message"])
         self.assertIn("keep the service as last applied", cond["message"])
+        # Review R4 V2-M1, V2-L2: a node with nothing to keep is named; what waits for the fix is said
+        self.assertIn("a network or cluster leaving", cond["message"])
+        out = run_play(play + [write_out("c")], dict(v, hf_service_unkept=["bgw-2"]))
+        cond = next(c for c in out if c["type"] == "ServiceRouting")
+        self.assertIn("no service on bgw-2 (nothing applied there to keep)", cond["message"])
         # the service off and never on: no condition at all (nothing changes)
         v["hf_service"] = {"enabled": False, "status": {"enabled": False}}
         out = run_play(play + [write_out("c")], v)
@@ -190,6 +195,23 @@ class FabricJob(unittest.TestCase):
         # not kept: nothing read, nothing changed
         out = run_play(tasks + [write_out("hf_node_service")], dict(v, hf_service={}))
         self.assertEqual(out, {})
+
+    def test_a_node_with_nothing_to_keep_is_named(self):
+        # Review R4 V2-M1: a rebuilt or new node has no root.json while a setting is wrong: no service there, and it
+        # says so (hf_service_unkept for the fabric's condition, serviceMissing in its root.json for its health)
+        names = ["{{ bgw_node.name }}: read the service the node runs, to keep it while a setting is wrong",
+                 "{{ bgw_node.name }}: keep the service the node runs", "{{ bgw_node.name }}: the kept service",
+                 "{{ bgw_node.name }}: a node with no service to keep"]
+        tasks = [node_task(n) for n in names]
+        tasks[0] = {"name": names[0], "ansible.builtin.set_fact": {"_hf_root_now": {"failed": True}},
+                    "when": tasks[0]["when"]}
+        v = {"role_path": HF.rsplit("/tasks", 1)[0], "bgw_node": {"name": "bgw-2"},
+             "hf_service": {"kept": True, "status": {"circuits": [{"circuit": "p/hub-a", "nodes": ["bgw-1", "bgw-2"]}]}}}
+        pre = [{"ansible.builtin.set_fact": {"hf_node_service": {}, "hf_node_vrfs": [], "hf_service_unkept": ["bgw-1"]}}]
+        out = run_play(pre + tasks + [write_out("[hf_node_service, hf_service_unkept]")], v)
+        self.assertEqual(out, [{}, ["bgw-1", "bgw-2"]])
+        conf = node_task("{{ bgw_node.name }}: root instance config")["ansible.builtin.copy"]["content"]
+        self.assertIn("serviceMissing", conf)
 
     def test_status(self):
         t = main_task("Report the fabric ready")
