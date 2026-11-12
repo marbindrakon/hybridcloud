@@ -1526,3 +1526,82 @@ class InstallStartedWakesTheNetwork(unittest.TestCase):
 
     def test_aws_and_gcp(self):
         self.check("aws_clusterbuild_deploy.yml", "Internal")
+
+
+# ---- the cluster's resolvers (install-config platform.openstack.externalDNS) ------------------------------------------
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ClusterResolvers(unittest.TestCase):
+    """A cluster on a hybrid network takes the resolvers its network's placement gives its subnets on the site
+    (realization placement.resolversBySite, IPv4 only); none listed for the site: the cloud's default, said in the
+    Preflight message; a cluster on a site's external network keeps the installation's externalDNS."""
+
+    INSTALLATION = ["198.51.100.53"]
+
+    def build(self, platform_path=True, by_site=None, placement_site="site1", **kw):
+        v = dict(Renders.V, cb_platform_path=platform_path, cb_oso_site="site1", pf={"fabric": "f1"},
+                 pf_placement={"metadata": {"name": "p1"}, "status": {"site": placement_site} if placement_site else {}},
+                 platformopenshift_defaults={"externalDNS": self.INSTALLATION},
+                 fabric_realization={"placement": {"resolversBySite": by_site if by_site is not None else {}}})
+        v.pop("cb_external_dns")
+        v.update(kw)
+        tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/cluster_resolvers.yml"},
+                 {"ansible.builtin.set_fact": {
+                     "_ic": "{{ lookup('template', role_path ~ '/templates/install-config-openstack.yaml.j2') }}"}}]
+        rc, tr, out = H.run("platformopenshift_provision", "cluster_resolvers.yml", v, tasks=tasks,
+                            result="{'ic': _ic, 'note': cb_external_dns_note}")
+        self.assertEqual(rc, 0, out)
+        import yaml
+        res = tr[-1]["result"]
+        return yaml.safe_load(res["ic"])["platform"]["openstack"]["externalDNS"], res["note"]
+
+    def test_network_with_site_resolvers(self):
+        dns, note = self.build(by_site={"site1": ["192.0.2.53", " 203.0.113.53 ", "2001:db8::53", "192.0.2.53"],
+                                        "site2": ["192.0.2.99"]})
+        self.assertEqual(dns, ["192.0.2.53", "203.0.113.53"])   # IPv4 only, the site's, never the installation's
+        self.assertIn("192.0.2.53, 203.0.113.53, the resolvers of site site1", note)
+
+    def test_network_takes_the_placements_site(self):
+        dns, _ = self.build(by_site={"site1": ["192.0.2.53"], "site2": ["192.0.2.99"]}, placement_site="site2")
+        self.assertEqual(dns, ["192.0.2.99"])
+        dns, _ = self.build(by_site={"site1": ["192.0.2.53"]}, placement_site="")
+        self.assertEqual(dns, ["192.0.2.53"])
+
+    def test_network_without_site_resolvers(self):
+        for by_site in ({}, {"site1": []}, {"site1": ["2001:db8::53"]}, {"site2": ["192.0.2.99"]}):
+            dns, note = self.build(by_site=by_site)
+            self.assertEqual(dns, [], by_site)                 # the cloud's DHCP default, as on the placement's subnets
+            self.assertIn("cloud default resolvers (site site1 lists no resolvers", note, by_site)
+
+    def test_external_network_keeps_the_installation_default(self):
+        dns, note = self.build(platform_path=False, by_site={"site1": ["192.0.2.53"]})
+        self.assertEqual((dns, note), (self.INSTALLATION, ""))
+        dns, _ = self.build(platform_path=False, platformopenshift_defaults={})
+        self.assertEqual(dns, [])
+
+    def test_strings_from_2_16(self):
+        # ansible-core 2.16 hands the flag over as a string
+        dns, _ = self.build(platform_path="True", by_site={"site1": ["192.0.2.53"]})
+        self.assertEqual(dns, ["192.0.2.53"])
+        dns, _ = self.build(platform_path="False", by_site={"site1": ["192.0.2.53"]})
+        self.assertEqual(dns, self.INSTALLATION)
+
+    def test_the_preflight_message_names_them(self):
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml",
+                            addr_vars(cb_external_dns_note="; machines resolve names through 192.0.2.53"),
+                            k8s=k8s(fab=CARRIED), result="1")
+        self.assertEqual(rc, 0, out)
+        msg = H.patches(tr)[-1]["body"]["conditions"][0]["message"]
+        self.assertTrue(msg.endswith("reached by the platform; machines resolve names through 192.0.2.53"), msg)
+
+
+class ClusterResolversWiring(unittest.TestCase):
+    def test_the_build_takes_its_resolvers_before_the_record_and_the_install_config(self):
+        cb = names(os.path.join(TASKS, "openstack_clusterbuild.yml"))
+        self.assertLess(cb.index("The cluster's resolvers"), cb.index("The cluster's recorded build and addresses"))
+        self.assertLess(cb.index("The cluster's resolvers"), cb.index("Write install-config to Vault"))
+        inc = by_name(load(os.path.join(TASKS, "openstack_clusterbuild.yml")), "The cluster's resolvers")
+        self.assertEqual(inc["ansible.builtin.include_tasks"], "cluster_resolvers.yml")
+        # the installation default is read in one place only, for the external network
+        self.assertNotIn("externalDNS", text(TASKS, "openstack_clusterbuild.yml"))
+        self.assertIn("externalDNS: {{ cb_external_dns", text(ROLE, "templates", "install-config-openstack.yaml.j2"))

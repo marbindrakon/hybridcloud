@@ -15,7 +15,8 @@ platformopenshift_oidc_idp_name: keycloak-sso
 # shc (§11.6 phase C): installation settings through the sovereign-localhost inventory variable
 # `platformopenshift_defaults` (config-as-code env PLATFORMOPENSHIFT_DEFAULTS). A CR field wins.
 # Keys: ocpImageSet, pullSecretVaultPath, pullSecretVaultProperty, sshKeyVaultPath, allowedVaultPaths,
-# allowedPullSecretProperties, controlPlaneCount, workerCount, controlPlaneFlavor, workerFlavor, glanceImage, externalDNS (list),
+# allowedPullSecretProperties, controlPlaneCount, workerCount, controlPlaneFlavor, workerFlavor, glanceImage, externalDNS (list:
+# clusters on a site's external network; on a hybrid network the placement's resolvers, cluster_resolvers.yml),
 # mceClusterBuildChart (oci:// ref), mceClusterBuildChartVersion. Fallbacks are upstream's.
 platformopenshift_defaults: {}
 default_pull_secret_vault_path: "{{ platformopenshift_defaults.pullSecretVaultPath | default('aws/ocp-pull-secret') }}"

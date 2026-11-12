@@ -145,5 +145,5 @@
   vars:
     pp_passed_message: >-
       {{ ('On HybridNetwork ' ~ oso_network ~ ', floating IPs ' ~ cb_api_vip ~ ' and ' ~ cb_ingress_vip
-          ~ ' reached by the platform') if cb_platform_path | bool
+          ~ ' reached by the platform' ~ (cb_external_dns_note | default('', true))) if cb_platform_path | bool
          else ('On external network ' ~ cb_external_network ~ ', floating IPs ' ~ cb_api_vip ~ ' and ' ~ cb_ingress_vip) }}
