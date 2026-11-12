@@ -48,13 +48,14 @@
 #   when no circuit has address6 (a run that never had one issues no IPv6 command), and the device's IPv6 goes off.
 #   VLAN devices in a root VRF, or on a listed parent with a VLAN in vlanPool, that aren't listed are removed (the
 #   platform circuits' devices are the service's, below).
-#   service {vrf, table, mtu, hub, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
+#   service {vrf, table, mtu, range, ports, hubEndpoints: [{prefix, ports}], circuits: [{circuit, device, parent, vlan,
 #   mtu, address, link, ce}], networks: [{vrf, table, se, so, seAddr, soAddr, seIp, soIp, prefixes}]} (the service VRF, through
 #   which the hub reaches the clusters the platform builds on tenant networks; absent = none, and a node that had it
 #   loses it all): the nftables table ip shc_service first (see service_nft: stateless, because the two directions of
-#   a connection may cross different nodes; the hub to a network's accepted prefixes on ports, a network's prefixes to
-#   the hub endpoints, ICMP errors and the hub's echo, nothing between networks, from a platform circuit to the node
-#   only BGP and BFD from its link and ICMP), then the VRF <vrf> (table <table>, IPv4 only), per platform circuit a
+#   a connection may cross different nodes; from the hub the service range to a network's accepted prefixes on ports,
+#   from a network only packets to the service range (replies from the ports, connections to the hub endpoints, ICMP
+#   errors and echo replies), the hub's ICMP errors and echo, nothing between networks, from a platform circuit to the
+#   node only BGP and BFD from its link and ICMP), then the VRF <vrf> (table <table>, IPv4 only), per platform circuit a
 #   VLAN device <parent>.<vlan> in it with the node's address (strict reverse path filtering, no IPv6), and per network
 #   with clusters its VRF e<n> and a veth se<n> (in e<n>) / so<n> (in <vrf>) on the network's service link (no IPv6).
 #   Links and circuit devices not listed are removed; the VRF's name is remembered in <instance>.service next to the
@@ -1375,12 +1376,14 @@ SV=$(opt .service.vrf)
 service_devices() { jq -r '.service.circuits // [] | .[].device' "$CONF"; }
 
 # the nftables table for the service VRF (replaced as a whole): stateless, because the two directions of a connection
-# may cross different nodes (each node announces the hub's ranges into the network and the clusters' prefixes to the
+# may cross different nodes (each node announces the service range into the network and the clusters' prefixes to the
 # hub). Untracked (raw prerouting notrack on the service links and the circuits); input: from a circuit to the node
-# only BGP and BFD from the circuit's link, and ICMP; forward: the hub's ranges to a network's accepted prefixes on
-# the service ports (the replies: TCP with ACK from those ports), a network's prefixes to the hub endpoints on their
-# ports (the replies likewise), ICMP errors both ways and echo from the hub; nothing between two networks, nothing of
-# the hub's toward a network's internet egress, nothing else through the service VRF. The drops name the service
+# only BGP and BFD from the circuit's link, and ICMP; forward: from a circuit, the service range (set service_range) to a
+# network's accepted prefixes on the service ports, and the hub endpoints' replies to them; from a network's link
+# only packets to the service range, by destination (no client range is named): the replies (TCP with ACK from the
+# service ports), connections to the hub endpoints on their ports, ICMP errors and echo replies; ICMP errors and echo
+# from the hub; nothing between two networks, nothing of the hub's toward a network's internet egress, nothing else
+# through the service VRF. The drops name the service
 # links by wildcard ("so*", "se*"), never by the list of this configuration: a link the list no longer holds (a
 # network leaving, a run that stopped part-way) is dropped like any other, and the table is in place before the
 # first link exists and goes only after the last one (service_up, service_down)
@@ -1392,7 +1395,7 @@ s = doc["service"]
 cs = s.get("circuits") or []
 ns = s.get("networks") or []
 eps = s.get("hubEndpoints") or []
-hub = [str(n) for n in ipaddress.collapse_addresses(ipaddress.ip_network(h) for h in s.get("hub") or [])]
+rng = [str(n) for n in ipaddress.collapse_addresses(ipaddress.ip_network(h) for h in s.get("range") or [])]
 ports = ", ".join(str(p) for p in s.get("ports") or [6443, 443])
 def names(xs):
     return "{ " + ", ".join(f'"{x}"' for x in xs) + " }"
@@ -1401,10 +1404,14 @@ def elements(xs):
     return "{ " + ", ".join(str(n) for n in ipaddress.collapse_addresses(ipaddress.ip_network(x) for x in xs)) + " }"
 cdevs = [c["device"] for c in cs]
 out = ["table ip shc_service", "delete table ip shc_service", "table ip shc_service {"]
-if hub:
-    out.append(f"  set hub {{ type ipv4_addr; flags interval; elements = {{ {', '.join(hub)} }}; }}")
+if rng:
+    out.append(f"  set service_range {{ type ipv4_addr; flags interval; elements = {{ {', '.join(rng)} }}; }}")
 # (each wildcard in a rule of its own: a wildcard inside a set needs a newer nftables than a single one)
+# from a service link only a source the service VRF routes back over that same link (a strict reverse path check
+# in the table itself, whatever the host's rp_filter: a network's packets carry its own accepted prefixes as source,
+# never another network's; no client range is named, the VRF's routes say it)
 out += ["  chain raw_prerouting {", "    type filter hook prerouting priority raw; policy accept;",
+        '    iifname "so*" fib saddr . iif oif missing counter drop comment "from a service link only a source routed back over it"',
         '    iifname "so*" notrack', '    iifname "se*" notrack']
 if cdevs:
     out.append(f"    iifname {names(cdevs)} notrack")
@@ -1426,31 +1433,33 @@ out.append("  }")
 out += ["  chain forward {", "    type filter hook forward priority filter; policy accept;"]
 for n in ns:
     p = elements(n["prefixes"])
-    if cdevs and hub:
+    if cdevs and rng:
+        # from the hub: only the service range, only to the network's accepted prefixes on the service ports
         # (a reset from the hub toward the service ports at a limited rate: the reply rule below is stateless, so a
-        # cluster can send ACK-shaped segments from those ports to any hub address and port, and each closed port
-        # answers with a reset; the hub's own resets to a cluster are rare)
-        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == 0 accept')
-        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == rst limit rate 10/second burst 20 packets accept')
-    if hub:
-        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & (syn | ack) == ack accept')
-        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub tcp sport {{ {ports} }} tcp flags & (syn | ack | rst) == syn | ack accept')
+        # cluster can send ACK-shaped segments from those ports to any address of the service range and any port, and
+        # each closed port answers with a reset; the hub's own resets to a cluster are rare)
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @service_range ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == 0 accept')
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @service_range ip daddr {p} tcp dport {{ {ports} }} tcp flags & rst == rst limit rate 10/second burst 20 packets accept')
+    if rng:
+        # from the network: by destination only (the service range), the replies from the service ports
+        out.append(f'    meta sdifname "{n["so"]}" ip daddr @service_range tcp sport {{ {ports} }} tcp flags & (syn | ack) == ack accept')
+        out.append(f'    meta sdifname "{n["so"]}" ip daddr @service_range tcp sport {{ {ports} }} tcp flags & (syn | ack | rst) == syn | ack accept')
     for e in eps:
         eports = ", ".join(str(x) for x in e.get("ports") or [])
         if not eports:
             continue
-        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr {e["prefix"]} tcp dport {{ {eports} }} accept')
+        out.append(f'    meta sdifname "{n["so"]}" ip daddr {e["prefix"]} tcp dport {{ {eports} }} accept')
         if cdevs:
             out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr {e["prefix"]} ip daddr {p} '
                        f'tcp sport {{ {eports} }} tcp flags & ack == ack accept')
-# ICMP: a network's errors and echo replies toward the hub only from its own prefixes; the hub's errors and echo
-# requests toward a network only to its prefixes
+# ICMP: a network's errors and echo replies only toward the service range; the hub's errors and echo requests from the
+# service range toward a network only to its prefixes
 for n in ns:
     p = elements(n["prefixes"])
-    if hub:
-        out.append(f'    meta sdifname "{n["so"]}" ip saddr {p} ip daddr @hub icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept')
-    if cdevs and hub:
-        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @hub ip daddr {p} icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept')
+    if rng:
+        out.append(f'    meta sdifname "{n["so"]}" ip daddr @service_range icmp type {{ destination-unreachable, time-exceeded, echo-reply }} accept')
+    if cdevs and rng:
+        out.append(f'    meta sdifname {names(cdevs)} oifname "{n["so"]}" ip saddr @service_range ip daddr {p} icmp type {{ destination-unreachable, time-exceeded, echo-request }} accept')
 # the drops: every service link by its name's form, whichever networks this configuration lists
 out.append('    meta sdifname "so*" oifname "so*" counter drop comment "no network reaches another through the service VRF"')
 out.append('    meta sdifname "se*" oifname "xe*" counter drop comment "the hub\'s traffic never leaves by a network\'s internet egress"')

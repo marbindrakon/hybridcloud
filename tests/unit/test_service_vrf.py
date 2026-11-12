@@ -45,6 +45,8 @@ import shc_fabric as F  # noqa: E402
 BASE = "669b781a"
 NODES = ["bgw-1", "bgw-2"]
 HUB = "198.51.100.0/24"
+# the service range: the hub's addresses the service VRF carries (inside the hub's range, narrower)
+RANGE = "198.51.100.0/28"
 with open(os.path.join(ROOT, "eda", "common", "vars", "fabric_realization.yml")) as fh:
     DEFAULTS = yaml.safe_load(fh)["fabric_realization_defaults"]
 
@@ -134,7 +136,7 @@ def realization(core, v6egress=False, service=False):
     r["attachments"].update(copy.deepcopy(AT))
     if service:
         r["infrastructure"] = {"hub": [HUB]}
-        r["service"].update({"enabled": True, "attachableRanges": ["192.0.2.0/24"],
+        r["service"].update({"enabled": True, "attachableRanges": ["192.0.2.0/24"], "range": [RANGE],
                              "hubEndpoints": [{"prefix": "198.51.100.10/32", "ports": [6443]}]})
     return r
 
@@ -322,11 +324,18 @@ class ServiceTemplate(unittest.TestCase):
         T.save("service-bgw-1.conf", out)
         self.assertIn("vrf service\n ip route 192.0.2.15/32 169.254.128.5\n ip route 192.0.2.16/32 169.254.128.5\n"
                       "exit-vrf\n", out)
-        self.assertIn("ip prefix-list SVC-HUB seq 5 permit 198.51.100.0/24 le 32\n", out)
+        # in from the hub's routers: the service range only, never the rest of the hub's range
+        self.assertIn("ip prefix-list SVC-HUB seq 5 permit 198.51.100.0/28 le 32\n", out)
+        self.assertNotIn("SVC-HUB seq 10", out)
         self.assertIn("ip prefix-list SVC-DENY seq 5 permit 0.0.0.0/0\n", out)
         self.assertIn("ip prefix-list SVC-ACCEPTED seq 5 permit 192.0.2.15/32\nip prefix-list SVC-ACCEPTED seq 10 permit "
                       "192.0.2.16/32\n", out)
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 permit 192.0.2.0/24 le 32\n", out)
+        # the guard on what is announced, as the hub's routers are told to filter it: the published ranges refused at
+        # any length first, then the attachable ranges
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 deny 198.51.100.0/24 le 32\n"
+                      "ip prefix-list SVC-ATTACHABLE seq 10 deny 192.0.0.8/32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 35 permit 192.0.2.0/24 le 32\n", out)
+        self.assertEqual(out.count("SVC-ATTACHABLE seq"), 7)
         self.assertIn("route-map SVC-STATIC permit 10\n match ip address prefix-list SVC-ATTACHABLE\nexit\n", out)
         self.assertIn("route-map AC3099-IN deny 10\n match ip address prefix-list SVC-DENY\nexit\n"
                       "route-map AC3099-IN permit 20\n match ip address prefix-list SVC-HUB\n"
@@ -362,8 +371,9 @@ class ServiceTemplate(unittest.TestCase):
         # the service-only network: the hub's routes learned over its service link (preferred over another node's in
         # the network's VPN), never configured; a reject route at distance 254 keeps them off any other route while no
         # node has them; nothing redistributed, a label, the VPN routes with their own next hop
-        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
-        self.assertNotRegex(out, r"ip route 198\.51\.100\.0/24 169\.254")
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/28 reject 254\nexit-vrf\n", out)
+        self.assertNotRegex(out, r"ip route 198\.51\.100\.0/2[48] 169\.254")
+        self.assertNotIn("198.51.100.0/24 reject", out)
         lab = out.split("router bgp 65010 vrf e10002\n")[1].split("\nexit\n")[0]
         for line in (" neighbor 169.254.128.4 remote-as 65010\n", " neighbor 169.254.128.4 ttl-security hops 1\n",
                      "  neighbor 169.254.128.4 activate\n", "  neighbor 169.254.128.4 route-map SVC-NET-IN in\n",
@@ -374,14 +384,16 @@ class ServiceTemplate(unittest.TestCase):
         self.assertNotIn("nexthop vpn export", lab)
         self.assertIn("route-map SVC-NET-IN permit 10\n match ip address prefix-list SHC-HUB4\n set weight 100\nexit\n"
                       "route-map SVC-NET-OUT deny 10\nexit\n", out)
-        self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/24 le 32\n", out)
+        # offered to the networks: the service range only
+        self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/28 le 32\n", out)
+        self.assertNotIn("SHC-HUB4 seq 10", out)
         self.assertNotIn("SHC-VRF-STATIC", out)
         self.assertIn("! HybridNetwork acme/lab: clusters the platform reaches (192.0.2.15/32,192.0.2.16/32)", out)
         # networks without clusters: as without the service
         core = out.split("router bgp 65010 vrf e10000\n")[1].split("\nexit\n")[0]
         self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", core)
         self.assertIn("  nexthop vpn export 10.255.0.1\n", core)
-        self.assertNotIn("198.51.100.0/24", out.split("vrf e10000\n")[1].split("exit-vrf")[0])
+        self.assertNotIn("198.51.100.0/2", out.split("vrf e10000\n")[1].split("exit-vrf")[0])
         self.assertNotIn("vrf e10003", out)
 
     def test_egress_network_with_clusters(self):
@@ -393,14 +405,14 @@ class ServiceTemplate(unittest.TestCase):
         egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
         out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
         # one vrf stanza: the default to the egress and the reject route that keeps the hub's ranges off it
-        self.assertIn("vrf e10000\n ip route 0.0.0.0/0 169.254.0.0\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
+        self.assertIn("vrf e10000\n ip route 0.0.0.0/0 169.254.0.0\n ip route 198.51.100.0/28 reject 254\nexit-vrf\n", out)
         self.assertEqual(out.count("vrf e10000\n"), 2)  # the stanza and the BGP instance
         inst = out.split("router bgp 65010 vrf e10000\n")[1].split("\nexit\n")[0]
         # only the default is redistributed (the reject route is not), the hub's routes come over the service link
         self.assertIn("  redistribute static route-map SHC-EGRESS-DEFAULT\n", inst)
         self.assertIn("  neighbor 169.254.128.0 route-map SVC-NET-IN in\n", inst)
         self.assertNotIn("nexthop vpn export", inst)
-        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 permit 0.0.0.0/0 le 32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 35 permit 0.0.0.0/0 le 32\n", out)
 
     def test_srv6(self):
         out, _ = self.render(core=CORE_SRV6)
@@ -410,7 +422,7 @@ class ServiceTemplate(unittest.TestCase):
         # the same learned hub routes on the SRv6 core, the VPN routes with their own next hop
         self.assertIn("  neighbor 169.254.128.4 route-map SVC-NET-IN in\n", lab)
         self.assertNotIn("nexthop vpn export", lab)
-        self.assertIn("vrf e10002\n ip route 198.51.100.0/24 reject 254\nexit-vrf\n", out)
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/28 reject 254\nexit-vrf\n", out)
         self.assertNotIn("sid vpn", out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0])
 
     def test_no_accepted_prefixes(self):
@@ -422,6 +434,25 @@ class ServiceTemplate(unittest.TestCase):
         self.assertIn("route-map AC3099-OUT deny 10\nexit\n", out)
         self.assertIn("router bgp 65010 vrf service\n", out)
         self.assertNotIn("neighbor 169.254", out)
+
+    def test_without_attachable_ranges_and_with_an_address(self):
+        # no attachable ranges: the announcement is guarded by the published ranges, then any IPv4 prefix up to /32;
+        # a service range entry that is an address is written without a length range (FRR refuses "/32 le 32")
+        real, _ = service_setup()
+        real["service"].update(attachableRanges=[], range=["198.51.100.10/32", "198.51.100.0/29"])
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32"])]
+        led = copy.deepcopy(LEDGER)
+        led["servicePrefix"] = {"HybridNetwork/acme/lab/192.0.2.15/32": 1}
+        egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=[platform()], ledger=led)
+        out = T.render(T.RT, template_vars(real, egp, att, vrfs, svc, "bgw-1", True))
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 35 permit 0.0.0.0/0 le 32\n", out)
+        self.assertIn("ip prefix-list SVC-ATTACHABLE seq 5 deny 198.51.100.0/24 le 32\n", out)
+        self.assertIn("ip prefix-list SVC-HUB seq 5 permit 198.51.100.0/29 le 32\n"
+                      "ip prefix-list SVC-HUB seq 10 permit 198.51.100.10/32\n", out)
+        self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/29 le 32\n"
+                      "ip prefix-list SHC-HUB4 seq 10 permit 198.51.100.10/32\n", out)
+        self.assertIn("vrf e10002\n ip route 198.51.100.0/29 reject 254\n ip route 198.51.100.10/32 reject 254\nexit-vrf\n", out)
+        self.assertNotIn("/32 le 32", out)
 
     def test_password(self):
         real, (egp, att, vrfs, svc) = service_setup()
@@ -586,6 +617,254 @@ class ServiceApply(A.ApplyCase):
             self.assertNotEqual(self.h.sysctl("", f"net/ipv6/conf/{d}/seg6_enabled"), "1", d)
         out, _ = self.h.ok(self, "root")
         self.assertTrue(out.strip().endswith("changed=no"), out)
+
+
+class Ruleset:
+    """The ruleset of `ip shc_service` as the node script loaded it (the fake kernel keeps the text), evaluated for one
+    packet: the subset of nftables the script writes (device names and their wildcards, addresses, sets, ports, TCP
+    flag tests, ICMP types, TTL, limit, the reverse path lookup, counter, comment, notrack, accept, drop)."""
+
+    def __init__(self, text, routes):
+        """routes: [(prefix, device)] of the service VRF, for `fib saddr . iif oif`."""
+        import ipaddress
+        self.ip = ipaddress
+        self.routes = [(ipaddress.ip_network(p), d) for p, d in routes]
+        self.sets, self.chains, cur = {}, {}, None
+        for line in text.splitlines():
+            line = line.strip()
+            m = re.match(r"set (\S+) \{ type ipv4_addr; flags interval; elements = \{ (.*) \}; \}$", line)
+            if m:
+                self.sets[m.group(1)] = [ipaddress.ip_network(x.strip()) for x in m.group(2).split(",")]
+            elif line.startswith("chain "):
+                cur = line.split()[1]
+                self.chains[cur] = []
+            elif cur and line == "}":
+                cur = None
+            elif cur and not line.startswith("type "):
+                self.chains[cur].append(line)
+
+    @staticmethod
+    def names(text):
+        return re.findall(r'"([^"]+)"', text) if text.startswith(("{", '"')) else [text]
+
+    def dev_match(self, spec, dev):
+        return any(dev == n or (n.endswith("*") and dev.startswith(n[:-1])) for n in self.names(spec))
+
+    def addr_match(self, spec, a):
+        a = self.ip.ip_address(a)
+        if spec.startswith("@"):
+            nets = self.sets[spec[1:]]
+        else:
+            nets = [self.ip.ip_network(x.strip()) for x in spec.strip("{} ").split(",")]
+        return any(a in n for n in nets)
+
+    @staticmethod
+    def flags_value(expr, flags):
+        bits = [b.strip() for b in expr.strip("() ").split("|")]
+        return {b for b in bits if b in flags}
+
+    def rule(self, rule, pk):
+        """(matched, verdict) for one rule."""
+        r = re.sub(r'comment "[^"]*"', "", rule)
+        toks = r
+
+        def take(rx):
+            nonlocal toks
+            m = re.match(r"\s*" + rx, toks)
+            if not m:
+                return None
+            toks = toks[m.end():]
+            return m
+
+        while True:
+            if take(r"$"):
+                return True, None
+            m = take(r"(accept|drop)\b")
+            if m:
+                return True, m.group(1)
+            if take(r"notrack\b") or take(r"counter\b"):
+                continue
+            m = take(r'(meta sdifname|iifname|oifname) (\{[^}]*\}|"[^"]*")')
+            if m:
+                dev = {"meta sdifname": pk.get("sdif", pk["iif"]), "iifname": pk["iif"], "oifname": pk.get("oif", "")}[m.group(1)]
+                if not self.dev_match(m.group(2), dev):
+                    return False, None
+                continue
+            m = take(r"ip (saddr|daddr) (@\S+|\{[^}]*\}|\S+)")
+            if m:
+                if not self.addr_match(m.group(2), pk[m.group(1)]):
+                    return False, None
+                continue
+            m = take(r"ip ttl (!= )?(\d+)")
+            if m:
+                if (pk.get("ttl", 64) == int(m.group(2))) == bool(m.group(1)):
+                    return False, None
+                continue
+            m = take(r"(tcp|udp) (sport|dport) (\{[^}]*\}|\d+)")
+            if m:
+                ports = {int(x) for x in re.findall(r"\d+", m.group(3))}
+                if pk.get("proto") != m.group(1) or pk.get(m.group(2)) not in ports:
+                    return False, None
+                continue
+            m = take(r"tcp flags & (\([^)]*\)|\w+) == (\w+(?: \| \w+)*|0)")
+            if m:
+                fl = set(pk.get("flags") or ())
+                want = set() if m.group(2) == "0" else self.flags_value(m.group(2), {"syn", "ack", "rst", "fin"})
+                if pk.get("proto") != "tcp" or self.flags_value(m.group(1), fl) != want:
+                    return False, None
+                continue
+            m = take(r"icmp type \{([^}]*)\}")
+            if m:
+                if pk.get("proto") != "icmp" or pk.get("icmp") not in [x.strip() for x in m.group(1).split(",")]:
+                    return False, None
+                continue
+            if take(r"meta l4proto icmp"):
+                if pk.get("proto") != "icmp":
+                    return False, None
+                continue
+            if take(r"limit rate \d+/second burst \d+ packets"):
+                continue
+            if take(r"fib saddr \. iif oif missing"):
+                a = self.ip.ip_address(pk["saddr"])
+                best = max((n for n, d in self.routes if a in n), key=lambda n: n.prefixlen, default=None)
+                dev = next((d for n, d in self.routes if n == best), None)
+                if dev == pk["iif"]:
+                    return False, None
+                continue
+            raise AssertionError(f"rule part not understood: {toks!r} in {rule!r}")
+
+    def chain(self, name, pk):
+        for rule in self.chains.get(name, []):
+            matched, verdict = self.rule(rule, pk)
+            if matched and verdict:
+                return verdict, rule
+        return "accept", "(policy)"
+
+    def forward(self, pk):
+        """A packet forwarded in the service VRF: the raw prerouting pass on its device, then the forward chain."""
+        verdict, rule = self.chain("raw_prerouting", dict(pk, sdif=pk["iif"]))
+        if verdict == "drop":
+            return verdict, rule
+        return self.chain("forward", dict(pk, sdif=pk["iif"]))
+
+
+class ServiceFilter(unittest.TestCase):
+    """The service VRF's filter by destination (no rule names a client range), proven on the ruleset the node script
+    loads into the fake kernel: from a network's link only packets to service.range (replies from the service ports,
+    connections to the hub endpoints, ICMP errors), from the hub only service.range's addresses to a network's
+    accepted prefixes on the service ports; nothing between networks."""
+
+    @classmethod
+    def setUpClass(cls):
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32"]),
+                hn("lab2", ["192.0.2.0/24"], internet=False, rows=["192.0.2.99/32"])]
+        led = copy.deepcopy(LEDGER)
+        led["vpnTarget"]["HybridNetwork/acme/lab2"] = 10003
+        led["egress"]["HybridNetwork/acme/lab2"] = 3
+        led["servicePrefix"] = {"HybridNetwork/acme/lab/192.0.2.15/32": 1, "HybridNetwork/acme/lab2/192.0.2.99/32": 2}
+        cls.real = realization(CORE, service=True)
+        egp, att, vrfs, svc = pipeline(F, cls.real, True, nets=nets, circuits=[platform()], ledger=led)
+        cls.conf = service_conf(cls.real, egp, att, svc)
+        tmp = tempfile.mkdtemp(prefix="svc-filter-")
+        h = A.Harness(tmp)
+        h.set_state(blade())
+        h.conf("root", cls.conf)
+        rc, out, err, _ = h.run("root")
+        assert rc == 0, err
+        cls.text = h.get_state()["ns"][""]["nft"]["ip shc_service"]
+        __import__("shutil").rmtree(tmp, True)
+        s = cls.conf["service"]
+        # the service VRF's routes as FRR installs them: each accepted prefix over its network's link, the links, the
+        # service range over the platform circuit
+        routes = [(p, w["so"]) for w in s["networks"] for p in w["prefixes"]]
+        routes += [(w["soAddr"], w["so"]) for w in s["networks"]]
+        routes += [(r, s["circuits"][0]["device"]) for r in s["range"]]
+        cls.rs = Ruleset(cls.text, routes)
+        cls.circ = s["circuits"][0]["device"]
+
+    def verdict(self, **pk):
+        return self.rs.forward(pk)[0]
+
+    def test_no_rule_names_a_client_range(self):
+        fwd = [r for r in self.rs.chains["forward"] if '"so1000' in r and "oifname" not in r]
+        self.assertTrue(fwd)
+        for r in fwd:
+            with self.subTest(rule=r):
+                self.assertNotIn("saddr", r)
+                self.assertRegex(r, r"ip daddr (@service_range|198\.51\.100\.10/32)")
+        self.assertNotIn("192.0.2.0/24", self.text)
+
+    def test_client_to_outside_the_range_is_dropped(self):
+        # inside the hub's range, outside the service range: neither a reply nor a connection nor ICMP passes
+        for pk in ({"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["ack"]},
+                   {"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["syn", "ack"]},
+                   {"proto": "tcp", "sport": 40000, "dport": 6443, "flags": ["syn"]},
+                   {"proto": "icmp", "icmp": "destination-unreachable"}):
+            with self.subTest(**{k: str(v) for k, v in pk.items()}):
+                self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="198.51.100.200", **pk),
+                                 "drop")
+        # and outside the hub altogether (a route the service VRF never has, but the filter does not rely on that)
+        self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="203.0.113.9",
+                                      proto="tcp", sport=6443, dport=40000, flags=["ack"]), "drop")
+
+    def test_client_to_a_hub_endpoint_is_accepted(self):
+        self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="198.51.100.10",
+                                      proto="tcp", sport=40000, dport=6443, flags=["syn"]), "accept")
+        # the endpoint's other ports are not
+        self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="198.51.100.10",
+                                      proto="tcp", sport=40000, dport=22, flags=["syn"]), "drop")
+        # inside the service range but not an endpoint: no new connection
+        self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="198.51.100.5",
+                                      proto="tcp", sport=40000, dport=6443, flags=["syn"]), "drop")
+
+    def test_reply_from_a_service_port_is_accepted_and_the_rate_limit_is_unchanged(self):
+        for flags in (["ack"], ["syn", "ack"], ["ack", "rst"], ["ack", "fin"]):
+            with self.subTest(flags=flags):
+                self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="198.51.100.5",
+                                              proto="tcp", sport=6443, dport=40000, flags=flags), "accept")
+        # a bare SYN from the service port, a SYN-ACK with RST: no reply shape
+        for flags in (["syn"], ["syn", "ack", "rst"]):
+            self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr="192.0.2.15", daddr="198.51.100.5",
+                                          proto="tcp", sport=6443, dport=40000, flags=flags), "drop")
+        # the hub's resets toward the service ports: limited as before (10/s, burst 20), the other segments not
+        rst = [r for r in self.rs.chains["forward"] if "tcp flags & rst == rst" in r]
+        self.assertEqual(len(rst), 2)
+        self.assertTrue(all("limit rate 10/second burst 20 packets accept" in r for r in rst))
+        self.assertTrue(all("tcp flags & rst == 0 accept" in r for r in self.rs.chains["forward"]
+                            if "tcp dport { 443, 6443 }" in r and "rst == rst" not in r))
+
+    def test_between_two_networks_is_dropped(self):
+        for pk in ({"proto": "tcp", "sport": 40000, "dport": 6443, "flags": ["syn"]},
+                   {"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["ack"]},
+                   {"proto": "icmp", "icmp": "echo-reply"}):
+            with self.subTest(**{k: str(v) for k, v in pk.items()}):
+                self.assertEqual(self.verdict(iif="so10002", oif="so10003", saddr="192.0.2.15", daddr="192.0.2.99", **pk),
+                                 "drop")
+                self.assertEqual(self.verdict(iif="so10003", oif="so10002", saddr="192.0.2.99", daddr="192.0.2.15", **pk),
+                                 "drop")
+
+    def test_hub_from_outside_the_range_is_dropped(self):
+        ok = dict(iif=self.circ, oif="so10002", daddr="192.0.2.15", proto="tcp", sport=40000, dport=6443, flags=["syn"])
+        self.assertEqual(self.verdict(saddr="198.51.100.5", **ok), "accept")
+        self.assertEqual(self.verdict(saddr="198.51.100.200", **ok), "drop")
+        self.assertEqual(self.verdict(saddr="198.51.100.200", **dict(ok, proto="icmp", icmp="echo-request")), "drop")
+        # inside the range: only the network's accepted prefixes, only the service ports
+        self.assertEqual(self.verdict(saddr="198.51.100.5", **dict(ok, daddr="192.0.2.16")), "drop")
+        self.assertEqual(self.verdict(saddr="198.51.100.5", **dict(ok, dport=22)), "drop")
+
+    def test_a_forged_source_is_dropped(self):
+        # another network's accepted prefix, or an address no network has here, as the source on a network's link
+        for src in ("192.0.2.99", "192.0.2.77"):
+            for pk in ({"proto": "tcp", "sport": 6443, "dport": 40000, "flags": ["ack"]},
+                       {"proto": "icmp", "icmp": "destination-unreachable"},
+                       {"proto": "tcp", "sport": 40000, "dport": 6443, "flags": ["syn"], "daddr": "198.51.100.10"}):
+                with self.subTest(src=src, **{k: str(v) for k, v in pk.items()}):
+                    pk = dict({"daddr": "198.51.100.5"}, **pk)
+                    self.assertEqual(self.verdict(iif="so10002", oif=self.circ, saddr=src, **pk), "drop")
+        # the network VRF's own session over its link passes the reverse path check (the link is the route back)
+        se = self.conf["service"]["networks"][0]["seIp"]
+        self.assertEqual(self.rs.chain("raw_prerouting", {"iif": "so10002", "saddr": se, "daddr": "169.254.128.4",
+                                                          "proto": "tcp", "dport": 179})[0], "accept")
 
 
 class StopHarness(A.Harness):
@@ -760,6 +1039,8 @@ ip link add bond1.3099 type veth peer name hubc; ip link set hubc netns hub
 ip link set bond1.3099 master service up; ip addr add 10.255.128.9/29 dev bond1.3099
 $H ip addr add 10.255.128.11/29 dev hubc; $H ip link set hubc up
 $H ip addr add 198.51.100.5/32 dev lo; $H ip addr add 198.51.100.10/32 dev lo
+# a hub address outside the service range (inside the hub's range): neither reaches nor is reached
+$H ip addr add 198.51.100.200/32 dev lo
 $H ip route add default via 10.255.128.9
 # two networks' service links, and each network's "core" (the cluster)
 for t in 10002:4:cl:192.0.2.15 10003:6:cl2:192.0.2.99; do
@@ -870,17 +1151,22 @@ for i in range(n):
 PY
 probe() {
   $C python3 /tmp/svc-l.py 192.0.2.15:6443 192.0.2.15:22 & $C2 python3 /tmp/svc-l.py 192.0.2.99:6443 &
-  $H python3 /tmp/svc-l.py 198.51.100.10:6443 198.51.100.5:22 198.51.100.10:22 & sleep 1
+  $H python3 /tmp/svc-l.py 198.51.100.10:6443 198.51.100.5:22 198.51.100.10:22 198.51.100.200:6443 & sleep 1
   echo "hub-api: $($H python3 /tmp/svc-c.py 198.51.100.5 192.0.2.15 6443)"
   echo "hub-ssh: $($H python3 /tmp/svc-c.py 198.51.100.5 192.0.2.15 22)"
   echo "cl-endpoint: $($C python3 /tmp/svc-c.py 192.0.2.15 198.51.100.10 6443)"
   echo "cl-other: $($C python3 /tmp/svc-c.py 192.0.2.15 198.51.100.10 22)"
   echo "cl-cl2: $($C python3 /tmp/svc-c.py 192.0.2.15 192.0.2.99 6443)"
+  echo "hub-outside: $($H python3 /tmp/svc-c.py 198.51.100.200 192.0.2.15 6443)"
+  echo "cl-outside: $($C python3 /tmp/svc-c.py 192.0.2.15 198.51.100.200 6443)"
   echo "ping: $($H ping -c 1 -W 1 -I 198.51.100.5 192.0.2.15 >/dev/null 2>&1 && echo reply || echo none)"
   # a reply that crosses this node without its request (stateless), and a request forged with the service port
   $H python3 /tmp/svc-cap.py 2.5 > /tmp/svc-cap.out & sleep 0.5
   $C python3 /tmp/svc-raw.py 192.0.2.15 198.51.100.5 6443 40000 12
   $C python3 /tmp/svc-raw.py 192.0.2.15 198.51.100.5 6443 40001 02
+  # a reply toward an address outside the service range, and one forged with the other network's prefix as source
+  $C python3 /tmp/svc-raw.py 192.0.2.15 198.51.100.200 6443 40002 12
+  $C python3 /tmp/svc-raw.py 192.0.2.99 198.51.100.5 6443 40003 12
   wait %4 2>/dev/null || true; sleep 2.5
   echo "raw: $(cat /tmp/svc-cap.out)"
   kill %1 %2 %3 2>/dev/null || true; wait 2>/dev/null || true
@@ -933,12 +1219,22 @@ class RealKernel(A.ApplyCase):
                 fh.write(p.stdout)
         before, after = p.stdout.split("--- after")
         res = {s: dict(re.findall(r"^([a-z0-9-]+): (.*)$", t, re.M)) for s, t in (("before", before), ("after", after))}
-        self.assertEqual({k: res["before"][k] for k in ("hub-api", "hub-ssh", "cl-endpoint", "cl-other", "cl-cl2", "ping")},
+        keys = ("hub-api", "hub-ssh", "cl-endpoint", "cl-other", "cl-cl2", "ping", "hub-outside", "cl-outside")
+        self.assertEqual({k: res["before"][k] for k in keys},
                          {"hub-api": "connected", "hub-ssh": "connected", "cl-endpoint": "connected",
-                          "cl-other": "connected", "cl-cl2": "connected", "ping": "reply"})
-        self.assertEqual({k: res["after"][k] for k in ("hub-api", "hub-ssh", "cl-endpoint", "cl-other", "cl-cl2", "ping")},
+                          "cl-other": "connected", "cl-cl2": "connected", "ping": "reply", "hub-outside": "connected",
+                          "cl-outside": "connected"})
+        # the service range only: a hub address outside it neither reaches the cluster nor is reached by it
+        self.assertEqual({k: res["after"][k] for k in keys},
                          {"hub-api": "connected", "hub-ssh": "timeout", "cl-endpoint": "connected",
-                          "cl-other": "timeout", "cl-cl2": "timeout", "ping": "reply"})
+                          "cl-other": "timeout", "cl-cl2": "timeout", "ping": "reply", "hub-outside": "timeout",
+                          "cl-outside": "timeout"})
+        # by destination: a reply toward an address outside the service range does not pass; a source the service
+        # VRF does not route back over the link (the other network's prefix) does not either
+        self.assertIn("192.0.2.15:6443>40002 12", res["before"]["raw"])
+        self.assertIn("192.0.2.99:6443>40003 12", res["before"]["raw"])
+        self.assertNotIn(">40002", res["after"]["raw"])
+        self.assertNotIn(">40003", res["after"]["raw"])
         # an ICMP error toward the hub passes from the network's own prefix only (not forged with another's)
         self.assertEqual(res["before"]["icmp"].split(), ["192.0.2.15", "192.0.2.99"])
         self.assertEqual(res["after"]["icmp"].split(), ["192.0.2.15"])
@@ -955,6 +1251,7 @@ class RealKernel(A.ApplyCase):
             counts[c] = counts.get(c, 0) + int(n)
         self.assertGreaterEqual(counts.get("no network reaches another through the service VRF", 0), 1, p.stdout)
         self.assertGreaterEqual(counts.get("nothing else through the service VRF", 0), 2, p.stdout)
+        self.assertGreaterEqual(counts.get("from a service link only a source routed back over it", 0), 2, p.stdout)
 
 
 if __name__ == "__main__":
