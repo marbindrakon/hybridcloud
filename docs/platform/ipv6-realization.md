@@ -160,7 +160,8 @@ placement:
   IPv6 subnet); a subnet whose list differs is updated on the next run, so a change reaches existing placements. A
   site not listed gets an empty list (enforced on existing subnets too), so its workloads fall back to the site's
   default, usually the site's own resolver, which a placement's workloads may not reach through the fabric; list
-  resolvers the network's egress can reach. OpenShift sites take
+  resolvers the network's egress can reach. An OpenShift cluster built on a placed network of an OpenStack site takes
+  the site's IPv4 entries as its machines' resolvers (see [Platform access, DNS](platform-access.md#dns)). OpenShift sites take
   no resolvers from here (the cluster's DNS serves the VMs; guests on IPv6-only placements with translation use the
   translation resolvers instead, see [Translation](#translation-translation), "What each site does").
 - **OpenStack placements** (CloudOSO): the placement's network holds one subnet per allocated prefix, IPv4 first,

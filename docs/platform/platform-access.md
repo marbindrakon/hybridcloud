@@ -286,6 +286,24 @@ floating IPs, or an AWS or Google Cloud cluster's internal load balancers). The 
 private answers: a resolver that drops private addresses in public answers (DNS rebinding protection) breaks the
 install and the import.
 
+The machines of an OpenStack cluster resolve names through the resolvers of their subnet (the installer's
+`platform.openstack.externalDNS`):
+
+- **On a hybrid network** they use the resolvers the network's placement gives its own subnets on that site: the IPv4
+  entries of the realization's `placement.resolversBySite` for the site. The installation's `externalDNS` default is
+  not used there, because the machines leave through the network's own paths (its internet egress, and the service
+  routing domain for the hub endpoints only), where a resolver on the platform's own network is not reachable. A
+  site with no IPv4 resolvers listed leaves the cluster on the cloud's default resolvers, as it leaves the
+  placement's subnets. The cluster's `Preflight` condition names the resolvers it took and their site, or says that
+  it uses the cloud's default.
+- **On a site's external network** they use the installation's `externalDNS` default (empty: the cloud's default).
+
+Deployment requirement for clusters on networks: every name such a cluster needs at install and while it runs must
+resolve through those resolvers to an address the network can reach. That covers the site's API endpoints (the
+cluster's cloud provider and machine management call them from the machines), the release and mirror registries, the
+cluster's own `api` and `*.apps` records, and the hub's API. The platform does not check this; a name that does not
+resolve, or resolves to an address the network cannot reach, shows as an install that never completes.
+
 ## Reserved ranges, as tenants see them
 
 The fabric computes every range a tenant prefix is refused in or stepped around into `HybridFabric
