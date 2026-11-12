@@ -354,7 +354,9 @@ hub's routing (above) is the deployment's to verify.
   sessions stay exactly as they are, the previous release's filter by `infrastructure.hub` included; a node that
   lost it, at a reboot for one, rebuilds it from that block, which survives in its configuration file; a node with
   no block to keep, rebuilt or new, has no service until the setting is fixed, and the condition and the node's
-  health finding `ServiceSessionsDown` name it), keeps the last realized status, carries no
+  health finding `ServiceSessionsDown` name it). Meanwhile nothing that needs the service planned again moves: a
+  network being deleted waits (its own status says `ServiceSettingInvalid` and names the setting), a cluster's new
+  addresses wait and a deleted cluster's addresses stay announced toward its own network until the setting is fixed, keeps the last realized status, carries no
   new cluster address, and goes on with everything else (networks, egress, edge connections). It is loud: the
   fabric's condition `ServiceRouting` is False `InvalidSpec` naming the setting, the alert
   `ShcFabricServiceSettingInvalid` fires, a Warning event `ServiceSettingInvalid` is written once per change and the

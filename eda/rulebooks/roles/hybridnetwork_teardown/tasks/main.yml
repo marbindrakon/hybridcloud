@@ -89,9 +89,14 @@
     - name: Take the network out of the service routing domain first
       when: hnd_service_carried | bool
       block:
+        # while the fabric keeps its service because a service setting is wrong (Review R4 NM2), it plans no service
+        # change and the deletion waits until the setting is fixed: the network's own status says so (V2-L2)
         - name: Mark the network waiting for the fabric
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
           vars:
+            _settings_error: >-
+              {{ (((((_hnd_fabric.resources | default([], true) + [{}]) | first).status | default({}, true)).realization
+                   | default({}, true)).service | default({}, true)).settingsError | default('', true) }}
             cr_api_version: hybridsovereign.redhat/v1alpha1
             cr_plural: hybridnetworks
             cr_name: "{{ fab_name }}"
@@ -100,7 +105,11 @@
             cr_status_body:
               status: pending
               ready: false
-              message: "Deletion waits for HybridFabric {{ fab_st.fabric }} to remove the platform's connection with the network"
+              reason: "{{ 'ServiceSettingInvalid' if _settings_error else '' }}"
+              message: >-
+                Deletion waits for HybridFabric {{ fab_st.fabric }} to remove the platform's connection with the
+                network{{ (': it changes nothing in that connection until a setting the platform team made is fixed ('
+                           ~ _settings_error ~ ')') if _settings_error else '' }}
               deletionBlockedBy: ["HybridFabric {{ fabric_platform_namespace }}/{{ fab_st.fabric }} (platform access)"]
               platformAccess: {prefixes: []}
               lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

@@ -679,6 +679,26 @@ class TeardownWiring(unittest.TestCase):
         self.assertIn("platformAccess: {prefixes: []}", text)
 
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_a_deletion_waiting_on_a_wrong_service_setting_says_so(self):
+        # Review R4 V2-L2: while the fabric keeps the service (a setting is wrong) the network's deletion waits; its
+        # own status names the reason and the setting
+        t = by_name(load(os.path.join(HND, "main.yml")), "Mark the network waiting for the fabric")
+        fab = {"resources": [{"status": {"realization": {"service": {
+            "networks": [{"network": "acme/net"}], "settingsError": "realization service.range is required"}}}}]}
+        body = run_play([{"ansible.builtin.set_fact": {"b": t["vars"]["cr_status_body"]}, "vars": t.get("vars", {})},
+                         write_out("b")],
+                        {"_hnd_fabric": fab, "fab_st": {"fabric": "lab"}, "fab_name": "net", "fab_namespace": "acme",
+                         "fabric_platform_namespace": "platform"})
+        self.assertEqual(body["reason"], "ServiceSettingInvalid")
+        self.assertIn("service.range is required", body["message"])
+        fab["resources"][0]["status"]["realization"]["service"].pop("settingsError")
+        body = run_play([{"ansible.builtin.set_fact": {"b": t["vars"]["cr_status_body"]}, "vars": t.get("vars", {})},
+                         write_out("b")],
+                        {"_hnd_fabric": fab, "fab_st": {"fabric": "lab"}, "fab_name": "net", "fab_namespace": "acme",
+                         "fabric_platform_namespace": "platform"})
+        self.assertEqual(body["reason"], "")
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_the_clusters_that_block(self):
         t = by_name(load(os.path.join(HND, "main.yml")), "The clusters on the network")
         cs = [{"metadata": {"name": "b"}, "spec": {"type": "aws", "aws": {"network": "net"}}},
