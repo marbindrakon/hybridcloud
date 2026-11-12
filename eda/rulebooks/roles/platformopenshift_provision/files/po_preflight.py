@@ -454,20 +454,37 @@ def service_wait(req):
 
 
 def router_gateway(req):
-    """The router is found by name in a project the tenant writes to: only a name that is unique there, and a router
-    whose gateway is on the cluster's network (network_id), gives an address (Review R2 L9)."""
-    named = [r for r in req.get("routers") or [] if isinstance(r, dict) and r.get("name") == req.get("name")]
-    if len(named) != 1:
-        return {"address": "", "note": f"{len(named)} routers named {req.get('name')}" if named else ""}
-    gw = named[0].get("external_gateway_info") or {}
+    """The cluster's router among the routers of the environment's project. The installer tags its router (as every
+    resource it creates) openshiftClusterID=<infraID>; its name depends on the installer generation, so `tag` (that
+    tag) is how it is found, `name` the older form. The tenant writes the project and can create or tag routers too
+    (Review R2 L9): only exactly one router with the tag (or name), whose gateway is on the cluster's network
+    (network_id), gives an address, its first IPv4 gateway address. Otherwise the address is "" and the note says why,
+    always in its own words: none found, how many, gateway on another network, or no IPv4 gateway address."""
+    tag, name = str(req.get("tag") or ""), str(req.get("name") or "")
+    routers = [r for r in req.get("routers") or [] if isinstance(r, dict)]
+    if tag:
+        what = f"tagged {tag}"
+        found = [r for r in routers if tag in (r.get("tags") or [])]
+    else:
+        what = f"named {name}"
+        found = [r for r in routers if r.get("name") == name]
+    if not found:
+        return {"address": "", "note": f"no router {what} found in the project"}
+    if len(found) != 1:
+        return {"address": "", "note": f"{len(found)} routers {what} in the project"}
+    router = found[0]
+    label = f"router {router.get('name') or router.get('id')} ({what})"
+    gw = router.get("external_gateway_info") or {}
     want = str(req.get("network_id") or "")
+    if not gw.get("network_id"):
+        return {"address": "", "note": f"{label} has no external gateway"}
     if want and str(gw.get("network_id") or "") != want:
-        return {"address": "", "note": f"router {req.get('name')} has its gateway on another network"}
+        return {"address": "", "note": f"{label} has its gateway on another network"}
     for f in gw.get("external_fixed_ips") or []:
         a = str((f or {}).get("ip_address") or "")
         if a and ":" not in a:
             return {"address": a, "note": ""}
-    return {"address": "", "note": ""}
+    return {"address": "", "note": f"{label} has no IPv4 gateway address"}
 
 
 ACTIONS = {"build-name": build_name, "acm-names": acm_names, "hub-owner": hub_owner, "networking": networking, "network": network, "external": external,

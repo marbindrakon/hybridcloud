@@ -362,6 +362,52 @@ class FipsAndWait(unittest.TestCase):
         self.assertIn("another network", r["note"])
 
 
+# The cluster's router as the 4.22 installer (Cluster API) left it on the site in gate S6 (evidence
+# p-cnet/evidence/gate/s6/f10b-router-site.txt): named by the Cluster API pattern, tagged with the infra id, a
+# dual-stack gateway on the placed network.
+INFRA = "h1-xstcm"
+TAG = f"openshiftClusterID={INFRA}"
+PLACED = "1a82c374-561b-4906-8610-d30ea79cc472"
+CAPI_ROUTER = {"id": "fc61f718-925d-4db3-98b3-741e9aad3046",
+               "name": f"k8s-clusterapi-cluster-openshift-cluster-api-guests-{INFRA}",
+               "project_id": "f25478071f94467494f38316b20dcab2", "tags": [TAG],
+               "external_gateway_info": {"network_id": PLACED, "enable_snat": True, "external_fixed_ips": [
+                   {"subnet_id": "9fc78b36-d559-4828-b92d-d1779a59478b", "ip_address": "10.68.0.193"},
+                   {"subnet_id": "77c2c787-9480-435b-866f-d70864801b54", "ip_address": "2602:81f:4005:4500::a1"}]}}
+
+
+class RouterGatewayByTag(unittest.TestCase):
+    """Gate F10b: the installer's tag finds the router whatever its name; each refusal says its own cause."""
+
+    def judge(self, routers, network=PLACED):
+        return P.router_gateway({"routers": routers, "tag": TAG, "network_id": network})
+
+    def test_the_installers_router(self):
+        self.assertEqual(self.judge([CAPI_ROUTER, {"name": "tenant-router", "tags": []}]),
+                         {"address": "10.68.0.193", "note": ""})
+        # the name of the earlier installer generation is not what finds it (81a6f5b7 looked for this name)
+        self.assertEqual(P.router_gateway({"routers": [CAPI_ROUTER], "name": f"{INFRA}-external-router",
+                                           "network_id": PLACED})["address"], "")
+
+    def test_refusals_each_in_their_own_words(self):
+        planted = dict(CAPI_ROUTER, id="r-planted", name="mine")
+        cases = (
+            ([], f"no router tagged {TAG} found in the project"),
+            ([dict(CAPI_ROUTER, tags=["openshiftClusterID=other"])], f"no router tagged {TAG} found in the project"),
+            ([CAPI_ROUTER, planted], f"2 routers tagged {TAG} in the project"),
+            ([dict(CAPI_ROUTER, external_gateway_info=dict(CAPI_ROUTER["external_gateway_info"], network_id="net-9"))],
+             "has its gateway on another network"),
+            ([dict(CAPI_ROUTER, external_gateway_info=dict(CAPI_ROUTER["external_gateway_info"], external_fixed_ips=[
+                {"subnet_id": "s6", "ip_address": "2602:81f:4005:4500::a1"}]))], "has no IPv4 gateway address"),
+            ([dict(CAPI_ROUTER, external_gateway_info=None)], "has no external gateway"),
+        )
+        for routers, words in cases:
+            with self.subTest(words=words):
+                r = self.judge(routers)
+                self.assertEqual(r["address"], "")
+                self.assertIn(words, r["note"])
+        self.assertIn(f"router {CAPI_ROUTER['name']} (tagged {TAG})", self.judge(cases[4][0])["note"])
+
 # ---- task files end to end ----------------------------------------------------------------------------------------
 
 CR = {"name": "c1", "namespace": NS}
@@ -806,8 +852,7 @@ class AccountFilesGoOnFailure(unittest.TestCase):
                    pnn_hybrid=True, pnn_credential="oso/projects/env1/clouds-config")
 
 
-GW_ROUTER = {"id": "r-1", "name": "c1-x7k2p-external-router", "project_id": "proj-1",
-             "external_gateway_info": {"network_id": "net-1", "external_fixed_ips": [{"ip_address": "192.0.2.30"}]}}
+GW_ROUTER = CAPI_ROUTER
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -818,7 +863,8 @@ class RouterGatewayFile(unittest.TestCase):
     built; the role's final write makes it Ready)."""
 
     def run_rg(self, fab, routers=(GW_ROUTER,), fakes=None, **kw):
-        v = dict(addr_vars(), rg_infra_id="c1-x7k2p", cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16",
+        v = dict(addr_vars(), rg_infra_id=INFRA, cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16",
+                 pf={"fabric": "f1", "networkId": PLACED, "service": fabric()["status"]["realization"]["service"]},
                  fake_os={"project-routers": {"routers": list(routers) if routers is not None else None}})
         v.update(kw)
         return H.run("platformopenshift_provision", "router_gateway.yml", v, k8s=k8s(fab=fab), result="rg_address",
@@ -836,23 +882,24 @@ class RouterGatewayFile(unittest.TestCase):
         return [p["body"]["platformPrefixes"] for p in H.patches(tr) if "platformPrefixes" in p["body"]]
 
     def test_gateway_joins_the_prefixes(self):
-        fab = fabric(networks=[{"network": f"{NS}/n1", "prefixes": ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]}])
+        fab = fabric(networks=[{"network": f"{NS}/n1", "prefixes": ["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"]}])
         rc, tr, out = self.run_rg(fab)
         self.assertEqual(rc, 0, out)
-        # the site account scoped to the environment's project, through the helper (no collection module)
+        # the site account scoped to the environment's project, through the helper (no collection module), the router
+        # found by the installer's tag (gate F10b: no router is named <infraID>-external-router any more)
         self.assertEqual(H.os_calls(tr), [{"action": "project-routers", "project_id": "proj-1",
-                                           "name": "c1-x7k2p-external-router"}])
+                                           "tag": "openshiftClusterID=h1-xstcm"}])
         self.assertEqual([t["as"] for t in tr if "os" in t], ["sites/site1"])
-        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]])
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"]])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("True", "AsExpected"))
-        self.assertIn("192.0.2.30", msg)
-        self.assertEqual(tr[-1], {"result": "192.0.2.30"})
+        self.assertIn("10.68.0.193", msg)
+        self.assertEqual(tr[-1], {"result": "10.68.0.193"})
         # every patch is partial: the role's final write decides Ready
         self.assertTrue(all(p["partial"] for p in H.patches(tr)))
 
     def test_refused_gateway_is_taken_out_not_fatal(self):
-        fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.30/32", "reason": "ServicePrefixInUse"}])
+        fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "10.68.0.193/32", "reason": "ServicePrefixInUse"}])
         rc, tr, out = self.run_rg(fab)
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.prefixes(tr)[-1], ["192.0.2.15/32", "192.0.2.16/32"])
@@ -863,21 +910,27 @@ class RouterGatewayFile(unittest.TestCase):
     def test_not_carried_yet_waits_recorded(self):
         rc, tr, out = self.run_rg(fabric())
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"]])
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"]])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "WaitingForPlatformAccess"))
         self.assertIn("is recorded and not carried yet", msg)
-        self.assertIn("192.0.2.30/32", msg)
+        self.assertIn("10.68.0.193/32", msg)
 
     def test_no_usable_router(self):
-        other = dict(GW_ROUTER, external_gateway_info={"network_id": "net-other",
-                                                       "external_fixed_ips": [{"ip_address": "192.0.2.31"}]})
-        v6only = dict(GW_ROUTER, external_gateway_info={"network_id": "net-1",
-                                                        "external_fixed_ips": [{"ip_address": "2001:db8::30"}]})
+        other = dict(GW_ROUTER, external_gateway_info=dict(GW_ROUTER["external_gateway_info"], network_id="net-other"))
+        v6only = dict(GW_ROUTER, external_gateway_info=dict(GW_ROUTER["external_gateway_info"], external_fixed_ips=[
+            {"subnet_id": "s6", "ip_address": "2602:81f:4005:4500::a1"}]))
+        # gate F10b: the routers the project held when the step looked for the old name
+        old_name = dict(GW_ROUTER, name=f"{INFRA}-external-router", tags=[])
+        tag = "openshiftClusterID=h1-xstcm"
         # on 2.16 a None the helper never sends would arrive as "" or None: both mean no router
-        for routers, words in (([], "no IPv4 gateway address"), (None, "no IPv4 gateway address"),
-                               ([GW_ROUTER, dict(GW_ROUTER, id="r-2")], "2 routers named c1-x7k2p-external-router"),
-                               ([other], "has its gateway on another network"), ([v6only], "no IPv4 gateway address")):
+        for routers, words in (([], f"no router tagged {tag} found in the project"),
+                               (None, f"no router tagged {tag} found in the project"),
+                               ([old_name], f"no router tagged {tag} found in the project"),
+                               ([GW_ROUTER, dict(GW_ROUTER, id="r-2", name="tenant-made")],
+                                f"2 routers tagged {tag} in the project"),
+                               ([other], "has its gateway on another network"),
+                               ([v6only], "has no IPv4 gateway address")):
             with self.subTest(words=words, n=len(routers or [])):
                 rc, tr, out = self.run_rg(fabric(), routers=routers)
                 self.assertEqual(rc, 0, out)
@@ -905,7 +958,7 @@ class RouterGatewayFile(unittest.TestCase):
         # the network's wake fails after the three prefixes were recorded
         rc, tr, out = self.run_rg(fabric(), fakes={"nudge_cr.yml": "- ansible.builtin.fail:\n    msg: services API down\n"})
         self.assertEqual(rc, 0, out)
-        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "192.0.2.30/32"],
+        self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"],
                                              ["192.0.2.15/32", "192.0.2.16/32"]])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))

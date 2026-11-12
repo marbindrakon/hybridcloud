@@ -294,60 +294,78 @@ class AccountAsConfigured(unittest.TestCase):
 
 
 class ProjectRouters(unittest.TestCase):
-    """fix-routergw (gate F10): the cluster's router read through the helper, not a collection module the job's
-    execution environment lacks. The site account scoped to the environment's project lists the routers of the name in
-    that project only, in the shape files/po_preflight.py router-gateway judges."""
+    """fix-routergw (gate F10, F10b): the cluster's router read through the helper, not a collection module the job's
+    execution environment lacks, and found by the installer's tag, not by a name (the 4.22 installer names it by the
+    Cluster API pattern). The site account scoped to the environment's project lists the tagged routers of that
+    project only, in the shape files/po_preflight.py router-gateway judges. The router is the one of gate S6
+    (evidence p-cnet/evidence/gate/s6/f10b-router-site.txt)."""
+
+    PID = "f25478071f94467494f38316b20dcab2"
+    TAG = "openshiftClusterID=h1-xstcm"
+    PLACED = "1a82c374-561b-4906-8610-d30ea79cc472"
 
     def run_it(self, routers, **req):
         conn = mock.MagicMock()
         seen = []
 
         def listing(**f):
+            # Neutron's own filters (tags: all of the listed tags; project_id), as the SDK passes them
             seen.append(f)
-            return [r for r in routers if all(getattr(r, k, None) == v for k, v in f.items())]
+            return [r for r in routers if f["tags"] in (r.tags or []) and r.project_id == f["project_id"]]
         conn.network.routers.side_effect = listing
         acct = mock.Mock()
         acct.project.return_value = conn
         with mock.patch.object(S, "Account", return_value=acct):
             out = S.ACTIONS["project-routers"]({"action": "project-routers", "clouds_yaml": "/dev/null",
-                                                "project_id": PROJECT, "name": "c1-x7k2p-external-router", **req})
-        acct.project.assert_called_once_with(PROJECT)
-        self.assertEqual(seen, [{"name": "c1-x7k2p-external-router", "project_id": PROJECT}])
+                                                "project_id": self.PID, "tag": self.TAG, **req})
+        acct.project.assert_called_once_with(self.PID)
+        self.assertEqual(seen, [{"tags": self.TAG, "project_id": self.PID}])
         conn.network.update_router.assert_not_called()
         return out
 
-    @staticmethod
-    def router(rid, project=PROJECT, name="c1-x7k2p-external-router", net=NET, addrs=("192.0.2.30",)):
+    def router(self, rid, project=None, name="k8s-clusterapi-cluster-openshift-cluster-api-guests-h1-xstcm",
+               tags=None, net=None, addrs=("10.68.0.193", "2602:81f:4005:4500::a1")):
+        net = self.PLACED if net is None else net
         gw = {"network_id": net, "enable_snat": True,
-              "external_fixed_ips": [{"subnet_id": "sn-1", "ip_address": a} for a in addrs]} if net else None
-        return Obj(id=rid, name=name, project_id=project, external_gateway_info=gw)
+              "external_fixed_ips": [{"subnet_id": f"sn-{i}", "ip_address": a} for i, a in enumerate(addrs)]} if net else None
+        return Obj(id=rid, name=name, project_id=project or self.PID, tags=[self.TAG] if tags is None else tags,
+                   external_gateway_info=gw)
 
-    def test_the_projects_router_with_its_gateway(self):
-        out = self.run_it([self.router("r-1", addrs=("2001:db8::30", "192.0.2.30")),
-                           self.router("r-2", project="proj-other"), self.router("r-3", name="other-router")])
-        self.assertEqual(out, {"routers": [{"id": "r-1", "name": "c1-x7k2p-external-router", "project_id": PROJECT,
-                                            "external_gateway_info": {"network_id": NET, "external_fixed_ips": [
-                                                {"subnet_id": "sn-1", "ip_address": "2001:db8::30"},
-                                                {"subnet_id": "sn-1", "ip_address": "192.0.2.30"}]}}]})
+    def test_the_installers_router_by_its_tag(self):
+        out = self.run_it([self.router("fc61f718-925d-4db3-98b3-741e9aad3046"),
+                           self.router("r-2", project="proj-other"), self.router("r-3", name="other", tags=[])])
+        self.assertEqual(out, {"routers": [{
+            "id": "fc61f718-925d-4db3-98b3-741e9aad3046",
+            "name": "k8s-clusterapi-cluster-openshift-cluster-api-guests-h1-xstcm", "project_id": self.PID,
+            "tags": [self.TAG],
+            "external_gateway_info": {"network_id": self.PLACED, "external_fixed_ips": [
+                {"subnet_id": "sn-0", "ip_address": "10.68.0.193"},
+                {"subnet_id": "sn-1", "ip_address": "2602:81f:4005:4500::a1"}]}}]})
         # the role's judge takes this shape unchanged
         spec = importlib.util.spec_from_file_location(
             "po_preflight", os.path.join(ROOT, "eda", "rulebooks", "roles", "platformopenshift_provision", "files",
                                          "po_preflight.py"))
         P = importlib.util.module_from_spec(spec)
         spec.loader.exec_module(P)
-        judged = P.router_gateway({"routers": out["routers"], "name": "c1-x7k2p-external-router", "network_id": NET})
-        self.assertEqual(judged, {"address": "192.0.2.30", "note": ""})
+        judged = P.router_gateway({"routers": out["routers"], "tag": self.TAG, "network_id": self.PLACED})
+        self.assertEqual(judged, {"address": "10.68.0.193", "note": ""})
 
-    def test_no_gateway_and_two_of_a_name(self):
-        out = self.run_it([self.router("r-1", net=None)])
-        self.assertEqual(out["routers"][0]["external_gateway_info"], {"network_id": "", "external_fixed_ips": []})
-        out = self.run_it([self.router("r-1"), self.router("r-2")])
-        self.assertEqual([r["id"] for r in out["routers"]], ["r-1", "r-2"])
+    def test_client_side_filter_and_shapes(self):
+        # a Neutron that ignored the filters still gives only the project's tagged routers
+        conn = mock.MagicMock()
+        conn.network.routers.return_value = [self.router("r-1"), self.router("r-2", project="proj-other"),
+                                             self.router("r-3", tags=["openshiftClusterID=other"]),
+                                             self.router("r-4", net="")]
+        acct = mock.Mock()
+        acct.project.return_value = conn
+        with mock.patch.object(S, "Account", return_value=acct):
+            out = S.project_routers({"clouds_yaml": "/dev/null", "project_id": self.PID, "tag": self.TAG})
+        self.assertEqual([r["id"] for r in out["routers"]], ["r-1", "r-4"])
+        self.assertEqual(out["routers"][1]["external_gateway_info"], {"network_id": "", "external_fixed_ips": []})
 
-    def test_needs_the_project_and_the_name(self):
-        for req in ({"project_id": ""}, {"name": ""}, {"project_id": None}):
+    def test_needs_the_project_and_the_tag(self):
+        for req in ({"project_id": ""}, {"tag": ""}, {"project_id": None}):
             with self.subTest(req=req), mock.patch.object(S, "Account") as acct:
                 with self.assertRaises(ValueError):
-                    S.project_routers({"clouds_yaml": "/dev/null", "project_id": PROJECT,
-                                       "name": "c1-x7k2p-external-router", **req})
+                    S.project_routers({"clouds_yaml": "/dev/null", "project_id": self.PID, "tag": self.TAG, **req})
                 acct.assert_not_called()

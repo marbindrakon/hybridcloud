@@ -1,10 +1,10 @@
 ---
 # After the install of a cluster on a hybrid network whose fabric admits hub endpoints (DESIGN cnet §3.7, §4.2 step
-# 7): the nodes reach the hub with the source address of the cluster's router (the installer's, named
-# <infraID>-external-router), so that address joins the cluster's prefixes as /32. Read with the site account scoped
-# to the environment's project (shc_openstack.py project-routers, through openstack_call.yml: the account's secret
-# stays in its temp file and is never a module parameter). The router is found by name in that project: only a name
-# that is unique there and a gateway on the cluster's network count (Review R2 L9). A refusal or a failure here is
+# 7): the nodes reach the hub with the source address of the cluster's router, so that address joins the cluster's
+# prefixes as /32. Read with the site account scoped to the environment's project (shc_openstack.py project-routers,
+# through openstack_call.yml: the account's secret stays in its temp file and is never a module parameter). The router
+# is found by the installer's tag openshiftClusterID=<infraID> (its name depends on the installer generation): only
+# exactly one router with the tag in that project and its gateway on the cluster's network count (Review R2 L9). A refusal or a failure here is
 # reported, not fatal: the cluster is built, and ACM's agent falls back to the network's own path. Condition
 # RouterGateway says which: True (carried), False WaitingForPlatformAccess (recorded, not carried yet), or False with
 # the fabric's refusal or Failed (not added, with the cause). Inputs: rg_infra_id.
@@ -26,7 +26,7 @@
             os_request:
               action: project-routers
               project_id: "{{ cb_oso_project_id }}"
-              name: "{{ rg_infra_id }}-external-router"
+              tag: "openshiftClusterID={{ rg_infra_id }}"
       always:
         - name: Remove the account's temp files
           ansible.builtin.file:
@@ -39,7 +39,7 @@
       vars:
         po_request:
           action: router-gateway
-          name: "{{ rg_infra_id }}-external-router"
+          tag: "openshiftClusterID={{ rg_infra_id }}"
           network_id: "{{ pf.networkId }}"
           routers: "{{ os_result.routers | default([], true) }}"
 
@@ -98,7 +98,6 @@
 
 - name: The outcome for the cluster's status
   vars:
-    _router: "{{ rg_infra_id }}-external-router"
     _failed: "{{ rg_error | default('', true) | length > 0 }}"
     _carried: "{{ not (_failed | bool) and rg_address | length > 0 and (pp_outcome.done | default(false) | bool) }}"
     _waits: "{{ not (_failed | bool) and rg_address | length > 0 and (pp_outcome.wait | default(false) | bool) }}"
@@ -106,13 +105,14 @@
     _cause: >-
       {{ ('it could not be read: ' ~ rg_error) if _failed | bool
          else ((pp_outcome.message | default('', true)) if _refused | bool
-         else ('router ' ~ _router ~ ': ' ~ (rg_note if rg_note | length > 0 else 'no IPv4 gateway address'))) }}
+         else (rg_note if rg_note | length > 0 else 'no gateway address')) }}
     _reason: >-
       {{ 'AsExpected' if _carried | bool
          else ('WaitingForPlatformAccess' if _waits | bool
          else ((pp_outcome.reason | default('', true) or 'Failed') if _refused | bool else 'Failed')) }}
     _message: >-
-      {{ (('Gateway ' ~ rg_address ~ ' of router ' ~ _router ~ " is carried in the platform's service routing domain: "
+      {{ (('Gateway ' ~ rg_address ~ " of the router tagged openshiftClusterID=" ~ rg_infra_id
+           ~ " is carried in the platform's service routing domain: "
            ~ "the cluster's own calls to the hub take the platform's path") if _carried | bool
           else (('Gateway ' ~ rg_address ~ ' is recorded and not carried yet: ' ~ (pp_outcome.message | default('', true)))
                 if _waits | bool
