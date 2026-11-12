@@ -15,8 +15,8 @@
 # ceKind platform (platform_circuit.yml): the hand-off of the fabric's service routing domain to the router of the
 # network the platform's management runs on. Only in the fabric's namespace (NotPlatformNamespace elsewhere: tenants
 # cannot write there), only while the realization offers the service (ServiceNotOffered), IPv4 only. No network: the
-# circuit accepts the platform's infrastructure.hub IPv4 ranges and advertises the prefixes of the clusters the
-# platform reaches (inside service.attachableRanges); status.ceConfig lists both for the hub's network team. VLAN,
+# circuit accepts the service range (service.range) and advertises the prefixes of the clusters the platform reaches;
+# status.ceConfig gives the hub's network team its filters (announce, refuse, accept, maximum-prefix). VLAN,
 # link, password, the fabric's realization and the sessions as for a customer circuit.
 - block:
     # a platform circuit lives in the platform namespace, which has no Entity: the Entity is read for the other kinds
@@ -510,23 +510,17 @@
               'bfd': ac_bgp.bfd | default(false) | bool} }}
       when: not (ac_platform | default(false) | bool)
 
-    # a platform circuit: in the service routing domain (no network, no VPN target); it accepts the hub's IPv4 ranges
-    # and advertises the clusters' prefixes inside service.attachableRanges (required with the service). The hub's
-    # router can install the two lists of status.ceConfig as fixed filters
+    # a platform circuit: in the service routing domain (no network, no VPN target); it accepts routes inside the
+    # service range only and advertises the clusters' prefixes (never inside a published range; inside
+    # service.attachableRanges when set). status.ceConfig gives the hub's router its filters in the order it applies
+    # them (ac_platform_ce, from check-circuit): announce acceptedRanges, refuse refusedRanges at any length, then
+    # accept advertisedRanges, at most maxPrefixes
     - name: The platform circuit's realization and the hub router's parameters
       vars:
         _maxp: "{{ ac_bgp.maxPrefixes | default({}, true) }}"
         _mtu: "{{ (ac_bearer_real.mtu | default(1500)) | int }}"
-        _accept: >-
-          {%- set out = [] -%}
-          {%- for r in ac_hub4 -%}{%- set _ = out.append(r if r.endswith('/32') else r ~ ' le 32') -%}{%- endfor -%}
-          {{ out }}
-        _advertise: >-
-          {%- set out = [] -%}
-          {%- for r in ac_service.attachableRanges | default([], true) | reject('search', ':') -%}
-            {%- set _ = out.append(r if r.endswith('/32') else r ~ ' le 32') -%}
-          {%- endfor -%}
-          {{ out }}
+        _accept: "{{ ac_platform_ce.acceptedRanges }}"
+        _advertise: "{{ ac_platform_ce.advertisedRanges }}"
       ansible.builtin.set_fact:
         ac_real: >-
           {{ {'ceKind': 'platform', 'vlan': ac_vlan | int, 'linkIndex': ac_link_index | int, 'link': ac_plan.link,
@@ -542,7 +536,8 @@
               'mtu': _mtu | int,
               'authentication': {'type': ac_auth_type} | combine({'secretName': ac_secret_name} if ac_auth_type == 'md5' else {}),
               'bfd': ac_bgp.bfd | default(false) | bool,
-              'advertisedRanges': _advertise, 'acceptedRanges': _accept} }}
+              'acceptedRanges': _accept, 'refusedRanges': ac_platform_ce.refusedRanges,
+              'advertisedRanges': _advertise, 'maxPrefixes': ac_platform_ce.maxPrefixes | int} }}
       when: ac_platform | default(false) | bool
 
     # a circuit with IPv6 accept entries: the IPv6 link, the CE's and each node's address on it, and the second

@@ -3,10 +3,13 @@
 # network the platform's management runs on. Checked here (namespace, edge, fabric, AS numbers, the service); the
 # password, the VLAN and link, the record and the sessions follow in main.yml as for a customer circuit.
 # Sets ac_edge, ac_fabric, ac_asn, ac_status, ac_policy (notes; IPv4 only), ac_service (the realization's service
-# keys) and ac_hub4 (the IPv4 infrastructure.hub ranges the circuit accepts), or fails with the reason.
+# keys), ac_hub4 (the IPv4 infrastructure.hub ranges), ac_range (service.range: the hub's addresses the circuit
+# accepts routes for) and ac_platform_ce (what the hub's router configures, from files/shc_fabric.py check-circuit:
+# acceptedRanges, refusedRanges, advertisedRanges, maxPrefixes), or fails with the reason.
 # Refusals: NotPlatformNamespace (outside the fabric's namespace: tenants cannot write there),
 # BearerNotFound / CeKindNotAccepted (the edge), AsnConflict / PeerAsnReserved, ServiceNotOffered (the realization
-# has service.enabled off), FamilyUnavailable (the hub's ranges have no IPv4 range: the circuit carries IPv4 only).
+# has service.enabled off, or names no service.range), FamilyUnavailable (the hub's ranges have no IPv4 range: the
+# circuit carries IPv4 only).
 - name: Refuse a platform circuit outside the platform namespace
   ansible.builtin.set_fact:
     fab_fail_reason: NotPlatformNamespace
@@ -140,6 +143,8 @@
     ac_service: "{{ fab_real.service | default({}, true) }}"
     ac_hub4: >-
       {{ (fab_real.infrastructure | default({}, true)).hub | default([], true) | reject('search', ':') | list }}
+    ac_range: >-
+      {{ ((fab_real.service | default({}, true)).range | default([], true)) | reject('search', ':') | list }}
 
 - name: Refuse a platform circuit the fabric does not offer
   ansible.builtin.set_fact:
@@ -160,6 +165,38 @@
   ansible.builtin.fail:
     msg: "AttachmentCircuit {{ fab_name }}: the realization's service.vrf.name is not set"
   when: (ac_service.vrf | default({}, true)).name | default('', true) | length == 0
+
+# the hub's addresses the service routing domain carries: what the circuit accepts from the hub's router, and the
+# only addresses that reach the clusters (check-fabric refuses the fabric without them, by name)
+- name: Refuse a platform circuit without the service range
+  ansible.builtin.set_fact:
+    fab_fail_reason: ServiceNotOffered
+    fab_fail_msg: >-
+      AttachmentCircuit {{ fab_name }}: the realization names no service.range (the hub's IPv4 addresses that reach
+      the clusters through the service routing domain)
+  when: ac_range | length == 0
+
+- name: Stop on a platform circuit without the service range
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: ac_range | length == 0
+
+# what the hub's router configures toward the platform (status.ceConfig), computed where the fabric's plan computes
+# what the nodes announce and accept, so both sides read one rule
+- name: The hub router's filters
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+  vars:
+    fab_check:
+      action: check-circuit
+      ceKind: platform
+      namespace: "{{ fab_namespace }}"
+      fabricNamespace: "{{ fabric_platform_namespace }}"
+      accept: []
+      realization: "{{ fab_real }}"
+
+- name: Keep the hub router's filters
+  ansible.builtin.set_fact:
+    ac_platform_ce: "{{ fab_check_result.ceConfig }}"
 
 # what the policy check gives a customer circuit: notes, the families, the default route (never, here)
 - name: The platform circuit's policy
