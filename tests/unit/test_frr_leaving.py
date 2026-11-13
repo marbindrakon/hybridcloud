@@ -165,6 +165,14 @@ class Main(unittest.TestCase):
         calls, out = self.run_main(desired("xe10000"), answers={"no neighbor xe10000 interface": (0, "% Create the peer-group first")})
         self.assertEqual(out, ["refused: router bgp 65010 vrf e10000: no neighbor xe10000 interface (% Create the peer-group first)"])
 
+    def test_an_empty_or_cut_wanted_text_takes_nothing_out(self):
+        # Review M3: the template always renders the default instance; a wanted text without it would remove every
+        # instance of the node
+        for bad in ("", "\n", "router bgp 65010 vrf e10001\n", "garbage\n"):
+            calls, out = self.run_main(bad)
+            self.assertEqual(calls[1:], [], bad)
+            self.assertTrue(out[0].startswith("unreadable: the wanted configuration"), out)
+
     def test_the_command_line_of_the_job(self):
         # node_root.yml passes --pattern e[0-9]+, the service VRF by --name and --no-neighbours when the role default is off
         calls, out = self.run_main(desired("xe10000", "xo10000"), args=("--pattern", "e[0-9]+", "--name", "service",
@@ -301,6 +309,44 @@ class RenderedPlans(unittest.TestCase):
         after = self.render(nets=nets)
         cmds = self.check(before, after)
         self.assertIn(("router bgp 65011 vrf egress", "no neighbor xo10000 interface"), cmds)
+
+    def test_the_reduced_text_the_job_sends_gives_the_same_commands(self):
+        # Review H2: the job sends only each "router bgp" line and the interface neighbours (the regex of node_root.yml);
+        # the commands are the same as from the whole file, and no password line travels
+        import yaml
+        with open(os.path.join(ROOT, "eda/rulebooks/roles/hybridfabric_provision/tasks/node_root.yml")) as f:
+            step = next(t for t in yaml.safe_load(f) if t.get("name", "").endswith("(before the kernel objects)"))
+        rx = re.search(r"regex_findall\('(.*?)'\)", step["ansible.builtin.command"]["stdin"]).group(1)
+        cases = [(self.render(), self.render(nets=[n for n in S.NETS if n["metadata"]["name"] != "core"])),
+                 (self.render(), self.render(v6egress=False)), (self.render(), self.render())]
+        for before, after in cases:
+            reduced = "\n".join(re.findall(rx, after, re.M))
+            self.assertEqual(L.leaving(before, reduced, "e[0-9]+", names=["service"]),
+                             L.leaving(before, after, "e[0-9]+", names=["service"]))
+            self.assertIn("", L.instances(reduced))
+        text = after.replace(" neighbor xe10000 interface v6only remote-as external\n",
+                             " neighbor xe10000 interface v6only remote-as external\n neighbor 10.0.0.9 password s3cr3t\n")
+        self.assertNotIn("password", "\n".join(re.findall(rx, text, re.M)))
+
+    def test_no_task_carries_the_whole_file_in_its_arguments(self):
+        # Review H2: the rendered file holds the circuits' BGP passwords; a task that names it is under no_log, or gets
+        # only the reduction (each task of every file of the role)
+        import glob
+        import yaml
+        sys.path.insert(0, HERE)
+        from play_helper import walk
+        bad = []
+        for path in glob.glob(os.path.join(ROOT, "eda/rulebooks/roles/*/tasks/*.yml")):
+            with open(path) as f:
+                tasks = yaml.safe_load(f) or []
+            for t in walk(tasks):
+                body = {k: v for k, v in t.items() if k not in ("name", "no_log", "when", "register")}
+                if "_hf_frr_text" not in str(body):
+                    continue
+                reduced = "_hf_frr_text | regex_findall(" in str(body) and "{{ _hf_frr_text }}" not in str(body)
+                if not (t.get("no_log") or reduced):
+                    bad.append("%s: %s" % (os.path.basename(path), t.get("name")))
+        self.assertEqual(bad, [])
 
     def test_a_rerun_takes_nothing_out(self):
         text = self.render()

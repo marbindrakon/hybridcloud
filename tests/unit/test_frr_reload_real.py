@@ -54,6 +54,8 @@ for i in $(seq 30); do vtysh -c 'show bgp vrfs' >/dev/null 2>&1 && break; sleep 
 R="python3 /usr/lib/frr/frr-reload.py --bindir /usr/bin --confdir /etc/frr --rundir /var/run/frr"
 $R --reload a.conf >/dev/null 2>&1
 vtysh -c 'show running-config' | grep -E '^ neighbor x[eo][0-9]+ ' | sed 's/^/loaded:/'
+# the unit's reload for a daemon (frrinit.sh reload: frr-reload.py of the file on disk) at its place before the step
+if [ "$2" = unitfirst ]; then $R --reload a.conf >/dev/null 2>&1; fi
 if [ "$1" = yes ]; then python3 helper.py --pattern 'e[0-9]+' --name service < b.conf; fi
 : > /var/log/frr/frr-reload.log
 $R --reload b.conf >/dev/null 2>&1
@@ -105,7 +107,7 @@ class RealReload(unittest.TestCase):
             return keep(T.render_text(template_text, v) if template_text else T.render(T.RT, v))
         return render(S.NETS), render([n for n in S.NETS if n["metadata"]["name"] != "core"])
 
-    def run_case(self, a, b, helper):
+    def run_case(self, a, b, helper, unit_first=False):
         d = tempfile.mkdtemp(prefix="shc-frr-real-")
         self.addCleanup(shutil.rmtree, d, True)
         for name, text in (("a.conf", a), ("b.conf", b), ("run.sh", SCRIPT), ("helper.py", HELPER)):
@@ -117,15 +119,19 @@ class RealReload(unittest.TestCase):
             os.chmod(os.path.join(d, f), 0o755)
         p = subprocess.run(["podman", "run", "--rm", "--network", "none", "--cap-add", "NET_ADMIN,SYS_ADMIN,NET_RAW",
                             "-v", "%s:/w:Z" % d, "--entrypoint", "/bin/bash", IMAGE, "/w/run.sh",
-                            "yes" if helper else "no"], capture_output=True, text=True, timeout=300)
+                            "yes" if helper else "no", "unitfirst" if unit_first else "-"],
+                           capture_output=True, text=True, timeout=300)
         self.assertIn("rc=", p.stdout, p.stdout + p.stderr)
         lines = p.stdout.splitlines()
         return ([l[6:] for l in lines if l.startswith("error:")], [l for l in lines if l.startswith("loaded:")],
                 [l for l in lines if l.startswith(("removed: ", "refused: "))], [l for l in lines if l.startswith("after:")])
 
-    @staticmethod
-    def instance_errors(errors):
-        return [e for e in errors if e.startswith(('"router bgp 65011 vrf egress --', '"router bgp 65010 vrf e1000'))]
+    # the upstream image's own artefact (its BGP VNC defaults in the default instance); RHEL's build has no VNC
+    IMAGE_ARTEFACTS = ('"router bgp 65010 --  no" we failed to remove this command', "% Unknown command:  no vnc defaults")
+
+    def instance_errors(self, errors):
+        """Every error but the image's artefact (Review L7: an error in any other context counts too)."""
+        return [e for e in errors if e.strip() and e.strip() not in self.IMAGE_ARTEFACTS]
 
     def test_the_release_before_fails_on_the_interface_neighbour(self):
         if self.old_t is None:
@@ -133,7 +139,8 @@ class RealReload(unittest.TestCase):
         a, b = self.files(self.old_t)
         errors, loaded, _, after = self.run_case(a, b, helper=False)
         self.assertIn("loaded: neighbor xo10000 description IPv6 egress of acme/core", loaded)
-        self.assertEqual(self.instance_errors(errors), ['"router bgp 65011 vrf egress --  no" we failed to remove this command'])
+        self.assertEqual(self.instance_errors(errors), ['"router bgp 65011 vrf egress --  no" we failed to remove this command',
+                                                        "% Specify remote-as or peer-group commands first"])
         self.assertEqual(after, [])  # the neighbour went with its first line: a failure in name only
 
     def test_without_the_description_the_reload_removes_it(self):
@@ -147,6 +154,17 @@ class RealReload(unittest.TestCase):
     def test_the_removal_step_first(self):
         a, b = self.files()
         errors, loaded, done, after = self.run_case(a, b, helper=True)
+        self.assertEqual(done, ["removed: no router bgp 65010 vrf e10000",
+                                "removed: router bgp 65011 vrf egress: no neighbor xo10000 interface"])
+        self.assertEqual(self.instance_errors(errors), [])
+        self.assertEqual(after, [])
+
+    def test_the_unit_reload_before_the_removal_step_puts_nothing_back(self):
+        # Review M1: the unit's reload for a newly enabled daemon now runs before the removal step; it loads the file on
+        # disk (the previous run's, with the network): what the step then removes stays removed, and the job's reload
+        # has no error
+        a, b = self.files()
+        errors, _, done, after = self.run_case(a, b, helper=True, unit_first=True)
         self.assertEqual(done, ["removed: no router bgp 65010 vrf e10000",
                                 "removed: router bgp 65011 vrf egress: no neighbor xo10000 interface"])
         self.assertEqual(self.instance_errors(errors), [])

@@ -705,8 +705,13 @@ class HolderWiring(unittest.TestCase):
                 for i, t in enumerate(tasks):
                     sd = t.get("ansible.builtin.systemd") or {}
                     cmd = str(t.get("ansible.builtin.command") or "")
+                    sh = t.get("ansible.builtin.shell") or ""
+                    sh = str(sh.get("cmd", "") if isinstance(sh, dict) else sh)
+                    # a shell step that starts, restarts or reloads a unit (not a timer) counts as well
+                    unit_job = [u for u in re.findall(r"systemctl\s+(?:-q\s+)?(?:start|restart|reload)\s+(\S+)", sh)
+                                if not u.endswith(".timer")]
                     long_step = (sd.get("state") and not str(sd.get("name", "")).endswith(".timer")) or \
-                        re.search(r"shc-fabric-apply .+ up$", cmd.strip())
+                        re.search(r"shc-fabric-apply .+ up$", cmd.strip()) or unit_job
                     if not long_step:
                         continue
                     with self.subTest(role=role, task=t["name"]):

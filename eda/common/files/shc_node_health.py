@@ -152,7 +152,7 @@ def coredumps(run, since):
 
 def restarts(run, since, units):
     """Automatic restarts of the routing units since `since` (epoch s): {unit: [{at, count}]} from systemd's own
-    records (an F12-like reload failure, watchfrr ending: no core dump). One read for all units, with its own limit;
+    records (a failed reload of the stock unit, watchfrr ending: no core dump). One read for all units, with its own limit;
     one that fails or runs out of time finds none."""
     if not units:
         return {}

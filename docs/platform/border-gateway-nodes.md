@@ -159,11 +159,13 @@ within the step's time limit on the node), not `systemctl reload frr`. The stock
 main process (watchfrr) and then runs the same script; when the script exits non-zero, systemd does not read the main
 process again, stops FRR at once and (`Restart=always`) starts it again five seconds later: every session of the node
 resets. Run by the job, a reload that fails or runs out of time never stops FRR. Its exit status alone does not fail
-the job: the post-reload verification (`shc-frr-check`) compares the running configuration with the file. With
-lines left, the job fails naming them and the reload's own error lines, nothing is recorded as loaded and the next
-run reloads again. With nothing left, the job succeeds and the node record says "the reload reported an error FRR did
-not need: <its first line>" (a line FRR refused that it no longer needed, such as the second line of a neighbour the
-first line already removed). With `nodes.frrLoadCheck` off, a reload that exits non-zero is not recorded as loaded.
+the job: the post-reload verification (`shc-frr-check`) compares the running configuration with the file. Only when
+nothing is left is a reload that exited non-zero forgiven: the job succeeds and the node record says "the reload
+reported an error FRR did not need: <its first line>" (a line FRR refused that it no longer needed, such as the second
+line of a neighbour the first line already removed). With lines left, the job fails naming them and the reload's own
+error lines (a password in them hidden), nothing is recorded as loaded and the next run reloads again; such a reload
+never counts as one of the two loads after which the check accepts lines FRR does not take. With `nodes.frrLoadCheck`
+off, a reload that exits non-zero is not recorded as loaded.
 
 Two more guards keep that error from happening at all. Before the apply deletes any device, the job takes out of the
 running FRR what the new file no longer has of two kinds (FRR's running configuration against the rendered file): the
@@ -175,8 +177,12 @@ description). A job launched by hand can leave the neighbours to the reload with
 
 The job installs a drop-in for the frr unit, `/etc/systemd/system/frr.service.d/50-shc-reload.conf`, that keeps the
 unit's reload but ignores its exit status (`ExecReload=-/usr/libexec/frr/frrinit.sh reload`). It covers the one reload
-the job leaves to systemd, the one that starts a newly enabled daemon (bfdd with attachment circuits; it runs before
-the new file is written), and a `systemctl reload frr` typed by hand: when such a reload fails, FRR keeps running with
+the job leaves to systemd and a `systemctl reload frr` typed by hand. Only the unit's reload starts a daemon the daemons
+file enables (a new watchfrr with the file's list); the job's own `frr-reload.py` does not. So the job reloads the unit
+whenever FRR is active and a daemon the file enables (bgpd, isisd, and bfdd with attachment circuits) does not run,
+whether this run enabled it or an earlier run that stopped did, and fails naming any daemon still not running; it does
+that before it takes anything out of FRR and before the new file is written, so that reload changes (nearly) nothing.
+After a start of FRR the job checks the same. When the unit's reload fails, FRR keeps running with
 what it applied (`systemctl show -p ExecReload frr` keeps the status) and systemd reads the main process again. Do not
 set the unit's `Restart=` to `on-failure` or `on-abnormal`: the stop after a failed reload would then leave FRR down.
 A reload through systemd that takes longer than the unit's `TimeoutSec` (two minutes) still stops and restarts FRR;

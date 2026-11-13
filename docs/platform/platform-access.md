@@ -362,7 +362,7 @@ on the network pages.
   connection, and `ServiceLinkDown` when, on a node whose edge session is up, a network's session with the service
   domain is down (that node then stops announcing the network's cluster addresses to the hub as well, so both
   directions take the other nodes; a cluster whose accepted prefix is a subnet stays announced by that node, see
-  below).
+  above).
 
 There is no live reachability probe: "the platform reaches this network" means the domain is offered, an edge
 connection of the platform kind is realized and the network is eligible, not that packets were seen to flow. The

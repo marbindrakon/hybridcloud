@@ -39,15 +39,18 @@ if left:
 CG = os.path.join(ROOT, "eda/rulebooks/roles/cloudgateway_provision/tasks/node_gateway.yml")
 PFX = "{{ bgw_node.name }}: "
 
+# the root's steps in the file's order (not adjacent: the removal step and the apply run between the daemons and the file)
 ROOT_STEPS = ["what FRR last loaded (a node without the record: the files as they are)",
               "FRR daemons",
-              "start a newly enabled FRR daemon (reload of the frr unit)",
+              "the lease lasts for the reload of the frr unit",
+              "start an enabled FRR daemon that does not run (reload of the frr unit)",
               "FRR configuration",
               "is a reload due (the files differ from what FRR last loaded)",
               "is FRR running",
               "what FRR still lacks of its files",
               "the lease lasts for the FRR start",
               "start FRR (enabled at boot)",
+              "every FRR daemon the file enables runs",
               "the lease lasts for the FRR reload",
               "reload the FRR configuration",
               "the reload's errors",
@@ -71,13 +74,14 @@ GW_STEPS = ["what the instance last loaded (without the record: the file as it i
 
 
 def section(path, steps):
-    """The node file's steps from the first to the last name, which must be exactly these, in this order."""
+    """The node file's steps of these names, which must be in this order (the gateway's: adjacent)."""
     tasks = load(path)
     names = [t.get("name", "").replace(PFX, "") for t in tasks]
-    i = names.index(steps[0])
-    part = tasks[i:i + len(steps)]
-    assert [t["name"].replace(PFX, "") for t in part] == steps, [t["name"] for t in part]
-    return part
+    idx = [names.index(n) for n in steps]
+    assert idx == sorted(idx), [names[i] for i in sorted(idx)]
+    if path == CG:
+        assert idx == list(range(idx[0], idx[0] + len(steps))), idx
+    return [tasks[i] for i in idx]
 
 
 class _Node:
@@ -117,6 +121,9 @@ class _Node:
         self.put(self.conf, conf)
         if self.daemons:
             self.put(self.daemons, daemons)
+        self.put("lconf", conf)
+        if self.daemons:
+            self.put("dloaded", daemons)
         self.put("loaded", "".join(self.get(f) for f in self.files()))
         self.put("state", "active\n" if active else "inactive\n")
 
@@ -138,10 +145,22 @@ def stub(task, node):
     t = copy.deepcopy(task)
     t.pop("delegate_to", None)
     t.pop("no_log", None)
-    load_files = " ".join(node.files())
     never = node.p("never")
-    load_cmd = "cat {files} | (if [ -s {never} ]; then grep -vxF -f {never} || true; else cat; fi) > {loaded}".format(
-        files=load_files, never=never, loaded=node.p("loaded"))
+    # what FRR runs (<root>/loaded) = the configuration it took (<root>/lconf: the file less what it never takes) and
+    # the daemons watchfrr runs (<root>/dloaded, the root only). frr-reload.py takes the configuration only; a start,
+    # restart or the unit's reload (frrinit.sh, a new watchfrr) the daemons file too
+    conf_cmd = "cat {conf} | (if [ -s {never} ]; then grep -vxF -f {never} || true; else cat; fi) > {lconf}".format(
+        conf=node.conf, never=never, lconf=node.p("lconf"))
+    join_cmd = "{{ cat {lconf}; cat {dl} 2>/dev/null || true; }} > {loaded}".format(lconf=node.p("lconf"), dl=node.p("dloaded"),
+                                                                loaded=node.p("loaded"))
+    # a daemon named in <root>/daemon_dead never starts
+    daemons_cmd = ("(if [ -s {dead} ]; then grep -vxF -f {dead} {d} || true; else cat {d}; fi) > {dl}; ".format(
+        dead=node.p("daemon_dead"), d=node.daemons, dl=node.p("dloaded"))) if node.daemons else ""
+    load_cmd = conf_cmd + "; " + daemons_cmd + join_cmd
+    reload_cmd = conf_cmd + "; " + join_cmd
+    # the daemons of _want that watchfrr does not run (the root's daemons checks)
+    missing_fn = ("missing() {{ m=''; for d in {{{{ _want }}}}; do grep -qx \"$d=yes\" {dl} 2>/dev/null || m=\"$m $d\"; "
+                  "done; echo \"${{m# }}\"; }}; ").format(dl=node.p("dloaded"))
     fake = node.p("frr-reload-test.py")
     if not os.path.exists(fake):
         node.put(fake, FAKE_TEST % (sys.executable, node.p("loaded")))
@@ -160,15 +179,24 @@ def stub(task, node):
         return {"name": t["name"], "vars": t.get("vars", {}), "ansible.builtin.set_fact": {"frr_pending_lines": expr}}
     if "ansible.builtin.set_fact" in t or "ansible.builtin.fail" in t or "ansible.builtin.debug" in t:
         return t
-    # the root's systemd reload for a newly enabled daemon (frrinit.sh reload through the unit): logged as unit-reloaded
-    # with the configuration FRR had then (<root>/unit-reload-saw: the file is not written yet); it loads the daemons file
-    if t["name"].endswith("start a newly enabled FRR daemon (reload of the frr unit)"):
-        t["ansible.builtin.shell"] = (
-            "[ \"$(cat {state})\" = active ] || {{ echo 'frr is not active'; exit 0; }}; echo unit-reloaded >> {log}; "
-            "cat {conf} > {saw}; {load}; echo reloaded rc=0 status=0/SUCCESS".format(
+    # the root's reload of the unit when a daemon the file enables does not run (frrinit.sh reload through systemd: a new
+    # watchfrr with the daemons file's list, and frr-reload.py of the file on disk): logged as unit-reloaded with the
+    # configuration on disk then (<root>/unit-reload-saw); with <root>/unit_reload_fails the daemon still does not start
+    if t["name"].endswith("start an enabled FRR daemon that does not run (reload of the frr unit)"):
+        t["ansible.builtin.shell"] = missing_fn + (
+            "[ \"$(cat {state})\" = active ] || {{ echo 'frr is not active'; exit 0; }}; m=$(missing); [ -z \"$m\" ] && exit 0; "
+            "echo \"not running: $m\"; echo unit-reloaded >> {log}; cat {conf} > {saw}; "
+            "if [ ! -e {fails} ]; then {load}; fi; echo reloaded status=0/SUCCESS; m=$(missing); [ -z \"$m\" ] && exit 0; "
+            "echo \"still not running after the reload of the frr unit: $m\"; exit 1").format(
                 state=node.p("state"), log=node.p("actions"), conf=node.conf, saw=node.p("unit-reload-saw"),
-                load=load_cmd))
+                fails=node.p("unit_reload_fails"), load=load_cmd)
         t.pop("args", None)
+        return t
+    if t["name"].endswith("every FRR daemon the file enables runs"):
+        t["ansible.builtin.shell"] = missing_fn + 'm=$(missing); [ -z "$m" ] && exit 0; echo "not running: $m"; exit 1'
+        t.pop("args", None)
+        t["delay"] = 0
+        t["retries"] = 1
         return t
     # the root's reload: frr-reload.py run by the job (exit status <root>/reload_rc; with <root>/reload_loads it loads
     # the files even when it exits non-zero; it prints <root>/reload_says)
@@ -180,7 +208,7 @@ def stub(task, node):
             "echo reloaded >> {log}; rc=$(cat {rc} 2>/dev/null || echo 0); cat {says} 2>/dev/null; "
             "if [ \"$rc\" = 0 ] || [ -e {loads} ]; then {load}; fi; exit $rc".format(
                 log=node.p("actions"), rc=node.p("reload_rc"), says=node.p("reload_says"), loads=node.p("reload_loads"),
-                load=load_cmd))
+                load=reload_cmd))
         return t
     if "ansible.builtin.shell" in t:
         sh = swap(t["ansible.builtin.shell"])
@@ -530,16 +558,48 @@ class RootReload(_Unapplied):
         self.assertIn("_hf_reload | default({})", record["ansible.builtin.set_fact"]["hf_changed_nodes"])
 
     def test_an_interrupted_daemons_change_is_healed(self):
-        # the daemons file is loaded by the reload too (it restarts watchfrr with the file's list)
+        # Review M2: a run that wrote bfdd=yes and stopped before the unit's reload. The next run finds the daemons file
+        # unchanged; frr-reload.py does not start a daemon (the stub is honest: it loads the configuration only), so
+        # the run sees bfdd not running and reloads the unit (a new watchfrr with the file's list)
         self.node.running("conf A\n")
         self.job("conf A\n")
         real = {"attachments": {"enabled": True}}
         self.job("conf A\n", crash_after="FRR daemons", fab_real=real)
         self.assertIn("bfdd=yes", self.node.get(self.node.daemons))
         self.assertNotIn("bfdd", self.node.runs())
-        self.assertEqual(self.job("conf A\n", fab_real=real), (["reloaded"], False))
+        self.assertEqual(self.job("conf A\n", fab_real=real), (["unit-reloaded", "reloaded"], False))
         self.assertIn("bfdd=yes", self.node.runs())
         self.assertEqual(self.job("conf A\n", fab_real=real), ([], False))
+
+    def test_frr_reload_alone_never_starts_a_daemon(self):
+        # the honest stub: the job's frr-reload.py takes the configuration, not the daemons file (f98cbae1's stub
+        # loaded both, which hid M2)
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put(self.node.daemons, "bgpd=yes\nisisd=yes\nbfdd=yes\n")
+        actions, failed = self.job("conf B\n")
+        self.assertEqual((actions, failed), (["reloaded"], False))     # bfdd is not wanted (attachments off)
+        self.assertNotIn("bfdd", self.node.runs())
+
+    def test_a_daemon_the_unit_reload_does_not_start_fails_the_job_named(self):
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("unit_reload_fails", "")
+        actions, failed, out = self.job("conf A\n", fab_real={"attachments": {"enabled": True}},
+                                        probe="_hf_daemons_reload.stdout | default('')")
+        self.assertEqual((actions, failed), (["unit-reloaded"], True))
+        self.assertIn("still not running after the reload of the frr unit: bfdd", out)
+
+    def test_a_daemon_that_does_not_start_with_frr_fails_the_job(self):
+        # FRR found stopped: the start starts every enabled daemon; one that does not run fails the job, named
+        self.node.running("conf A\n", active=False)
+        self.node.put("daemon_dead", "isisd=yes\n")
+        actions, failed, out = self.job("conf A\n", probe="_hf_daemons_run.stdout | default('')")
+        self.assertEqual((actions, failed), (["started"], True))
+        self.assertEqual(out, "not running: isisd")
+        os.remove(self.node.p("daemon_dead"))
+        # running FRR without isisd: the next run reloads the unit for it
+        self.assertEqual(self.job("conf A\n")[0][0], "unit-reloaded")
 
     # ---- gate-s6 F12: the job runs frr-reload.py itself; its exit status alone never fails the job or stops FRR ----
 
@@ -558,6 +618,7 @@ class RootReload(_Unapplied):
         actions, failed, out = self.job("conf B\n", reload_rc=1, probe="[_hf_reload_rc, _hf_reload_errors]")
         self.assertEqual((actions, failed), (["reloaded"], False))
         self.assertEqual(int(out[0]), 1)
+        self.assertEqual(self.node.get(self.node.record.replace(".frr-loaded", ".frr-unapplied")), None)
         self.assertEqual(out[1], ['"router bgp 65012 vrf egress --  no" we failed to remove this command',
                                   "% Specify remote-as or peer-group commands first"])
         self.assertTrue(self.loaded_digest_matches())
@@ -568,8 +629,9 @@ class RootReload(_Unapplied):
         record = next(t for t in tasks if t.get("name", "").endswith(": record the node"))
         msg = record["ansible.builtin.set_fact"]["hf_node_results"]
         self.assertIn("the reload reported an error FRR did not need: ' ~ _hf_reload_errors | first", msg)
+        self.assertIn("and 'result=applied' in (_hf_frr_recorded.stdout_lines | default([]))", msg)
         note = next(t for t in tasks if t.get("name", "").endswith(": a reload error FRR did not need"))
-        self.assertIn("'result=unapplied' not in", " ".join(note["when"]))
+        self.assertIn("'result=applied' in", " ".join(note["when"]))
 
     def test_a_reload_error_with_lines_left_fails_with_them_and_the_error(self):
         self.node.running("conf A\n")
@@ -581,6 +643,79 @@ class RootReload(_Unapplied):
         self.assertIn("The reload exited 1: \"router bgp 65012 vrf egress --  no\" we failed to remove this command", msg)
         self.assertFalse(self.loaded_digest_matches())
         self.assertEqual(self.job("conf B\n"), (["reloaded"], False))   # the next run reloads again
+
+    def test_review_rv1_a_reload_ended_by_its_limit_twice_is_never_recorded(self):
+        # Review H1 scenario a: the file changes, frr-reload.py is ended by the step's limit (exit 124) having applied
+        # nothing, in two runs. Both fail and record nothing (f98cbae1: the same); the second must not accept the lines
+        # the first left; a third run whose reload works records it
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        for _ in range(2):
+            actions, failed, out = self.job("conf A\nline B\n", reload_rc=124, probe=self.RECORDED + ".stdout_lines")
+            self.assertEqual((actions, failed), (["reloaded"], True))
+            self.assertEqual(out[:2], ["result=unapplied", "line: line B"])
+            self.assertFalse(self.loaded_digest_matches())
+            self.assertEqual(self.node.runs(), self.want("conf A\n"))
+        # the failed reloads' checks do not count as loads: no note is left that a later check could accept
+        self.assertIsNone(self.node.get(self.node.record.replace(".frr-loaded", ".frr-unapplied")))
+        self.assertEqual(self.job("conf A\nline B\n"), (["reloaded"], False))
+        self.assertTrue(self.loaded_digest_matches())
+        self.assertEqual(self.job("conf A\nline B\n"), ([], False))
+
+    def test_review_rv2_a_failed_repair_reload_is_not_accepted(self):
+        # Review H1 scenario b: the file is recorded as loaded, FRR lost a line (a hand change); the run woken for it
+        # reloads, the reload exits 1 having applied nothing: the job fails, nothing is accepted or noted
+        self.node.running("conf A\nline X\n")
+        self.assertEqual(self.job("conf A\nline X\n"), ([], False))
+        self.node.put("lconf", "conf A\n")
+        self.node.put("loaded", "conf A\n" + self.node.get("dloaded"))
+        actions, failed, out = self.job("conf A\nline X\n", reload_rc=1, probe=self.RECORDED + ".stdout_lines")
+        self.assertEqual((actions, failed), (["reloaded"], True))
+        self.assertEqual(out[0], "result=unapplied")
+        self.assertIsNone(self.node.get(self.node.record.replace(".frr-loaded", ".frr-unapplied")))
+        # the next run (a working reload) repairs it
+        self.assertEqual(self.job("conf A\nline X\n"), (["reloaded"], False))
+        self.assertEqual(self.node.runs(), self.want("conf A\nline X\n"))
+
+    def test_a_failed_reload_keeps_the_note_of_lines_frr_does_not_take(self):
+        # a standing accepted line (FRR never takes it) and a reload that exits 1: the job fails once (lines left are
+        # not forgiven), the note keeps what it held, and the next working reload accepts the line again at once
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("never", "line X\n")
+        self.job("conf A\nline X\n")
+        self.job("conf A\nline X\n")
+        note = self.node.record.replace(".frr-loaded", ".frr-unapplied")
+        before = self.node.get(note)
+        self.assertIn("line X", before)
+        self.node.put("reload_loads", "")
+        actions, failed = self.job("conf B\nline X\n", reload_rc=1)
+        self.assertEqual((actions, failed), (["reloaded"], True))
+        self.assertEqual(self.node.get(note), before)
+        os.remove(self.node.p("reload_loads"))
+        self.assertEqual(self.job("conf B\nline X\n"), (["reloaded"], False))
+
+    def test_no_note_without_a_check(self):
+        # a non-zero reload while a job for the unit is queued: nothing is recorded or checked, and no "FRR holds the
+        # whole configuration" note (Review H1, the smaller form)
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("job", "4711\n")
+        self.node.put("reload_says", self.F12_SAYS)
+        actions, failed, out = self.job("conf B\n", reload_rc=1, probe=self.RECORDED + ".stdout_lines")
+        self.assertEqual(out, ["not recorded: frr active, job 4711"])
+        tasks = load(HF)
+        note = next(t for t in tasks if t.get("name", "").endswith(": a reload error FRR did not need"))
+        self.assertIn("'result=applied' in (_hf_frr_recorded.stdout_lines | default([]))", note["when"])
+
+    def test_the_reload_errors_hide_a_password(self):
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("reload_says", '"router bgp 65010 vrf e1 --  no neighbor 10.0.0.1 password s3cr3t" we failed\n')
+        self.node.put("reload_loads", "")
+        actions, failed, errors = self.job("conf B\n", reload_rc=1, probe="_hf_reload_errors")
+        self.assertEqual(errors, ['"router bgp 65010 vrf e1 --  no neighbor 10.0.0.1 password <hidden>'])
+        self.assertNotIn("s3cr3t", str(errors))
 
     def test_a_reload_that_runs_out_of_time_is_judged_the_same_way(self):
         # timeout ended frr-reload.py (exit 124) after part of the file: the check sees what is left
@@ -604,7 +739,7 @@ class RootReload(_Unapplied):
 
     def test_a_newly_enabled_daemon_reloads_the_unit_before_the_file_is_written(self):
         # bfdd switched on: the unit's own reload (frrinit.sh, a new watchfrr) runs while frr.conf is still the old
-        # one; then the job writes the file and runs frr-reload.py itself
+        # one (before the removal step, Review M1: RootOrder); then the job writes the file and runs frr-reload.py
         self.node.running("conf A\n")
         self.job("conf A\n")
         real = {"attachments": {"enabled": True}}
@@ -635,7 +770,8 @@ class RootReload(_Unapplied):
         self.assertEqual([s for s in shells if "systemctl reload" in s and "frr" in s],
                          [next(s for s in shells if "systemctl reload frr" in s)])
         daemons = next(t for t in tasks if t.get("name", "").endswith("(reload of the frr unit)"))
-        self.assertIn("_hf_daemons is changed", daemons["when"])
+        self.assertNotIn("when", daemons)        # whenever a daemon the file enables does not run (Review M2)
+        self.assertIn("kill -0", daemons["ansible.builtin.shell"])
 
     def test_a_restart_for_a_new_bridge_mac_records_without_a_reload(self):
         self.node.running("conf A\n")
@@ -653,11 +789,17 @@ class RootOrder(unittest.TestCase):
 
     def test_order(self):
         n = self.names()
+        # Review M1: the drop-in and its daemon-reload, the daemons and the unit's reload, THEN the removal step (the unit's
+        # reload loads the file on disk, which still has what the step removes)
         order = ["the drop-in directory of the frr unit", "install the fabric apply script and unit",
+                 "load the units' new definitions",
+                 "what FRR last loaded (a node without the record: the files as they are)", "FRR daemons",
+                 "the lease lasts for the reload of the frr unit",
+                 "start an enabled FRR daemon that does not run (reload of the frr unit)",
                  "the FRR configuration this run wants",
                  "take out of FRR what this run removes (before the kernel objects)",
-                 "run the root instance at boot (and now)", "apply the root instance", "FRR daemons",
-                 "start a newly enabled FRR daemon (reload of the frr unit)", "FRR configuration",
+                 "run the root instance at boot (and now)", "apply the root instance", "FRR configuration",
+                 "start FRR (enabled at boot)", "every FRR daemon the file enables runs",
                  "reload the FRR configuration", "the reload's errors", "record what FRR loaded",
                  "FRR holds the whole configuration", "a reload error FRR did not need",
                  "remove from FRR the VRFs its configuration no longer has", "record the node"]
@@ -669,8 +811,10 @@ class RootOrder(unittest.TestCase):
         self.assertIn({"src": "frr-shc-reload.conf", "dest": "/etc/systemd/system/frr.service.d/50-shc-reload.conf",
                        "mode": "0644"}, install["loop"])
         self.assertEqual(install["register"], "_hf_files")
+        dr = next(t for t in tasks if t.get("name", "").endswith(": load the units' new definitions"))
+        self.assertEqual((dr["ansible.builtin.systemd"], dr["when"]), ({"daemon_reload": True}, "_hf_files is changed"))
         unit = next(t for t in tasks if t.get("name", "").endswith(": run the root instance at boot (and now)"))
-        self.assertEqual(unit["ansible.builtin.systemd"]["daemon_reload"], "{{ _hf_files is changed }}")
+        self.assertNotIn("daemon_reload", unit["ansible.builtin.systemd"])
         with open(os.path.join(ROOT, "eda/common/files/bgw/frr-shc-reload.conf")) as f:
             lines = [l for l in f.read().splitlines() if l and not l.startswith("#")]
         # the stock unit's ExecReload with its exit status ignored, nothing else (Restart=, ExecStop, the watchdog as
@@ -683,7 +827,8 @@ class RootOrder(unittest.TestCase):
         self.assertEqual(want["ansible.builtin.set_fact"]["_hf_frr_text"],
                          "{{ lookup('ansible.builtin.template', 'frr-root.conf.j2') }}")
         step = next(t for t in tasks if t.get("name", "").endswith("(before the kernel objects)"))
-        self.assertEqual(step["ansible.builtin.command"]["stdin"], "{{ _hf_frr_text }}")
+        # the step gets only the file's BGP lines (Review H2: never a password), RenderedPlans in test_frr_leaving
+        self.assertIn("_hf_frr_text | regex_findall(", step["ansible.builtin.command"]["stdin"])
         conf = next(t for t in tasks if t.get("name", "").endswith(": FRR configuration"))
         self.assertEqual(conf["ansible.builtin.copy"]["content"], "{{ _hf_frr_text }}")
         self.assertFalse([t for t in tasks if "ansible.builtin.template" in t])

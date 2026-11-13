@@ -19,10 +19,11 @@ command is never returned for something the desired file has (a neighbour remove
 a session reset).
 
 As a script (the fabric job, on the node): `python3 -c <this source> --pattern REGEX [--name VRF]... [--no-neighbours]` with the
-desired file on stdin. Reads the running configuration (vtysh), sends each removal in its own vtysh call, prints
+desired file's BGP lines on stdin (each "router bgp" line and the neighbours named by an interface: the parse needs no
+other line, and a password never travels). Reads the running configuration (vtysh), sends each removal in its own vtysh call, prints
 "removed: <context> <command>" per command FRR took and "refused: ..." per command it did not, and exits 0: a refusal
-is left to the reload (and reported there). Nothing is done while FRR is not active or its configuration cannot be
-read ("unreadable: ..."). Python 3.9, standard library only.
+is left to the reload (and reported there). Nothing is done while FRR is not active, its configuration cannot be
+read, or the wanted text has no default BGP instance ("unreadable: ..."). Python 3.9, standard library only.
 """
 import argparse
 import re
@@ -100,6 +101,11 @@ def main(argv, desired, run=run_cmd, out=sys.stdout):
     a = ap.parse_args(argv)
     if run(["systemctl", "-q", "is-active", "frr"])[0] != 0:
         print("frr is not active: nothing to take out", file=out)
+        return 0
+    if "" not in instances(desired):
+        # the template always renders the default instance: a wanted text without it is cut or empty, and acting on it
+        # would remove every instance
+        print("unreadable: the wanted configuration has no default BGP instance; nothing taken out", file=out)
         return 0
     rc, text = run(["vtysh", "-c", "show running-config"])
     if rc != 0 or not text.strip():

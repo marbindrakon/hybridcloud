@@ -302,8 +302,9 @@ class NodeSteps(unittest.TestCase):
 
         def argv(extra):
             out = run_play([{"vars": t.get("vars", {}), "ansible.builtin.set_fact": {"_a": t["ansible.builtin.command"]["argv"]}},
-                            write_out("_a")], dict({"role_path": role}, **extra))
+                            write_out("_a")], dict({"role_path": role, "fab_lease_step_timeout": "75"}, **extra))
             out = json.loads(out) if isinstance(out, str) else out
+            # bounded by the step's limit on the node, as the apply (Review L9)
             self.assertEqual(out[:6], ["timeout", "-k", "5", "60", "python3", "-c"])
             with open(os.path.join(ROOT, "eda", "common", "files", "shc_frr_leaving.py")) as f:
                 self.assertEqual(out[6].strip(), f.read().strip())
@@ -315,7 +316,7 @@ class NodeSteps(unittest.TestCase):
         # the role default off (a job launched by hand; a string from a survey or extra vars): the instances only
         self.assertEqual(argv({"fab_real": {}, "fabric_frr_remove_first": "false"}), ["--pattern", "e[0-9]+", "--no-neighbours"])
         self.assertEqual(argv({"fab_real": {}, "fabric_frr_remove_first": "True"}), ["--pattern", "e[0-9]+"])
-        self.assertEqual(t["ansible.builtin.command"]["stdin"], "{{ _hf_frr_text }}")
+        self.assertIn("_hf_frr_text | regex_findall(", t["ansible.builtin.command"]["stdin"])
 
     def test_readiness_check(self):
         real, (egp, att, vrfs, svc) = S.service_setup()

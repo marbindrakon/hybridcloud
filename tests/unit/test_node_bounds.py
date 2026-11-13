@@ -57,8 +57,10 @@ UNIT_ACTION = re.compile(r"systemctl\s+(-q\s+)?(start|stop|restart|reload|try-re
 UNIT_ACTIONS_ALLOWED = {
     ("cloudgateway_teardown", "{{ bgw_node.name }}: stop the instance's SRv6 core guard"),
     ("hybridfabric_provision", "{{ bgw_node.name }}: no IPv6 egress guard without IPv6 egress"),
-    # a newly enabled FRR daemon: the frr unit's own reload (frrinit.sh starts it under a new watchfrr)
-    ("hybridfabric_provision", "{{ bgw_node.name }}: start a newly enabled FRR daemon (reload of the frr unit)"),
+    # not on a timer nor a oneshot: the frr unit's own reload when a daemon the daemons file enables does not run
+    # (frrinit.sh starts it under a new watchfrr); it runs in systemd up to the unit's TimeoutSec, after a renew-if-short
+    # check of the lease (test_fabric_lease)
+    ("hybridfabric_provision", "{{ bgw_node.name }}: start an enabled FRR daemon that does not run (reload of the frr unit)"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: once no instance is left, remove the fabric's programs and units"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: remove the SRv6 core guard units"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: remove the IPv6 egress guard"),
