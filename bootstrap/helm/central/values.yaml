@@ -3070,7 +3070,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.31"  # 0.3.31: reasons copy (ServiceShareReached, ServiceLimitReached, ServiceNotRealized) (svc2); 0.3.30: reasons texts of the gate follow-up (0.3.29: alerts ShcFabricServiceSessionsDown and ShcFabricServiceLinkDown)
+  chartVersion: "0.3.32"  # 0.3.32: alert texts ShcFabricServiceLinkDown, ShcFabricServiceSessionsDown, ShcFabricRoutingDaemonRestarted and the reasons copy (ServiceLinkDown, RoutingDaemonRestarted) (bnode); 0.3.31: reasons copy (ServiceShareReached, ServiceLimitReached, ServiceNotRealized) (svc2); 0.3.30: reasons texts of the gate follow-up (0.3.29: alerts ShcFabricServiceSessionsDown and ShcFabricServiceLinkDown)
   # BF-15: on services the ACM observability addon (endpoint-monitoring-operator) owns
   # openshift-monitoring/cluster-monitoring-config data and rewrites it in its own normalized form, so Argo's copy
   # never stays applied (permanent OutOfSync). Ignored, and with RespectIgnoreDifferences not re-applied, while the
@@ -4856,7 +4856,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.16"  # img-2.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-2.3.15: gate follow-up (messages, floating IP and DNS display); img-2.3.14: platform access, placement use settings
+      tag: "img-2.3.17"  # img-2.3.17: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-2.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-2.3.15: gate follow-up (messages, floating IP and DNS display); img-2.3.14: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4896,7 +4896,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.16"  # img-5.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-5.3.15: gate follow-up (messages, floating IP and DNS display); img-5.3.14: platform access, placement use settings
+      tag: "img-5.3.17"  # img-5.3.17: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-5.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-5.3.15: gate follow-up (messages, floating IP and DNS display); img-5.3.14: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4930,7 +4930,7 @@ sovereignAdminPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.17"  # img-1.4.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.4.16: gate follow-up (messages, floating IP and DNS display); img-1.4.15: platform access, placement use settings
+      tag: "img-1.4.18"  # img-1.4.18: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-1.4.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.4.16: gate follow-up (messages, floating IP and DNS display); img-1.4.15: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4955,7 +4955,7 @@ sovereignTenantPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.17"  # img-1.5.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.5.16: gate follow-up (messages, floating IP and DNS display); img-1.5.15: platform access, placement use settings
+      tag: "img-1.5.18"  # img-1.5.18: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-1.5.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.5.16: gate follow-up (messages, floating IP and DNS display); img-1.5.15: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
