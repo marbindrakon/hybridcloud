@@ -111,7 +111,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "RoutesMissing": { actor: "P", class: "failed", summary: "Network routes are missing. The platform team is looking at it." },
   "RoutingDaemonDown": { actor: "P", class: "failed", summary: "Routing on a node is partly down. The platform team is alerted." },
   "ServiceFailed": { actor: "P", class: "failed", summary: "A network service on a node is not running. The platform team is alerted." },
-  "ServiceLinkDown": { actor: "P", class: "failed", summary: "On one node, a network's link to the platform's connection is down; the other nodes carry its clusters' traffic. The platform team is alerted." },
+  "ServiceLinkDown": { actor: "P", class: "failed", summary: "On one node, a network's link to the platform's connection is down; other nodes carry its clusters' traffic. The platform team is alerted." },
   "ServiceNotOffered": { actor: "P", class: "failed", summary: "The platform's connection for clusters on networks is not offered here. Ask the platform team." },
   "ServicePrefixInUse": { actor: "T", class: "failed", summary: "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team." },
   "ServiceSessionsDown": { actor: "P", class: "failed", summary: "A node has no session with the platform's router for clusters on networks. The platform team is alerted." },

@@ -177,7 +177,7 @@ REASONS = {
     "StartIncomplete": _r("P", FAILED, "The network configuration was applied in part on a node. The platform team is alerted."),
     "SiteSessionsDown": _r("P", FAILED, "The site's routing sessions are down on a node. The platform team is alerted."),
     "ServiceSessionsDown": _r("P", FAILED, "A node has no session with the platform's router for clusters on networks. The platform team is alerted."),
-    "ServiceLinkDown": _r("P", FAILED, "On one node, a network's link to the platform's connection is down; the other nodes carry its clusters' traffic. The platform team is alerted."),
+    "ServiceLinkDown": _r("P", FAILED, "On one node, a network's link to the platform's connection is down; other nodes carry its clusters' traffic. The platform team is alerted."),
 }
 
 # Reasons written on a part of an object's status (an egress family of a network, its translation to IPv4, the IPv6
