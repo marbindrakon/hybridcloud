@@ -29,7 +29,9 @@ HF = os.path.join(ROOT, "eda/rulebooks/roles/hybridfabric_provision/tasks/node_r
 CHECK = os.path.join(ROOT, "eda/common/files/bgw/shc-frr-check")
 # frr-reload.py --test as the check runs it: the lines of the file that the stub's FRR does not run
 FAKE_TEST = """#!%s
-import sys
+import os, sys
+if os.path.exists(os.path.join(os.path.dirname(%r), "test_fails")):
+    sys.exit(1)
 conf, running = sys.argv[-1], open(%r).read().splitlines()
 left = [x for x in open(conf).read().splitlines() if x.strip() and x not in running]
 if left:
@@ -163,7 +165,7 @@ def stub(task, node):
                   "done; echo \"${{m# }}\"; }}; ").format(dl=node.p("dloaded"))
     fake = node.p("frr-reload-test.py")
     if not os.path.exists(fake):
-        node.put(fake, FAKE_TEST % (sys.executable, node.p("loaded")))
+        node.put(fake, FAKE_TEST % (sys.executable, node.p("loaded"), node.p("loaded")))
         os.chmod(fake, 0o755)
     swap = lambda s: s.replace("/etc/frr/", node.r + "/etc/frr/").replace("/etc/shc-fabric/", node.r + "/etc/shc-fabric/")  # noqa: E731
     if str(t.get("ansible.builtin.include_tasks", "")).endswith("fabric_lease_ensure.yml"):
@@ -641,6 +643,10 @@ class RootReload(_Unapplied):
         self.assertEqual((actions, failed), (["reloaded"], True))
         self.assertIn("(conf B)", msg)
         self.assertIn("The reload exited 1: \"router bgp 65012 vrf egress --  no\" we failed to remove this command", msg)
+        # Review V1: no promise that a second reload's leftovers get recorded; the two ways out instead
+        self.assertNotIn("recorded as loaded and shown", msg)
+        self.assertIn("never recorded as loaded: remove what makes FRR refuse them, or name the line in the "
+                      "realization's nodes.frrLoadCheck.ignore", msg)
         self.assertFalse(self.loaded_digest_matches())
         self.assertEqual(self.job("conf B\n"), (["reloaded"], False))   # the next run reloads again
 
@@ -694,6 +700,27 @@ class RootReload(_Unapplied):
         self.assertEqual(self.node.get(note), before)
         os.remove(self.node.p("reload_loads"))
         self.assertEqual(self.job("conf B\nline X\n"), (["reloaded"], False))
+
+    def test_no_file_is_left_when_the_check_cannot_run(self):
+        # Review V2: a non-zero reload and a check that cannot run (exit 3): the step fails, the note is untouched and
+        # no copy of it (.before, .new) stays in /etc/shc-fabric
+        self.node.running("conf A\n")
+        self.job("conf A\n")
+        self.node.put("never", "line X\n")
+        self.job("conf A\nline X\n")
+        self.job("conf A\nline X\n")
+        note = self.node.record.replace(".frr-loaded", ".frr-unapplied")
+        before = self.node.get(note)
+        self.node.put("test_fails", "")
+        actions, failed = self.job("conf B\nline X\n", reload_rc=1)
+        self.assertEqual((actions, failed), (["reloaded"], True))
+        self.assertEqual(self.node.get(note), before)
+        os.remove(self.node.p("test_fails"))
+        self.node.put("reload_loads", "")
+        self.assertTrue(self.job("conf C\nline X\n", reload_rc=1)[1])     # the unforgiven path puts the note back
+        self.assertEqual(self.node.get(note), before)
+        self.assertEqual(sorted(f for f in os.listdir(os.path.dirname(note)) if "unapplied" in f),
+                         [os.path.basename(note)])
 
     def test_no_note_without_a_check(self):
         # a non-zero reload while a job for the unit is queued: nothing is recorded or checked, and no "FRR holds the

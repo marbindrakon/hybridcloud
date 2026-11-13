@@ -324,6 +324,14 @@ class RenderedPlans(unittest.TestCase):
             self.assertEqual(L.leaving(before, reduced, "e[0-9]+", names=["service"]),
                              L.leaving(before, after, "e[0-9]+", names=["service"]))
             self.assertIn("", L.instances(reduced))
+        # Review V6: a tab after "interface", and a bare "neighbor <if> interface" in a text with CRLF line ends: the
+        # reduction keeps what the helper reads
+        for odd in (" neighbor xo10009 interface\tv6only remote-as external\n",
+                    " neighbor xo10009 interface\r\n"):
+            text = after.replace("router bgp 65011 vrf egress\n", "router bgp 65011 vrf egress\n" + odd)
+            self.assertIn("xo10009", str(L.instances(text)))
+            reduced = "\n".join(re.findall(rx, text, re.M))
+            self.assertEqual(L.instances(reduced), L.instances(text), repr(odd))
         text = after.replace(" neighbor xe10000 interface v6only remote-as external\n",
                              " neighbor xe10000 interface v6only remote-as external\n neighbor 10.0.0.9 password s3cr3t\n")
         self.assertNotIn("password", "\n".join(re.findall(rx, text, re.M)))

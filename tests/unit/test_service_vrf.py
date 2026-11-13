@@ -268,6 +268,8 @@ class InertWithoutTheService(unittest.TestCase):
             self.assertEqual(n[0]["networks"], o[0]["networks"])
 
     def test_node_calls_and_state(self):
+        if not __import__("shutil").which("jq"):
+            self.skipTest("jq not installed (the node script reads its configuration with jq)")
         base = git_show(A.SCRIPT_REL)
         if base is None:
             self.skipTest(f"{BASE} not in this checkout")

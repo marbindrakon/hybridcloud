@@ -164,7 +164,9 @@ nothing is left is a reload that exited non-zero forgiven: the job succeeds and 
 reported an error FRR did not need: <its first line>" (a line FRR refused that it no longer needed, such as the second
 line of a neighbour the first line already removed). With lines left, the job fails naming them and the reload's own
 error lines (a password in them hidden), nothing is recorded as loaded and the next run reloads again; such a reload
-never counts as one of the two loads after which the check accepts lines FRR does not take. With `nodes.frrLoadCheck`
+never counts as one of the two loads after which the check accepts lines FRR does not take. While the reload exits
+non-zero, such lines are therefore never recorded: remove what makes FRR refuse them, or name the line in the
+realization's `nodes.frrLoadCheck.ignore`. With `nodes.frrLoadCheck`
 off, a reload that exits non-zero is not recorded as loaded.
 
 Two more guards keep that error from happening at all. Before the apply deletes any device, the job takes out of the

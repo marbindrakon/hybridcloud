@@ -264,6 +264,8 @@
 - name: "{{ bgw_node.name }}: start an enabled FRR daemon that does not run (reload of the frr unit)"
   vars:
     _want: "{{ (['bgpd', 'isisd'] + (['bfdd'] if fab_real.attachments.enabled | default(false) | bool else [])) | join(' ') }}"
+    # seconds between the checks after the reload (6 checks)
+    _wait: 2
   ansible.builtin.shell: |
     systemctl -q is-active frr || { echo "frr is not active"; exit 0; }
     missing() { m=""; for d in {{ _want }}; do p=$(cat "/var/run/frr/$d.pid" 2>/dev/null); { [ -n "$p" ] && kill -0 "$p" 2>/dev/null; } || m="$m $d"; done; echo "${m# }"; }
@@ -271,7 +273,7 @@
     echo "not running: $m"
     systemctl reload frr
     echo "reloaded $(systemctl show -p ExecReload --value frr | grep -o 'status=[^ ;]*' | tail -n 1)"
-    for i in 1 2 3 4 5 6; do m=$(missing); [ -z "$m" ] && exit 0; sleep 2; done
+    for i in 1 2 3 4 5 6; do m=$(missing); [ -z "$m" ] && exit 0; sleep {{ _wait }}; done
     echo "still not running after the reload of the frr unit: $m"
     exit 1
   args:
@@ -310,7 +312,7 @@
          + ([] if fabric_frr_remove_first | default(true) | bool else ['--no-neighbours']) }}
     # only the lines it reads (each BGP instance's first line, the neighbours named by an interface): never a password
     stdin: >-
-      {{ _hf_frr_text | regex_findall('(?m)^(?:router bgp .*| neighbor \S+ interface(?: .*)?)$') | join(_nl) }}
+      {{ _hf_frr_text | regex_findall('(?m)^(?:router bgp .*| neighbor \S+ interface(?:[ \t\r].*)?)$') | join(_nl) }}
   register: _hf_vrfgone
   changed_when: "'removed: ' in _hf_vrfgone.stdout"
   delegate_to: "{{ bgw_node.name }}"
@@ -523,8 +525,9 @@
     known=$( { printf '%s\n' {{ frr_pending_lines | map('quote') | join(' ') }}; cat /etc/shc-fabric/root.frr-unapplied 2>/dev/null; } )
     {% endif %}
     {% if _hf_reload_rc | default(0) | int != 0 %}
+    # the note of the check as it was, kept in the shell (no file is left behind on any path)
     note=/etc/shc-fabric/root.frr-unapplied
-    had=no; [ -e "$note" ] && { had=yes; cp -p "$note" "$note.before"; }
+    had=no; [ -e "$note" ] && { had=yes; before=$(cat "$note"); }
     {% endif %}
     check=$(chk) || exit 1
     {% if _hf_reload_rc | default(0) | int != 0 %}
@@ -532,11 +535,10 @@
     # FRR holds the whole file. Lines left are never accepted on its account and its check does not count as a load
     # (the note goes back to what it was): nothing is recorded, the job fails naming them, the next run reloads again
     if [ "${check%%$'\n'*}" != result=applied ]; then
-      if [ "$had" = yes ]; then mv -f "$note.before" "$note"; else rm -f "$note"; fi
+      if [ "$had" = yes ]; then (umask 077; printf '%s\n' "$before" > "$note.new") && mv -f "$note.new" "$note"; else rm -f "$note"; fi
       printf '%s\n' "$check" | sed '1s/^result=.*$/result=unapplied/'
       exit 0
     fi
-    rm -f "$note.before"
     {% elif frr_pending_lines | default([]) | length > 0 %}
     # lines missing before this reload although FRR had loaded this very file (it is recorded as loaded) and still
     # missing after it: two loads left them, so FRR keeps them; the second check accepts them and the file is
@@ -568,9 +570,12 @@
     msg: >-
       FRR on {{ bgw_node.name }} did not apply all of /etc/frr/frr.conf after its start or reload ({{
       _hf_frr_recorded.stdout_lines | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}).
-      What FRR loaded is not recorded, so the next run reloads again; lines a second start or reload leaves as well
-      are recorded as loaded and shown by the step after this{{
-      ('. The reload exited ' ~ _hf_reload_rc ~ ': ' ~ (_hf_reload_errors[:5] | join('; '))) if _hf_reload_errors | length > 0 else '' }}
+      What FRR loaded is not recorded, so the next run reloads again{{
+      ('. The reload exited ' ~ _hf_reload_rc ~ ': ' ~ (_hf_reload_errors[:5] | join('; '))
+       ~ '. While the reload exits non-zero these lines are never recorded as loaded: remove what makes FRR refuse '
+       ~ "them, or name the line in the realization's nodes.frrLoadCheck.ignore")
+      if _hf_reload_errors | length > 0 else
+      '; lines a second start or reload leaves as well are recorded as loaded and shown by the step after this' }}
   when: "'result=unapplied' in (_hf_frr_recorded.stdout_lines | default([]))"
 
 # a reload that reported an error and left nothing of the file unapplied (the check above found nothing left:
