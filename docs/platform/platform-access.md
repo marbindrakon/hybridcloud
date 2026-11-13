@@ -236,6 +236,19 @@ hub-side router:
    hub's traffic to a cluster (Hive's install, ACM's import and management) takes them, and leaves from those
    addresses.
 
+When a cluster address is announced to the hub: a node announces an accepted /32 (an OpenStack cluster's floating
+IPs and its router's gateway) while the network's site announces that address to the fabric and the node's session
+with the network is up; it withdraws it when either ends, in routing-protocol time (no job runs). So the hub's routers
+see a cluster address appear when the site announces it (for a floating IP, once it is attached) and disappear when
+it is withdrawn, from each node separately: a node that cannot deliver a cluster's traffic does not attract it. The
+routes carry the fabric's AS number followed by the AS path the site's route has (empty for an OpenStack site; a
+cloud's AS numbers behind a cloud edge), and no MED. The prefixes stay inside `advertisedRanges` and the count inside
+`maxPrefixes`, so the router's filters need no change. A cluster whose accepted prefix is shorter than /32 (the
+subnet of an AWS or Google Cloud cluster) is announced by every node with a platform edge connection as long as it
+is accepted, whether or not the node can deliver its traffic at that moment: during a partial failure of one node
+(its session with the network down, or the site's route missing there) the hub's traffic that reaches that node is
+dropped there.
+
 What the platform admits through the domain, by destination on the tenant side: from the hub's routers, only
 sources inside `service.range`, only to the cluster addresses it accepted, TCP on `service.ports` and ICMP echo;
 from a tenant network, only packets to `service.range`: replies from the service ports, connections to
@@ -347,7 +360,9 @@ on the network pages.
   accepted addresses, and the refused ones with their reason.
 - The fabric health check reports `ServiceSessionsDown` when a node has no established session on a platform edge
   connection, and `ServiceLinkDown` when, on a node whose edge session is up, a network's session with the service
-  domain is down (that network learns the service range through the other nodes only).
+  domain is down (that node then stops announcing the network's cluster addresses to the hub as well, so both
+  directions take the other nodes; a cluster whose accepted prefix is a subnet stays announced by that node, see
+  above).
 
 There is no live reachability probe: "the platform reaches this network" means the domain is offered, an edge
 connection of the platform kind is realized and the network is eligible, not that packets were seen to flow. The

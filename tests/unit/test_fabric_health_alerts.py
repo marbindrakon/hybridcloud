@@ -57,6 +57,10 @@ TESTS = {
                                  "the configuration is not applied on the node (failed, exit-code): gate H9 injected failure"),
               "values": "1x20"},
              {"series": node_row("HybridFabric", "lab", "bgw-1", "", ""), "values": "1x20"},
+             # the routing service restarted by itself (systemd's own restart record, no core dump)
+             {"series": node_row("HybridFabric", "lab", "bgw-2", "RoutingDaemonRestarted",
+                                 "the routing service restarted by itself 1 time(s) in the last 60 minutes, last at "
+                                 "2026-11-13T00:48:54Z"), "values": "1x20"},
              {"series": node_row("CloudGateway", "iaas1", "bgw-2", "NodeUnreachable", "x"), "values": "0x20"},
              {"series": node_row("CloudGateway", "edge1", "bgw-1", "SiteSessionsDown", "no session"), "values": "1x20"},
              {"series": node_row("HybridFabric", "lab", "bgw-1", "ServiceSessionsDown", "no platform circuit session"),
@@ -90,6 +94,16 @@ TESTS = {
                       "summary": "CloudGateway sovereign-cloud/edge1: no routing session with its site on bgw-1",
                       "description": "The node holds no session with the site. A site that is off on purpose is paused "
                                      "(CloudInfrastructure spec.paused), which this alert ignores."}}]},
+             {"eval_time": "1m", "alertname": "ShcFabricRoutingDaemonRestarted", "exp_alerts": [
+                 {"exp_labels": {"severity": "warning", "customresource_kind": "HybridFabric",
+                                 "namespace": "sovereign-cloud", "name": "lab", "node": "bgw-2",
+                                 "message": "the routing service restarted by itself 1 time(s) in the last 60 minutes, "
+                                            "last at 2026-11-13T00:48:54Z"},
+                  "exp_annotations": {
+                      "summary": "HybridFabric sovereign-cloud/lab: the routing service restarted by itself or a daemon "
+                                 "crashed on bgw-2",
+                      "description": "the routing service restarted by itself 1 time(s) in the last 60 minutes, last at "
+                                     "2026-11-13T00:48:54Z. A core dump is on the node when a daemon crashed."}}]},
              {"eval_time": "9m", "alertname": "ShcFabricServiceSessionsDown", "exp_alerts": []},
              {"eval_time": "13m", "alertname": "ShcFabricServiceSessionsDown", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab", "node": "bgw-1"},
@@ -97,16 +111,18 @@ TESTS = {
                       "summary": "HybridFabric sovereign-cloud/lab: no session with the hub's router on bgw-1",
                       "description": "The node has a platform circuit (AttachmentCircuit ceKind platform) but no "
                                      "established BGP session on it; the platform reaches the clusters on tenant "
-                                     "networks through the other nodes, or not at all when every node reports it."}}]},
+                                     "networks through the other nodes after the hub routers' hold time, or not at all "
+                                     "when every node reports it."}}]},
              {"eval_time": "9m", "alertname": "ShcFabricServiceLinkDown", "exp_alerts": []},
              {"eval_time": "13m", "alertname": "ShcFabricServiceLinkDown", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab", "node": "bgw-2"},
                   "exp_annotations": {
                       "summary": "HybridFabric sovereign-cloud/lab: a network's session with the platform's connection is down on bgw-2",
                       "description": "The node's platform circuit is up but the session over a network's service link "
-                                     "is not, so that network's VRF on the node does not learn the hub's ranges; the "
-                                     "network reaches the hub through the other nodes, or not at all when every node "
-                                     "reports it. status.health names the network."}}]},
+                                     "is not, so the node neither offers the hub's ranges to that network nor announces "
+                                     "that network's cluster addresses to the hub: both directions take the other "
+                                     "nodes, or none when every node reports it. A cluster whose accepted prefix is a "
+                                     "subnet stays announced by the node. status.health names the network."}}]},
              {"eval_time": "6m", "alertname": "ShcFabricIPv6EgressUpstreamDown", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
                   "exp_annotations": {

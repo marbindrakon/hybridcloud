@@ -152,6 +152,44 @@ as inactive, that the rendered configuration does not name and that has no BGP i
 and resets no session. A VRF that FRR refuses to remove is named in the job's output and stays: it has no device and
 no routes, and the next job tries again.
 
+## How the root's FRR takes a new configuration
+
+The fabric job writes `/etc/frr/frr.conf` and runs `frr-reload.py --reload` itself (as `frrinit.sh reload` would,
+within the step's time limit on the node), not `systemctl reload frr`. The stock frr unit's reload replaces the unit's
+main process (watchfrr) and then runs the same script; when the script exits non-zero, systemd does not read the main
+process again, stops FRR at once and (`Restart=always`) starts it again five seconds later: every session of the node
+resets. Run by the job, a reload that fails or runs out of time never stops FRR. Its exit status alone does not fail
+the job: the post-reload verification (`shc-frr-check`) compares the running configuration with the file. Only when
+nothing is left is a reload that exited non-zero forgiven: the job succeeds and the node record says "the reload
+reported an error FRR did not need: <its first line>" (a line FRR refused that it no longer needed, such as the second
+line of a neighbour the first line already removed). With lines left, the job fails naming them and the reload's own
+error lines (a password in them hidden), nothing is recorded as loaded and the next run reloads again; such a reload
+never counts as one of the two loads after which the check accepts lines FRR does not take. While the reload exits
+non-zero, such lines are therefore never recorded: remove what makes FRR refuse them, or name the line in the
+realization's `nodes.frrLoadCheck.ignore`. With `nodes.frrLoadCheck`
+off, a reload that exits non-zero is not recorded as loaded.
+
+Two more guards keep that error from happening at all. Before the apply deletes any device, the job takes out of the
+running FRR what the new file no longer has of two kinds (FRR's running configuration against the rendered file): the
+BGP instance of a network VRF or the service VRF that goes away, and, in an instance that stays, a BGP neighbour named
+by an interface (a network's IPv6 egress session, `xe<t>` and `xo<t>`): `frr-reload.py` 8.5 removes such a neighbour
+by its first line and then fails on any second one. And the template gives those neighbours no second line (no
+description). A job launched by hand can leave the neighbours to the reload with the role variable
+`fabric_frr_remove_first: false` (default true), for instance to see how a failed reload is handled.
+
+The job installs a drop-in for the frr unit, `/etc/systemd/system/frr.service.d/50-shc-reload.conf`, that keeps the
+unit's reload but ignores its exit status (`ExecReload=-/usr/libexec/frr/frrinit.sh reload`). It covers the one reload
+the job leaves to systemd and a `systemctl reload frr` typed by hand. Only the unit's reload starts a daemon the daemons
+file enables (a new watchfrr with the file's list); the job's own `frr-reload.py` does not. So the job reloads the unit
+whenever FRR is active and a daemon the file enables (bgpd, isisd, and bfdd with attachment circuits) does not run,
+whether this run enabled it or an earlier run that stopped did, and fails naming any daemon still not running; it does
+that before it takes anything out of FRR and before the new file is written, so that reload changes (nearly) nothing.
+After a start of FRR the job checks the same. When the unit's reload fails, FRR keeps running with
+what it applied (`systemctl show -p ExecReload frr` keeps the status) and systemd reads the main process again. Do not
+set the unit's `Restart=` to `on-failure` or `on-abnormal`: the stop after a failed reload would then leave FRR down.
+A reload through systemd that takes longer than the unit's `TimeoutSec` (two minutes) still stops and restarts FRR;
+the job's own reloads are not bound by it. The teardown removes the drop-in with the fabric's other units.
+
 ## The health check
 
 The job template `fabric-health` runs on a schedule (realization `health.intervalSeconds`, default 600 s, at least
@@ -168,7 +206,10 @@ What it reads, per instance (the root, and each gateway whose site is not paused
 - the instance's start at boot: a failed apply, with the apply's own lines from the journal of that start, and a root
   started without its IPv6 side (a `warning:` line);
 - the routing daemons (`show watchfrr`) and their crashes in the last `health.daemonRestartWindowMinutes`
-  (systemd-coredump's journal entries; a gateway's by its pathspace);
+  (systemd-coredump's journal entries; a gateway's by its pathspace), and the restarts systemd made of the routing
+  units by itself in that window (its "Scheduled restart job" records of `frr.service` and each gateway's unit; a
+  start or a restart a job asked for is not one). Both are `RoutingDaemonRestarted` (alert
+  `ShcFabricRoutingDaemonRestarted`): every session of the instance was reset;
 - drift: the state the apply manages now (`shc-fabric-apply <instance> snapshot`) against the record a successful
   apply leaves (`/etc/shc-fabric/<instance>.applied`), and the FRR files against the record of what FRR last loaded.
   A node without the records (applied by an earlier release and not since) is not judged for drift;
@@ -233,17 +274,26 @@ no more than the smallest NAT pool, as before). Where that half is the limit and
 index, turning the service on is refused by the fabric's ledger ("pool change refused: egress 0-<end> would drop
 allocated [...]"); a larger `egress.linkPool` resolves it, nothing is renumbered.
 
-Routes: in the service VRF, each accepted cluster address of a network via that network's `se` end (FRR static) and
-the service range's routes from the platform edge connections (eBGP, filtered to `service.range`: the hub's
-addresses the service VRF carries, inside `infrastructure.hub`). The network's VRF `e<t>` learns them from the service
-VRF over its service link: an iBGP session between the two VRF
-instances on the node (the network side connects, the service VRF has a router ID of its own, the node's address on
-its first platform edge connection; TTL 255 only, `ttl-security hops 1`, and the root's input filter admits it from the
-link's other end only). The service VRF sends the service range's routes and nothing else (next hop its `so` end),
-the network VRF takes the service range and nothing else (weight 100, so its own beats the other node's in the
-network's VPN) and sends nothing. So the service range enters the network's VPN from a node only while that node holds it from a
-platform edge connection: a node whose connections are all down withdraws them, and the sites return the clusters'
-traffic to the node that can deliver it. The failover time is the time the node needs to see its sessions go down
+Routes: in the service VRF, the service range's routes from the platform edge connections (eBGP, filtered to
+`service.range`: the hub's addresses the service VRF carries, inside `infrastructure.hub`) and each network's accepted
+cluster addresses. The two meet over the network's service link: an iBGP session between the network's VRF `e<t>`
+and the service VRF instance on the node (the network side connects, the service VRF has a router ID of its own, the
+node's address on its first platform edge connection; TTL 255 only, `ttl-security hops 1`, and the root's input
+filter admits it from the link's other end only). The service VRF sends the service range's routes and nothing else
+(next hop its `so` end); the network VRF takes the service range and nothing else (weight 100, so its own beats the
+other node's in the network's VPN). The network VRF sends its routes with the node as next hop (`next-hop-self
+force`: they came from the network's VPN), guarded as the hub's routers are told to filter them (`SVC-ATTACHABLE`:
+never inside a published reserved range, only inside `service.attachableRanges`), and the service VRF takes exactly
+that network's accepted /32 addresses from it (prefix list `SVC-NET-<vpn target>`; the plan gives an address to one
+network only), without communities. So a cluster address is in the service VRF, and announced to the hub, only while
+the network's session on that node is up and the network's VRF on that node holds the site's route for it; and the
+service range enters the network's VPN from a node only while that node holds it from a platform edge connection: a
+node whose connections are all down withdraws them, and the sites return the clusters' traffic to the node that can
+deliver it. Both directions of a network leave a node together, in routing-protocol time, without a job. An accepted
+prefix shorter than /32 (the subnet of an AWS or Google Cloud cluster) is not learned this way yet: it is a static
+route via the network's `se` end, redistributed through the same guard, as before; for those clusters the node keeps
+announcing the subnet while the network's session or the site's route on that node is gone, and the hub's traffic
+that reaches the node then is dropped there (the other nodes still deliver theirs). The failover time is the time the node needs to see its sessions go down
 (at once when the connection's link goes down, at most the hold time of 30 seconds otherwise, a second with BFD on
 the connection) plus about a second for the withdrawal through the network's VPN. With every connection of every
 node down, no node announces the service range: the clusters lose the hub and nothing else changes (a reject route at
@@ -270,7 +320,8 @@ its filters in order: `acceptedRanges` (what it announces: the service range), `
 reserved range, every site's own included, as `<range> le 32`: refused from the platform at any length), `advertisedRanges` (then accepted:
 each `attachableRanges` entry as `<range> le 32`) and `maxPrefixes`
 (`service.maxPrefixes`, which the plan never exceeds: later addresses wait). The nodes guard their own announcement
-the same way (prefix list `SVC-ATTACHABLE` on the redistribution). A more-specific route from the platform inside a
+the same way (prefix list `SVC-ATTACHABLE` on what a network's VRF sends the service VRF, and on the redistribution of
+the static routes of shorter prefixes). A more-specific route from the platform inside a
 range the hub's network routes itself would draw that traffic into a tenant network, which is why public space is
 outside the default list (see [Platform access](platform-access.md#the-default-the-allow-list-or-any-range)). What is announced
 is bounded further per cluster: an OpenStack cluster's addresses are /32s (its floating IPs and its router's
@@ -314,7 +365,10 @@ node has withdrawn the service range from the networks already, the finding is f
 over the service links do not count for it: the same read gives the session of each network's service link (the
 service VRF to the network's VRF), and one that is not established while the node's platform edge session is up is
 `ServiceLinkDown` on the fabric, naming the network (confirmed on a second check, degrading, alert
-`ShcFabricServiceLinkDown` after `ops.fabricHealth.alerts.serviceLinksFor`). With every platform edge session of the
+`ShcFabricServiceLinkDown` after `ops.fabricHealth.alerts.serviceLinksFor`). The node then neither offers the hub's
+ranges to that network nor announces the network's /32 cluster addresses to the hub, so both directions take the other
+nodes; a cluster whose accepted prefix is a subnet stays announced by the node and loses the hub's traffic sent to
+it. With every platform edge session of the
 node down, only `ServiceSessionsDown` is reported. It wakes nothing either: a full run repairs only a missing link or
 neighbour, which the drift check reports and wakes for already. The
 apply's snapshot covers the VRF, the pairs and the table, so drift is reported as for the rest of the root.

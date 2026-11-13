@@ -2,3 +2,12 @@
 # namespace of the platform objects (HybridFabric, CloudGateway, CloudInfrastructure); the fabric IPAM tasks
 # (fabric_ipam.yml, through fabric_ipam_pools.yml) pass it to the ledger
 fabric_platform_namespace: sovereign-cloud
+
+# Before the apply removes a network's devices, the fabric job takes out of the root's FRR the BGP neighbours named by
+# an interface (a network's IPv6 egress session) that the new configuration no longer has, so the reload never has to
+# remove one (FRR 8.5's frr-reload.py fails on that when the neighbour has a second line). On by default. A job
+# launched by hand can set it to false to leave that removal to the reload, for instance to test how a failed reload
+# is handled: the reload is contained either way (the job runs frr-reload.py itself and checks what FRR runs; the
+# frr unit's drop-in keeps FRR running when a reload fails), and the BGP instances of VRFs that go away are still
+# removed first. Not a realization setting
+fabric_frr_remove_first: true

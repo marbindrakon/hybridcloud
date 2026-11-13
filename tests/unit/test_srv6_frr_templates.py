@@ -109,7 +109,11 @@ class MplsUnchanged(unittest.TestCase):
                           {"fab_frr_major": "10"}):
                 self.assertEqual(T.render(path, dict(v, **extra)), plain, f"{name} with {extra}")
             if base is not None:
-                self.assertEqual(plain, T.render_text(base, v), f"{name}: differs from {BASE}")
+                want = T.render_text(base, v)
+                if path == T.RT:
+                    # the root's interface neighbours have no description since (frr-reload.py 8.5)
+                    want = T.without_interface_descriptions(want)
+                self.assertEqual(plain, want, f"{name}: differs from {BASE}")
         if base is None:
             self.skipTest(f"{BASE} not in this checkout")
 

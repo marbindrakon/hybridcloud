@@ -293,21 +293,30 @@ class NodeSteps(unittest.TestCase):
         return run_play([{"vars": t.get("vars", {}), "ansible.builtin.set_fact": {"_t": body}}, write_out("_t")], extra)
 
     def test_bgp_instance_removal(self):
+        # the step before the apply takes out of FRR what the run removes (files/shc_frr_leaving.py, which compares the
+        # running configuration with the rendered file, test_frr_leaving.py): the networks' VRFs by pattern and the
+        # service VRF by the realization's name, also on a node that no longer has it
+        name = "{{ bgw_node.name }}: take out of FRR what this run removes (before the kernel objects)"
+        t = node_task(name)
+        role = os.path.join(ROOT, "eda", "rulebooks", "roles", "hybridfabric_provision")
+
+        def argv(extra):
+            out = run_play([{"vars": t.get("vars", {}), "ansible.builtin.set_fact": {"_a": t["ansible.builtin.command"]["argv"]}},
+                            write_out("_a")], dict({"role_path": role, "fab_lease_step_timeout": "75"}, **extra))
+            out = json.loads(out) if isinstance(out, str) else out
+            # bounded by the step's limit on the node, as the apply (Review L9)
+            self.assertEqual(out[:6], ["timeout", "-k", "5", "60", "python3", "-c"])
+            with open(os.path.join(ROOT, "eda", "common", "files", "shc_frr_leaving.py")) as f:
+                self.assertEqual(out[6].strip(), f.read().strip())
+            return out[7:]
         real, (egp, att, vrfs, svc) = S.service_setup()
-        base = {"fab_spec": {"domainAsn": 65010}, "fab_real": real, "hf_node_vrfs": vrfs["bgw-1"]}
-        text = self.render("{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)",
-                           dict(base, hf_node_service=svc["bgw-1"]))
-        self.assertIn('want=" e10000 e10001 e10002 service "', text)
-        self.assertIn("grep -E '^e[0-9]+$|^service$'", text)
-        # a node without the service VRF: its instance goes
-        text = self.render("{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)",
-                           dict(base, hf_node_service={}, hf_node_vrfs=[]))
-        self.assertIn('want="  "', text)
-        self.assertIn("|^service$'", text)
-        # without the realization's service the check is the one of before
-        text = self.render("{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)",
-                           {"fab_spec": {"domainAsn": 65010}, "fab_real": {}, "hf_node_vrfs": []})
-        self.assertIn("grep -E '^e[0-9]+$' ||", text)
+        self.assertEqual(argv({"fab_real": real}), ["--pattern", "e[0-9]+", "--name", "service"])
+        # without the realization's service the instances of the networks' VRFs only, as before
+        self.assertEqual(argv({"fab_real": {}}), ["--pattern", "e[0-9]+"])
+        # the role default off (a job launched by hand; a string from a survey or extra vars): the instances only
+        self.assertEqual(argv({"fab_real": {}, "fabric_frr_remove_first": "false"}), ["--pattern", "e[0-9]+", "--no-neighbours"])
+        self.assertEqual(argv({"fab_real": {}, "fabric_frr_remove_first": "True"}), ["--pattern", "e[0-9]+"])
+        self.assertIn("_hf_frr_text | regex_findall(", t["ansible.builtin.command"]["stdin"])
 
     def test_readiness_check(self):
         real, (egp, att, vrfs, svc) = S.service_setup()

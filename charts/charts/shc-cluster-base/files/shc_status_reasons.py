@@ -177,7 +177,7 @@ REASONS = {
     "StartIncomplete": _r("P", FAILED, "The network configuration was applied in part on a node. The platform team is alerted."),
     "SiteSessionsDown": _r("P", FAILED, "The site's routing sessions are down on a node. The platform team is alerted."),
     "ServiceSessionsDown": _r("P", FAILED, "A node has no session with the platform's router for clusters on networks. The platform team is alerted."),
-    "ServiceLinkDown": _r("P", FAILED, "On a node, a network lacks the platform's routes for its clusters; other nodes carry them. The platform team is alerted."),
+    "ServiceLinkDown": _r("P", FAILED, "On a node, a network's link to the platform's connection is down: the platform may not reach all its clusters. The platform team is alerted."),
 }
 
 # Reasons written on a part of an object's status (an egress family of a network, its translation to IPv4, the IPv6
@@ -200,7 +200,7 @@ PART_REASONS = {
     # node health that does not reduce service (NodesHealthy only), and the health job's events
     "ConfigurationDrift": _r("A", READY, "A node's network state differs from its configuration; a repair run is requested."),
     "ConfigurationNotTaken": _r("P", READY, "A node's routing does not take part of its configuration; the platform team is looking at it."),
-    "RoutingDaemonRestarted": _r("P", READY, "A routing process on a node restarted after a crash; the platform team is alerted."),
+    "RoutingDaemonRestarted": _r("P", READY, "A routing process on a node restarted by itself (a crash, or the system restarted its service); the platform team is alerted."),
     "NotChecked": _r("A", READY, "The nodes have not been checked yet."),
     # why a health check left the nodes alone this time (status.health.skipped.reason)
     "NotEnabled": _r("A", READY, "Not turned on for this fabric."),

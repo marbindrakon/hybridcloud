@@ -10,7 +10,7 @@ Input (JSON, base64 in argv[1]):
                  route reflectors]}] (gateways of sites
                  that are paused, being deleted, or not realized yet are not listed)
   transport      mpls|srv6 (the SRv6 core guard units exist only with srv6)
-  windowSeconds  how far back a routing daemon crash counts
+  windowSeconds  how far back a routing daemon crash, or an automatic restart of a routing unit, counts
   cmdTimeout     limit of each command (s)
   frrPendingHelper  optional: the source of files/shc_frr_pending.py (FRR running configuration vs file)
   frrIgnore      the realization's nodes.frrLoadCheck.ignore patterns
@@ -36,6 +36,9 @@ FRR_DAEMONS = ("zebra", "bgpd", "isisd", "bfdd", "staticd", "mgmtd", "ospfd", "o
 UNIT_PROPS = "Id,LoadState,ActiveState,SubState,Result,NRestarts,UnitFileState,InvocationID"
 START_LINE = re.compile(r"^(shc-fabric-apply|transport srv6|warning): ")
 COREDUMP_ID = "fc2e22bc6ee647b6b90729ab34a250b1"
+# systemd's "Scheduled restart job" record: a restart systemd decided itself (Restart=), never a start or a restart
+# asked for (a job's systemctl restart); N_RESTARTS is the unit's counter
+RESTART_ID = "5eb03494b6584870a536b337290809b3"
 MAX_LINES = 10
 
 
@@ -144,6 +147,35 @@ def coredumps(run, since):
         except (TypeError, ValueError):
             at = 0
         found.append({"daemon": os.path.basename(exe), "at": at, "pathspace": m.group(1) if m else ""})
+    return found
+
+
+def restarts(run, since, units):
+    """Automatic restarts of the routing units since `since` (epoch s): {unit: [{at, count}]} from systemd's own
+    records (a failed reload of the stock unit, watchfrr ending: no core dump). One read for all units, with its own limit;
+    one that fails or runs out of time finds none."""
+    if not units:
+        return {}
+    rc, out = run(["journalctl", "--no-pager", "-o", "json", "--since=@%d" % int(since), "MESSAGE_ID=" + RESTART_ID]
+                  + ["UNIT=" + u for u in units] + ["--output-fields=UNIT,N_RESTARTS"])
+    found = {}
+    for line in (out if rc == 0 else "").splitlines():
+        try:
+            e = json.loads(line)
+        except ValueError:
+            continue
+        unit = str(e.get("UNIT") or "")
+        if unit not in units:
+            continue
+        try:
+            at = int(int(e.get("__REALTIME_TIMESTAMP") or 0) / 1000000)
+        except (TypeError, ValueError):
+            at = 0
+        try:
+            count = int(e.get("N_RESTARTS") or 0)
+        except (TypeError, ValueError):
+            count = 0
+        found.setdefault(unit, []).append({"at": at, "count": count})
     return found
 
 
@@ -320,6 +352,7 @@ def read_node(inp, run, read=read_file, now=None):
         booted = 0
     since = max(now - int(inp.get("windowSeconds") or 3600), booted)
     crashes = coredumps(run, since)
+    restarted = restarts(run, since, sorted({r for s, r, o in plan.values()}))
     result = {"bootId": (read("/proc/sys/kernel/random/boot_id") or "").strip(), "bootedAt": booted, "now": now,
               "failedUnits": failed, "instances": {}}
     for i in insts:
@@ -338,7 +371,8 @@ def read_node(inp, run, read=read_file, now=None):
         loaded = (read(record) or "").strip()
         d = {"start": start, "units": units,
              "routing": {"unit": ru, "daemons": watchfrr(run, pathspace) if units[ru]["active"] == "active" else None,
-                         "crashes": [c for c in crashes if c["pathspace"] == pathspace]},
+                         "crashes": [c for c in crashes if c["pathspace"] == pathspace],
+                         "restarts": restarted.get(ru, [])},
              "kernelDrift": kernel_drift(run, i["name"], read),
              "frr": {"reloadDue": bool(loaded) and digest(files, read) != loaded, "recorded": bool(loaded),
                      "pending": frr_pending(run, i, inp.get("frrPendingHelper"), inp.get("frrIgnore") or ()),

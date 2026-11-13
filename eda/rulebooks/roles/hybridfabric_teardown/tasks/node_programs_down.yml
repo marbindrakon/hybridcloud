@@ -4,7 +4,8 @@
 # root or gateway configuration in /etc/shc-fabric, no gateway unit running, failed or enabled), nothing of it stays
 # installed or running there: the root unit is stopped (a oneshot that stays "active (exited)" after its start; it
 # has no stop action) and disabled, and the apply script, the unit templates of the root, the gateways and the SRv6
-# core guard and the empty /etc/shc-fabric are removed. While an instance is left, all of it stays: a gateway still
+# core guard, the frr unit's drop-in (the reload's exit status ignored; the stock unit's reload again) and the empty
+# /etc/shc-fabric are removed. While an instance is left, all of it stays: a gateway still
 # needs the script for its own teardown, and its unit requires the root unit (stopping that would stop the gateway).
 # A teardown that fails before this step and runs again finds the script in place; a second run changes nothing.
 - name: "{{ bgw_node.name }}: once no instance is left, remove the fabric's programs and units"
@@ -26,9 +27,11 @@
     if systemctl -q is-enabled "$u" 2>/dev/null; then systemctl disable "$u"; changed=yes; fi
     for f in /usr/local/sbin/shc-fabric-apply /usr/local/sbin/shc-frr-check /etc/systemd/system/shc-fabric-apply@.service \
              /etc/systemd/system/shc-gw@.service /etc/systemd/system/shc-core-guard@.service \
-             /etc/systemd/system/shc-core-guard@.timer; do
+             /etc/systemd/system/shc-core-guard@.timer /etc/systemd/system/frr.service.d/50-shc-reload.conf; do
       [ -e "$f" ] && { rm -f "$f"; changed=yes; }
     done
+    # the frr unit's drop-in directory, when the fabric's drop-in was all it held
+    rmdir /etc/systemd/system/frr.service.d 2>/dev/null && changed=yes
     [ -d /etc/shc-fabric ] && rmdir /etc/shc-fabric 2>/dev/null && changed=yes
     [ "$changed" = no ] || systemctl daemon-reload
     echo "changed=$changed"

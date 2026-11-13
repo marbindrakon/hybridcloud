@@ -144,6 +144,14 @@ def instance_findings(inst, kind, cfg):
             found.append(("RoutingDaemonRestarted", "%d routing daemon crash(es) in the last %d minutes (%s), last at %s"
                           % (len(crashes), cfg["daemonRestartWindowMinutes"],
                              ", ".join(sorted({c.get("daemon", "?") for c in crashes})), iso(last) if last else "?")))
+        # systemd restarted the routing service by itself (a failed reload of the stock unit, watchfrr ending): every
+        # session of the instance reset, and no core dump tells it
+        restarts = r.get("restarts") or []
+        if restarts:
+            last = max(x.get("at") or 0 for x in restarts)
+            found.append(("RoutingDaemonRestarted", "the routing service restarted by itself %d time(s) in the last %d "
+                          "minutes, last at %s" % (len(restarts), cfg["daemonRestartWindowMinutes"],
+                                                   iso(last) if last else "?")))
     if chk["drift"]:
         kd = inst.get("kernelDrift")
         if kd:
@@ -176,13 +184,15 @@ def instance_findings(inst, kind, cfg):
                           % (s.get("vrf") or "", (" (" + down + ")") if down else "")))
         elif s is not None and (s.get("established") or 0) > 0:
             # each network's service link (iBGP between the service VRF and the network's VRF): one down while the
-            # node's platform circuit is up leaves that network's VRF on the node without the hub's ranges (the other
-            # nodes still carry them). With every circuit session down the circuit's finding says it all. No wake: a
+            # node's platform circuit is up leaves that network's VRF on the node without the hub's ranges, and the
+            # node stops announcing the network's /32 cluster addresses to the hub (the other nodes still carry both). With every circuit session down the circuit's finding says it all. No wake: a
             # run repairs only a missing link or neighbour, which the drift check reports (and wakes for) already
             for l in s.get("links") or []:
                 if l.get("state") != "Established":
                     found.append(("ServiceLinkDown", "the service link of %s has no session (%s %s): its VRF %s on this "
-                                  "node does not learn the hub's ranges"
+                                  "node does not learn the hub's ranges and the node does not announce the network's "
+                                  "cluster addresses to the hub (a cluster's subnet excepted); the other nodes carry "
+                                  "both directions"
                                   % (l.get("network") or "?", l.get("address") or "?", l.get("state") or "Missing",
                                      l.get("vrf") or "?")))
     return found
