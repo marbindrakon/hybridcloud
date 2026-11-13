@@ -119,8 +119,8 @@ spec:
       labels:
         severity: warning
       annotations:
-        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a routing daemon crashed on {{ "{{" }} $labels.node {{ "}}" }}"
-        description: "{{ "{{" }} $labels.message {{ "}}" }}. A core dump is on the node."
+        summary: "{{ "{{" }} $labels.customresource_kind {{ "}}" }} {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: the routing service restarted by itself or a daemon crashed on {{ "{{" }} $labels.node {{ "}}" }}"
+        description: "{{ "{{" }} $labels.message {{ "}}" }}. A core dump is on the node when a daemon crashed."
     - alert: ShcFabricDriftNotRepaired
       expr: >-
         max by (customresource_kind, namespace, name, node) (shc_fabric_node_reachable{reason="ConfigurationDrift"})
@@ -148,9 +148,10 @@ spec:
         severity: warning
       annotations:
         summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: no session with the hub's router on {{ "{{" }} $labels.node {{ "}}" }}"
-        description: "The node has a platform circuit (AttachmentCircuit ceKind platform) but no established BGP session on it; the platform reaches the clusters on tenant networks through the other nodes, or not at all when every node reports it."
+        description: "The node has a platform circuit (AttachmentCircuit ceKind platform) but no established BGP session on it; the platform reaches the clusters on tenant networks through the other nodes after the hub routers' hold time, or not at all when every node reports it."
     # a network's service link: the node's platform circuit is up, the iBGP session between the service VRF and that
-    # network's VRF is not (the network's VRF on the node lacks the hub's ranges)
+    # network's VRF is not (the network's VRF on the node lacks the hub's ranges, and the node does not announce the
+    # network's /32 cluster addresses to the hub)
     - alert: ShcFabricServiceLinkDown
       expr: >-
         max by (namespace, name, node) (shc_fabric_node_reachable{customresource_kind="HybridFabric", reason="ServiceLinkDown"})
@@ -159,7 +160,7 @@ spec:
         severity: warning
       annotations:
         summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a network's session with the platform's connection is down on {{ "{{" }} $labels.node {{ "}}" }}"
-        description: "The node's platform circuit is up but the session over a network's service link is not, so that network's VRF on the node does not learn the hub's ranges; the network reaches the hub through the other nodes, or not at all when every node reports it. status.health names the network."
+        description: "The node's platform circuit is up but the session over a network's service link is not, so the node neither offers the hub's ranges to that network nor announces that network's cluster addresses to the hub: both directions take the other nodes, or none when every node reports it. A cluster whose accepted prefix is a subnet stays announced by the node. status.health names the network."
     - alert: ShcFabricIPv6EgressUpstreamDown
       expr: >-
         max by (namespace, name) (shc_fabric_condition{customresource_kind="HybridFabric", type="IPv6EgressUpstream", status="False"})

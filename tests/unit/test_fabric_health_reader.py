@@ -57,6 +57,8 @@ class Node:
         self.down = {}
         self.journal = {}
         self.coredumps = []
+        self.restarts = []
+        self.restart_rc = 0
         self.peers6 = {"2001:db8:237::2": {"state": "Established", "remoteAs": 65002},
                        "2001:db8:237::3": {"state": "Established", "remoteAs": 65002}}
         self.site = {"172.18.103.10": {"state": "Established"}, "172.18.103.11": {"state": "Established"},
@@ -78,6 +80,11 @@ class Node:
                               if p.get("ActiveState") == "failed")
         if cmd[0] == "journalctl" and "-u" in cmd:
             return 0, "\n".join(self.journal.get(cmd[cmd.index("-u") + 1], [])) + "\n"
+        if cmd[0] == "journalctl" and "MESSAGE_ID=" + R.RESTART_ID in cmd:
+            units = {c[5:] for c in cmd if c.startswith("UNIT=")}
+            since = int(next(c for c in cmd if c.startswith("--since=@"))[9:])
+            return self.restart_rc, "\n".join(json.dumps(e) for e in self.restarts if e["UNIT"] in units
+                                               and int(e["__REALTIME_TIMESTAMP"]) >= since * 1000000) + "\n"
         if cmd[0] == "journalctl":
             return 0, "\n".join(json.dumps(e) for e in self.coredumps) + "\n"
         if cmd[0] == R.APPLY:
@@ -186,6 +193,26 @@ class ReaderTest(unittest.TestCase):
         self.assertEqual(root["routing"]["daemons"]["zebra"], "Down")
         self.assertEqual([c["daemon"] for c in root["routing"]["crashes"]], ["zebra"])
         self.assertEqual([c["daemon"] for c in gw["routing"]["crashes"]], ["bgpd"])
+
+    def test_automatic_restarts_of_the_routing_units(self):
+        # systemd's "Scheduled restart job" records in the window (bounded by the boot): per routing unit, one read
+        n = Node()
+        rec = lambda unit, ago, count: {"UNIT": unit, "N_RESTARTS": str(count),  # noqa: E731
+                                        "__REALTIME_TIMESTAMP": str((NOW - ago) * 1000000)}
+        n.restarts = [rec("frr.service", 100, 18), rec("frr.service", 700, 17), rec("shc-gw@atuin.service", 50, 1),
+                      rec("frr.service", 4000, 16), rec("sshd.service", 10, 1)]
+        out = n.read_node()
+        root, gw = out["instances"]["root"], out["instances"]["gw-atuin"]
+        # the node booted 600 s ago: the record of 700 s ago is from before the boot, 4000 s ago outside the window
+        self.assertEqual(root["routing"]["restarts"], [{"at": NOW - 100, "count": 18}])
+        self.assertEqual(gw["routing"]["restarts"], [{"at": NOW - 50, "count": 1}])
+        reads = [c for c, _ in n.calls if c[0] == "journalctl" and "MESSAGE_ID=" + R.RESTART_ID in c]
+        self.assertEqual(len(reads), 1)
+        self.assertEqual(sorted(c for c in reads[0] if c.startswith("UNIT=")), ["UNIT=frr.service", "UNIT=shc-gw@atuin.service"])
+        self.assertIn("--since=@%d" % (NOW - 600), reads[0])
+        # a read that fails or runs out of time finds none (no finding, not a failure)
+        n.restart_rc = 124
+        self.assertEqual(n.read_node()["instances"]["root"]["routing"]["restarts"], [])
 
     def test_kernel_and_frr_drift(self):
         n = Node()

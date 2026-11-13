@@ -218,7 +218,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
 | `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
-| `ServiceLinkDown` | On a node, a network lacks the platform's routes for its clusters; other nodes carry them. The platform team is alerted. | The platform team |
+| `ServiceLinkDown` | On one node, a network's link to the platform's connection is down; the other nodes carry its clusters' traffic. The platform team is alerted. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
 | `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
 | `ServiceSessionsDown` | A node has no session with the platform's router for clusters on networks. The platform team is alerted. | The platform team |
@@ -269,7 +269,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `OutsideAttachableRanges` | Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges). | You (the tenant) |
 | `PreflightPassed` | Every check before the build passed. | Nobody: it continues by itself |
 | `ReadFailed` | A node answered but could not be checked this time. | The platform team |
-| `RoutingDaemonRestarted` | A routing process on a node restarted after a crash; the platform team is alerted. | The platform team |
+| `RoutingDaemonRestarted` | A routing process on a node restarted by itself (a crash, or its service was restarted); the platform team is alerted. | The platform team |
 | `ServiceLimitReached` | The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
 | `ServiceNotRealized` | The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts. | The platform team |

@@ -326,6 +326,34 @@ class JudgeTest(unittest.TestCase):
                          ["ServiceFailed", "SiteSessionsDown"])
         self.assertTrue(atuin["wake"])
 
+    def test_an_automatic_restart_of_the_routing_service(self):
+        # gate-s6 F12: systemd stopped and restarted FRR after a failed reload; no core dump, every session reset. The
+        # root's restarts go to the fabric, a gateway unit's to that gateway; same reason as a crash, no wake
+        r = inst(routing={"unit": "frr.service", "daemons": {"zebra": "Up", "bgpd": "Up"}, "crashes": [],
+                          "restarts": [{"at": 1_800_000_000, "count": 17}, {"at": 1_800_000_300, "count": 18}]})
+        g = inst("gateway", routing={"unit": "shc-gw@atuin.service", "daemons": {"zebra": "Up"}, "crashes": [],
+                                     "restarts": [{"at": 1_800_000_100, "count": 1}]})
+        a = J.judge(req([node("bgw-1", root=r, gw=g), node("bgw-2")]))
+        f = a["fabric"]["status"]
+        nodes = {n["name"]: n for n in f["health"]["nodes"]}
+        self.assertEqual([x["reason"] for x in nodes["bgw-1"]["findings"]], ["RoutingDaemonRestarted"])
+        self.assertEqual(nodes["bgw-1"]["findings"][0]["message"],
+                         "the routing service restarted by itself 2 time(s) in the last 60 minutes, last at "
+                         "2027-01-15T08:05:00Z")
+        self.assertEqual(nodes["bgw-2"]["findings"], [])
+        self.assertFalse(a["fabric"]["wake"])
+        atuin = {x["name"]: x for x in a["gateways"]}["atuin"]
+        msgs = [x["message"] for n in atuin["status"]["health"]["nodes"] for x in n["findings"]]
+        self.assertEqual(msgs, ["the routing service restarted by itself 1 time(s) in the last 60 minutes, last at "
+                                "2027-01-15T08:01:40Z"])
+        # with a crash as well: one finding, both messages
+        r["routing"]["crashes"] = [{"daemon": "bgpd", "at": 1_800_000_200, "pathspace": ""}]
+        f = J.judge(req([node("bgw-1", root=r)]))["fabric"]["status"]
+        found = f["health"]["nodes"][0]["findings"]
+        self.assertEqual([x["reason"] for x in found], ["RoutingDaemonRestarted"])
+        self.assertIn("1 routing daemon crash(es)", found[0]["message"])
+        self.assertIn("restarted by itself 2 time(s)", found[0]["message"])
+
     def test_unit_not_enabled_and_guard_down(self):
         r = inst()
         r["units"]["frr.service"] = unit(enabled="disabled")
