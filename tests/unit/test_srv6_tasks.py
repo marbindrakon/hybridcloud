@@ -1348,9 +1348,12 @@ class TemplatesGetTheirVariables(unittest.TestCase):
             nt = names.index(P + "the core transport and FRR on this node")
             self.assertTrue(str(tasks[nt]["ansible.builtin.include_tasks"]).endswith("node_transport.yml"))
             for i, t in enumerate(tasks):
-                if "ansible.builtin.template" in t:
+                if "ansible.builtin.template" in t or tpl in str(t.get("ansible.builtin.set_fact", "")):
                     self.assertGreater(i, nt, t["name"])
-            self.assertIn(tpl, [t["ansible.builtin.template"]["src"] for t in tasks if "ansible.builtin.template" in t])
+            # the root renders its file once (a lookup, written by a copy), the gateway with the template module
+            self.assertIn(tpl, [t["ansible.builtin.template"]["src"] for t in tasks if "ansible.builtin.template" in t]
+                          + [tpl for t in tasks if "lookup('ansible.builtin.template', '%s')" % tpl
+                             in str(t.get("ansible.builtin.set_fact", ""))])
 
 
 if __name__ == "__main__":

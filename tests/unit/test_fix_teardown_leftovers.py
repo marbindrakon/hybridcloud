@@ -48,7 +48,7 @@ SYSTEMCTL = textwrap.dedent("""\
 
 INSTALLED = ["usr/local/sbin/shc-fabric-apply", "etc/systemd/system/shc-fabric-apply@.service",
              "etc/systemd/system/shc-gw@.service", "etc/systemd/system/shc-core-guard@.service",
-             "etc/systemd/system/shc-core-guard@.timer"]
+             "etc/systemd/system/shc-core-guard@.timer", "etc/systemd/system/frr.service.d/50-shc-reload.conf"]
 
 
 def shell(path, name):
@@ -124,6 +124,20 @@ class ProgramsDown(unittest.TestCase):
         rc, out, _, calls = n.run()
         self.assertEqual((rc, out.strip()), (0, "changed=no"))
         self.assertEqual([c for c in calls if not c.startswith(("-q is-", "list-units"))], [])
+
+    def test_the_frr_drop_in_goes_and_another_one_stays(self):
+        # the fabric's drop-in of the frr unit (the reload's exit status ignored) goes with its directory; a drop-in
+        # of someone else keeps the directory
+        n = self.node()
+        rc, out, _, calls = n.run()
+        self.assertFalse(n.exists("etc/systemd/system/frr.service.d"))
+        n = self.node()
+        n.touch("etc/systemd/system/frr.service.d/90-local.conf")
+        rc, out, _, calls = n.run()
+        self.assertEqual((rc, out.strip()), (0, "changed=yes"))
+        self.assertFalse(n.exists("etc/systemd/system/frr.service.d/50-shc-reload.conf"))
+        self.assertTrue(n.exists("etc/systemd/system/frr.service.d/90-local.conf"))
+        self.assertIn("daemon-reload", calls)
 
     def test_a_failed_or_enabled_root_unit_goes_too(self):
         n = self.node()

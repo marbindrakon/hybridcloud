@@ -57,6 +57,8 @@ UNIT_ACTION = re.compile(r"systemctl\s+(-q\s+)?(start|stop|restart|reload|try-re
 UNIT_ACTIONS_ALLOWED = {
     ("cloudgateway_teardown", "{{ bgw_node.name }}: stop the instance's SRv6 core guard"),
     ("hybridfabric_provision", "{{ bgw_node.name }}: no IPv6 egress guard without IPv6 egress"),
+    # a newly enabled FRR daemon: the frr unit's own reload (frrinit.sh starts it under a new watchfrr)
+    ("hybridfabric_provision", "{{ bgw_node.name }}: start a newly enabled FRR daemon (reload of the frr unit)"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: once no instance is left, remove the fabric's programs and units"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: remove the SRv6 core guard units"),
     ("hybridfabric_teardown", "{{ bgw_node.name }}: remove the IPv6 egress guard"),
@@ -200,14 +202,14 @@ class NodeTasks(unittest.TestCase):
         for role, file_, t, inh in node_tasks():
             if role == "hybridfabric_provision" and file_ == "node_root.yml":
                 steps[t.get("name")] = (t, inh)
-        want = ["{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)",
+        want = ["{{ bgw_node.name }}: take out of FRR what this run removes (before the kernel objects)",
                 "{{ bgw_node.name }}: apply the root instance", "{{ bgw_node.name }}: wait for BGP and IS-IS"]
         for name in want:
             with self.subTest(step=name):
                 self.assertIn(name, steps)
                 t, inh = steps[name]
                 body = str(t.get("ansible.builtin.shell") or t.get("ansible.builtin.command"))
-                if "apply the root instance" not in name:   # the apply reads the service from root.json
+                if "wait for BGP" in name:   # the apply reads the service from root.json, the removal from the file
                     self.assertIn("service", body)
                 self.assertIsNone(UNIT_ACTION.search(body))
                 self.assertIsNot(inh.get("become", True), False)

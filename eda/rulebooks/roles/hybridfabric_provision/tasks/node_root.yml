@@ -115,6 +115,18 @@
     hf_pe: "{{ hf_pe | combine({'locator': fab_check_result.locator, 'locatorNode': fab_check_result.locatorNode}) }}"
   when: fab_node_transport == 'srv6'
 
+# the stock frr unit's reload replaces the unit's main process (watchfrr); a reload that fails then makes systemd stop
+# FRR at once and its Restart=always start it again 5 s later: every session of the node resets. The drop-in ignores
+# the reload's exit status for the reloads this job does not run itself (a newly enabled daemon, below; a reload typed
+# by hand): FRR keeps running and the main process is read again. Restart= is not touched (on-failure or on-abnormal
+# would leave FRR stopped after such a reload). Installed with the units below (one daemon-reload when it changed)
+- name: "{{ bgw_node.name }}: the drop-in directory of the frr unit"
+  ansible.builtin.file:
+    path: /etc/systemd/system/frr.service.d
+    state: directory
+    mode: "0755"
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: install the fabric apply script and unit"
   ansible.builtin.copy:
     src: "{{ role_path }}/../../../common/files/bgw/{{ item.src }}"
@@ -126,6 +138,7 @@
     - {src: shc-fabric-apply, dest: /usr/local/sbin/shc-fabric-apply, mode: "0755"}
     - {src: shc-frr-check, dest: /usr/local/sbin/shc-frr-check, mode: "0755"}
     - {src: shc-fabric-apply@.service, dest: /etc/systemd/system/shc-fabric-apply@.service, mode: "0644"}
+    - {src: frr-shc-reload.conf, dest: /etc/systemd/system/frr.service.d/50-shc-reload.conf, mode: "0644"}
   loop_control:
     label: "{{ item.dest }}"
   delegate_to: "{{ bgw_node.name }}"
@@ -201,26 +214,36 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_rootconf
 
-# bgpd drops a neighbor's BFD session (bfdd) only while the neighbor's VRF still exists in the kernel. When the apply
-# deletes a root VRF first, the reload then removes its BGP instance but the session stays in bfdd for good (FRR 8.5.3,
-# seen after circuit teardowns). So the BGP instances of root VRFs that go away are removed here, before the apply
-# (or a start of the root unit) deletes their kernel VRFs; the reload then has nothing left to remove for them. The same
-# for the service VRF (the realization's name) on a node that no longer has it
-- name: "{{ bgw_node.name }}: remove the BGP instances of root VRFs that go away (before their kernel VRFs)"
+# the FRR configuration this run wants, rendered once: the step below compares FRR's running configuration with it,
+# and the configuration step writes it
+- name: "{{ bgw_node.name }}: the FRR configuration this run wants"
+  ansible.builtin.set_fact:
+    _hf_frr_text: "{{ lookup('ansible.builtin.template', 'frr-root.conf.j2') }}"
+  # the circuits' BGP passwords are in the file
+  no_log: "{{ hf_circuit_passwords | default({}) | length > 0 }}"
+
+# What this run removes is taken out of FRR here, before the apply (or a start of the root unit) deletes the devices
+# and VRFs: (1) bgpd drops a neighbor's BFD session (bfdd) only while the neighbor's VRF still exists in the kernel, so
+# the BGP instance of a root VRF that goes away is removed first (after a reload that removed it later the session
+# stayed in bfdd for good, FRR 8.5.3); the same for the service VRF (the realization's name) on a node that no longer
+# has it. (2) frr-reload.py 8.5 cannot remove a neighbour named by an interface (a network's IPv6 egress session) that
+# has a second line at router level, and its reload then fails; so the interface neighbours the file no longer has in
+# an instance that stays are removed here too (fabric_frr_remove_first, role default; the template gives them no
+# second line, so the reload removes them without error when this step did not). FRR's running configuration is
+# compared with the rendered file itself (files/shc_frr_leaving.py on the node, the file on stdin): it converges from
+# any earlier run, and nothing the file keeps is ever removed. A command FRR refuses is left to the reload
+- name: "{{ bgw_node.name }}: take out of FRR what this run removes (before the kernel objects)"
   vars:
     _svc_name: "{{ ((fab_real.service | default({}, true)).vrf | default({}, true)).name | default('', true) }}"
-  ansible.builtin.shell: |
-    set -o pipefail
-    systemctl -q is-active frr || exit 0
-    want=" {{ (hf_node_vrfs | map(attribute='vrf') | list + ([hf_node_service.vrf] if hf_node_service | default({}) | length > 0 else [])) | join(' ') }} "
-    for v in $(vtysh -c 'show bgp vrfs json' | jq -r '.vrfs // {} | keys[]' | grep -E '^e[0-9]+${{ ('|^' ~ _svc_name ~ '$') if _svc_name | length > 0 else '' }}' || true); do
-      case "$want" in *" $v "*) continue ;; esac
-      vtysh -c 'configure terminal' -c "no router bgp {{ fab_spec.domainAsn }} vrf $v" && echo "removed $v"
-    done
-  args:
-    executable: /bin/bash
+  ansible.builtin.command:
+    argv: >-
+      {{ ['timeout', '-k', '5', '60', 'python3', '-c',
+          lookup('ansible.builtin.file', role_path ~ '/../../../common/files/shc_frr_leaving.py'),
+          '--pattern', 'e[0-9]+'] + (['--name', _svc_name] if _svc_name | length > 0 else [])
+         + ([] if fabric_frr_remove_first | default(true) | bool else ['--no-neighbours']) }}
+    stdin: "{{ _hf_frr_text }}"
   register: _hf_vrfgone
-  changed_when: "'removed ' in _hf_vrfgone.stdout"
+  changed_when: "'removed: ' in _hf_vrfgone.stdout"
   delegate_to: "{{ bgw_node.name }}"
 
 - name: "{{ bgw_node.name }}: the lease lasts for the root instance's unit start"
@@ -317,9 +340,31 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_daemons
 
+# a newly enabled daemon (bfdd) starts only under a new watchfrr, which only the unit's own reload starts without
+# ending the unit (frrinit.sh reload: the daemons file's list; the running daemons are left alone). It runs before the
+# new configuration is written, so its frr-reload.py finds (nearly) nothing to change; the reload of the configuration
+# follows below. With the unit's drop-in a failed reload leaves FRR running (systemctl returns 0; the reload's own
+# status is in ExecReload, printed for the job). Not on a node whose FRR is not active (the start below reads the file)
+# nor with a new core bridge MAC (the restart below)
+- name: "{{ bgw_node.name }}: start a newly enabled FRR daemon (reload of the frr unit)"
+  ansible.builtin.shell: |
+    systemctl -q is-active frr || { echo "frr is not active"; exit 0; }
+    systemctl reload frr
+    rc=$?
+    echo "reloaded rc=$rc $(systemctl show -p ExecReload --value frr | grep -o 'status=[^ ;]*' | tail -n 1)"
+    exit $rc
+  args:
+    executable: /bin/bash
+  when:
+    - _hf_daemons is changed
+    - "'bridge-mac=changed' not in _hf_apply.stdout"
+  register: _hf_daemons_reload
+  changed_when: "'reloaded' in _hf_daemons_reload.stdout"
+  delegate_to: "{{ bgw_node.name }}"
+
 - name: "{{ bgw_node.name }}: FRR configuration"
-  ansible.builtin.template:
-    src: frr-root.conf.j2
+  ansible.builtin.copy:
+    content: "{{ _hf_frr_text }}"
     dest: /etc/frr/frr.conf
     owner: frr
     group: frr
@@ -378,13 +423,18 @@
     fab_lease_step: "the FRR reload on {{ bgw_node.name }}"
   timeout: 0
 
-# a running FRR takes a new configuration through frr-reload (no session reset), and a newly enabled daemon (bfdd)
-# the same way: the reload restarts watchfrr with the daemons file's list, which starts the missing daemon and
-# leaves the running ones alone (FRR 8.5's frrinit.sh)
+# a running FRR takes a new configuration through frr-reload.py (no session reset), run here by the job itself, as
+# frrinit.sh reload runs it but without systemd: the unit's main process is not replaced, no limit of the unit applies,
+# and a reload that fails or runs out of time (the step's limit on the node, as the apply's) can never stop FRR. Its
+# exit status does not fail the job: the record step below checks the running configuration against the file
+# (shc-frr-check) and decides; its error lines go with the result. A daemons file changed above was loaded by the
+# unit's reload before the file was written
 - name: "{{ bgw_node.name }}: reload the FRR configuration"
-  ansible.builtin.systemd:
-    name: frr
-    state: reloaded
+  ansible.builtin.command: >-
+    timeout -k 10 {{ [fab_lease_step_timeout | int - 15, 15] | max }} env PYTHONNOUSERSITE=1
+    /usr/libexec/frr/frr-reload.py --reload --bindir /usr/bin --confdir /etc/frr --rundir /var/run/frr /etc/frr/frr.conf
+  changed_when: true
+  failed_when: false
   when:
     - _hf_frr_active.stdout == 'active'
     - "'bridge-mac=changed' not in _hf_apply.stdout"
@@ -394,8 +444,19 @@
   delegate_to: "{{ bgw_node.name }}"
   register: _hf_reload
 
-# FRR runs the files when this job found it active and the reload (when one was due) succeeded, or when this job
-# started or restarted it; a step above that failed ended the job before this. FRR that was starting or reloading on
+# what frr-reload.py said when it exited non-zero (it prints the commands FRR refused and FRR's answers): kept for the
+# check's result and the node record
+- name: "{{ bgw_node.name }}: the reload's errors"
+  ansible.builtin.set_fact:
+    _hf_reload_errors: >-
+      {{ ((((_hf_reload.stdout_lines | default([])) + (_hf_reload.stderr_lines | default([])))
+           | map('trim') | select | list | unique | list) or ['no output (exit ' ~ _hf_reload.rc ~ ')'])
+         if (_hf_reload is not skipped and _hf_reload.rc | default(0) | int != 0) else [] }}
+    _hf_reload_rc: "{{ _hf_reload.rc | default(0) if _hf_reload is not skipped else 0 }}"
+
+# FRR runs the files when this job found it active and reloaded them (when a reload was due; whether the reload took
+# the whole file, also one that exited non-zero, the check below tells), or when this job started or restarted it; a
+# step above that failed ended the job before this. FRR that was starting or reloading on
 # its own (activating, reloading: its automatic restart, or what a timed-out step began) may have read older files, so
 # then nothing is recorded, nor while a job for it is still queued, and the next job finds the reload due. A start or
 # reload can also end without an error and part of the file unapplied: before the record, the running configuration
@@ -432,6 +493,10 @@
     {% endif %}
     echo "$check"
     [ "${check%%$'\n'*}" = result=unapplied ] && exit 0
+    {% elif _hf_reload_rc | default(0) | int != 0 %}
+    # without the check a reload that exited non-zero cannot be told complete: nothing is recorded, the next run reloads
+    printf 'result=unapplied\nline: (the load check is off; the reload exited %s)\n' {{ _hf_reload_rc | int }}
+    exit 0
     {% endif %}
     echo "$now" > "$f.new" && mv "$f.new" "$f"
     echo recorded
@@ -448,8 +513,21 @@
       FRR on {{ bgw_node.name }} did not apply all of /etc/frr/frr.conf after its start or reload ({{
       _hf_frr_recorded.stdout_lines | select('match', '^line: ') | map('regex_replace', '^line: ', '') | join('; ') }}).
       What FRR loaded is not recorded, so the next run reloads again; lines a second start or reload leaves as well
-      are recorded as loaded and shown by the step after this
+      are recorded as loaded and shown by the step after this{{
+      ('. The reload exited ' ~ _hf_reload_rc ~ ': ' ~ (_hf_reload_errors[:5] | join('; '))) if _hf_reload_errors | length > 0 else '' }}
   when: "'result=unapplied' in (_hf_frr_recorded.stdout_lines | default([]))"
+
+# a reload that reported an error and left nothing of the file unapplied (FRR runs the whole file: the check above
+# found nothing left, or the check is off and FRR is active): FRR did not need what it refused (e.g. a line of a
+# neighbour already removed with it). The job goes on; the node record says so
+- name: "{{ bgw_node.name }}: a reload error FRR did not need"
+  ansible.builtin.debug:
+    msg: >-
+      frr-reload.py on {{ bgw_node.name }} exited {{ _hf_reload_rc }} but FRR holds the whole configuration; the
+      reload reported an error FRR did not need: {{ _hf_reload_errors[:5] | join('; ') }}
+  when:
+    - _hf_reload_errors | length > 0
+    - "'result=unapplied' not in (_hf_frr_recorded.stdout_lines | default([]))"
 
 - name: "{{ bgw_node.name }}: lines FRR does not take"
   ansible.builtin.debug:
@@ -1269,13 +1347,15 @@
                       ~ ((', service VRF ' ~ hf_node_service.vrf ~ ' (' ~ hf_node_service.circuits | length
                           ~ ' platform circuit(s), ' ~ hf_node_service.networks | length ~ ' network(s))')
                          if hf_node_service | default({}) | length > 0 else '')
-                      ~ ((', not ready on the SRv6 core: ' ~ _pending | join(', ')) if _pending | length > 0 else ''),
+                      ~ ((', not ready on the SRv6 core: ' ~ _pending | join(', ')) if _pending | length > 0 else '')
+                      ~ ((', the reload reported an error FRR did not need: ' ~ _hf_reload_errors | first)
+                         if _hf_reload_errors | default([]) | length > 0 else ''),
            'lastAppliedAt': lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ')}
            | combine({'egressIpv6': _eg6} if hf_node_egress.ipv6 is defined else {})
            | combine({'transport': 'srv6', 'locator': hf_pe.locator, 'pendingPeers': _pending} if _srv6 | bool else {})] }}
     hf_changed_nodes: >-
       {{ hf_changed_nodes | default([]) + ([bgw_node.name] if [_hf_files, _hf_modules, _hf_rootconf, _hf_vrfgone, _hf_unit,
-         _hf_apply, _hf_daemons, _hf_frrconf, _hf_frr_state, _hf_reload | default({}), _hf_vrfs_gone | default({}),
+         _hf_apply, _hf_daemons, _hf_daemons_reload | default({}), _hf_frrconf, _hf_frr_state, _hf_reload | default({}), _hf_vrfs_gone | default({}),
          _hf_guard_files | default({}), _hf_guard_unit | default({}), _hf_guard_gone | default({}),
          _cgu_files | default({}), _cgu_timer | default({})]
          | select('changed') | list | length > 0 else []) }}
