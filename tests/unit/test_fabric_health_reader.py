@@ -275,6 +275,13 @@ class ServiceSessions(unittest.TestCase):
         self.assertEqual(out["instances"]["root"]["serviceSessions"]["established"], 0)
         self.assertEqual(out["instances"]["root"]["serviceSessions"]["peers"][0]["state"], "Missing")
 
+    def test_a_node_with_nothing_kept(self):
+        # Review R4 V2-M1: the fabric keeps the service while a setting is wrong, but this node has no block to keep
+        n = Node()
+        n.files["/etc/shc-fabric/root.json"] = json.dumps(dict(ROOT_JSON, serviceMissing="no service applied here to keep"))
+        out = n.read_node()["instances"]["root"]["serviceSessions"]
+        self.assertEqual((out["known"], out["established"], out["missing"]), (1, 0, "no service applied here to keep"))
+
     def test_none_without_the_service(self):
         n = Node()
         out = n.read_node()

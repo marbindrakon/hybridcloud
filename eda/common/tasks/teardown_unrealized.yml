@@ -60,6 +60,7 @@
       - OutsideAttachableRanges
       - AddressConflict
       - PrefixReserved
+      - NotForManagedClusters
       - NetworkChoiceRequired
       - ExternalNetworkNotListed
       - NetworkNameNotUnique

@@ -1,0 +1,71 @@
+---
+# An installed, healthy cluster on a hybrid network (the fast path of openstack.yml) whose router gateway address is
+# not carried: condition RouterGateway absent or not True, or status.platformPrefixes without the gateway /32. The
+# full path's step (router_gateway.yml) ran once and failed or was refused (a cloud read that failed, a release that
+# could not find the router); the cluster job does not run it again on its own, so this run does. A carried gateway
+# costs nothing here (the caller's status read decides). Reads only up to the step: the network, its placements and
+# its fabric judged as the preflight does (preflight_network.yml, pn_judge_only: nothing refuses or stops a Ready
+# cluster), the infra id from the ClusterDeployment the monitor read (cd_info). Nothing is created, claimed or
+# rendered. A failure before the step, or a network the judge does not pass, is condition RouterGateway False with
+# the cause; the cluster stays Ready. Uses what openstack.yml set before the fast path: oso_env_name, oso_network,
+# cb_oso_project_id, cb_fip_account, cb_app_name, cb_api_vip, cb_ingress_vip.
+- name: No cause kept yet
+  ansible.builtin.set_fact:
+    rga_error: ""
+
+- name: The network as the preflight judges it
+  block:
+    - name: Judge the network (reads only)
+      ansible.builtin.include_tasks: preflight_network.yml
+      vars:
+        pn_kind: CloudOSO
+        pn_env: "{{ oso_env_name }}"
+        pn_network: "{{ oso_network }}"
+        pn_need_platform: true
+        pn_need_router_attachments: true
+        pn_judge_only: true
+  rescue:
+    - name: Keep why the network could not be read
+      ansible.builtin.set_fact:
+        rga_error: >-
+          {{ (ansible_failed_result.msg | default('', true)
+              or ('task ' ~ (ansible_failed_task.name | default('?', true)) ~ ' failed')) | string | truncate(600, true, '') }}
+
+- name: The cluster's infra id
+  ansible.builtin.set_fact:
+    rga_infra_id: "{{ (cd_info.resources | default([]) | first | default({})).spec.clusterMetadata.infraID | default('', true) }}"
+
+# the same precondition as openstack_clusterbuild.yml's include of the step
+- name: The cluster router's gateway address joins the cluster's prefixes
+  ansible.builtin.include_tasks: router_gateway.yml
+  vars:
+    rg_infra_id: "{{ rga_infra_id }}"
+  when:
+    - rga_error | length == 0
+    - (pf.reason | default('', true)) | length == 0
+    - (pf.service.hubEndpoints | default([], true)) | length > 0
+    - rga_infra_id | length > 0
+
+- name: Say why the step could not run
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      conditions:
+        - >-
+          {{ {'type': 'RouterGateway', 'status': 'False', 'reason': 'Failed',
+              'message': ("The cluster is built and works, but the address of its router's gateway was not added to "
+                          ~ 'its addresses ('
+                          ~ (('the network could not be read: ' ~ rga_error) if rga_error | length > 0
+                             else ('HybridNetwork ' ~ oso_network ~ ': ' ~ (pf.reason | default('', true)) ~ ': '
+                                   ~ (pf.message | default('', true))) if (pf.reason | default('', true)) | length > 0
+                             else 'the ClusterDeployment names no infra id')
+                          ~ "): the cluster's own calls to the hub are not admitted on the platform's path and leave "
+                          ~ "by the network's own path") | truncate(1000, true, '')} }}
+  when: >-
+    rga_error | length > 0 or (pf.reason | default('', true)) | length > 0
+    or ((pf.service.hubEndpoints | default([], true)) | length > 0 and rga_infra_id | length == 0)

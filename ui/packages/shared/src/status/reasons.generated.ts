@@ -78,6 +78,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "NoMembersYet": { actor: "T", class: "waiting", summary: "Ready; sign-in will be verified once a granted access group has a member." },
   "NoProject": { actor: "T", class: "failed", summary: "No cloud project is set up for this environment." },
   "NodeUnreachable": { actor: "P", class: "failed", summary: "A network node does not answer. Traffic takes the other nodes; the platform team is alerted." },
+  "NotForManagedClusters": { actor: "T", class: "failed", summary: "An address of this cluster lies in a range the platform's management network routes. Use another network or address." },
   "NotPlatformNamespace": { actor: "T", class: "failed", summary: "Platform circuits are accepted only in the platform's namespace. Connect a network with ceKind customer." },
   "NotReady": { actor: "A", class: "progress", summary: "Not ready yet." },
   "NotRealizable": { actor: "T", class: "failed", summary: "The request cannot be realized on the chosen site." },
@@ -169,6 +170,7 @@ export const PART_REASONS: Record<string, ReasonEntry> = {
   "NodeStartFailed": { actor: "P", class: "ready", summary: "The network configuration did not start on a node." },
   "NotChecked": { actor: "A", class: "ready", summary: "The nodes have not been checked yet." },
   "NotEnabled": { actor: "A", class: "ready", summary: "Not turned on for this fabric." },
+  "NotForManagedClusters": { actor: "T", class: "ready", summary: "This address lies in a range the platform's management network routes: no managed cluster's address may." },
   "NotOffered": { actor: "A", class: "ready", summary: "Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4." },
   "NotReported": { actor: "A", class: "ready", summary: "The site does not report this health check." },
   "NotRequested": { actor: "T", class: "ready", summary: "The platform may not reach this network. Allow platform access on the network to build clusters the platform manages." },
@@ -177,8 +179,12 @@ export const PART_REASONS: Record<string, ReasonEntry> = {
   "PreflightPassed": { actor: "A", class: "ready", summary: "Every check before the build passed." },
   "ReadFailed": { actor: "P", class: "ready", summary: "A node answered but could not be checked this time." },
   "RoutingDaemonRestarted": { actor: "P", class: "ready", summary: "A routing process on a node restarted after a crash; the platform team is alerted." },
+  "ServiceLimitReached": { actor: "P", class: "ready", summary: "The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team." },
   "ServiceNotOffered": { actor: "P", class: "ready", summary: "The platform's connection for clusters on networks is not offered here. Ask the platform team." },
+  "ServiceNotRealized": { actor: "P", class: "ready", summary: "The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts." },
   "ServicePrefixInUse": { actor: "T", class: "ready", summary: "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team." },
+  "ServiceSettingInvalid": { actor: "P", class: "ready", summary: "A setting of the platform's connection for clusters on networks is wrong; the nodes keep it as last applied. The platform team acts." },
+  "ServiceShareReached": { actor: "T", class: "ready", summary: "Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn." },
   "UpstreamDown": { actor: "P", class: "ready", summary: "IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted." },
 };
 

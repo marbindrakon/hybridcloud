@@ -10,8 +10,9 @@ so that the roles' "{{ role_path }}/../../../common/..." paths resolve, with the
   fabric_check.yml      records {fabric: request} and returns fake_fabric[<action>] (default {"errors": []})
   central_create.yml    records {create: <path>/<name>, body} and answers fake_create["<path>/<name>"] (default 201)
 and a fake kubernetes.core collection (k8s_info returns FAKE_K8S["<Kind>/<namespace>/<name>"], a list query uses
-"<Kind>/<namespace>/"; k8s records {k8s: ...}) plus openstack.cloud.routers_info (returns fake routers). The trace
-is a list of JSON lines; the play may end early (meta: end_play) or fail, the trace says what happened.
+"<Kind>/<namespace>/"; k8s records {k8s: ...}). No other collection is faked: a task file that needs one the job's
+execution environment lacks fails here too (test_ee_content.py checks the definitions). The trace is a list of JSON
+lines; the play may end early (meta: end_play) or fail, the trace says what happened.
 """
 import json
 import os
@@ -95,19 +96,6 @@ def main():
     m.exit_json(changed=True)
 main()
 '''
-ROUTERS = '''#!/usr/bin/python
-import json, os
-from ansible.module_utils.basic import AnsibleModule
-def main():
-    import yaml
-    m = AnsibleModule(argument_spec=dict(cloud=dict(type="raw"), name=dict(), ca_cert=dict()))
-    cfg = yaml.safe_load(open(os.environ["OS_CLIENT_CONFIG_FILE"]))["clouds"][m.params["cloud"]]
-    with open(os.environ["FAKE_TRACE"], "a") as f:
-        f.write(json.dumps({"routers_info": m.params["name"], "project": cfg["auth"].get("project_id"),
-                            "scope": sorted(k for k in cfg["auth"] if k.endswith("domain_name"))}) + "\\n")
-    m.exit_json(changed=False, routers=json.load(open(os.environ["FAKE_ROUTERS"])))
-main()
-'''
 
 
 def _link(src, dst):
@@ -139,8 +127,7 @@ def build_tree(tmp, real=(), fakes=None):
     _link(os.path.join(EDA, "common", "files"), os.path.join(tmp, "eda", "common", "files"))
     _link(os.path.join(EDA, "common", "vars"), os.path.join(tmp, "eda", "common", "vars"))
     coll = os.path.join(tmp, "coll", "ansible_collections")
-    for ns, name, mods in (("kubernetes", "core", {"k8s_info.py": K8S_INFO, "k8s.py": K8S}),
-                           ("openstack", "cloud", {"routers_info.py": ROUTERS})):
+    for ns, name, mods in (("kubernetes", "core", {"k8s_info.py": K8S_INFO, "k8s.py": K8S}),):
         d = os.path.join(coll, ns, name, "plugins", "modules")
         os.makedirs(d)
         with open(os.path.join(coll, ns, name, "galaxy.yml"), "w") as fh:
@@ -151,7 +138,7 @@ def build_tree(tmp, real=(), fakes=None):
     return roles
 
 
-def run(role, task_file, extra_vars, k8s=None, routers=None, files=None, result=None, tasks=None, real=(), fakes=None):
+def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=None, real=(), fakes=None):
     """Run <role>/tasks/<task_file> (role_path = that role); with result (a Jinja expression) the trace ends with
     {"result": <its value>} when the file ran to its end; tasks (a task list) runs in place of the file, with the
     same role_path; real: common task files of FAKED to run unfaked (e.g. fabric_check.yml: the real helper); fakes:
@@ -165,8 +152,6 @@ def run(role, task_file, extra_vars, k8s=None, routers=None, files=None, result=
         open(trace, "w").close()
         with open(os.path.join(tmp, "k8s.json"), "w") as fh:
             json.dump(k8s or {}, fh)
-        with open(os.path.join(tmp, "routers.json"), "w") as fh:
-            json.dump(routers or [], fh)
         clouds = os.path.join(tmp, "clouds.yaml")
         with open(clouds, "w") as fh:
             yaml.safe_dump({"clouds": {"openstack": {"auth": {"auth_url": "https://keystone.example.org/v3",
@@ -206,8 +191,7 @@ def run(role, task_file, extra_vars, k8s=None, routers=None, files=None, result=
                    ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false",
                    ANSIBLE_REMOTE_TMP=os.path.join(tmp, "remote-tmp"), ANSIBLE_LOCAL_TEMP=os.path.join(tmp, "local-tmp"),
                    ANSIBLE_COLLECTIONS_SCAN_SYS_PATH="false",
-                   FAKE_K8S=os.path.join(tmp, "k8s.json"), FAKE_TRACE=trace,
-                   FAKE_ROUTERS=os.path.join(tmp, "routers.json"))
+                   FAKE_K8S=os.path.join(tmp, "k8s.json"), FAKE_TRACE=trace)
         proc = subprocess.run(["ansible-playbook", "-i", "localhost,", "play.yml", "-e", "@vars.json"], cwd=tmp, env=env,
                               capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
         with open(trace) as fh:

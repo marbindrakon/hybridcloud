@@ -134,7 +134,11 @@ function overlaps(a: string, b: string): boolean {
 
 /** The reserved ranges that apply to a prefix used on a site (rows of other sites do not). */
 export function applicableReserved(reserved: TenantReservedRange[] | undefined, site?: string): TenantReservedRange[] {
-  return (reserved ?? []).filter((r) => r && typeof r.prefix === 'string' && (!r.site || r.site === site));
+  // (NotForManagedClusters: only an address the platform announces for a managed cluster may not lie there; a
+  // network or a cluster's own networks may)
+  return (reserved ?? []).filter(
+    (r) => r && typeof r.prefix === 'string' && (!r.site || r.site === site) && r.rule !== 'NotForManagedClusters',
+  );
 }
 
 /** The first reserved range a prefix overlaps, or undefined. */

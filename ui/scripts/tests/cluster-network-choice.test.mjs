@@ -98,8 +98,12 @@ test('a placement subnet outside the managed cluster ranges is refused even when
   // 0.0.0.0/0 is the platform's explicit "any range"
   const any = nc.hybridNetworkOptions(opts({ profile: profile({ managedClusterRanges: ['0.0.0.0/0'] }), networks: [network('n')], placements: [placement('n', 'oso', { routers: true, state: 'ready' })] }));
   assert.equal(any[0].block, null);
-  // an absent list (not offered, or the profile not read) is never read as "any": the form filters nothing itself,
-  // the network's PlatformReachable decides (here: the platform does not offer the service)
+  // an absent or empty list: the platform names no ranges, any range it does not reserve will do; the form filters
+  // nothing itself and the network's PlatformReachable decides (whether the platform offers the service at all)
+  for (const managed of [{}, { managedClusterRanges: [] }]) {
+    const anyRange = nc.hybridNetworkOptions(opts({ profile: profile(managed), networks: [network('n')], placements: [placement('n', 'oso', { routers: true, state: 'ready' })] }));
+    assert.equal(anyRange[0].block, null);
+  }
   const notOffered = nc.hybridNetworkOptions(opts({ profile: profile({}), networks: [network('n', reach('False', 'ServiceNotOffered'))], placements: [placement('n', 'oso', { routers: true, state: 'ready' })] }));
   assert.equal(notOffered[0].block.reason, 'ServiceNotOffered');
 });

@@ -29,7 +29,7 @@ PA = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(PA)
 
 HUB = ["192.0.2.0/24"]
-SERVICE = {"enabled": True, "ports": [6443, 443], "attachableRanges": ["10.0.0.0/8"]}
+SERVICE = {"enabled": True, "ports": [6443, 443], "range": ["192.0.2.0/28"], "attachableRanges": ["10.0.0.0/8"]}
 CIRCUITS = {"circuits": [{"circuit": "platform-ns/hub-a", "vlan": 3001}], "networks": [], "refused": []}
 RESERVED = [{"prefix": "192.0.2.0/24", "purpose": "Networks the platform's management connects from", "rule": "Refused"},
             {"prefix": "198.51.100.0/24", "purpose": "Addresses inside the platform's network nodes", "rule": "SteppedAround"},
@@ -60,7 +60,8 @@ class Eligibility(unittest.TestCase):
         out = run()
         self.assertEqual(self.cond(out), ("True", "Attachable", "attachable"))
         self.assertEqual(out["reason"], "")
-        self.assertEqual(out["sources"], ["192.0.2.0/24"])
+        # the service range: the only addresses the platform opens connections from (not the whole hub)
+        self.assertEqual(out["sources"], ["192.0.2.0/28"])
         self.assertEqual(out["ports"], [6443, 443])
         self.assertEqual((out["prefixes"], out["accepted"], out["allocate"], out["release"]), ([], [], [], []))
         self.assertFalse(out["wakeFabric"])
@@ -107,12 +108,72 @@ class Eligibility(unittest.TestCase):
     def test_one_prefix_inside_is_enough(self):
         self.assertEqual(run(space=["172.16.0.0/16", "10.20.0.0/16"])["condition"]["reason"], "Attachable")
 
-    def test_any_range_is_written_out_and_empty_is_not_offered(self):
-        # service.attachableRanges is required with the service; 0.0.0.0/0 is the explicit "any", empty never is
-        self.assertEqual(run(space=["172.16.0.0/16"], service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]))
-                         ["condition"]["reason"], "Attachable")
-        self.assertEqual(run(space=["172.16.0.0/16"], service=dict(SERVICE, attachableRanges=[]))["condition"]["reason"],
-                         "ServiceNotOffered")
+    def test_any_is_written_out_and_empty_is_not_offered(self):
+        # Review R4 NH1: 0.0.0.0/0 is the one way to say any range the platform does not refuse; an empty list (the
+        # fabric refuses it by name) reads as not offered, by name
+        svc = dict(SERVICE, attachableRanges=["0.0.0.0/0"])
+        self.assertEqual(run(space=["172.16.0.0/16"], service=svc)["condition"]["reason"], "Attachable")
+        out = run(space=["172.16.0.0/16"], service=svc, clusters=[cl("c1", "172.16.0.9/32")])
+        self.assertEqual(out["accepted"], ["172.16.0.9/32"])
+        for att in ({"attachableRanges": []}, {"attachableRanges": None}, {}):
+            svc = {k: v for k, v in SERVICE.items() if k != "attachableRanges"}
+            svc.update(att)
+            with self.subTest(service=str(att)):
+                out = run(space=["172.16.0.0/16"], service=svc, clusters=[cl("c1", "172.16.0.9/32")])
+                self.assertEqual(out["condition"]["reason"], "ServiceNotOffered")
+                self.assertIn("service.attachableRanges", out["message"])
+                self.assertEqual(out["accepted"], [])
+        # the reserved ranges still refuse under any: the hub's range and the published rows
+        out = run(space=["172.16.0.0/16", "198.51.100.0/24"], service=dict(SERVICE, attachableRanges=["0.0.0.0/0"]),
+                  clusters=[cl("c1", "198.51.100.7/32")])
+        self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
+
+    def test_no_service_range_is_not_offered(self):
+        # the service needs its range (check-fabric names it); the network says so and accepts nothing
+        for rng in ([], None):
+            with self.subTest(range=rng):
+                out = run(service=dict(SERVICE, range=rng), clusters=[cl("c1", "10.20.1.5/32")])
+                self.assertEqual(self.cond(out), ("False", "ServiceNotOffered", "unavailable"))
+                self.assertIn("service.range", out["message"])
+                self.assertEqual(out["accepted"], [])
+
+    def test_a_service_the_fabric_does_not_realize(self):
+        # Review R4 M2: the fabric realizes no service for a wrong setting and says why in its status; the network
+        # says so by name (ServiceNotOffered), its accepted prefixes keep their place
+        sst = dict(CIRCUITS, circuits=[], reason="InvalidSpec",
+                   message="realization service.vrf.table 254 must be a table other than 253-255")
+        led = {"HybridNetwork/tenant-a/net/10.20.1.5/32": 3}
+        out = run(serviceStatus=sst, clusters=[cl("c1", "10.20.1.5/32")], ledger=led)
+        self.assertEqual(self.cond(out), ("False", "ServiceNotOffered", "unavailable"))
+        self.assertIn("service.vrf.table", out["message"])
+        self.assertEqual((out["kept"], out["release"]), (["10.20.1.5/32"], []))
+
+    def test_a_row_says_whether_its_cluster_installed(self):
+        # Review R4 M1: the fabric gives slots of the limit to installed clusters first
+        out = run(clusters=[dict(cl("c1", "10.20.1.5/32"), installed=True), cl("c2", "10.20.1.6/32")])
+        self.assertEqual({r["cluster"]: r["installed"] for r in out["prefixes"]}, {"c1": True, "c2": False})
+
+    def test_a_prefix_waiting_for_the_limit(self):
+        # Review R4 M1: the fabric's waiting rows: pending with the reason and the numbers, the place kept, a candidate
+        # for the fabric still (no reason it gives back)
+        led = {"HybridNetwork/tenant-a/net/10.20.1.5/32": 3}
+        sst = dict(CIRCUITS, waiting=[{"network": "tenant-a/net", "prefix": "10.20.1.5/32", "cluster": "c1",
+                                       "reason": "ServiceShareReached",
+                                       "message": "10.20.1.5/32 waits: this tenant's clusters hold 5 of the 5 ..."}])
+        out = run(serviceStatus=sst, clusters=[cl("c1", "10.20.1.5/32")], ledger=led)
+        row = out["prefixes"][0]
+        self.assertEqual((row["state"], row["reason"]), ("pending", "ServiceShareReached"))
+        self.assertIn("5 of the 5", row["message"])
+        self.assertEqual((out["accepted"], out["kept"], out["release"]), ([], ["10.20.1.5/32"], []))
+        sys.path.insert(0, os.path.join(ROOT, "eda", "common", "files"))
+        import shc_fabric as F
+        self.assertTrue(F.accepted_row(row))
+
+    def test_the_sources_are_the_service_range(self):
+        # the only addresses the platform's management opens connections from, for the tenant's own firewalls
+        self.assertEqual(run()["sources"], ["192.0.2.0/28"])
+        # the service off: as before (the hub's IPv4 ranges)
+        self.assertEqual(run(service=dict(SERVICE, enabled=False))["sources"], HUB)
 
 
 class Prefixes(unittest.TestCase):
@@ -155,8 +216,27 @@ class Prefixes(unittest.TestCase):
         out = run(space=["10.20.0.0/16", "172.16.0.0/16"], clusters=[cl("c1", "172.16.0.9/32")])
         self.assertEqual((out["prefixes"][0]["state"], out["prefixes"][0]["reason"]), ("refused", "OutsideAttachableRanges"))
 
-    def test_a_site_row_does_not_refuse(self):
-        self.assertEqual(run(clusters=[cl("c1", "10.20.200.9/32")])["accepted"], ["10.20.200.9/32"])
+    def test_a_site_row_refuses_a_service_prefix(self):
+        # Review R4 H1: a cluster's address is announced to the hub's network, where every site's own addresses are
+        # routed: a row of any site refuses it, whatever site the network is placed on (a tenant network itself is
+        # judged by its own site's rows only, check-network)
+        out = run(clusters=[cl("c1", "10.20.200.9/32")])
+        self.assertEqual(out["accepted"], [])
+        self.assertEqual(out["prefixes"][0]["reason"], "PrefixReserved")
+        self.assertIn("10.20.200.0/24", out["prefixes"][0]["message"])
+        self.assertIn("site-a", out["prefixes"][0]["message"])
+
+    def test_a_range_the_hub_routes_refuses_a_cluster_address_only(self):
+        # Review R4 NM3: published NotForManagedClusters: the cluster's address is refused with its own reason
+        rows = RESERVED + [{"prefix": "10.20.100.0/24", "purpose": "Addresses the platform's management network routes",
+                            "rule": "NotForManagedClusters"}]
+        out = run(reserved=rows, clusters=[cl("c1", "10.20.100.5/32", "10.20.1.5/32")])
+        by = {r["prefix"]: r for r in out["prefixes"]}
+        self.assertEqual(by["10.20.100.5/32"]["reason"], "NotForManagedClusters")
+        self.assertIn("cannot have an address there", by["10.20.100.5/32"]["message"])
+        self.assertEqual(out["accepted"], ["10.20.1.5/32"])
+        # the network itself is not affected
+        self.assertEqual(out["condition"]["reason"], "AttachPending")
 
     def test_the_hub_refuses_without_a_published_row(self):
         out = run(space=["192.0.2.0/24", "10.20.0.0/16"], reserved=[], clusters=[cl("c1", "192.0.2.9/32")],
@@ -384,6 +464,29 @@ class PlatformAccessTasks(unittest.TestCase):
         self.assertFalse(out["ledger_read"])
         self.assertEqual(out["recorded"], [])
 
+    def test_the_job_passes_the_range_and_no_attachable_ranges_mean_any(self):
+        # the realization's service.range reaches the decision (sources; without it: not offered, by name), and a
+        # realization without attachableRanges accepts any range the platform does not refuse
+        svc = dict(SERVICE, attachableRanges=["0.0.0.0/0"])
+        out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], real={"service": svc})
+        self.assertEqual(out["access"]["sources"], ["192.0.2.0/28"])
+        self.assertEqual([(r["prefix"], r["state"], r["reason"]) for r in out["access"]["prefixes"]],
+                         [("10.20.1.5/32", "pending", "")])
+        out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32"])], real={"service": dict(svc, range=[])})
+        self.assertEqual(out["cond"]["reason"], "ServiceNotOffered")
+        self.assertIn("service.range", out["cond"]["message"])
+
+    def test_the_rows_say_whether_the_cluster_installed(self):
+        # Review R4 M1: from the cluster's status (installStarted or clusterInstalled), on the job's own listing
+        c1 = self.poc("os1", "net", ["10.20.1.5/32"])
+        c1["status"]["installStarted"] = True
+        c2 = self.poc("os2", "net", ["10.20.1.6/32"])
+        c3 = self.poc("os3", "net", ["10.20.1.7/32"])
+        c3["status"]["clusterInstalled"] = True
+        out = self.run_tasks([c1, c2, c3])
+        self.assertEqual({r["cluster"]: r["installed"] for r in out["access"]["prefixes"]},
+                         {"os1": True, "os2": False, "os3": True})
+
     def test_accepted_rows_carry_no_reason(self):
         out = self.run_tasks([self.poc("os1", "net", ["10.20.1.5/32", "10.30.0.1/32"])])
         rows = {r["prefix"]: r for r in out["access"]["prefixes"]}
@@ -576,6 +679,26 @@ class TeardownWiring(unittest.TestCase):
         self.assertIn("platformAccess: {prefixes: []}", text)
 
     @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_a_deletion_waiting_on_a_wrong_service_setting_says_so(self):
+        # Review R4 V2-L2: while the fabric keeps the service (a setting is wrong) the network's deletion waits; its
+        # own status names the reason and the setting
+        t = by_name(load(os.path.join(HND, "main.yml")), "Mark the network waiting for the fabric")
+        fab = {"resources": [{"status": {"realization": {"service": {
+            "networks": [{"network": "acme/net"}], "settingsError": "realization service.range is required"}}}}]}
+        body = run_play([{"ansible.builtin.set_fact": {"b": t["vars"]["cr_status_body"]}, "vars": t.get("vars", {})},
+                         write_out("b")],
+                        {"_hnd_fabric": fab, "fab_st": {"fabric": "lab"}, "fab_name": "net", "fab_namespace": "acme",
+                         "fabric_platform_namespace": "platform"})
+        self.assertEqual(body["reason"], "ServiceSettingInvalid")
+        self.assertIn("service.range is required", body["message"])
+        fab["resources"][0]["status"]["realization"]["service"].pop("settingsError")
+        body = run_play([{"ansible.builtin.set_fact": {"b": t["vars"]["cr_status_body"]}, "vars": t.get("vars", {})},
+                         write_out("b")],
+                        {"_hnd_fabric": fab, "fab_st": {"fabric": "lab"}, "fab_name": "net", "fab_namespace": "acme",
+                         "fabric_platform_namespace": "platform"})
+        self.assertEqual(body["reason"], "")
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
     def test_the_clusters_that_block(self):
         t = by_name(load(os.path.join(HND, "main.yml")), "The clusters on the network")
         cs = [{"metadata": {"name": "b"}, "spec": {"type": "aws", "aws": {"network": "net"}}},
@@ -608,7 +731,7 @@ class CrdText(unittest.TestCase):
         self.assertEqual((pa["type"], pa["default"]), ("boolean", True))
         st = props["status"]["properties"]["platformAccess"]["properties"]
         self.assertEqual(sorted(st), ["message", "ports", "prefixes", "reason", "sources", "state"])
-        self.assertEqual(sorted(st["prefixes"]["items"]["properties"]), ["cluster", "message", "prefix", "reason", "state"])
+        self.assertEqual(sorted(st["prefixes"]["items"]["properties"]), ["cluster", "installed", "message", "prefix", "reason", "state"])
         # API text only
         text = json.dumps(pa) + json.dumps(props["status"]["properties"]["platformAccess"])
         for word in ("DESIGN", "OD1", "2026", "fabric_realization", "infrastructure.hub", "service VRF"):
@@ -655,7 +778,7 @@ class FirstComeFirstServedSurvivesOutages(unittest.TestCase):
                 "core": {"loopbackPool": "100.126.0.0/24", "linkSubnet": "100.126.1.0/24"},
                 "egress": {"linkPool": "169.254.0.0/16", "networkTableBase": 100000, "vrf": {"name": "egress", "table": 9000}},
                 "service": {"enabled": True, "vrf": {"name": "service", "table": 9001}, "ports": [6443, 443],
-                            "hubEndpoints": [], "attachableRanges": ["10.0.0.0/8"]}}
+                            "range": ["192.0.2.0/28"], "hubEndpoints": [], "attachableRanges": ["10.0.0.0/8"]}}
         alloc = {"vpnTarget": {"HybridNetwork/" + self.A: 10001, "HybridNetwork/" + self.B: 10002},
                  "egress": {"HybridNetwork/" + self.A: 1, "HybridNetwork/" + self.B: 2}, "servicePrefix": dict(self.ledger)}
         circ = [{"circuit": "platform-ns/hub-a", "vlan": 3001, "nodes": {"bgw-1": "100.127.0.2"}, "device": "bond1.3001",

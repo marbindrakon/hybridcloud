@@ -42,8 +42,9 @@ spec:
             one IPv6 entry the circuit also gets an IPv6 link subnet and a second BGP session over
             IPv6 from every node. A circuit of ceKind platform (only in the platform's namespace) connects
             the router of the network the platform's management runs on instead, with no network: it
-            accepts the platform's management ranges and advertises the addresses of the clusters the
-            platform builds on networks (status.ceConfig acceptedRanges and advertisedRanges).
+            accepts routes to the platform's management addresses that reach those clusters and advertises
+            the addresses of the clusters the platform builds on networks (status.ceConfig gives the router
+            its filters).
           type: object
           required:
             - spec
@@ -280,23 +281,39 @@ spec:
                   type: object
                   description: >-
                     What the CE needs to configure. With IPv6 accept entries also address6, secondAddress6 and
-                    neighbors6; for ceKind platform also advertisedRanges and acceptedRanges.
+                    neighbors6; for ceKind platform also acceptedRanges, refusedRanges, advertisedRanges and
+                    maxPrefixes, the router's filters in the order it applies them.
                   properties:
-                    advertisedRanges:
-                      type: array
-                      description: >-
-                        ceKind platform: the routes the platform advertises over the circuit, as prefix-list entries
-                        the router at the other end can accept with a fixed filter; the platform never announces a
-                        route outside them.
-                      items:
-                        type: string
                     acceptedRanges:
                       type: array
                       description: >-
-                        ceKind platform: the routes the platform accepts from the router at the other end (the
-                        ranges the platform's management connects from), as prefix-list entries.
+                        ceKind platform: the routes the platform accepts from the router at the other end, as
+                        prefix-list entries: the addresses of the platform's management that reach the clusters.
+                        The router announces these; the platform accepts nothing else.
                       items:
                         type: string
+                    refusedRanges:
+                      type: array
+                      description: >-
+                        ceKind platform: ranges the router refuses from the platform at any length, as prefix-list
+                        entries (the ranges the platform reserves, which no cluster address may lie in). Applied
+                        before advertisedRanges.
+                      items:
+                        type: string
+                    advertisedRanges:
+                      type: array
+                      description: >-
+                        ceKind platform: after refusedRanges, the routes the router accepts from the platform, as
+                        prefix-list entries: 0.0.0.0/0 le 32 (any other IPv4 prefix up to /32) unless the platform
+                        names the ranges the clusters' addresses must lie in. The platform never announces a route
+                        outside them.
+                      items:
+                        type: string
+                    maxPrefixes:
+                      type: integer
+                      description: >-
+                        ceKind platform: the most routes the platform announces over the circuit, for the router's
+                        maximum-prefix limit.
                     address6:
                       type: string
                       description: The CE's address on the circuit's IPv6 link subnet (with its length).

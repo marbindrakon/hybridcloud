@@ -72,8 +72,11 @@ class FabricJob(unittest.TestCase):
         out = run_play([{"ansible.builtin.set_fact": {"_r": t["vars"]["fab_check"]}}, write_out("_r")],
                        {"fab_real": real, "fab_spec": {"domainAsn": 65010, "borderGateway": {"nodes": [{"name": n} for n in S.NODES]}},
                         "fab_name": "lab", "_hf_networks": {"resources": nets}, "hf_alloc": led, "hf_attach_plan": a,
+                        "hf_sites": [{"name": "site-b", "kind": "openshift", "ranges": ["10.40.0.0/16"]}],
                         "fab_st": {"realization": {"service": {"networks": [{"network": "acme/lab", "prefixes": []}]}}}})
         self.assertEqual(out["action"], "service-plan")
+        # the fabric's sites reach the plan (Review R4 H1: every site's ranges refuse a cluster prefix)
+        self.assertEqual(out["sites"], [{"name": "site-b", "kind": "openshift", "ranges": ["10.40.0.0/16"]}])
         self.assertIsInstance(out["realization"]["service"], dict)
         r = F.service_plan(out)
         self.assertEqual(r["errors"], [])
@@ -82,7 +85,7 @@ class FabricJob(unittest.TestCase):
         out = run_play([{"ansible.builtin.set_fact": {"_r": t["vars"]["fab_check"]}}, write_out("_r")],
                        {"fab_real": real, "fab_spec": {"domainAsn": 65010, "borderGateway": {"nodes": []}},
                         "fab_name": "lab", "_hf_networks": {"resources": nets}, "hf_alloc": led,
-                        "hf_attach_plan": {"vrfs": {}}, "fab_st": {}})
+                        "hf_attach_plan": {"vrfs": {}}, "fab_st": {}, "hf_sites": []})
         self.assertEqual(out["circuits"], [])
         self.assertEqual(out["previous"], {})
 
@@ -98,19 +101,117 @@ class FabricJob(unittest.TestCase):
                          [("e10000", [4], "x"), ("e10002", [4], "y")])
 
     def test_ranges_join_the_tenants_offer(self):
-        t = main_task("Keep the ranges tenants may not use")
+        keep = main_task("Keep the ranges tenants may not use")
+        t = main_task("Tell the Entities of the ranges tenants may not use")
         rows = F.reserved_ranges(S.realization(S.CORE, service=True))
         # (pools.yml sets the offer as a fact; an extra variable would win over the step's set_fact)
         pre = {"ansible.builtin.set_fact": {"hf_tenant_offer": "{{ _offer }}"}}
+        pre = [pre, keep]
         base = {"fab_check_result": {"ranges": rows}, "_offer": "/48 /56 default /56",
                 "hf_service": {"status": {"attachableRanges": ["192.0.2.0/24"]}}}
-        a = run_play([pre, t, write_out("[hf_reserved, hf_tenant_offer]")], base)
+        a = run_play(pre + [t, write_out("[hf_reserved, hf_tenant_offer]")], base)
         self.assertEqual(a[0], rows)
         self.assertRegex(a[1], r"^/48 /56 default /56; ranges [0-9a-f]{12}$")
-        b = run_play([pre, t, write_out("hf_tenant_offer")], dict(base, hf_service={"status": {"attachableRanges": []}}))
+        b = run_play(pre + [t, write_out("hf_tenant_offer")], dict(base, hf_service={"status": {"attachableRanges": []}}))
         self.assertNotEqual(a[1], b)
-        c = run_play([pre, t, write_out("hf_tenant_offer")], base)
+        c = run_play(pre + [t, write_out("hf_tenant_offer")], base)
         self.assertEqual(a[1], c)
+
+    def test_a_service_not_realized_is_reported_once_and_named(self):
+        # Review R4 M2: an event per change of the reason, and the Ready message names it
+        t = main_task("Report the service routing domain not realized")
+        probe = {"name": t["name"], "when": t["when"], "vars": t.get("vars", {}),
+                 "ansible.builtin.set_fact": {"evented": True}}
+        st = {"enabled": False, "reason": "InvalidSpec", "message": "realization service.range is required"}
+        for before, want in (({}, True), ({"enabled": True}, True), (dict(st), False)):
+            out = run_play([probe, write_out("evented | default(false)")],
+                           {"hf_service": {"status": st}, "hf_service_before": before})
+            self.assertEqual(out, want, before)
+        out = run_play([probe, write_out("evented | default(false)")],
+                       {"hf_service": {"status": {"enabled": True}}, "hf_service_before": {}})
+        self.assertFalse(out)
+        msg = main_task("Report the fabric ready")["vars"]["fab_message"]
+        v = {"fab_name": "lab", "hf_node_results": [], "hf_changed_nodes": [], "hf_egress": {"networks": []},
+             "hf_egress_status": [], "hf_egress6_status": {"enabled": False}, "hf_attach": {"status": [], "skipped": []},
+             "hf_ipam": {"refused": ""}, "fab_real": {"egress": {}, "attachments": {}},
+             "hf_service": {"enabled": True, "pending": [], "status": dict(st, circuits=[], networks=[], refused=[])},
+             "_svc_capped": []}
+        text = run_play([{"ansible.builtin.set_fact": {"m": msg}}, write_out("m")], v)
+        self.assertIn("service VRF not realized: realization service.range is required", text)
+
+    def test_a_wrong_setting_keeps_the_service_loudly(self):
+        # Review R4 NM2: the nodes keep the last applied service; the event once per change; the condition
+        # ServiceRouting False InvalidSpec naming the setting (the alert reads it); the Ready message says it
+        t = main_task("Report the service routing domain kept while a setting is wrong")
+        probe = {"name": t["name"], "when": t["when"], "vars": t.get("vars", {}),
+                 "ansible.builtin.set_fact": {"evented": True, "why": "{{ _why }}"}}
+        st = {"enabled": True, "circuits": [{"circuit": "p/hub-a"}], "networks": [], "refused": [],
+              "settingsError": "realization service.tenantShare '0,5' must be a fraction"}
+        for before, want in (({"enabled": True}, True), (dict(st), False)):
+            out = run_play([probe, write_out("evented | default(false)")],
+                           {"hf_service": {"status": st, "kept": True}, "hf_service_before": before})
+            self.assertEqual(out, want, before)
+        rt = main_task("Report the fabric ready")
+        ct = main_task("The service routing domain's condition")
+        v = {"fab_name": "lab", "hf_node_results": [], "hf_changed_nodes": [], "hf_egress": {"networks": []},
+             "hf_egress_status": [], "hf_egress6_status": {"enabled": False}, "hf_attach": {"status": [], "skipped": []},
+             "hf_ipam": {"refused": ""}, "fab_real": {"egress": {}, "attachments": {}}, "fab_st": {},
+             "hf_service": {"enabled": True, "kept": True, "pending": [], "status": st}}
+        play = [ct, {"ansible.builtin.set_fact": {"m": rt["vars"]["fab_message"], "c": rt["vars"]["fab_conditions"]},
+                     "vars": {k: rt["vars"][k] for k in rt["vars"] if k.startswith("_")}}]
+        out = run_play(play + [write_out("[m, c]")], v)
+        self.assertIn("kept as last applied: realization service.tenantShare", out[0])
+        cond = next(c for c in out[1] if c["type"] == "ServiceRouting")
+        self.assertEqual((cond["status"], cond["reason"]), ("False", "InvalidSpec"))
+        self.assertIn("service.tenantShare", cond["message"])
+        self.assertIn("keep the service as last applied", cond["message"])
+        # Review R4 V2-M1, V2-L2: a node with nothing to keep is named; what waits for the fix is said
+        self.assertIn("a network or cluster leaving", cond["message"])
+        out = run_play(play + [write_out("c")], dict(v, hf_service_unkept=["bgw-2"]))
+        cond = next(c for c in out if c["type"] == "ServiceRouting")
+        self.assertIn("no service on bgw-2 (nothing applied there to keep)", cond["message"])
+        # the service off and never on: no condition at all (nothing changes)
+        v["hf_service"] = {"enabled": False, "status": {"enabled": False}}
+        out = run_play(play + [write_out("c")], v)
+        self.assertEqual([c for c in out if c["type"] == "ServiceRouting"], [])
+
+    def test_a_node_keeps_the_service_it_runs(self):
+        # Review R4 NM2: inside the node loop, the node's own root.json service block is kept (marked keep)
+        import base64
+        real, (egp, att, vrfs, svc) = S.service_setup()
+        names = ["{{ bgw_node.name }}: read the service the node runs, to keep it while a setting is wrong",
+                 "{{ bgw_node.name }}: keep the service the node runs", "{{ bgw_node.name }}: the kept service"]
+        tasks = [node_task(n) for n in names]
+        doc = json.dumps({"type": "root", "service": svc["bgw-1"]})
+        tasks[0] = {"name": names[0], "ansible.builtin.set_fact": {"_hf_root_now": {
+            "content": base64.b64encode(doc.encode()).decode()}}, "when": tasks[0]["when"]}
+        v = {"role_path": HF.rsplit("/tasks", 1)[0], "bgw_node": {"name": "bgw-1"}, "hf_service": {"kept": True}}
+        # (node_root.yml sets these as facts; an extra variable would win over the step's set_fact)
+        tasks = [{"ansible.builtin.set_fact": {"hf_node_service": {}, "hf_node_vrfs": []}}] + tasks
+        out = run_play(tasks + [write_out("[hf_node_service, hf_node_vrfs]")], v)
+        self.assertIs(out[0]["keep"], True)
+        self.assertEqual(out[0]["networks"], svc["bgw-1"]["networks"])
+        self.assertEqual([x["vrf"] for x in out[1]], [w["vrf"] for w in svc["bgw-1"]["networks"]])
+        # not kept: nothing read, nothing changed
+        out = run_play(tasks + [write_out("hf_node_service")], dict(v, hf_service={}))
+        self.assertEqual(out, {})
+
+    def test_a_node_with_nothing_to_keep_is_named(self):
+        # Review R4 V2-M1: a rebuilt or new node has no root.json while a setting is wrong: no service there, and it
+        # says so (hf_service_unkept for the fabric's condition, serviceMissing in its root.json for its health)
+        names = ["{{ bgw_node.name }}: read the service the node runs, to keep it while a setting is wrong",
+                 "{{ bgw_node.name }}: keep the service the node runs", "{{ bgw_node.name }}: the kept service",
+                 "{{ bgw_node.name }}: a node with no service to keep"]
+        tasks = [node_task(n) for n in names]
+        tasks[0] = {"name": names[0], "ansible.builtin.set_fact": {"_hf_root_now": {"failed": True}},
+                    "when": tasks[0]["when"]}
+        v = {"role_path": HF.rsplit("/tasks", 1)[0], "bgw_node": {"name": "bgw-2"},
+             "hf_service": {"kept": True, "status": {"circuits": [{"circuit": "p/hub-a", "nodes": ["bgw-1", "bgw-2"]}]}}}
+        pre = [{"ansible.builtin.set_fact": {"hf_node_service": {}, "hf_node_vrfs": [], "hf_service_unkept": ["bgw-1"]}}]
+        out = run_play(pre + tasks + [write_out("[hf_node_service, hf_service_unkept]")], v)
+        self.assertEqual(out, [{}, ["bgw-1", "bgw-2"]])
+        conf = node_task("{{ bgw_node.name }}: root instance config")["ansible.builtin.copy"]["content"]
+        self.assertIn("serviceMissing", conf)
 
     def test_status(self):
         t = main_task("Report the fabric ready")

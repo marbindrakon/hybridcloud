@@ -80,7 +80,8 @@ by default). It lets the platform's management open connections into the network
 addresses of the clusters it builds there and only on its service ports, and lets those clusters reach the
 platform's service endpoints. Nothing is reserved or routed for the network until a cluster is built on it, and
 no other network is reached this way. The network page shows the platform's own addresses and ports, for your own
-firewalls, and the cluster addresses it reaches.
+firewalls (the only addresses the platform's management connects from, and the only ones your clusters reach
+through this access), and the cluster addresses it reaches.
 
 The network's **PlatformReachable** condition says whether the platform reaches the network:
 
@@ -89,7 +90,7 @@ The network's **PlatformReachable** condition says whether the platform reaches 
 | `Attachable`, `Attached` | The platform reaches the network (Attached: a cluster is on it). |
 | `NotRequested` | Platform access is off on the network. Turn it on (the cluster form offers **Allow platform access**). |
 | `NoIPv4` | The network has no IPv4 address space; clusters need IPv4. |
-| `OutsideAttachableRanges` | No IPv4 prefix of the network lies in the ranges for clusters managed by the platform. |
+| `OutsideAttachableRanges` | The platform names ranges for clusters it manages, and no IPv4 prefix of the network lies in them. |
 | `InfrastructureOverlap` | The network's addresses overlap a range the platform reserves; the platform cannot reach it. |
 | `ServiceNotOffered`, `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. |
 | `AttachPending` | The platform is connecting to the network; this takes a few minutes. |
@@ -104,11 +105,19 @@ Your tenant profile lists the ranges the platform reserves (`oc get tenantprofil
 - **Refused**: no network, edge connection route or cluster range of yours may overlap it. The network form marks
   a prefix inside one before you create the network.
 - **Not allocated**: the platform does not give subnets from it (on the site named, where a row names one).
+- **Not for managed clusters**: your networks may use it, but a cluster the platform manages cannot have its
+  addresses there (the platform's management network routes it): such an address is refused with
+  `NotForManagedClusters`.
 
-**Ranges for clusters managed by the platform** (`status.managedClusterRanges`) are the ranges a network must have
-addresses in to host clusters the platform manages: on OpenStack the floating IPs, on AWS and Google Cloud with
-Internal the placement's subnet. `0.0.0.0/0` means any range the platform does not reserve. Without the list the
-platform does not offer clusters it manages on your networks.
+**Ranges for clusters managed by the platform** (`status.managedClusterRanges`): a network must have addresses in
+them, outside the ranges refused above, to host clusters the platform manages (on OpenStack the floating IPs, on
+AWS and Google Cloud with Internal the placement's subnet). By default these are the private and shared blocks
+(10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10); `0.0.0.0/0` means **any range** not refused above.
+Inside them you number your networks as you like: a cluster's addresses are taken first come, first served, so
+two tenants with the same address space can both have clusters as long as their clusters' addresses differ
+(`ServicePrefixInUse` tells the second one; creating the cluster again picks new addresses). The list is absent
+where the platform does not offer clusters it manages on networks (the network's `PlatformReachable` condition says
+`ServiceNotOffered`).
 
 ## Address settings of a cluster
 
@@ -143,10 +152,11 @@ install). [Status reasons](status-reasons.md) lists every reason and who acts.
 | `WaitingForPlacement` | The placement is not ready yet; the cluster waits. |
 | `PlacementHasNoIPv4` | The placement has no IPv4 subnet; clusters need one. |
 | `PlatformAccessOff` | Allow platform access on the network. |
-| `OutsideAttachableRanges` | Use a network (placement subnet) inside the ranges for clusters managed by the platform. |
+| `OutsideAttachableRanges` | Use a network (placement subnet) inside the ranges for clusters managed by the platform (only where the platform names such ranges). |
 | `AddressConflict` | Two of the cluster's ranges, or a range and the network's space, overlap; the message names both. |
 | `PrefixReserved` | A range overlaps a range the platform reserves; the message names it and its purpose. |
 | `ServicePrefixInUse` | An address of the cluster is already reached by the platform for another network. Create the cluster again (new addresses are chosen) or ask the platform team. |
+| `ServiceLimitReached`, `ServiceShareReached` (on the network's address rows; the cluster waits) | The platform reaches as many cluster addresses as it may, or your clusters hold the share one tenant may hold while others use the platform's connection; the message gives the numbers. The cluster waits its turn; deleting another of your clusters frees its share. |
 | `NetworkChoiceRequired` | The site has no default external network: choose a network. |
 | `ExternalNetworkNotListed` | The external network named is not one of the site's. |
 | `NetworkNameNotUnique` | The environment sees another network with the same name as the cluster's network, and the installer finds the network by its name. Rename or remove the other network; a network shared with the environment by someone else: ask the platform team. |

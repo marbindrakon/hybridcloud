@@ -57,6 +57,10 @@ Actions (request["action"]):
                 The calls carry a Keystone token of the router's project (never logged or returned).
   platform-inventory  read only: the networks (with their RBAC shares), routers (with evpn_vni) and ports of other
                 owners in the platform project, for the fabric orphan check.
+  project-routers  read only, the site account scoped to the environment's project (project_id): the routers of
+                that project carrying `tag` (the installer tags its resources openshiftClusterID=<infraID>), each with
+                its tags and external gateway (network and fixed addresses), for the PlatformOpenshift role's router
+                gateway step (files/po_preflight.py router-gateway judges them).
 """
 import ipaddress
 import json
@@ -1036,12 +1040,39 @@ def platform_inventory(req):
     return {"found": True, "projectId": proj.id, "networks": nets, "routers": routers}
 
 
+def project_routers(req):
+    """Read only. {project_id, tag} -> {routers: [{id, name, project_id, tags, external_gateway_info: {network_id,
+    external_fixed_ips: [{subnet_id, ip_address}]}}]}: the routers of the environment's project that carry the tag,
+    with the site account scoped to that project. The installer names its router by its generation (Terraform:
+    <infraID>-external-router; Cluster API: k8s-clusterapi-cluster-openshift-cluster-api-guests-<infraID>) but tags it
+    openshiftClusterID=<infraID> in both, as its destroy finds it. Neutron filters by tag and project; both are
+    checked again here (routers of other projects are never listed, the account may see them all)."""
+    pid = str(req.get("project_id") or "")
+    tag = str(req.get("tag") or "")
+    if not pid or not tag:
+        raise ValueError("project-routers needs project_id and tag")
+    conn = Account(req).project(pid)
+    out = []
+    for r in conn.network.routers(tags=tag, project_id=pid):
+        tags = list(getattr(r, "tags", None) or [])
+        if tag not in tags or (getattr(r, "project_id", None) or pid) != pid:
+            continue
+        gw = getattr(r, "external_gateway_info", None) or {}
+        out.append({"id": r.id, "name": r.name, "project_id": getattr(r, "project_id", None) or pid, "tags": tags,
+                    "external_gateway_info": {
+                        "network_id": gw.get("network_id") or "",
+                        "external_fixed_ips": [{"subnet_id": (f or {}).get("subnet_id") or "",
+                                                "ip_address": (f or {}).get("ip_address") or ""}
+                                               for f in gw.get("external_fixed_ips") or []]}})
+    return {"routers": out}
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
            "cluster-fips": cluster_fips, "router-advertisement": router_advertisement,
            "network-name-check": network_name_check,
-           "platform-inventory": platform_inventory}
+           "platform-inventory": platform_inventory, "project-routers": project_routers}
 
 if __name__ == "__main__":
     request = json.load(sys.stdin)

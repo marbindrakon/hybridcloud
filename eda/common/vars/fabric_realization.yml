@@ -264,31 +264,55 @@ fabric_realization_defaults:
     # the networks the platform's management (cluster installation and management) connects from. Empty = none
     hub: []
   # the service VRF: the platform's management reaches the clusters it builds on tenant networks through it, handed
-  # off to the hub's network by AttachmentCircuits of ceKind platform (an eBGP session per node and circuit: the hub's
-  # IPv4 ranges in, the clusters' prefixes out). A network takes part from its first cluster on: its VRF on every node
-  # gets a veth pair (se<vpnTarget> in the network's VRF, so<vpnTarget> in the service VRF) on its root index's
-  # service link (the upper half of egress.linkPool) over which it learns the hub's IPv4 ranges from the service VRF
-  # (announced into the network's VPN only while the node holds them from a platform circuit), and the service VRF a
-  # route to each of the cluster's prefixes; the nftables table ip shc_service admits only
-  # the hub to the clusters' prefixes on ports and the clusters to hubEndpoints, statelessly (the two directions may
-  # cross different nodes). IPv4 only. Needs attachments.enabled and an IPv4 infrastructure.hub range.
+  # off to the hub's network by AttachmentCircuits of ceKind platform (an eBGP session per node and circuit: the service
+  # range in, the clusters' prefixes out). A network takes part from its first cluster on: its VRF on every node gets
+  # a veth pair (se<vpnTarget> in the network's VRF, so<vpnTarget> in the service VRF) on its root index's service link
+  # (the upper half of egress.linkPool) over which it learns the service range from the service VRF (announced into
+  # the network's VPN only while the node holds it from a platform circuit), and the service VRF a route to each of the
+  # cluster's prefixes; the nftables table ip shc_service admits, statelessly (the two directions may cross different
+  # nodes), from the hub only the service range to the clusters' prefixes on ports, and from a network only packets
+  # to the service range (replies from those ports, connections to hubEndpoints). IPv4 only. Needs
+  # attachments.enabled, an IPv4 infrastructure.hub range and service.range.
   service:
     enabled: false
     # the VRF on every node's root (not the egress VRF's name, not e<digits>) and its table (not 253-255, not the
     # egress VRF's, below egress.networkTableBase)
     vrf: {name: service, table: 9001}
+    # the hub's IPv4 addresses the service VRF carries (an address is written /32), each inside an infrastructure.hub
+    # range (it may be the same): the only sources admitted toward the clusters, the only destinations a cluster
+    # reaches through the service VRF, the only routes taken from the hub's routers and offered to the networks.
+    # Required with service.enabled (check-fabric names it when empty)
+    range: []
     # TCP ports the hub may open toward a cluster's prefixes
     ports: [6443, 443]
-    # destinations in the hub's ranges the clusters may open TCP connections to: [{prefix, ports}] (e.g. the hub's
+    # destinations inside service.range the clusters may open TCP connections to: [{prefix, ports}] (e.g. the hub's
     # API). Empty = none: the clusters reach the hub by their network's own outbound path
     hubEndpoints: []
-    # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF; the platform circuit announces nothing
-    # outside them, and its status.ceConfig gives them to the hub's network ("<range> le 32") to accept with a fixed
-    # filter. Required with service.enabled (check-fabric names it when empty): there is no implicit "any". A
-    # deployment that wants every range writes 0.0.0.0/0, and then the hub's network accepts any route inside its
-    # tenants' address spaces that the reserved ranges do not cover (more-specifics of its own networks outside
-    # infrastructure.hub included)
-    attachableRanges: []
+    # IPv4 ranges a cluster's prefixes must lie in to enter the service VRF, the reserved ranges taken out first; the
+    # hub's network is told exactly this list (status.ceConfig, "<range> le 32"). Default: the private and shared
+    # blocks. A deployment whose tenants run clusters on other space sets its own list. 0.0.0.0/0 is the one way to
+    # say any range the platform does not refuse: the hub's routers then accept any public /32 from the platform too,
+    # and where the hub reaches the internet by a default route a cluster's address is preferred there over the
+    # internet's, so every range the hub's network routes itself must then be declared (service.hubRoutedRanges).
+    # Not empty (refused by name: an empty list would read as "none" or as "any")
+    attachableRanges: [10.0.0.0/8, 172.16.0.0/12, 192.168.0.0/16, 100.64.0.0/10]
+    # the IPv4 ranges the hub's network routes itself (its servers, proxies, other sites, cloud-side subnets the fabric
+    # does not know): no cluster address may lie in them (a cluster's /32 would be preferred there over the real
+    # one), but tenant networks may use them (each network is its own VRF). Published to tenants as
+    # NotForManagedClusters. infrastructure.hub stays the hub's own range tenants are refused outright
+    hubRoutedRanges: []
+    # the most cluster prefixes the platform announces to the hub's network over a platform circuit (its
+    # maximum-prefix, status.ceConfig.maxPrefixes). A cluster's prefixes are admitted all or none; an admitted cluster
+    # keeps its slot (see admissionHoldMinutes), the others take what is left in the order they came; the rest wait
+    # (ServiceLimitReached on the network's row)
+    maxPrefixes: 1000
+    # the part of maxPrefixes one tenant's not yet admitted clusters may take while two or more tenants ask
+    # (ServiceShareReached beyond it); a tenant alone may use all of it. Above 0, at most 1
+    tenantShare: 0.5
+    # how long a cluster admitted to the limit keeps its slot before its install starts (minutes): an admitted
+    # cluster is never pushed out by a newcomer meanwhile; once its install has started it keeps it for good, and a
+    # refused or deleted cluster gives it back at once
+    admissionHoldMinutes: 60
   # attachment circuits (AttachmentCircuit on a ProviderEdge of platform frr): each circuit gets a VLAN from vlanPool
   # on its bearer and the next /linkPrefixLength of linkPool (node i takes host address i+1, the CE the next one);
   # the network's root VRF on every node peers with the CE over that VLAN. providerEdges.<edge>.bearers.<bearer>

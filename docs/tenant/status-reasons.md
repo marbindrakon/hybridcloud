@@ -196,6 +196,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NoDefaultConfig` | No default connection is configured for this service. Ask the platform team. | The platform team |
 | `NoProject` | No cloud project is set up for this environment. | You (the tenant) |
 | `NodeUnreachable` | A network node does not answer. Traffic takes the other nodes; the platform team is alerted. | The platform team |
+| `NotForManagedClusters` | An address of this cluster lies in a range the platform's management network routes. Use another network or address. | You (the tenant) |
 | `NotPlatformNamespace` | Platform circuits are accepted only in the platform's namespace. Connect a network with ceKind customer. | You (the tenant) |
 | `NotRealizable` | The request cannot be realized on the chosen site. | You (the tenant) |
 | `OperatorFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
@@ -260,6 +261,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NodeStartFailed` | The network configuration did not start on a node. | The platform team |
 | `NotChecked` | The nodes have not been checked yet. | Nobody: it continues by itself |
 | `NotEnabled` | Not turned on for this fabric. | Nobody: it continues by itself |
+| `NotForManagedClusters` | This address lies in a range the platform's management network routes: no managed cluster's address may. | You (the tenant) |
 | `NotOffered` | Not offered on this fabric yet: internet access for an address family, or translation to IPv4 for a network without IPv4. | Nobody: it continues by itself |
 | `NotReported` | The site does not report this health check. | Nobody: it continues by itself |
 | `NotRequested` | The platform may not reach this network. Allow platform access on the network to build clusters the platform manages. | You (the tenant) |
@@ -268,7 +270,11 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `PreflightPassed` | Every check before the build passed. | Nobody: it continues by itself |
 | `ReadFailed` | A node answered but could not be checked this time. | The platform team |
 | `RoutingDaemonRestarted` | A routing process on a node restarted after a crash; the platform team is alerted. | The platform team |
+| `ServiceLimitReached` | The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
+| `ServiceNotRealized` | The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts. | The platform team |
 | `ServicePrefixInUse` | An address of this cluster is already reached by the platform for another network. Try again or ask the platform team. | You (the tenant) |
+| `ServiceSettingInvalid` | A setting of the platform's connection for clusters on networks is wrong; the nodes keep it as last applied. The platform team acts. | The platform team |
+| `ServiceShareReached` | Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn. | You (the tenant) |
 | `UpstreamDown` | IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted. | The platform team |
 <!-- reasons:end -->

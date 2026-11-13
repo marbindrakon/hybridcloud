@@ -48,8 +48,10 @@
     cb_install_config_vault: "oso/projects/{{ oso_env_name }}/clusters/{{ ansible_operator_meta.name }}/install-config"
     cb_trust_bundle: "{{ platform_spec.openstack.trustBundle | default('') }}"
     cb_glance_image: "{{ platform_spec.openstack.glanceImageOverride | default(default_glance_image_override, true) }}"
-    # resolvers for the cluster subnet (empty: the cloud's DHCP default)
-    cb_external_dns: "{{ platformopenshift_defaults.externalDNS | default([]) }}"
+
+# the resolvers of the cluster's machine subnet: on a hybrid network the placement's, else the installation default
+- name: The cluster's resolvers
+  ansible.builtin.include_tasks: cluster_resolvers.yml
 
 # the teardown derives the same list (eda/common/tasks/resolve_platformopenshift_paths.yml): change both
 - name: Record the Vault paths this cluster writes (install-config here, PushSecrets in the monitor)
@@ -213,6 +215,13 @@
         projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
         records: "{{ cb_dns_records | default([]) }}"
       vaultPaths: null
+
+# the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
+- name: Wake the network now the install starts
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: HybridNetwork, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ oso_network }}"}]
+  when: cb_platform_path | default(false) | bool
 
 - name: Render build-values YAML to tempfile
   ansible.builtin.copy:

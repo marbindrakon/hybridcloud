@@ -1,78 +1,132 @@
 ---
 # After the install of a cluster on a hybrid network whose fabric admits hub endpoints (DESIGN cnet §3.7, §4.2 step
-# 7): the nodes reach the hub with the source address of the cluster's router (the installer's, named
-# <infraID>-external-router), so that address joins the cluster's prefixes as /32. Read with the site account scoped
-# to the environment's project. The router is found by name in a project the tenant writes to: only a name that is
-# unique there and a gateway on the cluster's network count (Review R2 L9). A refusal is reported, not fatal: the
-# cluster is built, and ACM's agent falls back to the network's own path. Inputs: rg_infra_id.
-- name: Load the site account
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
-  vars:
-    os_account_vault_path: "{{ cb_fip_account }}"
-    os_account_tag: "po-router-{{ cb_app_name }}"
-
-- name: Read the router with the account scoped to the environment's project
+# 7): the nodes reach the hub with the source address of the cluster's router, so that address joins the cluster's
+# prefixes as /32. Read with the site account scoped to the environment's project (shc_openstack.py project-routers,
+# through openstack_call.yml: the account's secret stays in its temp file and is never a module parameter). The router
+# is found by the installer's tag openshiftClusterID=<infraID> (its name depends on the installer generation): only
+# exactly one router with the tag in that project and its gateway on the cluster's network count (Review R2 L9). A refusal or a failure here is
+# reported, not fatal: the cluster is built, and ACM's agent falls back to the network's own path. Condition
+# RouterGateway says which: True (carried), False WaitingForPlatformAccess (recorded, not carried yet), or False with
+# the fabric's refusal or Failed (not added, with the cause). Inputs: rg_infra_id.
+- name: The router's gateway address joins the cluster's prefixes
   block:
-    - name: Read the account
-      ansible.builtin.slurp:
-        src: "{{ os_account_clouds_yaml }}"
-      register: _rg_clouds
-      no_log: true
+    # the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
+    - name: Read the router with the account scoped to the environment's project
+      block:
+        - name: Load the site account
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+          vars:
+            os_account_vault_path: "{{ cb_fip_account }}"
+            os_account_tag: "po-router-{{ cb_app_name }}"
 
-    # a clouds.yaml of its own (the module reads it by name): a secret passed as a module parameter would be masked in
-    # everything the module returns, router names and addresses included
-    - name: The account scoped to the environment's project
+        - name: Read the cluster's router
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+          vars:
+            os_call_no_log: false
+            os_request:
+              action: project-routers
+              project_id: "{{ cb_oso_project_id }}"
+              tag: "openshiftClusterID={{ rg_infra_id }}"
+      always:
+        - name: Remove the account's temp files
+          ansible.builtin.file:
+            path: "/tmp/eda-po-router-{{ cb_app_name }}-{{ item }}"
+            state: absent
+          loop: [clouds.yaml, ca.crt]
+
+    - name: The router's gateway address
+      ansible.builtin.include_tasks: po_call.yml
       vars:
-        _cfg: "{{ ((_rg_clouds.content | b64decode | from_yaml).clouds | default({})).openstack | default({}) }}"
-        _scope: [project_name, project_id, project_domain_name, project_domain_id, domain_name, domain_id, system_scope]
-        _cacert: "{{ os_account_cacert | default('', true) or (_cfg.cacert | default('', true)) }}"
-      ansible.builtin.copy:
-        dest: "/tmp/eda-po-router-{{ cb_app_name }}-project.yaml"
-        mode: "0600"
-        content: >-
-          {{ {'clouds': {'project': _cfg
-                         | combine({'auth': (_cfg.auth | default({})) | dict2items | rejectattr('key', 'in', _scope)
-                                            | items2dict | combine({'project_id': cb_oso_project_id})})
-                         | combine({'cacert': _cacert} if _cacert | length > 0 else {})}} | to_nice_yaml }}
-      no_log: true
+        po_request:
+          action: router-gateway
+          tag: "openshiftClusterID={{ rg_infra_id }}"
+          network_id: "{{ pf.networkId }}"
+          routers: "{{ os_result.routers | default([], true) }}"
 
-    - name: Read the cluster's router
-      openstack.cloud.routers_info:
-        cloud: project
-        name: "{{ rg_infra_id }}-external-router"
-      environment:
-        OS_CLIENT_CONFIG_FILE: "/tmp/eda-po-router-{{ cb_app_name }}-project.yaml"
-      register: _rg_routers
-  always:
-    - name: Remove the account's temp files
-      ansible.builtin.file:
-        path: "/tmp/eda-po-router-{{ cb_app_name }}-{{ item }}"
-        state: absent
-      loop: [clouds.yaml, ca.crt, project.yaml]
+    - name: Keep the gateway address
+      ansible.builtin.set_fact:
+        rg_address: "{{ po_result.address | default('', true) }}"
+        rg_note: "{{ po_result.note | default('', true) }}"
 
-- name: The router's gateway address
-  ansible.builtin.include_tasks: po_call.yml
+    - name: Carry the gateway address with the floating IPs
+      ansible.builtin.include_tasks: platform_prefixes.yml
+      vars:
+        pp_prefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32", "{{ rg_address }}/32"]
+        pp_network: "{{ oso_network }}"
+        pp_fabric: "{{ pf.fabric }}"
+      when: rg_address | length > 0
+
+    - name: Take a refused gateway address out again
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          platformPrefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32"]
+      when:
+        - rg_address | length > 0
+        - not (pp_outcome.done | bool)
+        - not (pp_outcome.wait | bool)
+  rescue:
+    - name: Keep why the gateway address could not be added
+      ansible.builtin.set_fact:
+        rg_error: >-
+          {{ (ansible_failed_result.msg | default('', true)
+              or ('task ' ~ (ansible_failed_task.name | default('?', true)) ~ ' failed')) | string | truncate(600, true, '') }}
+
+    # a failure after the record: the floating IPs stay the cluster's prefixes and the gateway goes (best effort; the
+    # condition below says it was not added either way)
+    - name: Take the gateway address out again
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          platformPrefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32"]
+      when: rg_address | default('', true) | length > 0
+
+    - name: No gateway address
+      ansible.builtin.set_fact:
+        rg_address: ""
+        rg_note: ""
+
+- name: The outcome for the cluster's status
   vars:
-    po_request:
-      action: router-gateway
-      name: "{{ rg_infra_id }}-external-router"
-      network_id: "{{ pf.networkId }}"
-      routers: "{{ _rg_routers.routers | default([]) }}"
-
-- name: Keep the gateway address
+    _failed: "{{ rg_error | default('', true) | length > 0 }}"
+    _carried: "{{ not (_failed | bool) and rg_address | length > 0 and (pp_outcome.done | default(false) | bool) }}"
+    _waits: "{{ not (_failed | bool) and rg_address | length > 0 and (pp_outcome.wait | default(false) | bool) }}"
+    _refused: "{{ not (_failed | bool) and rg_address | length > 0 and not (_carried | bool) and not (_waits | bool) }}"
+    _cause: >-
+      {{ ('it could not be read: ' ~ rg_error) if _failed | bool
+         else ((pp_outcome.message | default('', true)) if _refused | bool
+         else (rg_note if rg_note | length > 0 else 'no gateway address')) }}
+    _reason: >-
+      {{ 'AsExpected' if _carried | bool
+         else ('WaitingForPlatformAccess' if _waits | bool
+         else ((pp_outcome.reason | default('', true) or 'Failed') if _refused | bool else 'Failed')) }}
+    _message: >-
+      {{ (('Gateway ' ~ rg_address ~ " of the router tagged openshiftClusterID=" ~ rg_infra_id
+           ~ " is carried in the platform's service routing domain: "
+           ~ "the cluster's own calls to the hub take the platform's path") if _carried | bool
+          else (('Gateway ' ~ rg_address ~ ' is recorded and not carried yet: ' ~ (pp_outcome.message | default('', true)))
+                if _waits | bool
+          else ("The cluster is built and works, but the address of its router's gateway was not added to its "
+                ~ 'addresses (' ~ _cause | trim ~ "): the cluster's own calls to the hub are not admitted on the "
+                ~ "platform's path and leave by the network's own path"))) | string | truncate(1000, true, '') }}
+  # one expression: the status stays the string "True"/"False" (on ansible-core 2.16 a template that renders True alone
+  # becomes a boolean)
   ansible.builtin.set_fact:
-    rg_address: "{{ po_result.address }}"
-    rg_note: "{{ po_result.note | default('', true) }}"
+    rg_condition: >-
+      {{ {'type': 'RouterGateway', 'status': ('True' if _carried | bool else 'False'), 'reason': _reason | trim,
+          'message': _message | trim} }}
 
-- name: Carry the gateway address with the floating IPs
-  ansible.builtin.include_tasks: platform_prefixes.yml
-  vars:
-    pp_prefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32", "{{ rg_address }}/32"]
-    pp_network: "{{ oso_network }}"
-    pp_fabric: "{{ pf.fabric }}"
-  when: rg_address | length > 0
-
-- name: Take a refused gateway address out again
+- name: Record the outcome on the cluster
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
     cr_api_version: hybridsovereign.redhat/v1alpha1
@@ -81,16 +135,8 @@
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
     cr_status_partial: true
     cr_status_body:
-      platformPrefixes: ["{{ cb_api_vip }}/32", "{{ cb_ingress_vip }}/32"]
-  when:
-    - rg_address | length > 0
-    - not (pp_outcome.done | bool)
-    - not (pp_outcome.wait | bool)
+      conditions: ["{{ rg_condition }}"]
 
 - name: Say what happened to the gateway address
   ansible.builtin.debug:
-    msg: >-
-      {{ ('Router ' ~ rg_infra_id ~ '-external-router: ' ~ (rg_note if rg_note | length > 0 else 'no IPv4 gateway address')
-          ~ "; the cluster reaches the hub by its network's own path") if rg_address | length == 0
-         else ('Gateway ' ~ rg_address ~ ': ' ~ (pp_outcome.message if pp_outcome.reason | length > 0
-               else "carried in the platform's service routing domain")) }}
+    msg: "{{ rg_condition.reason | trim }}: {{ rg_condition.message | trim }}"

@@ -169,6 +169,17 @@ spec:
       annotations:
         summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a node has no IPv6 upstream"
         description: "A node has no IPv6 upstream session or default route; the networks' IPv6 internet traffic takes the other node(s)."
+    # a wrong service.* setting: the nodes keep the platform's connection for clusters on networks as last applied (or,
+    # never applied, it is not realized); the condition ServiceRouting names the setting
+    - alert: ShcFabricServiceSettingInvalid
+      expr: >-
+        max by (namespace, name) (shc_fabric_condition{customresource_kind="HybridFabric", type="ServiceRouting", status="False"})
+      for: {{ $f.alerts.upstreamDownFor }}
+      labels:
+        severity: warning
+      annotations:
+        summary: "HybridFabric {{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.name {{ "}}" }}: a setting of the platform's connection for clusters on networks is wrong"
+        description: "The fabric keeps the connection as last applied on its nodes (or, never applied, does not realize it) until the setting is fixed: no new cluster address is carried. The condition ServiceRouting names the setting."
     - alert: ShcFabricIPv6EgressDown
       expr: >-
         count by (namespace, name) (shc_fabric_egress6_node_healthy)

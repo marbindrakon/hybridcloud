@@ -1724,18 +1724,21 @@
   },
   "reserved": {
     "title": "Address ranges reserved by the platform",
-    "intro": "Your networks cannot use the refused ranges. The platform does not allocate subnets from the ranges marked 'not allocated'.",
+    "intro": "Your networks cannot use the refused ranges. The platform does not allocate subnets from the ranges marked 'not allocated'. Ranges marked 'not for managed clusters' are free for your networks, but a cluster the platform manages cannot have its addresses there.",
     "range": "Range",
     "purpose": "Purpose",
     "rule": "Rule",
     "site": "Site",
     "rule_Refused": "Refused",
     "rule_SteppedAround": "Not allocated",
+    "rule_NotForManagedClusters": "Not for managed clusters",
     "allSites": "All sites",
     "none": "The platform reserves no ranges.",
     "notListed": "Your tenant profile does not list the reserved ranges yet.",
     "managedTitle": "Ranges for clusters managed by the platform",
+    "managedAny": "Any range the platform does not reserve (above), first come, first served. Whether the platform builds such clusters on a network shows under Platform access on the network.",
     "managedNotOffered": "Not offered: the platform does not build clusters it manages on networks here.",
-    "managedHelp": "A network that hosts OpenShift clusters the platform manages needs addresses inside these ranges."
+    "managedNotListed": "Your tenant profile does not list them yet.",
+    "managedHelp": "When the platform names ranges here, a network that hosts OpenShift clusters the platform manages needs addresses inside them, outside the refused ranges above (those are taken out first)."
   }
 }

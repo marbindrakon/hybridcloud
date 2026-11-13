@@ -525,7 +525,9 @@ def has_value(path, want):
 
 
 RANGES = [{"prefix": "192.0.2.0/24", "purpose": "Networks the platform's management connects from", "rule": "Refused"},
-          {"prefix": "198.51.100.0/24", "purpose": "Addresses the site uses itself", "rule": "SteppedAround", "site": "site-a"}]
+          {"prefix": "198.51.100.0/24", "purpose": "Addresses the site uses itself", "rule": "SteppedAround", "site": "site-a"},
+          {"prefix": "203.0.113.0/24", "purpose": "Addresses the platform's management network routes",
+           "rule": "NotForManagedClusters"}]
 NEED_NET = "spec.network is required for ceKind customer and not allowed for ceKind platform"
 CASES += [
     C("PA-01", PL, "an existing network reads platformAccess true", [("create", net(prefixes=NET4), "ok"),
@@ -556,8 +558,10 @@ CASES += [
       [("create", acirc(["172.30.0.0/16 le 24"]), "ok"),
        ("check", ("attachmentcircuits", "c", has_value(["spec", "ceKind"], "customer"), ""), "ok")]),
     C("PL-11", PL, "the platform circuit's ceConfig ranges survive", [("create", pcirc(), "ok")]
-        + status_roundtrip("attachmentcircuits", "hub", {"ceConfig": {"vlan": 3001, "advertisedRanges": ["10.64.0.0/12 le 32"],
-                                                                      "acceptedRanges": ["192.0.2.0/24 le 32"]}})),
+        + status_roundtrip("attachmentcircuits", "hub", {"ceConfig": {"vlan": 3001, "acceptedRanges": ["192.0.2.0/28 le 32"],
+                                                                      "refusedRanges": ["192.0.2.0/24 le 32", "100.127.0.0/16 le 32"],
+                                                                      "advertisedRanges": ["0.0.0.0/0 le 32"],
+                                                                      "maxPrefixes": 1000}})),
     C("PL-12", PL, "a bearer offers ceKind platform", [("create", pedge(["customer", "platform"]), "ok")]),
     C("PL-13", PL, "a bearer with an unknown ceKind is refused", [("create", pedge(["partner"]), "deny:Unsupported value")]),
     C("PR-01", PL, "HybridFabric status.reservedRanges survives", [("create", fabric_obj(), "ok")]

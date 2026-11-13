@@ -1724,18 +1724,21 @@
   },
   "reserved": {
     "title": "Plages d'adresses réservées par la plateforme",
-    "intro": "Vos réseaux ne peuvent pas utiliser les plages refusées. La plateforme n'alloue pas de sous-réseaux dans les plages marquées « non allouée ».",
+    "intro": "Vos réseaux ne peuvent pas utiliser les plages refusées. La plateforme n'alloue pas de sous-réseaux dans les plages marquées « non allouée ». Les plages marquées « pas pour les clusters gérés » sont libres pour vos réseaux, mais un cluster géré par la plateforme ne peut pas y avoir ses adresses.",
     "range": "Plage",
     "purpose": "Usage",
     "rule": "Règle",
     "site": "Site",
     "rule_Refused": "Refusée",
     "rule_SteppedAround": "Non allouée",
+    "rule_NotForManagedClusters": "Pas pour les clusters gérés",
     "allSites": "Tous les sites",
     "none": "La plateforme ne réserve aucune plage.",
     "notListed": "Votre profil de locataire n'indique pas encore les plages réservées.",
     "managedTitle": "Plages pour les clusters gérés par la plateforme",
+    "managedAny": "Toute plage que la plateforme ne réserve pas (ci-dessus), dans l'ordre d'arrivée. La section Accès de la plateforme d'un réseau indique si la plateforme y construit de tels clusters.",
     "managedNotOffered": "Non proposé : la plateforme ne construit pas ici de clusters qu'elle gère sur des réseaux.",
-    "managedHelp": "Un réseau qui héberge des clusters OpenShift gérés par la plateforme doit avoir des adresses dans ces plages."
+    "managedNotListed": "Votre profil de locataire ne les indique pas encore.",
+    "managedHelp": "Lorsque la plateforme indique des plages ici, un réseau qui héberge des clusters OpenShift gérés par la plateforme doit avoir des adresses dans ces plages, hors des plages refusées ci-dessus (elles sont retirées d'abord)."
   }
 }

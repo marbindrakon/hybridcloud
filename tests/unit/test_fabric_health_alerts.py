@@ -64,6 +64,9 @@ TESTS = {
              {"series": node_row("HybridFabric", "lab", "bgw-2", "ServiceLinkDown", "the service link of acme/n1 has no session"),
               "values": "_x2 1x18"},
              {"series": cond("HybridFabric", "lab", "IPv6EgressUpstream", "False", "Degraded"), "values": "1000x20"},
+             # Review R4 NM2: a wrong service setting (the nodes keep the last applied service)
+             {"series": cond("HybridFabric", "lab", "ServiceRouting", "False", "InvalidSpec"), "values": "1000x20"},
+             {"series": cond("HybridFabric", "lab2", "ServiceRouting", "True", "Ready"), "values": "1000x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-1"}', "values": "1x20"},
              {"series": 'shc_fabric_egress6_node_healthy{namespace="sovereign-cloud",name="lab",node="bgw-2"}', "values": "0x20"},
              {"series": 'shc_fabric_pool_blocks_free{namespace="sovereign-cloud",name="lab",pool="p6"}', "values": "3x90"},
@@ -111,6 +114,13 @@ TESTS = {
                       "description": "A node has no IPv6 upstream session or default route; the networks' IPv6 "
                                      "internet traffic takes the other node(s)."}}]},
              {"eval_time": "6m", "alertname": "ShcFabricIPv6EgressDown", "exp_alerts": []},
+             {"eval_time": "6m", "alertname": "ShcFabricServiceSettingInvalid", "exp_alerts": [
+                 {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab"},
+                  "exp_annotations": {
+                      "summary": "HybridFabric sovereign-cloud/lab: a setting of the platform's connection for clusters on networks is wrong",
+                      "description": "The fabric keeps the connection as last applied on its nodes (or, never applied, does "
+                                     "not realize it) until the setting is fixed: no new cluster address is carried. The "
+                                     "condition ServiceRouting names the setting."}}]},
              {"eval_time": "65m", "alertname": "ShcPlatformPoolLow", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": "sovereign-cloud", "name": "lab", "pool": "p6"},
                   "exp_annotations": {

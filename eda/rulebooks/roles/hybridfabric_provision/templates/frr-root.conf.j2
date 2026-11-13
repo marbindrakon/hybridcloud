@@ -157,7 +157,7 @@ vrf {{ n.vrf }}
  ip route 0.0.0.0/0 {{ n.xoIp }}
 {% endif %}
 {% if n.vrf in _svc_by_vrf %}
-{% for h in _svc.hub %}
+{% for h in _svc.range %}
  ip route {{ h }} reject 254
 {% endfor %}
 {% endif %}
@@ -269,20 +269,20 @@ exit
 !
 {% endif %}
 {% if _svc %}
-{# the service VRF (no VPN, no route target, no SID or label): the hub's routes from the platform circuits (eBGP,
-   only the hub's ranges), a route to each accepted prefix of a network over its service link, announced to the hub
-   (only the accepted prefixes, only inside the attachable ranges). Each network with clusters learns the hub's
-   ranges from the service VRF over its service link (iBGP, the network VRF connecting, the service VRF passive):
-   only while this node holds them from a platform circuit, so a node whose circuits are all down withdraws them from
-   the network's VPN and the sites return the clusters' traffic to a node that can deliver it. A reject route at
-   distance 254 keeps the hub's ranges off any other route of the network (its internet egress default) while
-   neither node has them. Nothing else of the service VRF reaches a network VRF, so no route crosses between tenant
-   networks #}
-! the service VRF {{ _svc.vrf }}: the platform's management (the hub, {{ _svc.hub | join(', ') }}) reaches the clusters the
-! platform builds on tenant networks; handed off to the hub's network by the platform circuits
+{# the service VRF (no VPN, no route target, no SID or label): the service range's routes from the platform circuits
+   (eBGP, only inside the service range), a route to each accepted prefix of a network over its service link,
+   announced to the hub (only the accepted prefixes, never inside a published range, only inside the attachable
+   ranges when they are set). Each network with clusters learns the service range from the service VRF over its
+   service link (iBGP, the network VRF connecting, the service VRF passive): only while this node holds it from a
+   platform circuit, so a node whose circuits are all down withdraws it from the network's VPN and the sites return
+   the clusters' traffic to a node that can deliver it. A reject route at distance 254 keeps the service range off any
+   other route of the network (its internet egress default) while neither node has it. Nothing else of the service
+   VRF reaches a network VRF, so no route crosses between tenant networks #}
+! the service VRF {{ _svc.vrf }}: the platform's management (the service range, {{ _svc.range | join(', ') }}) reaches the
+! clusters the platform builds on tenant networks; handed off to the hub's network by the platform circuits
 {% for v in hf_node_vrfs if v.service is defined and not v.egress %}
 vrf {{ v.vrf }}
-{% for h in _svc.hub %}
+{% for h in _svc.range %}
  ip route {{ h }} reject 254
 {% endfor %}
 exit-vrf
@@ -298,8 +298,8 @@ vrf {{ _svc.vrf }}
 exit-vrf
 !
 {% endif %}
-{% for h in _svc.hub %}
-ip prefix-list SHC-HUB4 seq {{ loop.index * 5 }} permit {{ h }} le 32
+{% for h in _svc.range %}
+ip prefix-list SHC-HUB4 seq {{ loop.index * 5 }} permit {{ h }}{{ '' if h.endswith('/32') else ' le 32' }}
 {% endfor %}
 !
 route-map SVC-NET-IN permit 10
@@ -325,8 +325,14 @@ ip prefix-list SVC-ACCEPTED seq {{ loop.index * 5 }} permit {{ e }}
 {% else %}
 ip prefix-list SVC-ACCEPTED seq 5 deny 0.0.0.0/0 le 32
 {% endfor %}
+{# what may be announced to the hub, as its routers are told to filter it (status.ceConfig): never inside a published
+   range, then the attachable ranges (0.0.0.0/0 le 32 without them) #}
+{% for e in _svc.refuse | default([]) %}
+ip prefix-list SVC-ATTACHABLE seq {{ loop.index * 5 }} deny {{ e }}
+{% endfor %}
+{% set _svc_seq = (_svc.refuse | default([])) | length %}
 {% for e in _svc.attachable %}
-ip prefix-list SVC-ATTACHABLE seq {{ loop.index * 5 }} permit {{ e }}
+ip prefix-list SVC-ATTACHABLE seq {{ (_svc_seq + loop.index) * 5 }} permit {{ e }}
 {% endfor %}
 !
 route-map SVC-STATIC permit 10
@@ -334,7 +340,7 @@ route-map SVC-STATIC permit 10
 exit
 !
 {% for c in _svc.circuits %}
-! platform circuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): the hub's ranges in, the
+! platform circuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): the service range in, the
 ! accepted cluster prefixes out. The hub's routes enter without the hub router's own AS number and without any
 ! community (a route target among them would import them into another network's VRF; no-export or no-advertise would
 ! keep them from the networks)

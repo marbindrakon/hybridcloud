@@ -26,8 +26,8 @@
 #    first served by the ledger (kind servicePrefix) (status.realization.service); the job wakes the networks whose
 #    realized or refused prefixes changed and the platform circuits whose realization changed.
 # 7. The ranges tenants may not use (status.reservedRanges: the realization's infrastructure, core and pool ranges,
-#    and each site's own); when they or the ranges a cluster may take (service.attachableRanges) change, the Entities
-#    are woken to copy them into the tenants' profiles.
+#    and each site's own); when they or the ranges a cluster may take (service.attachableRanges; none = any range not
+#    reserved) change, the Entities are woken to copy them into the tenants' profiles.
 # 8. Wakes from other jobs that came during the run waited for it (the controller does not let them supersede a job
 #    in flight): the job has the controller publish them once it has written its status (deferred_wakes.yml).
 - block:
@@ -57,6 +57,8 @@
 
     - name: Keep the pool sizes
       ansible.builtin.set_fact:
+        # a wrong service setting stops the service's changes only (Review R4 M2, NM2)
+        hf_service_errors: "{{ fab_check_result.serviceErrors | default([]) }}"
         hf_pools: "{{ fab_check_result.poolSize }}"
         hf_pe_max: "{{ fab_check_result.peIndexMax | int }}"
 
@@ -374,6 +376,53 @@
       ansible.builtin.set_fact:
         hf_attach_plan: "{{ fab_check_result }}"
 
+    # the ranges tenants may not use: the realization's and each site's own (its gateway's underlay and the
+    # realization's placement.siteReserved of the site's kind), for status.reservedRanges (the Entity job copies them)
+    # and for the service VRF, where every site's ranges refuse a cluster prefix (Review R4 H1)
+    - name: List the gateways and sites for the ranges tenants may not use
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: "{{ item }}"
+        namespace: "{{ fab_namespace }}"
+      loop: [CloudGateway, CloudInfrastructure]
+      register: _hf_sites
+
+    - name: The fabric's sites and their own ranges
+      vars:
+        _types: >-
+          {%- set out = {} -%}
+          {%- for c in _hf_sites.results[1].resources | default([]) -%}
+            {%- set _ = out.update({c.metadata.name: (c.spec | default({})).type | default('')}) -%}
+          {%- endfor -%}
+          {{ out }}
+      ansible.builtin.set_fact:
+        hf_sites: >-
+            {%- set out = [] -%}
+            {%- for g in _hf_sites.results[0].resources | default([])
+                  if (g.spec.fabricRef | default({})).name | default('') == fab_name
+                     and g.metadata.deletionTimestamp is not defined -%}
+              {%- set site = (g.spec.cloudRef | default({})).name | default('') -%}
+              {%- set cidr = (g.spec.siteUnderlay | default({})).cidr | default('', true) -%}
+              {%- set _ = out.append({'name': site, 'kind': _types.get(site, ''),
+                                      'ranges': [cidr] if cidr | length > 0 else []}) -%}
+            {%- endfor -%}
+            {{ out | sort(attribute='name') }}
+
+    - name: The ranges tenants may not use
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: reserved-ranges
+          realization: "{{ fab_real }}"
+          sites: "{{ hf_sites }}"
+
+    - name: Keep the ranges tenants may not use
+      ansible.builtin.set_fact:
+        hf_reserved: "{{ fab_check_result.ranges }}"
+
     # the service VRF: the networks' cluster prefixes (status.platformAccess) on every node with a platform circuit,
     # the root VRFs of the networks gaining their service links
     - name: Plan the service VRF on the nodes
@@ -390,6 +439,9 @@
           circuits: "{{ hf_attach_plan.platform | default([]) }}"
           vrfs: "{{ hf_attach_plan.vrfs | default({}) }}"
           previous: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
+          sites: "{{ hf_sites }}"
+          # (the admissions' age: service.admissionHoldMinutes)
+          now: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
 
     - name: Refuse an unusable service plan
       ansible.builtin.set_fact:
@@ -407,50 +459,82 @@
         hf_service: "{{ fab_check_result }}"
         hf_service_before: "{{ (fab_st.realization | default({}, true)).service | default({}, true) }}"
 
-    # the ranges tenants may not use: the realization's and each site's own (its gateway's underlay and the
-    # realization's placement.siteReserved of the site's kind), for status.reservedRanges (the Entity job copies them)
-    - name: List the gateways and sites for the ranges tenants may not use
-      kubernetes.core.k8s_info:
+    # a wrong service setting stops the service only (Review R4 M2): the plan realizes none and its status says why;
+    # the fabric says so once per change of the reason as a Warning event, and its other work goes on
+    - name: Report the service routing domain not realized
+      kubernetes.core.k8s:
         host: "{{ services_api_host }}"
         api_key: "{{ services_bearer_token }}"
         validate_certs: false
-        api_version: hybridsovereign.redhat/v1alpha1
-        kind: "{{ item }}"
-        namespace: "{{ fab_namespace }}"
-      loop: [CloudGateway, CloudInfrastructure]
-      register: _hf_sites
-
-    - name: The ranges tenants may not use
-      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Event
+          metadata:
+            name: "{{ fab_name }}-service-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+            namespace: "{{ fab_namespace }}"
+          involvedObject:
+            apiVersion: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ fab_name }}"
+            namespace: "{{ fab_namespace }}"
+            uid: "{{ fab_obj.metadata.uid }}"
+          type: Warning
+          reason: ServiceNotRealized
+          message: "The service routing domain is not realized: {{ hf_service.status.message }}"
+          source: {component: shc-hybridfabric}
+          reportingComponent: shc-hybridfabric
+          firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          count: 1
       vars:
-        _types: >-
-          {%- set out = {} -%}
-          {%- for c in _hf_sites.results[1].resources | default([]) -%}
-            {%- set _ = out.update({c.metadata.name: (c.spec | default({})).type | default('')}) -%}
-          {%- endfor -%}
-          {{ out }}
-        fab_check:
-          action: reserved-ranges
-          realization: "{{ fab_real }}"
-          sites: >-
-            {%- set out = [] -%}
-            {%- for g in _hf_sites.results[0].resources | default([])
-                  if (g.spec.fabricRef | default({})).name | default('') == fab_name
-                     and g.metadata.deletionTimestamp is not defined -%}
-              {%- set site = (g.spec.cloudRef | default({})).name | default('') -%}
-              {%- set cidr = (g.spec.siteUnderlay | default({})).cidr | default('', true) -%}
-              {%- set _ = out.append({'name': site, 'kind': _types.get(site, ''),
-                                      'ranges': [cidr] if cidr | length > 0 else []}) -%}
-            {%- endfor -%}
-            {{ out | sort(attribute='name') }}
+        _why: "{{ (hf_service.status | default({})).settingsError | default((hf_service.status | default({})).message | default('', true), true) }}"
+        _was: "{{ hf_service_before.settingsError | default(hf_service_before.message | default('', true), true) }}"
+      when:
+        - (hf_service.status | default({})).reason | default('', true) | length > 0
+        - _was != _why
+
+    - name: Report the service routing domain kept while a setting is wrong
+      kubernetes.core.k8s:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        state: present
+        definition:
+          apiVersion: v1
+          kind: Event
+          metadata:
+            name: "{{ fab_name }}-service-{{ lookup('pipe', 'date -u +%Y%m%d%H%M%S') }}"
+            namespace: "{{ fab_namespace }}"
+          involvedObject:
+            apiVersion: hybridsovereign.redhat/v1alpha1
+            kind: HybridFabric
+            name: "{{ fab_name }}"
+            namespace: "{{ fab_namespace }}"
+            uid: "{{ fab_obj.metadata.uid }}"
+          type: Warning
+          reason: ServiceSettingInvalid
+          message: >-
+            The service routing domain is kept as last applied on the nodes, unchanged, while a setting is wrong:
+            {{ hf_service.status.settingsError }}
+          source: {component: shc-hybridfabric}
+          reportingComponent: shc-hybridfabric
+          firstTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          lastTimestamp: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+          count: 1
+      vars:
+        _why: "{{ (hf_service.status | default({})).settingsError | default((hf_service.status | default({})).message | default('', true), true) }}"
+        _was: "{{ hf_service_before.settingsError | default(hf_service_before.message | default('', true), true) }}"
+      when:
+        - hf_service.kept | default(false) | bool
+        - _was != _why
 
     # what tenants see of these (the ranges and the ranges a managed cluster's prefixes must lie in) joins the offer
     # the Entities were told (status.realization.ipam.tenantOffer), so a change wakes them
-    - name: Keep the ranges tenants may not use
+    - name: Tell the Entities of the ranges tenants may not use
       ansible.builtin.set_fact:
-        hf_reserved: "{{ fab_check_result.ranges }}"
         hf_tenant_offer: >-
-          {{ hf_tenant_offer ~ '; ranges ' ~ ({'reservedRanges': fab_check_result.ranges,
+          {{ hf_tenant_offer ~ '; ranges ' ~ ({'reservedRanges': hf_reserved,
                                                'managedClusterRanges': hf_service.status.attachableRanges}
                                               | to_json | hash('sha1'))[:12] }}
 
@@ -677,11 +761,41 @@
                                  if (not hf_wake_entities | bool) or (we_entities_listed | default(false) | bool)
                                  else none}) }}
 
+    # the service routing domain's condition (only with the service on, or once it was): False, InvalidSpec, while
+    # a setting is wrong (the nodes keep the last applied service, or it was never realized), naming the setting
+    # (Review R4 NM2; the alert ShcFabricServiceSettingInvalid reads it)
+    - name: The service routing domain's condition
+      vars:
+        _svc_st: "{{ (hf_service | default({})).status | default({}) }}"
+        _svc_why: >-
+          {{ _svc_st.settingsError | default('', true)
+             or (_svc_st.message | default('', true) if _svc_st.reason | default('', true) else '') }}
+      ansible.builtin.set_fact:
+        hf_service_condition: >-
+          {{ [{'type': 'ServiceRouting', 'status': 'False' if _svc_why else 'True',
+               'reason': 'InvalidSpec' if _svc_why else 'Ready',
+               'message': (('a service setting is wrong (' ~ _svc_why ~ '); '
+                            ~ ('the nodes keep the service as last applied' if (hf_service | default({})).kept | default(false)
+                               else 'the service is not realized')
+                            ~ ((', no service on ' ~ hf_service_unkept | join(', ') ~ ' (nothing applied there to keep)')
+                               if hf_service_unkept | default([]) else '')
+                            ~ '; what needs the service planned again (a network or cluster leaving, new cluster '
+                              'addresses) waits until the setting is fixed') if _svc_why
+                           else 'the service routing domain is realized as configured')}]
+             if (hf_service | default({})).enabled | default(false)
+             else ([{'type': 'ServiceRouting', 'status': 'Unknown', 'reason': 'NotEnabled',
+                     'message': 'the service routing domain is off on this fabric'}]
+                   if fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'ServiceRouting')
+                      | list | length > 0 else []) }}
+
     - name: Report the fabric ready
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
         fab_outcome: ready
         fab_reason: Ready
+        # the cluster prefixes the platform does not announce yet: service.maxPrefixes or a tenant's share reached
+        # (status.realization.service.waiting; they wait in order)
+        _svc_capped: "{{ ((hf_service | default({})).status | default({})).waiting | default([], true) }}"
         fab_message: >-
           Ledger fabric-ledger-{{ fab_name }}; root instance on {{ hf_node_results | map(attribute='name') | join(', ') }}
           ({{ ('changed on ' ~ hf_changed_nodes | join(', ')) if hf_changed_nodes else 'no change' }}){{
@@ -695,14 +809,20 @@
           if fab_real.attachments.enabled | default(false) | bool else '' }}{{
           ('; service VRF with ' ~ hf_service.status.circuits | length ~ ' platform circuit(s) for '
            ~ hf_service.status.networks | length ~ ' network(s)'
-           ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else ''))
+           ~ ((', refused: ' ~ hf_service.status.refused | length ~ ' prefix(es)') if hf_service.status.refused else '')
+           ~ ((', waiting for service.maxPrefixes or a tenant share: ' ~ _svc_capped | length ~ ' prefix(es)')
+              if _svc_capped else '')
+           ~ (('; kept as last applied: ' ~ hf_service.status.settingsError)
+              if (hf_service.status | default({})).settingsError | default('', true) else '')
+           if not ((hf_service.status | default({})).reason | default('', true))
+           else ('; service VRF not realized: ' ~ hf_service.status.message))
           if (hf_service | default({})).enabled | default(false) else '' }}{{
           ('; platform address pools not updated: ' ~ hf_ipam.refused) if hf_ipam.refused else '' }}{{
           '; SRv6 core' if (fab_real.core | default({}, true)).transport | default('mpls', true) == 'srv6' else '' }}
         # the IPv6 egress condition (only with IPv6 egress): True while every node has an upstream session and the
         # default route; Degraded otherwise (the networks' rows say the same)
         fab_conditions: >-
-          {{ ([{'type': 'IPv6EgressUpstream',
+          {{ hf_service_condition | default([]) + ([{'type': 'IPv6EgressUpstream',
                'status': 'False' if hf_egress6_status.degraded | default(false) else 'True',
                'reason': 'Degraded' if hf_egress6_status.degraded | default(false) else 'Ready',
                'message': (('no upstream session or default route on ' ~ hf_egress6_status.degradedNodes | join(', ')

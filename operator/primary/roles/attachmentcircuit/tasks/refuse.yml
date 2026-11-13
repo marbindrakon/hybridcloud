@@ -1,0 +1,44 @@
+---
+# A circuit this operator does not realize (main.yml, "Decide whether this operator realizes the circuit"): Ready
+# False with reason InvalidSpec and the refusal as its message, phase Failed, and no event. Written once: a re-check
+# (the reconcile period, Retry now) of a recorded refusal writes nothing. The refusal depends only on the namespace
+# and spec.ceKind (immutable), so it holds until the object is deleted; the delete releases it without an event
+# (roles/attachmentcircuit_delete). Ends the reconcile.
+- name: Tell whether the refusal is already recorded
+  ansible.builtin.set_fact:
+    _attachmentcircuit_refusal_recorded: >-
+      {%- set st = _hybridsovereign_redhat_attachmentcircuit.status | default({}, true) -%}
+      {%- set ready = (st.conditions | default([], true) | selectattr('type', 'equalto', 'Ready') | list + [{}]) | first -%}
+      {{ (st.status | default('', true)) == 'failed'
+         and (ready.reason | default('', true)) == 'InvalidSpec'
+         and (st.message | default('', true) | trim) == (attachmentcircuit_refusal | default('', true) | trim) }}
+
+- name: Record the refusal
+  vars:
+    _refused_at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+    _refused_st: "{{ _hybridsovereign_redhat_attachmentcircuit.status | default({}, true) }}"
+  operator_sdk.util.k8s_status:
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: AttachmentCircuit
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      status: failed
+      ready: false
+      phase: Failed
+      phaseSince: >-
+        {{ _refused_st.phaseSince if ((_refused_st.phase | default('', true)) == 'Failed'
+                                      and (_refused_st.phaseSince | default('', true) | length > 0)) else _refused_at }}
+      summary: The request is not valid; correct the fields named in the message.
+      message: "{{ attachmentcircuit_refusal | default('', true) | trim }}"
+      lastReconciledAt: "{{ _refused_at }}"
+      conditions:
+        - type: Ready
+          status: "False"
+          lastTransitionTime: "{{ _refused_at }}"
+          reason: InvalidSpec
+          message: "{{ attachmentcircuit_refusal | default('', true) | trim }}"
+  when: not (_attachmentcircuit_refusal_recorded | bool)
+
+- name: End the reconcile of a refused circuit (no event)
+  ansible.builtin.meta: end_host

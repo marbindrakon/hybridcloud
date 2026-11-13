@@ -80,6 +80,21 @@
   reconcilePeriod: 300s
   watchAnnotationsChanges: true
 
+# shc: the platform's own attachment circuits (ceKind platform) live in the platform's namespace, which runs no
+# namespace operator: this operator realizes them there (and refuses any other circuit it sees, roles/attachmentcircuit).
+# A tenant's circuits are the namespace operator's (operator/namespace/watches.yaml). Same finalizer name as there.
+- version: v1alpha1
+  group: hybridsovereign.redhat
+  kind: AttachmentCircuit
+  role: attachmentcircuit
+  manageStatus: false
+  finalizer:
+    name: hybridsovereign.redhat/attachmentcircuit-cleanup
+    role: attachmentcircuit_delete
+  maxConcurrentReconciles: 1
+  reconcilePeriod: 300s
+  watchAnnotationsChanges: true
+
 - version: v1alpha1
   group: hybridsovereign.redhat
   kind: TransportLink

@@ -1,0 +1,49 @@
+---
+# The resolvers of an OpenStack cluster's machine subnet (install-config platform.openstack.externalDNS). On a site's
+# global external network: the installation's platformopenshift_defaults.externalDNS (empty = the cloud's DHCP
+# default). On a hybrid network the machines sit behind a router whose gateway is on the placed network and leave
+# through that network's own paths, so a resolver of the platform's own network is not reachable from them: they take
+# the resolvers the network's placement gives its subnets on the site (realization placement.resolversBySite[<site>],
+# networkplacement_provision backend_cloudoso.yml), IPv4 only (the install-config is IPv4 single-stack, and a cluster
+# on a network needs an IPv4 placement). None listed for the site: the cloud's DHCP default, as on the placement's
+# subnets; the cluster's Preflight message says which resolvers it took and from where.
+# Inputs: cb_platform_path, pf (preflight_network.yml: fabric), pf_placement (the NetworkPlacement), cb_oso_site.
+# Sets cb_external_dns (list), cb_external_dns_note (the words for the Preflight message; '' off a hybrid network).
+- name: The realization of the network's fabric
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_realization.yml"
+  vars:
+    fab_real_fabric: "{{ pf.fabric }}"
+  when: cb_platform_path | bool
+
+- name: The cluster's resolvers on the hybrid network
+  vars:
+    # the placement's own site (status.site), else the environment's
+    _site: "{{ (pf_placement.status | default({}, true)).site | default(cb_oso_site | default('', true), true) }}"
+    _site_resolvers: >-
+      {{ ((fab_real.placement | default({}, true)).resolversBySite | default({}, true))[_site] | default([], true)
+         if _site | length > 0 else [] }}
+  ansible.builtin.set_fact:
+    cb_external_dns: "{{ _site_resolvers | map('string') | map('trim') | select | reject('search', ':') | unique | list }}"
+    cb_external_dns_site: "{{ _site }}"
+  when: cb_platform_path | bool
+
+- name: The cluster's resolvers on the external network
+  ansible.builtin.set_fact:
+    cb_external_dns: "{{ platformopenshift_defaults.externalDNS | default([]) }}"
+  when: not (cb_platform_path | bool)
+
+- name: Say which resolvers the cluster's machines use
+  ansible.builtin.set_fact:
+    cb_external_dns_note: >-
+      {{ (('; machines resolve names through ' ~ (cb_external_dns | join(', ')) ~ ', the resolvers of site '
+           ~ cb_external_dns_site ~ ' for its placed networks')
+          if cb_external_dns | length > 0 else
+          ('; machines use the cloud default resolvers (site ' ~ cb_external_dns_site
+           ~ ' lists no resolvers for its placed networks)'))
+         if cb_platform_path | bool else '' }}
+
+- name: Show the cluster's resolvers
+  ansible.builtin.debug:
+    msg: >-
+      externalDNS {{ cb_external_dns | to_json }}{{ cb_external_dns_note if cb_platform_path | bool
+      else ' (the installation default for clusters on an external network)' }}

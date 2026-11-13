@@ -116,6 +116,7 @@ REASONS = {
     "OutsideAttachableRanges": _r("T", FAILED, "Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges)."),
     "AddressConflict": _r("T", FAILED, "The cluster's address ranges overlap each other or the network's addresses; the message names both."),
     "ServicePrefixInUse": _r("T", FAILED, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
+    "NotForManagedClusters": _r("T", FAILED, "An address of this cluster lies in a range the platform's management network routes. Use another network or address."),
     "NetworkChoiceRequired": _r("T", FAILED, "This site has no default external network. Choose a network."),
     "ExternalNetworkNotListed": _r("T", FAILED, "The named network is not an external network of this site."),
     "NetworkNameNotUnique": _r("T", FAILED, "Your environment sees another network with the name of the cluster's network. Rename or remove the other network."),
@@ -189,6 +190,8 @@ PART_REASONS = {
     "UpstreamDown": _r("P", READY, "IPv6 internet access is down: no node of the fabric has an upstream session; the platform team is alerted."),
     # the HybridFabric's IPv6EgressUpstream condition and its Warning event: a node without an upstream session
     "IPv6EgressUpstreamDown": _r("P", READY, "IPv6 internet access works through the other node; a node's upstream sessions are down."),
+    "ServiceSettingInvalid": _r("P", READY, "A setting of the platform's connection for clusters on networks is wrong; the nodes keep it as last applied. The platform team acts."),
+    "ServiceNotRealized": _r("P", READY, "The platform's connection for clusters on networks is not realized: one of its settings is wrong. The rest of the fabric works. The platform team acts."),
     # the CloudInfrastructure's TenantDns condition: the site's tenant DNS controller reports a failed reconcile newer
     # than its last success, or no success for dns.reverse6.staleMinutes
     "DNSReconcileFailed": _r("P", READY, "The tenant DNS controller on a site failed to reconcile or has not succeeded recently; the platform team is looking at it."),
@@ -223,7 +226,10 @@ PART_REASONS = {
     "AttachPending": _r("A", READY, "The platform is connecting to this network; try again in a few minutes."),
     # a row of status.platformAccess.prefixes (a cluster's address the platform should reach)
     "ServicePrefixInUse": _r("T", READY, "An address of this cluster is already reached by the platform for another network. Try again or ask the platform team."),
+    "NotForManagedClusters": _r("T", READY, "This address lies in a range the platform's management network routes: no managed cluster's address may."),
     "OutsideAddressSpace": _r("T", READY, "The cluster's address lies outside the network's address space."),
+    "ServiceLimitReached": _r("P", READY, "The platform reaches as many cluster addresses as it may; this cluster waits its turn. Ask the platform team."),
+    "ServiceShareReached": _r("T", READY, "Your clusters hold the share of the platform's cluster addresses one tenant may hold while others use them; this cluster waits its turn."),
     # an OpenShift cluster's condition Preflight when every check passed (Ready decides the phase)
     "PreflightPassed": _r("A", READY, "Every check before the build passed."),
 }

@@ -2,8 +2,9 @@
 # Preflight of a cluster that names a hybrid network (DESIGN cnet §4.2 steps 1-3, §5), before anything is built:
 # the network and its NetworkPlacement in the environment (ready, router attachments ready on OpenStack, an IPv4
 # subnet) and, when the platform must reach the cluster through the network, the network's condition
-# PlatformReachable, the fabric's service routing domain, the subnet inside its attachable ranges and the hub's API
-# admitted by its hub endpoints. Reads only; refuses through preflight_stop.yml. Inputs:
+# PlatformReachable, the fabric's service routing domain with its service range, the subnet inside its attachable
+# ranges when it names them (none named: any range) and the hub's API admitted by its hub endpoints when it lies in the
+# service range. Reads only; refuses through preflight_stop.yml. Inputs:
 #   pn_kind, pn_env               the environment (CloudOSO, CloudAWS, CloudGCP) and its name
 #   pn_network                    the HybridNetwork (this namespace)
 #   pn_need_platform              true: OpenStack on a network, AWS/GCP Internal
@@ -12,6 +13,8 @@
 #   pn_defer_wait                 optional, default false: true = a wait does not stop the job here; it goes to
 #                                 po_deferred_wait ({reason, message}) and the caller stops with it after its other
 #                                 checks (a refusal there wins over the wait)
+#   pn_judge_only                 optional, default false: true = read and judge only, never stop (an installed
+#                                 cluster's later run reads pf; the caller decides what a reason means)
 # Sets pf (po_preflight.py network result: placement, placementName, subnet4, space, networkId, networkName, fabric,
 # service, reserved), pf_placement (the NetworkPlacement object), pf_network_obj (the HybridNetwork object).
 - name: Require the platform namespace setting
@@ -93,12 +96,15 @@
        ~ ('turn router attachments back on for the placement, or delete the cluster'
           if pf.reason == 'RouterAttachmentsOff' else 'the next run continues with them'))
       if _held | length > 0 and not (pf.wait | default(false) | bool) else '' }}
-  when: pf.reason | length > 0
+  when:
+    - not (pn_judge_only | default(false) | bool)
+    - pf.reason | length > 0
 
 - name: Keep the wait for the caller
   ansible.builtin.set_fact:
     po_deferred_wait: "{{ {'reason': pf.reason, 'message': pn_stop_message | trim} }}"
   when:
+    - not (pn_judge_only | default(false) | bool)
     - pf.reason | length > 0
     - pf.wait | default(false) | bool
     - pn_defer_wait | default(false) | bool
@@ -109,5 +115,6 @@
     ps_reason: "{{ pf.reason }}"
     ps_message: "{{ pn_stop_message | trim }}"
   when:
+    - not (pn_judge_only | default(false) | bool)
     - pf.reason | length > 0
     - not (pf.wait | default(false) | bool and pn_defer_wait | default(false) | bool)
