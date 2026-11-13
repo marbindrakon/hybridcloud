@@ -239,7 +239,9 @@ class InertWithoutTheService(unittest.TestCase):
             for node in NODES:
                 with self.subTest(variant=name, node=node):
                     new = T.render(T.RT, template_vars(real, n[0], n[1], n[2], n[3], node, True))
-                    old = T.render_text(old_t, template_vars(real, o[0], o[1], o[2], o[3], node, False))
+                    # the only difference: interface neighbours have no description (frr-reload.py 8.5)
+                    old = T.without_interface_descriptions(
+                        T.render_text(old_t, template_vars(real, o[0], o[1], o[2], o[3], node, False)))
                     T.save(f"inert-{name}-{node}.conf", new)
                     self.assertEqual(new, old)
                     self.assertIn("route-map SHC-EGRESS-DEFAULT permit 10", new)
@@ -323,8 +325,18 @@ class ServiceTemplate(unittest.TestCase):
     def test_service_vrf(self):
         out, svc = self.render()
         T.save("service-bgw-1.conf", out)
-        self.assertIn("vrf service\n ip route 192.0.2.15/32 169.254.128.5\n ip route 192.0.2.16/32 169.254.128.5\n"
-                      "exit-vrf\n", out)
+        # the /32 cluster prefixes are learned over the network's session, not configured: no static route, nothing
+        # redistributed, no SVC-STATIC (a network VRF that loses the session or the site's route stops the node's
+        # announcement, gate-s6 F2)
+        self.assertNotIn("\nvrf service\n", out)
+        self.assertNotIn("SVC-STATIC", out)
+        self.assertNotIn("redistribute static", out.split("router bgp 65010 vrf service\n")[1].split("\nexit\n")[0])
+        # the entrance: exactly the network's accepted /32 prefixes, communities stripped
+        self.assertIn("ip prefix-list SVC-NET-10002 seq 5 permit 192.0.2.15/32\n"
+                      "ip prefix-list SVC-NET-10002 seq 10 permit 192.0.2.16/32\n"
+                      "route-map SVC-FROM-10002 permit 10\n match ip address prefix-list SVC-NET-10002\n"
+                      " set community none\n set large-community none\n set extcommunity none\nexit\n", out)
+        self.assertEqual(out.count("SVC-NET-10002 seq"), 2)
         # in from the hub's routers: the service range only, never the rest of the hub's range
         self.assertIn("ip prefix-list SVC-HUB seq 5 permit 198.51.100.0/28 le 32\n", out)
         self.assertNotIn("SVC-HUB seq 10", out)
@@ -338,7 +350,8 @@ class ServiceTemplate(unittest.TestCase):
                       "ip prefix-list SVC-ATTACHABLE seq 15 deny 192.0.0.8/32\n", out)
         self.assertIn("ip prefix-list SVC-ATTACHABLE seq 70 permit 192.0.2.0/24 le 32\n", out)
         self.assertEqual(out.count("SVC-ATTACHABLE seq"), 14)  # the hand-off and the special-purpose space too (R4 H1)
-        self.assertIn("route-map SVC-STATIC permit 10\n match ip address prefix-list SVC-ATTACHABLE\nexit\n", out)
+        # what a network VRF sends the service VRF: the same guard
+        self.assertIn("route-map SVC-NET-OUT permit 10\n match ip address prefix-list SVC-ATTACHABLE\nexit\n", out)
         self.assertIn("route-map AC3099-IN deny 10\n match ip address prefix-list SVC-DENY\nexit\n"
                       "route-map AC3099-IN permit 20\n match ip address prefix-list SVC-HUB\n"
                       # Review R3 N3: the hub's routes enter without the hub router's communities (a route target among
@@ -357,14 +370,14 @@ class ServiceTemplate(unittest.TestCase):
             " neighbor 169.254.128.5 timers 10 30",
             f" neighbor {ce} remote-as 64600", f" neighbor {ce} description AC3099 platform/hub-a",
             f" neighbor {ce} timers 10 30", " !", " address-family ipv4 unicast",
-            "  redistribute static route-map SVC-STATIC", f"  neighbor {ce} activate",
+            f"  neighbor {ce} activate",
             f"  neighbor {ce} route-map AC3099-IN in", f"  neighbor {ce} route-map AC3099-OUT out",
             f"  neighbor {ce} maximum-prefix 50 restart 2", "  neighbor 169.254.128.5 activate",
-            "  neighbor 169.254.128.5 next-hop-self", "  neighbor 169.254.128.5 route-map SVC-FROM-NET in",
+            "  neighbor 169.254.128.5 next-hop-self", "  neighbor 169.254.128.5 route-map SVC-FROM-10002 in",
             "  neighbor 169.254.128.5 route-map SVC-TO-NET out", " exit-address-family"])
         self.assertNotEqual(svc["bgw-1"]["circuits"][0]["ip"], "10.255.0.1")
-        self.assertIn("route-map SVC-TO-NET permit 10\n match ip address prefix-list SHC-HUB4\nexit\n"
-                      "route-map SVC-FROM-NET deny 10\nexit\n", out)
+        self.assertIn("route-map SVC-TO-NET permit 10\n match ip address prefix-list SHC-HUB4\nexit\n", out)
+        self.assertNotIn("SVC-FROM-NET", out)  # only for a network without a /32 accepted prefix
         # no VPN for the service VRF
         self.assertNotRegex(inst, r"rd vpn|rt vpn|label vpn|sid vpn|export vpn|import vpn")
 
@@ -378,14 +391,15 @@ class ServiceTemplate(unittest.TestCase):
         self.assertNotIn("198.51.100.0/24 reject", out)
         lab = out.split("router bgp 65010 vrf e10002\n")[1].split("\nexit\n")[0]
         for line in (" neighbor 169.254.128.4 remote-as 65010\n", " neighbor 169.254.128.4 ttl-security hops 1\n",
-                     "  neighbor 169.254.128.4 activate\n", "  neighbor 169.254.128.4 route-map SVC-NET-IN in\n",
+                     "  neighbor 169.254.128.4 activate\n", "  neighbor 169.254.128.4 next-hop-self force\n",
+                     "  neighbor 169.254.128.4 route-map SVC-NET-IN in\n",
                      "  neighbor 169.254.128.4 route-map SVC-NET-OUT out\n", "  label vpn export auto\n"):
             self.assertIn(line, lab)
         self.assertNotIn("passive", lab)
         self.assertNotIn("redistribute static", lab)
         self.assertNotIn("nexthop vpn export", lab)
-        self.assertIn("route-map SVC-NET-IN permit 10\n match ip address prefix-list SHC-HUB4\n set weight 100\nexit\n"
-                      "route-map SVC-NET-OUT deny 10\nexit\n", out)
+        self.assertIn("route-map SVC-NET-IN permit 10\n match ip address prefix-list SHC-HUB4\n set weight 100\nexit\n", out)
+        self.assertNotIn("route-map SVC-NET-OUT deny", out)
         # offered to the networks: the service range only
         self.assertIn("ip prefix-list SHC-HUB4 seq 5 permit 198.51.100.0/28 le 32\n", out)
         self.assertNotIn("SHC-HUB4 seq 10", out)
@@ -510,6 +524,113 @@ def blade():
 
 def service_conf(real, egp, att, svc, node="bgw-1"):
     return root_json(real, egp, att, svc, node, True)
+
+
+class LearnedClusterPrefixes(unittest.TestCase):
+    """gate-s6 F2: a node announced a network's cluster /32s to the hub from static routes while its session with that
+    network was down, and dropped the hub's traffic it attracted. The /32s now enter the service VRF only as the
+    network's VRF holds them, over the network's session, through three filters in series (SVC-NET-OUT out of the
+    network VRF: the range guard; SVC-FROM-<t> into the service VRF: exactly that network's accepted /32s; the circuits'
+    OUT: the accepted prefixes). An accepted prefix shorter than /32 keeps its static route and redistribution. On
+    f98cbae1 every test below that asserts the absence of a static /32, of redistribute static or the per-network
+    entrance fails."""
+
+    def render(self, nets, led, real=None, node="bgw-1"):
+        real = real or realization(CORE, service=True)
+        egp, att, vrfs, svc = pipeline(F, real, True, nets=nets, circuits=CIRCUITS + [platform()], ledger=led)
+        return T.render(T.RT, template_vars(real, egp, att, vrfs, svc, node, True)), svc
+
+    @staticmethod
+    def ledger(rows):
+        led = copy.deepcopy(LEDGER)
+        led["vpnTarget"]["HybridNetwork/acme/web"] = 10003
+        led["egress"]["HybridNetwork/acme/web"] = 3
+        led["servicePrefix"] = {"HybridNetwork/acme/%s/%s" % (n, p): i for i, (n, p) in enumerate(rows, 1)}
+        return led
+
+    @staticmethod
+    def inst(out, vrf):
+        return out.split("router bgp 65010 vrf %s\n" % vrf)[1].split("\nexit\n")[0]
+
+    def test_three_addresses_of_one_network(self):
+        rows = ["192.0.2.15/32", "192.0.2.16/32", "192.0.2.17/32"]
+        out, _ = self.render([hn("lab", ["192.0.2.0/24"], internet=False, rows=rows)],
+                             self.ledger([("lab", p) for p in rows]))
+        self.assertIn("".join("ip prefix-list SVC-NET-10002 seq %d permit %s\n" % (5 * i, p)
+                              for i, p in enumerate(rows, 1)), out)
+        self.assertEqual(len(re.findall(r"(?m)^ip prefix-list SVC-NET-", out)), 3)
+        self.assertNotIn("\nvrf service\n", out)
+        self.assertNotRegex(out, r"(?m)^ ip route 192\.0\.2\.1[567]/32")
+        svc = self.inst(out, "service")
+        self.assertNotIn("redistribute static", svc)
+        self.assertIn("  neighbor 169.254.128.5 route-map SVC-FROM-10002 in\n", svc)
+        lab = self.inst(out, "e10002")
+        self.assertIn("  neighbor 169.254.128.4 next-hop-self force\n  neighbor 169.254.128.4 route-map SVC-NET-IN in\n"
+                      "  neighbor 169.254.128.4 route-map SVC-NET-OUT out\n", lab)
+        # the hub still gets exactly the accepted prefixes
+        self.assertEqual(re.findall(r"(?m)^ip prefix-list SVC-ACCEPTED seq \d+ permit (\S+)$", out), rows)
+
+    def test_two_networks_have_disjoint_exact_lists(self):
+        # first come first served: web asks for lab's 192.0.2.15 too and gets no entry for it (ServicePrefixInUse)
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32", "192.0.2.16/32"]),
+                hn("web", ["192.0.2.0/24"], internet=False, rows=["192.0.2.15/32", "192.0.2.40/32"])]
+        led = self.ledger([("lab", "192.0.2.15/32"), ("lab", "192.0.2.16/32"), ("web", "192.0.2.15/32"),
+                           ("web", "192.0.2.40/32")])
+        out, svc = self.render(nets, led)
+        lists = {}
+        for t, p in re.findall(r"(?m)^ip prefix-list SVC-NET-(\d+) seq \d+ permit (\S+)$", out):
+            lists.setdefault(t, []).append(p)
+        self.assertEqual(lists, {"10002": ["192.0.2.15/32", "192.0.2.16/32"], "10003": ["192.0.2.40/32"]})
+        self.assertFalse(set(lists["10002"]) & set(lists["10003"]))
+        svc_inst = self.inst(out, "service")
+        links = {w["vpnTarget"]: w["seIp"] for w in svc["bgw-1"]["networks"]}
+        for t, se in links.items():
+            # each network's entrance on its own session only
+            self.assertEqual(re.findall(r"(?m)^  neighbor (\S+) route-map SVC-FROM-%d in$" % t, svc_inst), [se])
+        self.assertIn("route-map SVC-FROM-10003 permit 10\n match ip address prefix-list SVC-NET-10003\n", out)
+
+    def test_a_subnet_prefix_keeps_its_static_route(self):
+        # an AWS or Google Cloud cluster's accepted subnet: the static route and its redistribution as before; the
+        # network's /32 on the same network is learned
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.32/28", "192.0.2.15/32"])]
+        out, svc = self.render(nets, self.ledger([("lab", "192.0.2.32/28"), ("lab", "192.0.2.15/32")]))
+        se = svc["bgw-1"]["networks"][0]["seIp"]
+        self.assertIn("vrf service\n ip route 192.0.2.32/28 %s\nexit-vrf\n" % se, out)
+        self.assertNotIn("ip route 192.0.2.15/32", out)
+        self.assertIn("route-map SVC-STATIC permit 10\n match ip address prefix-list SVC-ATTACHABLE\nexit\n", out)
+        self.assertIn(" address-family ipv4 unicast\n  redistribute static route-map SVC-STATIC\n", self.inst(out, "service"))
+        self.assertEqual(re.findall(r"(?m)^ip prefix-list SVC-NET-10002 seq \d+ permit (.*)$", out), ["192.0.2.15/32"])
+        self.assertNotIn("le 32", "".join(re.findall(r"(?m)^ip prefix-list SVC-NET-.*$", out)))
+        self.assertNotIn("aggregate-address", self.inst(out, "service"))
+
+    def test_a_network_with_only_a_subnet_prefix_is_as_before(self):
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.32/28"])]
+        out, svc = self.render(nets, self.ledger([("lab", "192.0.2.32/28")]))
+        se = svc["bgw-1"]["networks"][0]["seIp"]
+        self.assertIn("vrf service\n ip route 192.0.2.32/28 %s\nexit-vrf\n" % se, out)
+        self.assertIn("route-map SVC-FROM-NET deny 10\nexit\n", out)
+        self.assertIn("  neighbor %s route-map SVC-FROM-NET in\n" % se, self.inst(out, "service"))
+        self.assertNotIn("SVC-NET-10002", out)
+        self.assertIn("  redistribute static route-map SVC-STATIC\n", self.inst(out, "service"))
+
+    def test_service_with_circuits_and_no_network(self):
+        out, _ = self.render([hn("lab", ["192.0.2.0/24"], internet=False)], self.ledger([]))
+        for absent in ("SVC-NET-1", "SVC-FROM-", "SVC-STATIC", "redistribute static route-map SVC", "\nvrf service\n"):
+            self.assertNotIn(absent, out)
+        self.assertIn("route-map SVC-NET-OUT permit 10\n", out)
+        self.assertIn("router bgp 65010 vrf service\n", out)
+
+    def test_every_route_map_and_list_named_is_defined(self):
+        # a route-map entry that names a missing list must never be read as "permit": every name used is defined
+        nets = [hn("lab", ["192.0.2.0/24"], internet=False, rows=["192.0.2.32/28", "192.0.2.15/32"]),
+                hn("web", ["192.0.2.0/24"], internet=False, rows=["192.0.2.64/28"])]
+        out, _ = self.render(nets, self.ledger([("lab", "192.0.2.32/28"), ("lab", "192.0.2.15/32"),
+                                                ("web", "192.0.2.64/28")]))
+        maps = set(re.findall(r"(?m)^route-map (\S+) ", out))
+        used = set(re.findall(r"(?m) route-map (\S+) (?:in|out)$", out)) | set(re.findall(r"route-map (SVC-\S+)$", out))
+        self.assertLessEqual(used, maps)
+        lists = set(re.findall(r"(?m)^ip prefix-list (\S+) ", out))
+        self.assertLessEqual(set(re.findall(r"(?m)^ match ip address prefix-list (\S+)$", out)), lists)
 
 
 class ServiceApply(A.ApplyCase):

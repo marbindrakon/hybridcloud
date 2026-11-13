@@ -270,14 +270,21 @@ exit
 {% endif %}
 {% if _svc %}
 {# the service VRF (no VPN, no route target, no SID or label): the service range's routes from the platform circuits
-   (eBGP, only inside the service range), a route to each accepted prefix of a network over its service link,
-   announced to the hub (only the accepted prefixes, never inside a published range, only inside the attachable
-   ranges when they are set). Each network with clusters learns the service range from the service VRF over its
-   service link (iBGP, the network VRF connecting, the service VRF passive): only while this node holds it from a
-   platform circuit, so a node whose circuits are all down withdraws it from the network's VPN and the sites return
-   the clusters' traffic to a node that can deliver it. A reject route at distance 254 keeps the service range off any
-   other route of the network (its internet egress default) while neither node has it. Nothing else of the service
-   VRF reaches a network VRF, so no route crosses between tenant networks #}
+   (eBGP, only inside the service range) and the networks' accepted cluster prefixes, announced to the hub (only the
+   accepted prefixes, never inside a published range, only inside the attachable ranges when they are set). Each
+   network with clusters has an iBGP session over its service link (the network VRF connecting, the service VRF
+   passive). Over it the network VRF learns the service range, only while this node holds it from a platform circuit,
+   so a node whose circuits are all down withdraws it from the network's VPN and the sites return the clusters'
+   traffic to a node that can deliver it; a reject route at distance 254 keeps the service range off any other route
+   of the network (its internet egress default) while neither node has it. And over it the service VRF learns the
+   network's accepted /32 prefixes as the network VRF holds them from its sites, through three filters in series: out
+   of the network VRF never inside a published range and only inside the attachable ranges (SVC-NET-OUT), into the
+   service VRF exactly that network's accepted /32 prefixes (SVC-FROM-<target>; the planner gives each prefix to one
+   network only), to the hub the accepted prefixes (<circuit>-OUT). So a node announces a cluster address to the hub
+   only while that network's session is up and its VRF on the node has the site's route: both directions leave the
+   node together. An accepted prefix shorter than /32 (a cluster's subnet) keeps a static route over the link,
+   redistributed through the same range guard (SVC-STATIC). Nothing else of the service VRF reaches a network VRF,
+   so no route crosses between tenant networks #}
 ! the service VRF {{ _svc.vrf }}: the platform's management (the service range, {{ _svc.range | join(', ') }}) reaches the
 ! clusters the platform builds on tenant networks; handed off to the hub's network by the platform circuits
 {% for v in hf_node_vrfs if v.service is defined and not v.egress %}
@@ -288,8 +295,14 @@ vrf {{ v.vrf }}
 exit-vrf
 !
 {% endfor %}
+{# the accepted prefixes shorter than /32 only: static routes over the network's link; the /32 prefixes per network
+   (its VPN target) are learned over the network's session #}
 {% set _svc_routes = [] %}
-{% for w in _svc.networks %}{% for p in w.prefixes %}{% set _ = _svc_routes.append([p, w.seIp]) %}{% endfor %}{% endfor %}
+{% set _svc_p32 = {} %}
+{% for w in _svc.networks %}
+{% set _ = _svc_p32.update({w.vpnTarget: []}) %}
+{% for p in w.prefixes %}{% if p.endswith('/32') %}{% set _ = _svc_p32[w.vpnTarget].append(p) %}{% else %}{% set _ = _svc_routes.append([p, w.seIp]) %}{% endif %}{% endfor %}
+{% endfor %}
 {% if _svc_routes %}
 vrf {{ _svc.vrf }}
 {% for r in _svc_routes %}
@@ -306,14 +319,31 @@ route-map SVC-NET-IN permit 10
  match ip address prefix-list SHC-HUB4
  set weight 100
 exit
-route-map SVC-NET-OUT deny 10
-exit
 route-map SVC-TO-NET permit 10
  match ip address prefix-list SHC-HUB4
 exit
+{# the entrance of a network without a /32 among its accepted prefixes: nothing #}
+{% if _svc_p32.values() | reject | list %}
 route-map SVC-FROM-NET deny 10
 exit
+{% endif %}
 !
+{# per network with accepted /32 prefixes: exactly those, the service domain's entrance on that network's session #}
+{% for w in _svc.networks %}
+{% set _p32 = _svc_p32[w.vpnTarget] %}
+{% if _p32 %}
+{% for p in _p32 %}
+ip prefix-list SVC-NET-{{ w.vpnTarget }} seq {{ loop.index * 5 }} permit {{ p }}
+{% endfor %}
+route-map SVC-FROM-{{ w.vpnTarget }} permit 10
+ match ip address prefix-list SVC-NET-{{ w.vpnTarget }}
+ set community none
+ set large-community none
+ set extcommunity none
+exit
+!
+{% endif %}
+{% endfor %}
 {% for e in _svc.accept %}
 ip prefix-list SVC-HUB seq {{ loop.index * 5 }} permit {{ e }}
 {% endfor %}
@@ -335,9 +365,15 @@ ip prefix-list SVC-ATTACHABLE seq {{ loop.index * 5 }} deny {{ e }}
 ip prefix-list SVC-ATTACHABLE seq {{ (_svc_seq + loop.index) * 5 }} permit {{ e }}
 {% endfor %}
 !
+{# what a network VRF sends the service VRF: the same guard #}
+route-map SVC-NET-OUT permit 10
+ match ip address prefix-list SVC-ATTACHABLE
+exit
+{% if _svc_routes %}
 route-map SVC-STATIC permit 10
  match ip address prefix-list SVC-ATTACHABLE
 exit
+{% endif %}
 !
 {% for c in _svc.circuits %}
 ! platform circuit {{ c.circuit }} (VLAN {{ c.vlan }}, CE {{ c.ce }} AS {{ c.peerAsn }}): the service range in, the
@@ -389,7 +425,9 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ _svc.vrf }}
 {% endfor %}
  !
  address-family ipv4 unicast
+{% if _svc_routes %}
   redistribute static route-map SVC-STATIC
+{% endif %}
 {% for c in _svc.circuits %}
   neighbor {{ c.ce }} activate
   neighbor {{ c.ce }} route-map {{ c.id }}-IN in
@@ -399,7 +437,7 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ _svc.vrf }}
 {% for w in _svc.networks %}
   neighbor {{ w.seIp }} activate
   neighbor {{ w.seIp }} next-hop-self
-  neighbor {{ w.seIp }} route-map SVC-FROM-NET in
+  neighbor {{ w.seIp }} route-map {{ ('SVC-FROM-' ~ w.vpnTarget) if _svc_p32[w.vpnTarget] else 'SVC-FROM-NET' }} in
   neighbor {{ w.seIp }} route-map SVC-TO-NET out
 {% endfor %}
  exit-address-family
@@ -489,9 +527,10 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
 {% endif %}
 {% if _e6 and n.ipv6 is defined %}
 {# v6only: the veth also carries the IPv4 /31 of the IPv4 egress, and FRR would peer over it (the IPv4 filter drops
-   that); the session stays on the link-local addresses the router advertisements exchange #}
+   that); the session stays on the link-local addresses the router advertisements exchange. No other line at router
+   level for a neighbour named by an interface (no description): frr-reload.py 8.5 removes its defining line first and
+   then fails on any other #}
  neighbor {{ n.xe }} interface v6only remote-as external
- neighbor {{ n.xe }} description IPv6 egress of {{ n.network }}
 {% endif %}
 {% if n.service is defined %}
  neighbor {{ n.service.soIp }} remote-as {{ fab_spec.domainAsn }}
@@ -531,6 +570,9 @@ router bgp {{ fab_spec.domainAsn }} vrf {{ n.vrf }}
 {% endif %}
 {% if n.service is defined %}
   neighbor {{ n.service.soIp }} activate
+{# the network's routes go to the service VRF with this node as next hop (they came from the VPN, with a core next
+   hop the service VRF cannot reach) #}
+  neighbor {{ n.service.soIp }} next-hop-self force
   neighbor {{ n.service.soIp }} route-map SVC-NET-IN in
   neighbor {{ n.service.soIp }} route-map SVC-NET-OUT out
 {% endif %}
@@ -623,9 +665,9 @@ router bgp {{ _e6.asn }} vrf {{ hf_node_egress.vrf }}
  bgp router-id {{ hf_node_egress.address.split('/')[0] }}
  no bgp default ipv4-unicast
  bgp graceful-restart-disable
+{# a neighbour named by an interface has no other line at router level (see the network VRF's xe) #}
 {% for n in _n6 %}
  neighbor {{ n.xo }} interface v6only remote-as external
- neighbor {{ n.xo }} description IPv6 egress of {{ n.network }}
 {% endfor %}
 {% for u in _e6.upstream %}
  neighbor {{ u.address }} remote-as {{ u.asn }}

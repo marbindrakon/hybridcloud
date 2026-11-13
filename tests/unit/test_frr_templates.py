@@ -80,6 +80,15 @@ def base_text(path):
     return p.stdout if p.returncode == 0 else None
 
 
+def without_interface_descriptions(text):
+    """A render of the root template from before interface neighbours lost their description (frr-reload.py 8.5 fails
+    to remove a neighbour named by an interface that has a second line at router level): the same text without the
+    " neighbor <name> description ..." lines of the neighbours named by an interface."""
+    ifs = set(re.findall(r"^ neighbor (\S+) interface\b", text, re.M))
+    return "".join(l for l in text.splitlines(True)
+                   if not (l.startswith(" neighbor ") and l.split()[1] in ifs and l.split()[2:3] == ["description"]))
+
+
 def save(name, text):
     if OUT:
         os.makedirs(OUT, exist_ok=True)

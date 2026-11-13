@@ -59,8 +59,9 @@ def git_show(rel):
 
 
 def base_render(variables):
+    """The release's render, without the descriptions of interface neighbours (gone since: frr-reload.py 8.5)."""
     text = git_show(os.path.relpath(T.RT, ROOT))
-    return None if text is None else T.render_text(text, variables)
+    return None if text is None else T.without_interface_descriptions(T.render_text(text, variables))
 
 
 def with_v6(c, **over):
