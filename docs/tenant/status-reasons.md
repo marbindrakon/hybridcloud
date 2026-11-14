@@ -118,8 +118,10 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `CredentialsUnavailable` | The site credentials are not available yet. The platform team is looking at it. | The platform team |
 | `InUse` | A setting turned off waits until the environment no longer uses it; the message lists what still does. | You (the tenant) |
 | `LinkedNotReady` | Waiting for its team setup, app projects and OpenShift cluster to be ready. | Nobody: it continues by itself |
+| `NoAccessGroups` | No access group can use this environment. Add an access group so that people can sign in. | You (the tenant) |
 | `NoMembersYet` | Ready; sign-in will be verified once a granted access group has a member. | You (the tenant) |
 | `ReferenceDeleting` | An object this one refers to is being deleted. | You (the tenant) |
+| `SignInNotSetUp` | Sign-in with the platform identity is not set up on this site. Clusters can still be built. | The platform team |
 | `Waiting` | Waiting for a prerequisite. | Nobody: it continues by itself |
 | `WaitingForAccessGroup` | Waiting for the named access groups to be ready. | You (the tenant) |
 | `WaitingForAddressSpace` | Waiting for free address space. The message says what is full; adding a prefix or freeing a block lets it continue. | You (the tenant) |
@@ -128,6 +130,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `WaitingForDependents` | Waiting for the objects that depend on this one to be deleted. | Nobody: it continues by itself |
 | `WaitingForFabric` | Waiting for the network fabric to be ready. | Nobody: it continues by itself |
 | `WaitingForGateway` | Waiting for the site connection to be ready. | Nobody: it continues by itself |
+| `WaitingForGroup` | An access group has no group in the sign-in directory yet. | Nobody: it continues by itself |
 | `WaitingForPlacement` | Waiting for the network's placement in this environment to be ready. | Nobody: it continues by itself |
 | `WaitingForPlatformAccess` | The platform is connecting to the cluster's network; this takes a few minutes. | Nobody: it continues by itself |
 | `WaitingForSecret` | Waiting for a required credential to be available. | Nobody: it continues by itself |
@@ -164,8 +167,10 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `CeKindNotAccepted` | The bearer does not accept this kind of router. Choose another bearer or ask the platform team. | You (the tenant) |
 | `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ClaimMissing` | Members of the granted access groups cannot sign in yet. The platform team is looking at it. | The platform team |
+| `ClientNotFound` | The sign-in directory has no client for this site. The platform team is looking at it. | The platform team |
 | `CnvNotAvailable` | The site does not offer virtual machines yet. The platform team is looking at it. | The platform team |
 | `ConfigNotFound` | The named connection does not exist. | You (the tenant) |
+| `CredentialRefused` | The site refused the cluster's credential. The platform team is looking at it. | The platform team |
 | `CredentialsInvalid` | The site credentials were refused. The platform team is looking at it. | The platform team |
 | `CredentialsMissing` | The site credentials are missing. The platform team is looking at it. | The platform team |
 | `DnsProjectNotFound` | The DNS project does not exist. The platform team is looking at it. | The platform team |
@@ -178,8 +183,11 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `FabricMismatch` | The network and the site belong to different fabrics. | You (the tenant) |
 | `Failed` | Could not be completed; see the reason. | The platform team |
 | `FamilyUnavailable` | This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it. | You (the tenant) |
+| `GrantRefused` | The site refused a role for an access group. The platform team is looking at it. | The platform team |
+| `GroupDomainNotFound` | The site has no domain of the declared group domain. The platform team is looking at it. | The platform team |
 | `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
+| `IdentityProviderNotFound` | The site has no identity provider of the declared name. The platform team is looking at it. | The platform team |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
@@ -201,6 +209,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `NotRealizable` | The request cannot be realized on the chosen site. | You (the tenant) |
 | `OperatorFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
 | `OutsideAttachableRanges` | Clusters the platform manages need a network inside the ranges your tenant profile lists (managedClusterRanges). | You (the tenant) |
+| `PasswordRefused` | The site refused to set up the cluster's user. The platform team is looking at it. | The platform team |
 | `PeerAsnReserved` | This AS number is reserved by the platform. Configure your router with another AS number. | You (the tenant) |
 | `PlacementHasNoIPv4` | The network has no IPv4 subnet here; clusters need one. | You (the tenant) |
 | `PlatformAccessOff` | The platform may not reach this network. Allow platform access on the network. | You (the tenant) |
@@ -213,6 +222,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ProvisionFailed` | Creating or updating did not complete. The platform team is looking at it. | The platform team |
 | `PublishFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
 | `RegionNotSupported` | This region is not supported. | You (the tenant) |
+| `RoleRefused` | The site refused a role for the cluster's user. The platform team is looking at it. | The platform team |
 | `RouterAdvertisementFailed` | The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this. | The platform team |
 | `RouterAttachmentsOff` | The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement. | You (the tenant) |
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
@@ -233,6 +243,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `TeardownFailed` | Deleting did not complete. The platform team is looking at it. | The platform team |
 | `TransportNotSupported` | This transport is not supported. | You (the tenant) |
 | `TypeNotSupported` | This type is not supported here. | You (the tenant) |
+| `UserRefused` | The site refused the cluster's user. The platform team is looking at it. | The platform team |
 | `ZoneMismatch` | The zone does not match the site. | You (the tenant) |
 
 **On a part of an object (an egress family of a network, its translation to IPv4, a placement's IPv6 internet access)**

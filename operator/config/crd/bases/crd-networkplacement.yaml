@@ -233,6 +233,40 @@ spec:
                 l2Vni:
                   type: integer
                   description: The placement's MAC-VRF VNI inside its site (CloudVirt).
+                siteNetwork:
+                  type: object
+                  description: >-
+                    The object on the site that carries this placement, to choose when attaching workloads
+                    (OpenStack: the network to give a server).
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the network on the site.
+                    id:
+                      type: string
+                      description: Identifier of the network on the site.
+                    project:
+                      type: string
+                      description: The project on the site that owns the network (the platform's, shared with the environment).
+                    subnets:
+                      type: array
+                      description: The network's subnets.
+                      items:
+                        type: object
+                        description: One subnet.
+                        properties:
+                          family:
+                            type: integer
+                            description: 4 or 6.
+                          prefix:
+                            type: string
+                            description: The subnet's prefix.
+                          gateway:
+                            type: string
+                            description: The subnet's gateway address on the site (empty when it has none).
+                          id:
+                            type: string
+                            description: Identifier of the subnet on the site.
                 realization:
                   type: object
                   description: How the platform realized the placement (informational; depends on the platform).

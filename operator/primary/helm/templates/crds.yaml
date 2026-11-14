@@ -2635,7 +2635,9 @@ spec:
                       type: string
                       maxLength: 64
                       description: >-
-                        Keystone domain for tenant projects. The infrastructure account is granted admin on it.
+                        Keystone domain for tenant projects. An infrastructure account that holds the admin role
+                        is given admin on it; any other account needs the manager role on it, given by the
+                        site's operator.
                     createProjectDomain:
                       type: boolean
                       default: false
@@ -2647,6 +2649,56 @@ spec:
                         The site's default external network (a Neutron network that every project may use as
                         external). It must exist and be external; OpenShift clusters that name no network of
                         their own use it.
+                    dashboard:
+                      type: object
+                      description: The site's web dashboard.
+                      properties:
+                        url:
+                          type: string
+                          maxLength: 512
+                          pattern: '^https://'
+                          description: >-
+                            Base URL of the site's web dashboard. Shown to tenants as the environment's console.
+                    signIn:
+                      type: object
+                      description: >-
+                        Sign-in to the site with the platform's tenant identities, as the site's operator has set
+                        it up. Unset: environments on the site offer no sign-in for people.
+                      required: [identityProvider, protocol]
+                      properties:
+                        identityProvider:
+                          type: string
+                          maxLength: 255
+                          description: Identifier of the identity provider in the site's identity service.
+                        protocol:
+                          type: string
+                          maxLength: 255
+                          description: Identifier of the identity provider's protocol in the site's identity service.
+                        displayName:
+                          type: string
+                          maxLength: 255
+                          description: >-
+                            Name of the entry people choose on the dashboard's sign-in page. Default: the
+                            identity provider's identifier.
+                        groupDomain:
+                          type: string
+                          maxLength: 64
+                          description: >-
+                            Domain of the site's identity service in which sign-in looks up groups. The platform
+                            creates one group per access group in use there. Default: projectDomain.
+                        start:
+                          type: string
+                          enum: [Dashboard, IdentityProvider]
+                          default: Dashboard
+                          description: >-
+                            Dashboard: the console link opens the dashboard's sign-in page. IdentityProvider: the
+                            link starts sign-in at the identity provider and returns to the dashboard.
+                        authorizationTTLMinutes:
+                          type: integer
+                          minimum: 0
+                          description: >-
+                            How long the site keeps a person's group memberships after a sign-in, in minutes, as
+                            the operator states it. Used when the site does not report the value.
                 openshift:
                   type: object
                   description: >-
@@ -2791,7 +2843,10 @@ spec:
                     IPv4 are offered), ipv6NetworkSource (IPv6 subnets can come from the network's
                     address space), ipv6ProviderSource (IPv6 subnets can come from the cloud
                     provider), ipv6Translation (placements without IPv4 reach IPv4-only destinations
-                    by translation). A key that is absent or false is not offered.
+                    by translation), consoleSignIn (openstack: people sign in to the site's dashboard
+                    with their platform identity), apiCredentials (openstack: people can create
+                    application credentials for command-line tools in the dashboard). A key that is
+                    absent or false is not offered.
                   additionalProperties:
                     type: boolean
                 site:
@@ -2828,6 +2883,76 @@ spec:
                           default:
                             type: boolean
                             description: True for the network spec.openstack.externalNetwork names.
+                    dashboard:
+                      type: string
+                      description: OpenStack sites, the dashboard URL the platform shows (spec.openstack.dashboard.url).
+                    signIn:
+                      type: object
+                      description: >-
+                        OpenStack sites, the declared sign-in (spec.openstack.signIn) and what the probe found.
+                      properties:
+                        identityProvider:
+                          type: string
+                          description: Identifier of the identity provider.
+                        protocol:
+                          type: string
+                          description: Identifier of its protocol.
+                        displayName:
+                          type: string
+                          description: Name of the entry on the dashboard's sign-in page.
+                        groupDomain:
+                          type: string
+                          description: Domain that holds the groups sign-in looks up.
+                        groupDomainId:
+                          type: string
+                          description: Identifier of that domain.
+                        userDomain:
+                          type: string
+                          description: Domain the identity provider puts the signed-in people in, where it could be read.
+                        start:
+                          type: string
+                          description: Dashboard or IdentityProvider (spec.openstack.signIn.start).
+                        startUrl:
+                          type: string
+                          description: The link that starts sign-in, as environments show it.
+                        authorizationTTLMinutes:
+                          type: integer
+                          description: >-
+                            How long the site keeps a person's group memberships after a sign-in, in minutes.
+                            Absent when not known.
+                        authorizationTTLSource:
+                          type: string
+                          description: Site (read from the site), Declared (stated by the platform team) or Unknown.
+                        confirmed:
+                          type: array
+                          description: >-
+                            What the platform read from the site and found as declared: identityProvider,
+                            protocol, mapping, groupDomain, client, startUrl.
+                          items:
+                            type: string
+                        notConfirmed:
+                          type: array
+                          description: What the platform could not read or check; it is taken as declared.
+                          items:
+                            type: string
+                        warnings:
+                          type: array
+                          description: What in the site's sign-in setup works against tenant sign-in.
+                          items:
+                            type: string
+                        account:
+                          type: array
+                          description: The infrastructure account's roles on the site, where they could be read.
+                          items:
+                            type: object
+                            description: One role of the account.
+                            properties:
+                              role:
+                                type: string
+                                description: Role name.
+                              scope:
+                                type: string
+                                description: Where the role holds (system, domain <name> or project <name>).
                   x-kubernetes-preserve-unknown-fields: true
                 status:
                   type: string
@@ -3034,10 +3159,11 @@ spec:
           description: >-
             An OpenStack environment: the tenant's project on a platform OpenStack site, comparable
             to an OpenStack project with its quota, an AWS account in one Region or a Google Cloud
-            project. The platform creates the project on the site named by spec.cloudRef, a
-            credential for it, and the environment's DNS zone <environment>.<tenant>.<tenant DNS
-            domain>. With cloudRef set, the site supplies every site setting and the legacy fields
-            below have no effect.
+            project. The platform creates the project on the site named by spec.cloudRef and the
+            environment's DNS zone <environment>.<tenant>.<tenant DNS domain>. Where the site offers
+            sign-in with the platform identity, members of the access groups in spec.toolRbac sign in
+            to the site's dashboard and work in the project. With cloudRef set, the site supplies every
+            site setting and the legacy fields below have no effect.
           type: object
           required:
             - spec
@@ -3073,6 +3199,24 @@ spec:
                       description: Name of the OpenStack site (CloudInfrastructure).
                       type: string
                       maxLength: 253
+                toolRbac:
+                  type: object
+                  description: >-
+                    Who can use the environment on the site (access groups, Rbac names in this namespace).
+                  properties:
+                    editRbac:
+                      type: array
+                      description: >-
+                        Access groups whose members can create, change and delete resources in the
+                        environment's project.
+                      items:
+                        type: string
+                    viewRbac:
+                      type: array
+                      description: >-
+                        Access groups whose members get read-only access to the environment's project.
+                      items:
+                        type: string
                 project:
                   type: string
                   description: Name hint for the OpenStack project. Required.
@@ -3179,6 +3323,113 @@ spec:
                 domainName:
                   type: string
                   description: Name of the OpenStack domain that holds the project.
+                access:
+                  type: object
+                  description: >-
+                    Who can use the environment on the site: the sign-in directory client the site's
+                    sign-in uses, the domain of the site's identity service that holds the groups, and one
+                    entry per access group in spec.toolRbac.
+                  properties:
+                    signInClient:
+                      type: string
+                      description: The client of the platform's sign-in directory that the site's sign-in uses.
+                    groupDomain:
+                      type: string
+                      description: Domain of the site's identity service that holds the environment's groups.
+                    groups:
+                      type: array
+                      description: One entry per access group in spec.toolRbac.
+                      items:
+                        type: object
+                        description: An access group and its group on the site.
+                        properties:
+                          rbac:
+                            type: string
+                            description: The access group (Rbac name).
+                          group:
+                            type: string
+                            description: Name of the group on the site and in the sign-in token, <tenant>.<access group>.
+                          access:
+                            type: string
+                            description: Edit (create, change and delete resources) or View (read only).
+                          role:
+                            type: string
+                            description: The role the group holds on the project.
+                          state:
+                            type: string
+                            description: >-
+                              Granted, Waiting (the access group has no group in the sign-in directory yet) or
+                              Failed (the site refused; message says why).
+                          message:
+                            type: string
+                            description: Why the group is waiting or failed, in plain words.
+                endpoints:
+                  type: object
+                  description: How people and tools reach the environment.
+                  properties:
+                    console:
+                      type: string
+                      description: >-
+                        The link that opens the site's dashboard for this environment, with sign-in where the
+                        site offers it. Empty when the site publishes no dashboard.
+                    signIn:
+                      type: object
+                      description: How people sign in to the dashboard.
+                      properties:
+                        method:
+                          type: string
+                          description: TenantSSO (with the platform identity) or NotAvailable (the site offers no sign-in for people).
+                        idpName:
+                          type: string
+                          description: Name of the entry to choose on the dashboard's sign-in page.
+                        start:
+                          type: string
+                          description: >-
+                            IdentityProvider: the console link starts sign-in at the identity provider and returns
+                            to the dashboard. Dashboard: the link opens the dashboard's sign-in page.
+                    signInGroups:
+                      type: array
+                      description: The groups whose members can sign in to the environment.
+                      items:
+                        type: string
+                    api:
+                      type: string
+                      description: The site's identity endpoint, the entry point of its API.
+                    project:
+                      type: string
+                      description: Name of the environment's project.
+                    projectId:
+                      type: string
+                      description: Identifier of the environment's project.
+                    domain:
+                      type: string
+                      description: Name of the domain that holds the project.
+                    domainId:
+                      type: string
+                      description: Identifier of the domain that holds the project.
+                    region:
+                      type: string
+                      description: The site's region name, as command-line tools ask for it.
+                    location:
+                      type: string
+                      description: Where the site is, in words.
+                    apiCredentials:
+                      type: object
+                      description: >-
+                        Whether people can create application credentials (secrets that let command-line tools
+                        act as them in the project) in the dashboard, and for how long they work.
+                      properties:
+                        state:
+                          type: string
+                          description: Offered, NotOffered or Unknown (the site does not report it and nobody declared it).
+                        validMinutesAfterSignIn:
+                          type: integer
+                          description: >-
+                            How long an application credential keeps working after the person's last sign-in to
+                            the dashboard, in minutes. It works again after the next sign-in.
+                        source:
+                          type: string
+                          description: Site (read from the site) or Declared (stated by the platform team).
                 status:
                   type: string
                   description: Short state word written by the platform's automation.
@@ -6095,6 +6346,40 @@ spec:
                 l2Vni:
                   type: integer
                   description: The placement's MAC-VRF VNI inside its site (CloudVirt).
+                siteNetwork:
+                  type: object
+                  description: >-
+                    The object on the site that carries this placement, to choose when attaching workloads
+                    (OpenStack: the network to give a server).
+                  properties:
+                    name:
+                      type: string
+                      description: Name of the network on the site.
+                    id:
+                      type: string
+                      description: Identifier of the network on the site.
+                    project:
+                      type: string
+                      description: The project on the site that owns the network (the platform's, shared with the environment).
+                    subnets:
+                      type: array
+                      description: The network's subnets.
+                      items:
+                        type: object
+                        description: One subnet.
+                        properties:
+                          family:
+                            type: integer
+                            description: 4 or 6.
+                          prefix:
+                            type: string
+                            description: The subnet's prefix.
+                          gateway:
+                            type: string
+                            description: The subnet's gateway address on the site (empty when it has none).
+                          id:
+                            type: string
+                            description: Identifier of the subnet on the site.
                 realization:
                   type: object
                   description: How the platform realized the placement (informational; depends on the platform).
@@ -7551,6 +7836,27 @@ spec:
                   type: array
                   items:
                     type: string
+                credential:
+                  description: >-
+                    OpenStack: the cluster's own credential on the site, an application credential of a site user
+                    made for this cluster alone (identifiers only). It is deleted with the cluster.
+                  type: object
+                  properties:
+                    id:
+                      description: Identifier of the application credential.
+                      type: string
+                    user:
+                      description: Name of the site user that owns it. Actions by this user in the project are this cluster's.
+                      type: string
+                    userId:
+                      description: Identifier of that user.
+                      type: string
+                    domain:
+                      description: Identifier of the domain of the site's identity service that holds the user.
+                      type: string
+                    createdAt:
+                      description: When the credential was made, as the site reports it.
+                      type: string
                 floatingIPs:
                   description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."
                   type: object
@@ -9823,14 +10129,16 @@ spec:
                           (networks that span sites), DNS (names for environments), IPv6 (placements can have an
                           IPv6 subnet), IPv6Only (placements without IPv4), IPv6NetworkSource (IPv6 subnets from the
                           network's address space), IPv6ProviderSource (IPv6 subnets from the cloud provider),
-                          IPv6Translation (placements without IPv4 reach IPv4-only destinations by translation).
+                          IPv6Translation (placements without IPv4 reach IPv4-only destinations by translation),
+                          ConsoleSignIn (people sign in to the site's dashboard with their platform identity),
+                          ApiCredentials (people can create credentials for command-line tools in the dashboard).
                         type: array
                         maxItems: 16
                         x-kubernetes-list-type: set
                         items:
                           type: string
                           enum: [Virtualization, HybridNetworking, DNS, IPv6, IPv6Only, IPv6NetworkSource,
-                                 IPv6ProviderSource, IPv6Translation]
+                                 IPv6ProviderSource, IPv6Translation, ConsoleSignIn, ApiCredentials]
                       externalNetworks:
                         description: >-
                           External networks of an OpenStack site that every project may use: an OpenShift cluster's

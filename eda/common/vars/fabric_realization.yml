@@ -151,6 +151,29 @@ fabric_realization_defaults:
     # the Keystone domain of that project on every OpenStack site; "" = the site's own openstack.projectDomain
     # (CloudInfrastructure spec)
     projectDomain: ""
+    # tenant sign-in on OpenStack sites (CloudInfrastructure spec.openstack.signIn, set up by the site's operator):
+    # the site's OIDC client in the tenant realm. A CloudOSO's access groups (spec.toolRbac) become Keystone groups
+    # <entity>.<rbac> in the site's group domain with these roles on the environment's project, and client roles of
+    # the same name of that client, mapped to the Rbac's Keycloak group (the client puts them into the groups claim).
+    tenantSignIn:
+      # "" = openshift.tenantSignIn.realm
+      realm: ""
+      # "{site}" = the CloudInfrastructure's name
+      clientId: "openstack-{site}"
+      # "" = openshift.tenantSignIn.rbacConfig (the RbacConfig whose automation clients manage the realm)
+      rbacConfig: ""
+      editRoles: [member]
+      viewRoles: [reader]
+    # an OpenShift cluster on an OpenStack site acts as its own Keystone user in the environment's domain (no stored
+    # password, the platform's user options), with these roles on the environment's project and one restricted
+    # application credential of the same life as the cluster. "{build}" = the cluster's build name. rolesBySite:
+    # <site>: roles for that site instead of roles (a site whose load balancer needs more than member). A role other
+    # than manager/member/reader needs admin, or a site policy that lets the domain manager grant it.
+    clusterIdentity:
+      userName: "shc-{build}"
+      roles: [member]
+      rolesBySite: {}
+      credentialName: "shc-{build}"
   openshift:
     # OpenShift sites: the FRRConfigurations (labels) whose BGP sessions to the site's gateway carry the placements'
     # routes; empty selects every FRRConfiguration of the site
