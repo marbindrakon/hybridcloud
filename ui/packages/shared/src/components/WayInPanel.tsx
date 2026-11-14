@@ -20,10 +20,14 @@ import {
   osoNoAccessGroup,
   osoProjectAndDomain,
   osoReaderGroups,
+  osoRemovingGroups,
   osoSignIn,
   osoSignInGroups,
   periodParts,
 } from '../forms/openstackAccess';
+import { safeLink } from '../forms/safeLink';
+
+export { safeLink };
 
 interface WayInStatus {
   endpoints?: EnvironmentEndpoints;
@@ -71,11 +75,6 @@ function ConsoleButton({ href, label }: { href: string; label: string }): React.
   );
 }
 
-/** A link the page may open: http(s) only (a status value is never trusted to be a URL). */
-export function safeLink(v: unknown): string | undefined {
-  return typeof v === 'string' && /^https?:\/\//i.test(v.trim()) ? v.trim() : undefined;
-}
-
 /** "name (ID id)", the name alone, or nothing. */
 function NameAndId({ name, id, t }: { name?: string; id?: string; t: T }): React.ReactElement | null {
   if (!name && !id) return null;
@@ -107,20 +106,24 @@ function OpenStackWayIn({ item, readerGroups }: { item: K8sResource; readerGroup
   const ids = osoProjectAndDomain(item);
   const api = osoApiCredentials(item);
   const noGroup = osoNoAccessGroup(item);
+  const removing = osoRemovingGroups(item);
   // the dashboard is offered only while people can sign in to it (the job writes no console otherwise; an object of
   // an earlier release may still carry one)
   const consoleUrl = offered ? safeLink(ep.console) : undefined;
 
-  const groupsText = rows.length
-    ? rows.map((r) => (
-        <div key={`${r.name}-${r.access}`}>
-          {r.ready
-            ? t(r.access === 'View' ? 'wayin.oso.groupView' : 'wayin.oso.groupEdit', { group: r.name })
-            : r.message
-              ? t('wayin.oso.groupNotReady', { group: r.name, message: r.message })
-              : t('wayin.oso.groupNotReadyNoMessage', { group: r.name })}
-        </div>
-      ))
+  const groupsText = rows.length || removing.length
+    ? [
+        ...rows.map((r) => (
+          <div key={`${r.name}-${r.access}`}>
+            {r.ready
+              ? t(r.access === 'View' ? 'wayin.oso.groupView' : 'wayin.oso.groupEdit', { group: r.name })
+              : r.message
+                ? t('wayin.oso.groupNotReady', { group: r.name, message: r.message })
+                : t('wayin.oso.groupNotReadyNoMessage', { group: r.name })}
+          </div>
+        )),
+        ...removing.map((g) => <div key={`removing-${g}`}>{t('wayin.oso.groupRemoving', { group: g })}</div>),
+      ]
     : signInGroups.length
       ? signInGroups.join(', ')
       : null;

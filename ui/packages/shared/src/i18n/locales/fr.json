@@ -855,7 +855,8 @@
     "copied": "Copié",
     "siteUser": "Utilisateur sur le site",
     "siteUserActions": "Les actions de cet utilisateur dans le projet sont celles de ce cluster.",
-    "clusterCredentialRefused": "Le cluster n'a pas d'identifiant sur le site"
+    "clusterCredentialRefused": "Le cluster n'a pas d'identifiant sur le site",
+    "clusterCredentialSecretMissing": "L'identifiant du cluster attend l'équipe plateforme"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1248,6 +1249,7 @@
       "groupView": "{{group}} (lecture seule)",
       "groupNotReady": "{{group}} (pas prêt : {{message}})",
       "groupNotReadyNoMessage": "{{group}} (pas prêt)",
+      "groupRemoving": "{{group}} (en cours de retrait)",
       "youAreNotIn": "Vous n'êtes dans aucun de ces groupes. Demandez à l'administrateur des accès de votre locataire de vous ajouter à l'un d'eux.",
       "noGroup": "Aucun groupe d'accès ne peut utiliser cet environnement. Personne ne peut s'y connecter. Ajoutez un groupe d'accès à l'environnement.",
       "apiCredentials": "Identifiants d'API",

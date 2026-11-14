@@ -24,6 +24,11 @@ import { WayInCard } from './components/WayInPanel';
 import { KindStatusDetails, KIND_STATUS_KEYS, redactForTenant } from './components/KindStatusDetails';
 import { OsoAccessGroupsField } from './components/OsoAccessGroupsField';
 import { KIND_SPEC_META } from './forms/specFieldMeta';
+import { formatValue, DiagnosticsBlock } from './components/ResourceDetail';
+import { ToolSignInPanel } from './components/ToolSignInPanel';
+export const value = (v) => renderToStaticMarkup(createElement('div', null, formatValue(v)));
+export const diagnostics = (item) => renderToStaticMarkup(createElement(DiagnosticsBlock, { item }));
+export const tool = (kind, item) => renderToStaticMarkup(createElement(ToolSignInPanel, { kind, item }));
 export const card = (kind, item, readerGroups) => renderToStaticMarkup(createElement(WayInCard, { kind, item, readerGroups }));
 export const details = (kind, item) => renderToStaticMarkup(createElement(KindStatusDetails, { kind, item }));
 export const field = (props) => renderToStaticMarkup(createElement(OsoAccessGroupsField, { onEditChange: () => {}, onViewChange: () => {}, ...props }));
@@ -519,3 +524,70 @@ test('form: the pre-fill of "Create and change" and the spec the form sends (R13
   assert.equal('toolRbac' in m.buildCloudOsoSpec({ site: 'site-a', project: 'web', editRbac: [], viewRbac: [' '] }), false);
   assert.deepEqual(m.buildCloudOsoSpec({ site: 'site-a', project: 'web', editRbac: ['developers'], viewRbac: [] }).toolRbac, { editRbac: ['developers'] });
 });
+
+// ------------------------------------------------------------------ second pass (V9, V10, V11)
+test('every status URL the pages render is http(s) only (V9)', () => {
+  const bad = ['javascript:alert(1)', ' JavaScript:x', 'data:text/html,x'];
+  for (const href of bad) {
+    // KindStatusDetails: the site console and endpoint of an environment
+    const virt = { kind: 'CloudVirt', metadata: { name: 'v', namespace: 'entity-acme' }, spec: { cloudRef: { name: 's' } },
+      status: { endpoints: { console: href }, site: { name: 's', endpoint: href, console: href } } };
+    const html = pages.details('CloudVirt', virt);
+    assert.ok(!/href="[^"]*(javascript|data):/i.test(html), `details ${href}`);
+    // ResourceDetail: any status value; the job links of the diagnostics
+    assert.ok(!pages.value(href).includes('<a '), `value ${href}`);
+    const diag = pages.diagnostics({ kind: 'CloudVirt', metadata: { name: 'v' }, status: { edaJobs: [{ name: 'job', url: href }] } });
+    assert.ok(!/href="[^"]*(javascript|data):/i.test(diag), `diagnostics ${href}`);
+    // ToolSignInPanel: the sign-in and organization links
+    const t = pages.tool('AAPOrg', { kind: 'AAPOrg', metadata: { name: 'o' }, status: { loginUrl: href, orgUrl: href } });
+    assert.ok(!/href="[^"]*(javascript|data):/i.test(t), `tool ${href}`);
+  }
+  assert.ok(pages.value('https://example.org/x').includes('href="https://example.org/x"'));
+});
+
+test('from the jobs: a group being removed is listed, and nobody-can-sign-in is not said (V10)', () => {
+  const item = fromJob('removing');
+  const html = pages.card('CloudOSO', item, []);
+  assert.equal(row(html, O.groups), `developers (create and change) ${fill(O.groupRemoving, { group: 'auditors' })}`);
+  assert.equal(O.groupRemoving, '{{group}} (being removed)');
+  assert.equal(typeof fr.wayin.oso.groupRemoving, 'string');
+  // every wanted group gone, one removal pending: the card does not say nobody can sign in
+  const empty = fromJob('removing');
+  empty.status.access = { ...empty.status.access, groups: [] };
+  empty.status.endpoints = { ...empty.status.endpoints, signInGroups: [] };
+  const page = text(pages.card('CloudOSO', empty, []));
+  assert.ok(!page.includes(O.noGroup));
+  assert.ok(page.includes(fill(O.groupRemoving, { group: 'auditors' })));
+});
+
+test('from the jobs: start at the dashboard, API credentials not known and none (V11)', () => {
+  const dash = text(pages.card('CloudOSO', fromJob('startDashboard'), []));
+  assert.ok(dash.includes('On the sign-in page, choose Example Platform. You sign in with your platform identity.'));
+  assert.equal(row(pages.card('CloudOSO', fromJob('ttlUnknown'), []), O.apiCredentials), `${O.apiCredentialsIntro} ${O.apiCredentialsUnknown}`);
+  assert.equal(row(pages.card('CloudOSO', fromJob('ttlZero'), []), O.apiCredentials), O.apiCredentialsNotOffered);
+});
+
+test('form: the access groups field and the pre-fill take the form\'s own state (V11)', () => {
+  const form = fs.readFileSync(path.join(UI, 'packages/shared/src/components/CreateResourceForm.tsx'), 'utf8');
+  const field = /<OsoAccessGroupsField([\s\S]*?)\/>/.exec(form);
+  assert.ok(field, 'the field is in the form');
+  assert.match(field[1], /editRbac=\{osoEditRbac\}/);
+  assert.match(field[1], /viewRbac=\{osoViewRbac\}/);
+  assert.match(field[1], /setOsoEditTouched\(true\);\s*setOsoEditRbac\(v\);/);
+  assert.match(field[1], /onViewChange=\{setOsoViewRbac\}/);
+  assert.match(field[1], /options=\{names\(rbacs\.items\)\}/);
+  const effect = /useEffect\(\(\) => \{\s*const next = osoPrefillEdit\(\{([\s\S]*?)\}\);\s*if \(next\) setOsoEditRbac\(next\);\s*\}, \[([^\]]*)\]\)/.exec(form);
+  assert.ok(effect, 'the pre-fill effect');
+  assert.match(effect[1], /rbacNames: rbacs\.items\.map\(\(i\) => i\.metadata\.name\)/);
+  const deps = effect[2].split(',').map((d) => d.trim());
+  for (const d of ['type', 'scopeIdentity', 'currentEntityName', 'rbacs.items', 'osoEditTouched']) assert.ok(deps.includes(d), `effect depends on ${d}`);
+});
+
+test('cluster: a recorded credential whose secret is gone has its own title', () => {
+  const html = pages.details('PlatformOpenshift', cluster({
+    conditions: [{ type: 'ClusterCredential', status: 'False', reason: 'CredentialSecretMissing', message: 'x' }],
+  }));
+  assert.ok(text(html).includes(en.detail.clusterCredentialSecretMissing));
+  assert.ok(!text(html).includes(en.detail.clusterCredentialRefused));
+});
+

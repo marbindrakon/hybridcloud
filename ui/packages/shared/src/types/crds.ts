@@ -92,6 +92,8 @@ export interface CloudOSOAccessStatus {
   signInClient?: string;
   groupDomain?: string;
   groups?: CloudOSOAccessGroup[];
+  /** Groups no longer wanted whose removal from the site or the sign-in directory is not finished */
+  removing?: string[];
 }
 
 /** One automation job run recorded on the object */

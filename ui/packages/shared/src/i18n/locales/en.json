@@ -855,7 +855,8 @@
     "copied": "Copied",
     "siteUser": "Site user",
     "siteUserActions": "Actions by this user in the project are this cluster's.",
-    "clusterCredentialRefused": "The cluster has no credential on the site"
+    "clusterCredentialRefused": "The cluster has no credential on the site",
+    "clusterCredentialSecretMissing": "The cluster's credential needs the platform team"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1248,6 +1249,7 @@
       "groupView": "{{group}} (read only)",
       "groupNotReady": "{{group}} (not ready: {{message}})",
       "groupNotReadyNoMessage": "{{group}} (not ready)",
+      "groupRemoving": "{{group}} (being removed)",
       "youAreNotIn": "You are not in any of these groups. Ask your tenant's access administrator to add you to one.",
       "noGroup": "No access group can use this environment. Nobody can sign in to it. Add an access group to the environment.",
       "apiCredentials": "API credentials",

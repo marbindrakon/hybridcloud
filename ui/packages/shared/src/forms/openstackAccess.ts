@@ -69,6 +69,19 @@ export function osoAccessGroups(item: K8sResource | undefined): OsoGroupRow[] {
   return rows;
 }
 
+/**
+ * The access groups whose removal from the site is not finished (status.access.removing), named as the card names
+ * groups: the access group (the part after the tenant), else the directory group.
+ */
+export function osoRemovingGroups(item: K8sResource | undefined): string[] {
+  const access = (item?.status as { access?: unknown } | undefined)?.access;
+  const list = isObj(access) && Array.isArray(access.removing) ? (access.removing as unknown[]) : [];
+  return list
+    .map((g) => str(g))
+    .filter((g): g is string => !!g)
+    .map((g) => (g.includes('.') ? g.slice(g.indexOf('.') + 1) : g));
+}
+
 /** True when the object carries status.access (written by this round's job). */
 export function hasAccessStatus(item: K8sResource | undefined): boolean {
   return isObj((item?.status as { access?: unknown } | undefined)?.access);
@@ -103,6 +116,8 @@ export function osoSignIn(item: K8sResource | undefined): {
 /** No access group can use the environment (sign-in is set up, nobody can sign in). */
 export function osoNoAccessGroup(item: K8sResource | undefined): boolean {
   if (osoSignIn(item).state !== 'offered') return false;
+  // a group still being removed can still sign in until its removal is finished
+  if (osoRemovingGroups(item).length) return false;
   if (conditionOf(item, 'AccessReady')?.reason === 'NoAccessGroups') return true;
   if (osoAccessGroups(item).length) return false;
   const ep = ((item?.status as { endpoints?: unknown } | undefined)?.endpoints ?? {}) as EnvironmentEndpoints;

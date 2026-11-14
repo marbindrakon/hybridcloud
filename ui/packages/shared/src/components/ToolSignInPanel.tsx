@@ -1,4 +1,5 @@
 import React from 'react';
+import { safeLink } from '../forms/safeLink';
 import { Button, Card, CardBody, CardTitle, Label } from '@patternfly/react-core';
 import { CheckCircleIcon, ExclamationTriangleIcon, ExternalLinkAltIcon, InfoCircleIcon } from '@patternfly/react-icons';
 import { useTranslation } from '../i18n';
@@ -8,9 +9,7 @@ import type { HybridSovereignKind, K8sResource } from '../types';
 /** Kinds whose status names where people sign in (loginUrl) and their organization page (orgUrl). */
 export const TOOL_SIGN_IN_KINDS: ReadonlySet<HybridSovereignKind> = new Set<HybridSovereignKind>(['AAPOrg', 'QuayOrg', 'VaultKV', 'Vault']);
 
-function webUrl(v: unknown): string | undefined {
-  return typeof v === 'string' && /^https?:\/\//.test(v) ? v : undefined;
-}
+const webUrl = safeLink;
 
 /**
  * "Sign in" for a platform service object (AAPOrg, QuayOrg, VaultKV, Vault): the

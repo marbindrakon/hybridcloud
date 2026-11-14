@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { safeLink } from '../forms/safeLink';
 import {
   Alert,
   ClipboardCopy,
@@ -201,9 +202,12 @@ function List({ items }: { items?: Array<string | number> | null }): React.React
 
 function Link({ href }: { href?: string }): React.ReactElement {
   if (!href) return <Dash />;
+  const url = safeLink(href);
+  // a status value that is not an http(s) URL is shown as text, never as a link
+  if (!url) return <span style={{ wordBreak: 'break-all' }}>{href}</span>;
   return (
-    <a href={href} target="_blank" rel="noopener noreferrer" style={{ wordBreak: 'break-all' }}>
-      {href}
+    <a href={url} target="_blank" rel="noopener noreferrer" style={{ wordBreak: 'break-all' }}>
+      {url}
     </a>
   );
 }
@@ -997,7 +1001,12 @@ export function PlatformOpenshiftDetails({ item }: { item: PlatformOpenshift }):
   return (
     <>
       {refused && (
-        <Alert variant="danger" isInline title={t('detail.clusterCredentialRefused')} className="sc-mb">
+        <Alert
+          variant="danger"
+          isInline
+          title={t(refused.reason === 'CredentialSecretMissing' ? 'detail.clusterCredentialSecretMissing' : 'detail.clusterCredentialRefused')}
+          className="sc-mb"
+        >
           {refused.message ? displayText(t, refused.message) : refused.reason}
         </Alert>
       )}
