@@ -68,8 +68,8 @@ class Base(unittest.TestCase):
 def cluster_req(t, **over):
     out = os.path.join(TMP, f"out-{id(t)}-{len(t.ks.log)}.json")
     req = {"action": "cluster-identity", "clouds_yaml": t.clouds, "domain": "tenants", "project_id": t.pid,
-           "user_name": "shc-shc-oso-acme-c1-0a1b2", "description": "User of OpenShift cluster entity-acme/c1",
-           "roles": ["member"], "credential_name": "shc-shc-oso-acme-c1-0a1b2",
+           "user_name": "shc-oso-acme-c1-0a1b2", "description": "User of OpenShift cluster entity-acme/c1",
+           "roles": ["member"], "credential_name": "shc-oso-acme-c1-0a1b2",
            "credential_description": "OpenShift cluster entity-acme/c1", "vault_file": "", "out_file": out}
     req.update(over)
     return req
@@ -165,19 +165,19 @@ class ClusterIdentity(Base):
         self.assertNotIn(first["credential"]["id"], self.ks.app_creds)
 
     def test_a_user_of_that_name_that_is_not_the_platforms_is_refused(self):
-        foreign = self.ks.add_user("shc-shc-oso-acme-c1-0a1b2", self.tenants, password="theirs", description="mine")
+        foreign = self.ks.add_user("shc-oso-acme-c1-0a1b2", self.tenants, password="theirs", description="mine")
         with self.assertRaises(S.Refusal) as cm:
             S.cluster_identity(cluster_req(self))
         self.assertEqual(cm.exception.reason, "UserRefused")
         self.assertEqual(cm.exception.message,
-                         "The site refused the cluster's user shc-shc-oso-acme-c1-0a1b2: a user named "
-                         "shc-shc-oso-acme-c1-0a1b2 exists in domain tenants and is not the platform's. "
+                         "The site refused the cluster's user shc-oso-acme-c1-0a1b2: a user named "
+                         "shc-oso-acme-c1-0a1b2 exists in domain tenants and is not the platform's. "
                          "The cluster cannot be built.")
         self.assertEqual(self.ks.users[foreign]["password"], "theirs")
         self.assertEqual(self.calls("PATCH") + self.calls("PUT"), [])
 
     def test_an_existing_user_gets_the_options_back(self):
-        uid = self.ks.add_user("shc-shc-oso-acme-c1-0a1b2", self.tenants, description="x. " + S.MARKER,
+        uid = self.ks.add_user("shc-oso-acme-c1-0a1b2", self.tenants, description="x. " + S.MARKER,
                                options={"lock_password": False})
         out = S.cluster_identity(cluster_req(self))
         self.assertEqual(out["user"]["id"], uid)
@@ -191,7 +191,7 @@ class ClusterIdentity(Base):
             if method == "GET" and path.endswith("/application_credentials") and not state["done"]:
                 state["done"] = True
                 for u in self.ks.users.values():
-                    if u["name"].startswith("shc-shc-oso"):
+                    if u["name"].startswith("shc-oso"):
                         u["password"] = "set-by-another-job"
                         u["revoked_before"] = self.ks.tick()
         self.ks.on_request = hook
@@ -208,7 +208,7 @@ class ClusterIdentity(Base):
             S.cluster_identity(cluster_req(self, roles=["member", "load-balancer_member"]))
         self.assertEqual(cm.exception.reason, "RoleRefused")
         self.assertTrue(cm.exception.message.startswith(
-            "The site refused the role load-balancer_member on the project for user shc-shc-oso-acme-c1-0a1b2: "
+            "The site refused the role load-balancer_member on the project for user shc-oso-acme-c1-0a1b2: "
             "You are not authorized to perform the requested action: identity:create_grant."), cm.exception.message)
 
     def test_a_domain_manager_account_is_enough(self):
@@ -248,12 +248,12 @@ class ClusterIdentityDelete(Base):
         cid = out["credential"]["id"]
         cred = dict(self.ks.app_creds[cid])
         res = S.cluster_identity_delete({"clouds_yaml": self.clouds, "domain": "tenants", "user_id": out["user"]["id"],
-                                         "user_name": "shc-shc-oso-acme-c1-0a1b2"})
+                                         "user_name": "shc-oso-acme-c1-0a1b2"})
         self.assertEqual(res, {"found": True, "deleted": True, "id": out["user"]["id"]})
         k = S.Keystone(S.Account({"clouds_yaml": self.clouds}))
         self.assertEqual(k.app_cred_token(cid, cred["secret"])[0], 401)
         again = S.cluster_identity_delete({"clouds_yaml": self.clouds, "domain": "tenants", "user_id": out["user"]["id"],
-                                           "user_name": "shc-shc-oso-acme-c1-0a1b2"})
+                                           "user_name": "shc-oso-acme-c1-0a1b2"})
         self.assertEqual(again, {"found": False, "deleted": False, "id": ""})
 
     def test_by_name_and_never_a_foreign_user(self):
@@ -379,10 +379,14 @@ class AccessGroups(Base):
         self.ks.grant("user", mgr_uid, "domain", fed, "manager")
         self.clouds = self.ks.clouds_yaml(os.path.join(TMP, f"m2-{id(self)}.yaml"), "m2", mgr_pw,
                                           project="m2-project", domain="tenants")
-        out = S.access_groups(group_req(self, group_domain="federated"))
-        self.assertEqual([g["state"] for g in out["groups"]], ["Failed", "Failed"])
-        self.assertEqual(out["groups"][0]["message"],
-                         "You are not authorized to perform the requested action: identity:create_grant.")
+        # a domain manager (here also manager of the federation domain) may not grant a group of another domain a
+        # role on the project (A5): said plainly, before any call that would be refused
+        with self.assertRaises(S.Refusal) as cm:
+            S.access_groups(group_req(self, group_domain="federated"))
+        self.assertEqual(cm.exception.reason, "GrantRefused")
+        self.assertEqual(cm.exception.message, "The site account is not an administrator; sign-in groups in domain "
+                                               "federated, which is not the project's domain, need the admin role")
+        self.assertEqual([c for c in self.ks.log if c[0] in ("POST", "PUT") and c[1] != "/v3/auth/tokens"], [])
         # the cloud administrator may
         self.ks.grant("user", self.uid, "domain", fed, "admin")
         self.clouds = self.ks.clouds_yaml(os.path.join(TMP, f"acct2-{id(self)}.yaml"), "site-admin", self.pw,
@@ -432,13 +436,19 @@ class SignInReads(Base):
         return fed
 
     def read(self, clouds=None, **si):
+        # as site_probe does: an administrator reads with its own token, a domain manager with one scoped to the
+        # project domain
         acct = S.Account({"clouds_yaml": clouds or self.clouds})
         conn = acct.own_scope()
-        tok = conn.session.get_token()
+        access = conn.session.auth.get_access(conn.session)
+        admin = "admin" in access.role_names
         notes = []
-        out = S.sign_in_reads(S.Keystone(acct), tok, conn.session.auth.get_access(conn.session).user_id,
+        ks = S.Keystone(acct)
+        tok = S.identity_token(ks, conn.session.get_token(), admin, "tenants", notes)
+        out = S.sign_in_reads(ks, tok, access.user_id,
                               dict({"identity_provider": "platform-tenants", "protocol": "openid",
-                                    "group_domain": "tenants"}, **si), notes)
+                                    "group_domain": "tenants", "project_domain": "tenants", "admin": admin}, **si),
+                              notes)
         return out, notes
 
     def test_an_administrator_reads_the_setup(self):
@@ -567,6 +577,303 @@ class NoSecretInOutput(Base):
         for s in S._SECRETS[n0:] + [c["secret"] for c in self.ks.app_creds.values()] + [self.pw]:
             self.assertNotIn(s, text)
         self.assertIn("<secret>", text)   # Keystone's message echoed a password: replaced
+
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class KeepCheck(Base):
+    """R1, R10: the credential in Vault is replaced only when the site says it is not valid (401, 404 at its sign-in)
+    or it signs in as another user or project; any other answer stops the step with nothing changed."""
+
+    def first(self):
+        req = cluster_req(self)
+        out = S.cluster_identity(req)
+        return out, vault_read_of(req["out_file"], os.path.join(TMP, f"vault-{id(self)}-{len(self.ks.log)}.json"))
+
+    def test_a_5xx_or_no_answer_changes_nothing(self):
+        out, vf = self.first()
+        for status in (500, 503):
+            n = len(self.ks.log)
+            # the site account's password sign-ins pass, the credential's sign-in is answered with the status once
+            orig = self.ks._auth
+
+            def auth(body, status=status, orig=orig):
+                if "application_credential" in (((body.get("auth") or {}).get("identity") or {}).get("methods") or []):
+                    self.ks._auth = orig
+                    return self.ks._err(status, "Service Unavailable")
+                return orig(body)
+            self.ks._auth = auth
+            with self.assertRaises(S.NotAnswered) as cm:
+                S.cluster_identity(cluster_req(self, vault_file=vf))
+            self.assertIn(f"(HTTP {status}); nothing was changed", cm.exception.message)
+            later = self.ks.log[n:]
+            self.assertEqual([c for c in later if c[0] in ("PATCH", "DELETE")
+                              or (c[0] == "POST" and "application_credentials" in c[1])], [])
+            self.assertIn(out["credential"]["id"], self.ks.app_creds)
+        # no connection at all
+        with mock.patch.object(S.Keystone, "app_cred_token", side_effect=__import__("requests").ConnectionError("x")):
+            with self.assertRaises(S.NotAnswered):
+                S.cluster_identity(cluster_req(self, vault_file=vf))
+        self.assertIn(out["credential"]["id"], self.ks.app_creds)
+        # the helper's exit for it: an error marked transient, no refusal reason
+        orig = self.ks._auth
+
+        def auth(body):
+            if "application_credential" in (((body.get("auth") or {}).get("identity") or {}).get("methods") or []):
+                self.ks._auth = orig
+                return self.ks._err(503, "x")
+            return orig(body)
+        self.ks._auth = auth
+        buf = io.StringIO()
+        self.assertEqual(S.main(io.StringIO(json.dumps(cluster_req(self, vault_file=vf))), buf), 1)
+        body = json.loads(buf.getvalue())
+        self.assertTrue(body["transient"])
+        self.assertNotIn("reason", body)
+
+    def test_a_credential_of_another_user_or_project_is_replaced(self):
+        out, vf = self.first()
+        other_pid = self.ks.add_project("acme_env9", self.tenants)
+        # the credential Vault holds now signs in, but as another project: not this cluster's
+        self.ks.app_creds[out["credential"]["id"]]["project"] = other_pid
+        self.ks.grant("user", out["user"]["id"], "project", other_pid, "member")
+        again = S.cluster_identity(cluster_req(self, vault_file=vf))
+        self.assertFalse(again["credential"]["kept"])
+        # and as another user
+        out2, vf2 = self.first()
+        other = self.ks.add_user("someone", self.tenants, description=S.MARKER)
+        self.ks.grant("user", other, "project", self.pid, "member")
+        self.ks.app_creds[out2["credential"]["id"]]["user"] = other
+        again = S.cluster_identity(cluster_req(self, vault_file=vf2))
+        self.assertFalse(again["credential"]["kept"])
+
+    def test_a_401_or_404_makes_a_new_one(self):
+        out, vf = self.first()
+        del self.ks.app_creds[out["credential"]["id"]]                  # 401 from the fake
+        self.assertFalse(S.cluster_identity(cluster_req(self, vault_file=vf))["credential"]["kept"])
+
+    def test_the_vault_file_may_be_the_clouds_yaml_itself(self):
+        req = cluster_req(self)
+        S.cluster_identity(req)
+        with open(req["out_file"]) as f:
+            text = json.load(f)["data"]["clouds.yaml"]
+        path = os.path.join(TMP, f"clouds-{id(self)}.yaml")
+        with open(path, "w") as f:
+            f.write(text)
+        self.assertTrue(S.cluster_identity(cluster_req(self, vault_file=path))["credential"]["kept"])
+
+    def test_a_wait_after_the_second_password_set(self):
+        """R14: the unit returns only PASSWORD_SETTLE_SECONDS after the second set (the next step signs in with the
+        new credential; a token of the second of a reset is refused)."""
+        sleeps = []
+        real_sleep = S.time.sleep
+        with mock.patch.object(S.time, "sleep", side_effect=lambda t: (sleeps.append(t), real_sleep(t))):
+            S.cluster_identity(cluster_req(self))
+        self.assertEqual(sleeps, [self.settle, self.settle])
+        last_patch = max(i for i, c in enumerate(self.ks.log) if c[0] == "PATCH")
+        self.assertEqual(self.ks.log[last_patch:][1:], [])
+
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class Guards(Base):
+    """R9, R10, R16: a delete never runs with a filter an empty value widened, never outside the domain, never on a
+    user of another name."""
+
+    def test_empty_filters_are_refused(self):
+        mine = self.ks.add_user("shc-left", self.tenants, description="c. " + S.MARKER)
+        self.ks.grant("user", mine, "project", self.pid, "member")
+        n = len(self.ks.log)
+        for req in ({"domain": "tenants", "project_id": ""}, {"domain": "", "project_id": self.pid},
+                    {"domain": "tenants"}):
+            with self.assertRaises(ValueError):
+                S.leftover_users(dict(req, clouds_yaml=self.clouds, action="leftover-users"))
+        for req in ({"domain": "tenants", "user_id": "", "user_name": ""}, {"domain": "", "user_id": mine}):
+            with self.assertRaises(ValueError):
+                S.cluster_identity_delete(dict(req, clouds_yaml=self.clouds))
+        for over in ({"project_id": ""}, {"domain": ""}, {"group_domain": ""}):
+            for state in ("present", "absent"):
+                with self.assertRaises(ValueError):
+                    S.access_groups(group_req(self, state=state, **over))
+        self.assertEqual(self.ks.log[n:], [])
+        self.assertIn(mine, self.ks.users)
+
+    def test_leftover_users_of_another_domain_stay(self):
+        other_dom = self.ks.add_domain("elsewhere")
+        stranger = self.ks.add_user("shc-x", other_dom, description="c. " + S.MARKER)
+        self.ks.grant("user", stranger, "project", self.pid, "member")
+        res = S.leftover_users({"clouds_yaml": self.clouds, "domain": "tenants", "project_id": self.pid})
+        self.assertEqual(res, {"deleted": []})
+        self.assertIn(stranger, self.ks.users)
+
+    def test_delete_by_id_outside_the_domain_or_of_another_name(self):
+        other_dom = self.ks.add_domain("elsewhere")
+        stranger = self.ks.add_user("shc-x", other_dom, description="c. " + S.MARKER)
+        res = S.cluster_identity_delete({"clouds_yaml": self.clouds, "domain": "tenants", "user_id": stranger})
+        self.assertEqual((res["deleted"], res["kept"]), (False, "not the platform's"))
+        self.assertIn(stranger, self.ks.users)
+        sibling = self.ks.add_user("shc-oso-acme-c2-9z9z9", self.tenants, description="c. " + S.MARKER)
+        res = S.cluster_identity_delete({"clouds_yaml": self.clouds, "domain": "tenants", "user_id": sibling,
+                                         "user_name": "shc-oso-acme-c1-0a1b2"})
+        self.assertFalse(res["deleted"])
+        self.assertIn(sibling, self.ks.users)
+
+    def test_unwanted_are_this_tenants_groups_only(self):
+        S.access_groups(group_req(self))
+        other = self.ks.add_group("globex.developers", self.tenants, description="x. " + S.MARKER)
+        self.ks.grant("group", other, "project", self.pid, "member")
+        out = S.access_groups(group_req(self))
+        self.assertEqual(out["unwanted"], [])
+
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class GroupFaults(Base):
+    """R5, R19, R20, spike B name limits: a site that does not answer for one group leaves it Unchecked (nothing is
+    known, nothing is refused); a refusal is Failed with a plain message; a name over the limit is refused plainly."""
+
+    def test_a_5xx_on_one_grant_is_unchecked_not_failed(self):
+        S.access_groups(group_req(self))
+        gid = next(g["id"] for g in self.ks.groups.values() if g["name"] == "acme.developers")
+        self.ks.assignments = {a for a in self.ks.assignments if a[1] != gid}
+        self.ks.fail_next.append(("PUT", f"/v3/projects/{self.pid}/groups/{gid}", 503, "Service Unavailable"))
+        out = S.access_groups(group_req(self))
+        dev, aud = out["groups"]
+        self.assertEqual((dev["state"], dev["message"]), ("Unchecked", "Service Unavailable"))
+        self.assertEqual(aud["state"], "Granted")
+
+    def test_a_refusal_holds_what_it_held(self):
+        S.access_groups(group_req(self))
+        gid = next(g["id"] for g in self.ks.groups.values() if g["name"] == "acme.developers")
+        self.ks.fail_next.append(("GET", "/v3/role_assignments", 403, "You are not authorized"))
+        out = S.access_groups(group_req(self))
+        self.assertEqual((out["groups"][0]["state"], out["groups"][0]["held"]), ("Failed", False))
+        out = S.access_groups(group_req(self))
+        self.assertEqual((out["groups"][0]["state"], out["groups"][0]["held"]), ("Granted", True))
+        self.assertTrue(gid)
+
+    def test_a_group_name_over_the_limit(self):
+        long = "acme." + "r" * 60
+        out = S.access_groups(group_req(self, groups=[{"group": long, "roles": ["member"]}]))
+        self.assertEqual(out["groups"][0]["state"], "Failed")
+        self.assertEqual(out["groups"][0]["message"],
+                         f"the group name {long} is longer than the site allows (64 characters)")
+        self.assertEqual(self.calls("POST", "/v3/groups"), [])
+        # the fake refuses it as Keystone does (spike B)
+        k = S.Keystone(S.Account({"clouds_yaml": self.clouds}))
+        tok, _, dom = k.site("tenants")
+        self.assertEqual(k.request(tok, "POST", "/groups", {"group": {"name": long, "domain_id": dom}})[0], 400)
+
+    def test_a_missing_managed_role_fails_only_the_group_that_needs_it(self):
+        groups = [{"group": "acme.developers", "roles": ["member"]}, {"group": "acme.auditors", "roles": ["observer"]}]
+        out = S.access_groups(group_req(self, managed_roles=["member", "observer"], groups=groups))
+        dev, aud = out["groups"]
+        self.assertEqual(dev["state"], "Granted")
+        self.assertEqual((aud["state"], aud["message"]), ("Failed", "role observer does not exist on the site"))
+
+    def test_a_refusal_without_keystones_message_is_plain(self):
+        self.ks.fail_next.append(("POST", "/v3/groups", 403, ""))
+        out = S.access_groups(group_req(self))
+        self.assertEqual(out["groups"][0]["message"], "the site answered HTTP 403")
+
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class GroupDeleteTrust(Base):
+    """R8(b): a group is deleted only when the read of its roles elsewhere can be trusted to be complete."""
+
+    def fed_admin(self):
+        fed = self.ks.add_domain("federated")
+        self.ks.grant("user", self.uid, "domain", fed, "admin")
+        return fed
+
+    def test_a_read_that_is_refused_keeps_the_group(self):
+        S.access_groups(group_req(self))
+        # the read of the group's roles elsewhere is refused (the revoke's own read, scoped to the project, passes)
+        orig = self.ks._role_assignments
+
+        def ra(q, tok):
+            if "group.id" in q and "scope.project.id" not in q:
+                return self.ks._err(403, "You are not authorized")
+            return orig(q, tok)
+        self.ks._role_assignments = ra
+        out = S.access_groups(group_req(self, state="absent", groups=[{"group": "acme.developers", "delete": True}]))
+        g = out["groups"][0]
+        self.assertEqual((g["revoked"], g["deleted"]), (["member"], False))
+        self.assertEqual(g["kept"], "its roles on other projects could not be read (HTTP 403)")
+        self.assertIn("acme.developers", [x["name"] for x in self.ks.groups.values()])
+
+    def test_federation_domain_read_with_the_administrators_own_token(self):
+        fed = self.fed_admin()
+        S.access_groups(group_req(self, group_domain="federated"))
+        gid = next(g["id"] for g in self.ks.groups.values() if g["name"] == "acme.auditors" and g["domain_id"] == fed)
+        # the group holds a role on a project of the tenant domain too: a token scoped to the federation domain would
+        # not list it (a domain-scoped list holds its own domain only); the administrator's own token does
+        other = self.ks.add_project("acme_env2", self.tenants)
+        self.ks.grant("group", gid, "project", other, "reader")
+        out = S.access_groups(group_req(self, state="absent", group_domain="federated",
+                                        groups=[{"group": "acme.auditors", "delete": True}]))
+        self.assertEqual(out["groups"][0]["kept"], "holds a role on another project")
+        self.assertIn(gid, self.ks.groups)
+
+    def test_an_administrator_without_a_role_on_the_group_domain_is_told_plainly(self):
+        """R8(a): the account cannot get a token for the federation domain: a plain refusal naming the domain."""
+        self.ks.add_domain("federated")
+        with self.assertRaises(S.Refusal) as cm:
+            S.access_groups(group_req(self, group_domain="federated"))
+        self.assertEqual(cm.exception.reason, "GrantRefused")
+        self.assertEqual(cm.exception.message, "The site account holds no role on domain federated; sign-in groups in "
+                                               "a domain other than the project's need the admin role there")
+
+    def test_the_fake_filters_a_managers_list_to_its_domain(self):
+        """spike B: a manager's domain-scoped /role_assignments holds its own domain's; a project-scoped one is
+        refused; /domains?name=<another domain> is an empty list."""
+        mgr = self.manager_account()
+        fed = self.ks.add_domain("federated")
+        S.access_groups(group_req(self))
+        gid = next(g["id"] for g in self.ks.groups.values() if g["name"] == "acme.auditors")
+        self.ks.grant("group", gid, "domain", fed, "reader")
+        k = S.Keystone(S.Account({"clouds_yaml": mgr}))
+        tok, _, _ = k.site("tenants")
+        st, body, _ = k.request(tok, "GET", f"/role_assignments?group.id={gid}")
+        self.assertEqual((st, len(body["role_assignments"])), (200, 1))
+        st, body, _ = k.request(tok, "GET", "/domains?name=federated")
+        self.assertEqual((st, body["domains"]), (200, []))
+        acct = S.Account({"clouds_yaml": mgr})
+        ptok = acct.own_scope().session.get_token()
+        for path in ("/roles?name=member", "/domains?name=tenants", f"/role_assignments?group.id={gid}",
+                     f"/users?domain_id={self.tenants}", f"/groups?domain_id={self.tenants}"):
+            self.assertEqual(k.request(ptok, "GET", path)[0], 403, path)
+
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class SignInReadFaults(SignInReads):
+    """R6: only 404 (an empty list for the group domain) means "does not exist"; a 5xx is not a result."""
+
+    def test_a_5xx_is_unreadable_not_missing(self):
+        self.declare()
+        self.ks.fail_next.append(("GET", "/v3/OS-FEDERATION/identity_providers/platform-tenants", 503, "x"))
+        out, _ = self.read()
+        self.assertEqual((out["identityProvider"]["read"], out["identityProvider"]["found"]), (False, False))
+        self.assertEqual(out["unreadable"], ["identityProvider (HTTP 503)"])
+        self.ks.fail_next.append(("GET", "/v3/domains", 500, "x"))
+        out, _ = self.read()
+        self.assertEqual((out["groupDomain"]["read"], out["groupDomain"]["found"]), (False, False))
+        self.assertEqual(out["unreadable"], ["groupDomain (HTTP 500)"])
+
+    def test_a_404_is_missing(self):
+        out, _ = self.read(identity_provider="nobody")
+        self.assertEqual(out["unreadable"], [])
+        out, _ = self.read(group_domain="nowhere")
+        self.assertEqual((out["groupDomain"]["read"], out["groupDomain"]["found"]), (True, False))
+
+    def test_a_managers_reads_use_a_domain_token(self):
+        self.declare()
+        out, notes = self.read(clouds=self.manager_account())
+        self.assertTrue(out["groupDomain"]["found"])
+        self.assertTrue(out["account"]["read"])
+        self.assertIn({"role": "manager", "scope": "domain tenants"}, out["account"]["roles"])
+
+    def test_another_group_domain_needs_an_administrator(self):
+        self.declare()
+        out, notes = self.read(clouds=self.manager_account(), group_domain="federated")
+        self.assertEqual((out["groupDomain"]["read"], out["groupDomain"]["found"]), (False, False))
+        self.assertIn("only an administrator account can find it", " ".join(notes))
 
 
 if __name__ == "__main__":

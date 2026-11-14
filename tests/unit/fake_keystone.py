@@ -15,7 +15,13 @@ to it, and it enforces the Keystone behaviours the platform's jobs depend on, as
     credentials go with the user [S2];
   - a domain manager may manage users, groups, projects of its domain and grant manager/member/reader where actor,
     project and token are of that domain; anything else 403 [S5]; it may not read the federation API (403) [N4];
-  - `admin` (any scope) may do everything except create another user's credential.
+  - `admin` (any scope) may do everything except create another user's credential;
+  - identity reads [spike B, a domain manager on Keystone 2025.1]: a non-admin token scoped to a PROJECT is refused
+    every identity read (roles, domains by name, users, groups, projects, role assignments, a group's roles on a
+    project), except its own user and GET /domains/<its own domain id>; a manager's DOMAIN-scoped token may read them,
+    and its lists hold its own domain only: /domains?name=<another domain> is an empty list, /users without a filter
+    lists its domain's users, /role_assignments lists only assignments on its domain and its domain's projects;
+  - name limits [spike B]: a user name over 255 characters, a group or project name over 64, is refused (400).
 Every request and its status is recorded in `log` (bodies without passwords or secrets: the test greps the helper's
 output for the secrets, so the fake keeps no copy it could leak itself).
 """
@@ -50,6 +56,7 @@ class Keystone:
         self.faults = []                  # tracebacks of the fake's own errors (a test asserts there are none)
         self.fail_next = []               # [(method, path prefix, status, message)] answered once, in order
         self.on_request = None            # optional hook(method, path) run before a request is handled
+        self.secrets_seen = []            # every password set and credential secret made (a test's secret hunt)
         for r in ("admin", "manager", "member", "reader", "load-balancer_member"):
             rid = _id()
             self.roles[rid] = {"id": rid, "name": r, "domain_id": None}
@@ -324,6 +331,18 @@ class Keystone:
     def manager_of(tok, domain_id):
         return tok["scope"] == ("domain", domain_id) and "manager" in tok["roles"]
 
+    def project_scoped_reader(self, tok):
+        """A non-admin token scoped to a project: refused identity reads (spike B)."""
+        return not self.is_admin(tok) and bool(tok["scope"]) and tok["scope"][0] == "project"
+
+    def token_domain(self, tok):
+        """The domain a non-admin token sees: its domain scope, or its project's domain."""
+        if not tok["scope"]:
+            return None
+        if tok["scope"][0] == "domain":
+            return tok["scope"][1]
+        return (self.projects.get(tok["scope"][1]) or {}).get("domain_id")
+
     def _forbidden(self, what="identity"):
         return self._err(403, f"You are not authorized to perform the requested action: {what}.")
 
@@ -331,6 +350,11 @@ class Keystone:
     def _resource(self, method, parts, q, tok, body):
         n = len(parts)
         head = parts[0] if parts else ""
+        if head in ("roles", "users", "groups", "projects", "role_assignments") and method in ("GET", "HEAD") \
+                and self.project_scoped_reader(tok):
+            # its own user and its own credentials stay readable
+            if not (head == "users" and n >= 2 and parts[1] == tok["user"]):
+                return self._forbidden(f"identity:{head}")
         if head == "roles":
             if n == 1 and method == "GET":
                 rs = [r for r in self.roles.values() if "name" not in q or r["name"] == q["name"]]
@@ -340,10 +364,15 @@ class Keystone:
                 return (200, {"role": r}, None) if r else self._err(404, "Could not find role")
         if head == "domains":
             if n == 1 and method == "GET":
-                ds = [d for d in self.domains.values() if "name" not in q or d["name"] == q["name"]]
+                if self.project_scoped_reader(tok):
+                    return self._forbidden("identity:list_domains")
+                ds = [d for d in self.domains.values() if ("name" not in q or d["name"] == q["name"])
+                      and (self.is_admin(tok) or d["id"] == self.token_domain(tok))]
                 return 200, {"domains": ds}, None
             if n == 2 and method == "GET":
                 d = self.domains.get(parts[1])
+                if not self.is_admin(tok) and parts[1] != self.token_domain(tok):
+                    return self._forbidden("identity:get_domain")
                 return (200, {"domain": d}, None) if d else self._err(404, "Could not find domain")
         if head == "projects":
             return self._projects(method, parts, q, tok, body)
@@ -383,6 +412,8 @@ class Keystone:
             p = body.get("project") or {}
             if not self._may_domain(tok, p.get("domain_id")):
                 return self._forbidden("identity:create_project")
+            if len(p.get("name") or "") > 64:
+                return self._err(400, f"Invalid input for field/attribute name. Value: {p.get('name')}")
             if any(x["name"] == p.get("name") and x["domain_id"] == p.get("domain_id") for x in self.projects.values()):
                 return self._err(409, "Conflict occurred attempting to store project")
             pid = self.add_project(p["name"], p["domain_id"])
@@ -437,6 +468,9 @@ class Keystone:
         n = len(parts)
         if n == 1 and method == "GET":
             did = q.get("domain_id")
+            if not self.is_admin(tok) and not did and tok["scope"] and tok["scope"][0] == "domain" \
+                    and self.manager_of(tok, tok["scope"][1]):
+                did = tok["scope"][1]          # a manager's list holds its own domain's users
             if not (self.is_admin(tok) or (did and self.manager_of(tok, did))):
                 return self._forbidden("identity:list_users")
             us = [self._user_view(u) for u in self.users.values() if (not did or u["domain_id"] == did)
@@ -446,6 +480,8 @@ class Keystone:
             u = body.get("user") or {}
             if not self._may_domain(tok, u.get("domain_id")):
                 return self._forbidden("identity:create_user")
+            if len(u.get("name") or "") > 255:
+                return self._err(400, f"Invalid input for field/attribute name. Value: {u.get('name')}")
             if any(x["name"] == u.get("name") and x["domain_id"] == u.get("domain_id") for x in self.users.values()):
                 return self._err(409, "Conflict occurred attempting to store user - Duplicate entry")
             uid = self.add_user(u["name"], u["domain_id"], password=u.get("password"),
@@ -466,6 +502,7 @@ class Keystone:
             u = body.get("user") or {}
             if "password" in u:
                 user["password"] = u["password"]
+                self.secrets_seen.append(u["password"])
                 user["revoked_before"] = self.tick()
             if "options" in u:
                 user["options"].update(u["options"] or {})
@@ -526,6 +563,7 @@ class Keystone:
                    "roles": roles, "unrestricted": bool(c.get("unrestricted", False)),
                    "expires_at": c.get("expires_at"), "created_at": "2026-11-14T00:00:00.000000"}
             self.app_creds[cid] = rec
+            self.secrets_seen.append(rec["secret"])
             return 201, {"application_credential": dict(self._cred_view(rec), secret=rec["secret"])}, None
         if n == 4:
             c = self.app_creds.get(parts[3])
@@ -563,6 +601,9 @@ class Keystone:
             g = body.get("group") or {}
             if not self._may_domain(tok, g.get("domain_id")):
                 return self._forbidden("identity:create_group")
+            if len(g.get("name") or "") > 64:
+                return self._err(400, f"String length exceeded. The length of string '{g.get('name')}' exceeded "
+                                      "the limit of column name(64).")
             if any(x["name"] == g.get("name") and x["domain_id"] == g.get("domain_id") for x in self.groups.values()):
                 return self._err(409, "Conflict occurred attempting to store group - Duplicate entry")
             gid = self.add_group(g["name"], g["domain_id"], g.get("description", ""))
@@ -585,14 +626,17 @@ class Keystone:
 
     def _role_assignments(self, q, tok):
         pid = q.get("scope.project.id")
+        seen = None   # an administrator sees every assignment
         if not self.is_admin(tok):
-            ok = (pid and pid in self.projects and self.manager_of(tok, self.projects[pid]["domain_id"])) or (
-                q.get("user.id") == tok["user"]) or (
-                q.get("group.id") in self.groups and self.manager_of(tok, self.groups[q["group.id"]]["domain_id"]))
-            if not ok:
+            if not (tok["scope"] and tok["scope"][0] == "domain" and "manager" in tok["roles"]):
                 return self._forbidden("identity:list_role_assignments")
+            # a domain manager's list holds only the assignments on its domain and on its domain's projects
+            seen = tok["scope"][1]
         out = []
         for (k, a, sk, sid, r) in sorted(self.assignments):
+            if seen is not None and not ((sk == "domain" and sid == seen) or (
+                    sk == "project" and (self.projects.get(sid) or {}).get("domain_id") == seen)):
+                continue
             if q.get("user.id") and not (k == "user" and a == q["user.id"]):
                 continue
             if q.get("group.id") and not (k == "group" and a == q["group.id"]):
