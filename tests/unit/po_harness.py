@@ -30,6 +30,7 @@ HAVE_ANSIBLE = shutil.which("ansible-playbook") is not None
 # where an execution environment image carries its collections (ansible-galaxy collection list in the image)
 SYSTEM_COLLECTIONS = "/usr/share/ansible/collections"
 LAST_OUTPUT = ""
+LAST_VARS = ""   # with dump_vars: every variable of the play at its end (facts and registered results included)
 FAKED = ("patch_cr_status.yml", "nudge_cr.yml", "openstack_account.yml", "openstack_call.yml", "fabric_check.yml",
          "central_create.yml", "openstack_cluster_credential.yml")
 
@@ -147,12 +148,14 @@ def build_tree(tmp, real=(), fakes=None):
     return roles
 
 
-def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=None, real=(), fakes=None):
+def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=None, real=(), fakes=None,
+        dump_vars=False):
     """Run <role>/tasks/<task_file> (role_path = that role); with result (a Jinja expression) the trace ends with
     {"result": <its value>} when the file ran to its end; tasks (a task list) runs in place of the file, with the
     same role_path; real: common task files of FAKED to run unfaked (e.g. fabric_check.yml: the real helper); fakes:
-    {file name: task list text} replacing more common task files (TRACE is the trace task's template).
-    Returns (rc, trace list, output tail)."""
+    {file name: task list text} replacing more common task files (TRACE is the trace task's template); dump_vars:
+    every variable the play holds at its end (also after a failure) goes to LAST_VARS as JSON text, for a test that
+    hunts for secrets in facts and registered results. Returns (rc, trace list, output tail)."""
     tmp = tempfile.mkdtemp(prefix="shc-po-harness-")
     try:
         roles = build_tree(tmp, real, fakes)
@@ -177,18 +180,24 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
             target = os.path.join(tmp, "given_tasks.yml")
             with open(target, "w") as fh:
                 yaml.safe_dump(tasks, fh)
+        dump = os.path.join(tmp, "vars-dump.json")
         with open(os.path.join(tmp, "play.yml"), "w") as fh:
             fh.write(textwrap.dedent(f'''\
                 - hosts: localhost
                   connection: local
                   gather_facts: false
                   tasks:
-                    - ansible.builtin.include_tasks: {target}
+                    - block:
+                        - ansible.builtin.include_tasks: {target}
                 '''))
             if result:
-                fh.write("    - name: trace the result\n      ansible.builtin.shell: cat >> {{ trace_file }}\n"
-                         "      args:\n        stdin: \"{{ {'result': %s} | to_json }}\"\n      changed_when: false\n"
-                         % result.replace('"', '\\"'))
+                fh.write("        - name: trace the result\n          ansible.builtin.shell: cat >> {{ trace_file }}\n"
+                         "          args:\n            stdin: \"{{ {'result': %s} | to_json }}\"\n"
+                         "          changed_when: false\n" % result.replace('"', '\\"'))
+            if dump_vars:
+                fh.write("      always:\n        - name: dump every variable\n          ansible.builtin.copy:\n"
+                         "            content: \"{{ hostvars['localhost'] | to_json }}\"\n"
+                         f"            dest: {dump}\n          no_log: true\n")
         with open(os.path.join(tmp, "ansible.cfg"), "w") as fh:
             fh.write("[defaults]\n")
         base = {"role_path": role_path, "trace_file": trace, "fake_clouds_yaml": clouds, "fake_os": {},
@@ -207,8 +216,14 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
                               capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
         with open(trace) as fh:
             lines = [json.loads(ln) for ln in fh if ln.strip()]
-        global LAST_OUTPUT
+        global LAST_OUTPUT, LAST_VARS
         LAST_OUTPUT = proc.stdout + proc.stderr   # the whole job output (a test that hunts for secrets reads it)
+        LAST_VARS = ""
+        if dump_vars:
+            if not os.path.exists(dump):
+                raise AssertionError("the play did not dump its variables: " + LAST_OUTPUT[-3000:])
+            with open(dump) as fh:
+                LAST_VARS = fh.read()
         return proc.returncode, lines, proc.stdout[-4000:] + proc.stderr[-2000:]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

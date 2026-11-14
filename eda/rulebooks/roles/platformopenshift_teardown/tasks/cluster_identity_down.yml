@@ -2,17 +2,85 @@
 # An OpenStack cluster's own site user goes (after Hive's deprovision, which used the hub's copy of the credential,
 # and after the floating IPs were released): Keystone deletes its application credential with it, so nobody signs in
 # as the user. Then its Vault path joins the paths the teardown deletes. The user is the one status.credential
-# recorded (by id, else by name), deleted only when it carries the platform's mark (files/shc_openstack.py
-# cluster-identity-delete). An environment that is gone took the user with it (its teardown deletes the platform's
-# users with a role on its project). A cluster refused before its build name was recorded still has its credential's
-# Vault path under the build name it would have had (build_name.yml).
-# Uses po_cr, po_oso_env, platformopenshift_cr_name / _namespace, po_build_name, po_vault_paths.
+# recorded (by id), else the one of the cluster's computed name (the realization's openstack.clusterIdentity.userName
+# with the cluster's build name): a cluster refused after its user was made, before the credential was recorded
+# (RoleRefused, PasswordRefused, CredentialRefused, a failed status write), still has its user. It is deleted only when
+# it carries the platform's mark, lives in the environment's domain and has that name (files/shc_openstack.py
+# cluster-identity-delete). The computed name is used only for a build this cluster owns: a recorded build
+# (status.buildName) the hub says is this cluster's (po_hub_owned), or, with none recorded, the build name it would
+# have had when no namespace of another cluster holds it (a cluster refused NamespaceTaken or BuildOwnerMismatch never
+# made a user under that name). The credential's Vault path joins the deleted paths only for a recorded credential
+# (a cluster without a recorded build owns no cluster/ path otherwise: hub_ownership.yml). An environment that is
+# gone took the user with it (its teardown deletes the platform's users with a role on its project).
+# Uses po_cr, po_oso_env, platformopenshift_cr_name / _namespace, po_hub_owned, po_vault_paths.
+- name: Load the realization defaults (the cluster's identity)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
 - name: The cluster's recorded credential
   ansible.builtin.set_fact:
     cid_cred: "{{ ((po_cr.resources | default([]) | first | default({})).status | default({}, true)).credential | default({}, true) }}"
+    cid_uid: "{{ ((po_cr.resources | default([]) | first | default({})).metadata | default({})).uid | default('', true) }}"
+    cid_recorded: >-
+      {{ (((po_cr.resources | default([]) | first | default({})).status | default({}, true)).buildName
+         | default('', true)) | string | trim }}
+
+- name: The build name the cluster would have had (none recorded)
+  when: cid_recorded | length == 0
+  block:
+    - name: Read the cluster's namespace
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ platformopenshift_cr_namespace }}"
+      register: _cid_ns
+
+    - name: Derive it
+      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/build_name.yml"
+      vars:
+        bn_entity: >-
+          {{ ((_cid_ns.resources | default([]) | first | default({})).metadata | default({})).labels
+             | default({}, true) | dict2items | selectattr('key', 'equalto', 'hybridsovereign.redhat/entity')
+             | map(attribute='value') | first | default('') }}
+        bn_name: "{{ platformopenshift_cr_name }}"
+        bn_recorded: ""
+
+    - name: Read the derived build's namespace on the hub
+      kubernetes.core.k8s_info:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
+        validate_certs: false
+        api_version: v1
+        kind: Namespace
+        name: "{{ bn_build_name }}"
+      register: _cid_hub_ns
+      when: bn_build_name | default('', true) | length > 0
+
+- name: The cluster's build and whether it is this cluster's
+  vars:
+    _real: "{{ fabric_realization_defaults | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _ci: "{{ (_real.openstack | default({})).clusterIdentity | default({}) }}"
+    _hub_read: "{{ _cid_hub_ns is defined and _cid_hub_ns is not skipped }}"
+    _hub_ns: "{{ (_cid_hub_ns.resources | default([]) | first | default({})) if _hub_read | bool else {} }}"
+    _hub_owner: >-
+      {{ ((_hub_ns.metadata | default({})).labels | default({}, true))['hybridsovereign.redhat/platformopenshift-uid']
+         | default('', true) }}
+    _build: "{{ cid_recorded or bn_build_name | default('', true) }}"
+  ansible.builtin.set_fact:
+    cid_build: "{{ _build }}"
+    cid_build_ours: >-
+      {{ (po_hub_owned | default(false) | bool) if cid_recorded | length > 0
+         else ((_build | length > 0) and (_hub_read | bool)
+               and ((_hub_ns | length == 0) or (cid_uid | length > 0 and (_hub_owner | trim) == cid_uid))) }}
+    cid_user_name: >-
+      {{ cid_cred.user | default('', true)
+         or (((_ci.userName | default('{build}', true)) | replace('{build}', _build)) if _build | length > 0 else '') }}
 
 - name: The cluster's user on the site
-  when: (cid_cred.userId | default('', true) or cid_cred.user | default('', true)) | length > 0
+  when: (cid_cred.userId | default('', true) | length > 0) or (cid_build_ours | bool and cid_build | length > 0)
   block:
     - name: Read the cluster's environment
       kubernetes.core.k8s_info:
@@ -53,7 +121,7 @@
               action: cluster-identity-delete
               domain: "{{ _cid_oso.resources[0].status.domainName }}"
               user_id: "{{ cid_cred.userId | default('', true) }}"
-              user_name: "{{ cid_cred.user | default('', true) }}"
+              user_name: "{{ cid_user_name | trim }}"
       always:
         - name: Remove the account's temp files
           ansible.builtin.file:
@@ -61,32 +129,9 @@
             state: absent
           loop: [clouds.yaml, ca.crt]
 
-    - name: The build name the cluster would have had (none recorded)
-      when: po_build_name | default('', true) | length == 0
-      block:
-        - name: Read the cluster's namespace
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            api_version: v1
-            kind: Namespace
-            name: "{{ platformopenshift_cr_namespace }}"
-          register: _cid_ns
-
-        - name: Derive it
-          ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/build_name.yml"
-          vars:
-            bn_entity: >-
-              {{ ((_cid_ns.resources | default([]) | first | default({})).metadata | default({})).labels
-                 | default({}, true) | dict2items | selectattr('key', 'equalto', 'hybridsovereign.redhat/entity')
-                 | map(attribute='value') | first | default('') }}
-            bn_name: "{{ platformopenshift_cr_name }}"
-            bn_recorded: ""
-
-    - name: The credential's Vault path goes with the cluster's other paths
-      vars:
-        _build: "{{ po_build_name | default('', true) or bn_build_name | default('', true) }}"
-      ansible.builtin.set_fact:
-        po_vault_paths: "{{ po_vault_paths | union(['cluster/oso/' ~ _build ~ '/build/provider-creds']) }}"
-      when: _build | length > 0
+- name: The credential's Vault path goes with the cluster's other paths
+  ansible.builtin.set_fact:
+    po_vault_paths: "{{ po_vault_paths | union(['cluster/oso/' ~ cid_build ~ '/build/provider-creds']) }}"
+  when:
+    - cid_build | length > 0
+    - cid_cred.userId | default('', true) | length > 0

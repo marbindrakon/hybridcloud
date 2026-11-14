@@ -12,6 +12,7 @@ class Vault:
         self.token = token
         self.data = {}
         self.log = []
+        self.fail_next = []   # [(method, path prefix, status)] answered once, in order
 
     def start(self):
         v = self
@@ -32,6 +33,11 @@ class Vault:
             def _do(self, method):
                 ln = int(self.headers.get("Content-Length") or 0)
                 raw = self.rfile.read(ln) if ln else b""
+                for i, (m, prefix, st) in enumerate(v.fail_next):
+                    if m == method and self.path.startswith(prefix):
+                        del v.fail_next[i]
+                        v.log.append((method, self.path, st))
+                        return self._send(st, {"errors": ["fake: unavailable"]})
                 parts = self.path.split("/", 4)   # '', 'v1', mount, kind, path
                 if self.headers.get("X-Vault-Token") != v.token:
                     v.log.append((method, self.path, 403))
