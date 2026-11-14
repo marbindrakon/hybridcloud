@@ -129,6 +129,20 @@
             state: absent
           loop: [clouds.yaml, ca.crt]
 
+# the user could not be looked for (no environment named, or the environment has no project domain or site account on
+# record): said in the delete's result, never skipped without a word; the environment's own delete removes the
+# platform's users left in its project (an environment that is gone already did)
+- name: Say when the cluster's user could not be looked for
+  ansible.builtin.set_fact:
+    cid_note: >-
+      The cluster's user {{ cid_user_name | trim }} on the site could not be looked for: its OpenStack environment
+      {{ po_oso_env }} has no project domain or site account on record. The environment's delete removes it.
+  when:
+    - (cid_cred.userId | default('', true) | length > 0) or (cid_build_ours | bool and cid_build | length > 0)
+    - (_cid_oso is skipped) or ((_cid_oso.resources | default([]) | length > 0)
+      and ((((_cid_oso.resources[0].status | default({}, true)).domainName | default('', true)) | length == 0)
+           or ((rca_account_vault_path | default('', true)) | length == 0)))
+
 - name: The credential's Vault path goes with the cluster's other paths
   ansible.builtin.set_fact:
     po_vault_paths: "{{ po_vault_paths | union(['cluster/oso/' ~ cid_build ~ '/build/provider-creds']) }}"

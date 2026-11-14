@@ -16,6 +16,9 @@
     # nothing on a site (refused at validation): delete without site cleanup
     - name: Skip the site cleanup when nothing was realized
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/teardown_unrealized.yml"
+      vars:
+        # an OpenStack cluster refused after its preflight made its site user still has that user
+        teardown_unrealized_before: "{{ role_path }}/tasks/unrealized_identity_down.yml"
 
     - name: Parse event payload
       ansible.builtin.set_fact:
@@ -362,7 +365,8 @@
           deletionComplete: true
           deletion: null
           lastReconciledAt: "{{ platformopenshift_delete_transition_time }}"
-          message: PlatformOpenshift {{ platformopenshift_cr_name }} deleted by EDA
+          message: >-
+            PlatformOpenshift {{ platformopenshift_cr_name }} deleted by EDA. {{ cid_note | default('') | trim }}
 
     # the operator drops the finalizer the next time it looks at the CR: make that now
     - name: Release the finalizer now

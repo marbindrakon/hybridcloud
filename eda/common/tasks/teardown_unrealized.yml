@@ -5,7 +5,9 @@
 #   1. it was never ready (status.ready, status.realized and the Ready condition are not true),
 #   2. none of the kind's realization markers in status is set (teardown_unrealized_markers),
 #   3. its Ready reason is a validation reason (teardown_unrealized_reasons).
-# Input: shc_live_cr (acknowledge_event.yml); optional teardown_unrealized_after, a task file the kind runs after
+# Input: shc_live_cr (acknowledge_event.yml); optional teardown_unrealized_before, a task file the kind runs before
+# deletionComplete is recorded (something a refused run may still have made, found by name; a failure there fails
+# the delete, which runs again); optional teardown_unrealized_after, a task file the kind runs after
 # deletionComplete is recorded (e.g. waking what counted the object). Sets teardown_nothing_realized; when true it
 # records deletionComplete, wakes the object so the operator drops its finalizer, and ends the job.
 - name: Decide whether anything was realized
@@ -69,6 +71,10 @@
 - name: Delete without site cleanup
   when: teardown_nothing_realized | bool
   block:
+    - name: The kind's steps before the deletion
+      ansible.builtin.include_tasks: "{{ teardown_unrealized_before }}"
+      when: teardown_unrealized_before | default('', true) | length > 0
+
     - name: Record the deletion as complete
       ansible.builtin.include_tasks: patch_cr_status.yml
       vars:

@@ -255,6 +255,33 @@ class ClusterCredential(unittest.TestCase):
         self.assertIn('"_cc_vault"', H.LAST_VARS)
         self.assertIn('"_os_account_read"', H.LAST_VARS)
 
+    def test_a_recorded_credential_whose_secret_is_gone_is_not_replaced(self):
+        """V1: the cluster recorded its credential and Vault no longer holds its secret: nothing changes on the site,
+        ClusterCredential False / CredentialSecretMissing with the plain message."""
+        trace = self.run_cred()
+        cid = trace[-1]["result"]["cred"]["credential"]["id"]
+        del self.site.vault.data[PATH]
+        creds = set(self.site.ks.app_creds)
+        n = len(self.site.ks.log)
+        recorded = {"resources": [{"status": {"credential": {"id": cid, "user": BUILD}}}]}
+        trace = self.run_cred(po_cr_current=recorded)
+        ref = [t["refused"] for t in trace if "refused" in t][0]
+        self.assertEqual((ref["reason"], ref["condition"]["reason"]), ("CredentialSecretMissing", "CredentialSecretMissing"))
+        self.assertIn("A platform administrator must restore the secret or replace the credential in the cluster",
+                      ref["condition"]["message"])
+        self.assertEqual([c for c in self.site.ks.log[n:] if c[1] != "/v3/auth/tokens"], [])
+        self.assertEqual(set(self.site.ks.app_creds), creds)
+        self.assertNotIn(PATH, self.site.vault.data)
+
+    def test_a_5xx_at_the_users_lookup_is_not_a_refusal(self):
+        """V3: the site not answering a step outside the keep check fails the job plainly, refuses nothing."""
+        self.site.ks.fail_next.append(("GET", "/v3/users", 503, "Service Unavailable"))
+        trace = self.run_cred(expect_rc=None)
+        self.assertNotEqual(self.last_rc, 0)
+        self.assertEqual([t for t in trace if "refused" in t and t["refused"].get("reason")], [])
+        self.assertIn("did not answer the cluster's user", H.LAST_OUTPUT)
+        self.assertEqual(H.patches(trace), [])
+
     def test_a_foreign_user_of_that_name_is_refused(self):
         self.site.ks.add_user(BUILD, self.site.tenants, password="someone-elses", description="theirs")
         trace = self.run_cred()
@@ -298,11 +325,12 @@ class ClusterUserDown(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def run_down(self, status, hub_owned=None, hub_ns=None):
+    def run_down(self, status, hub_owned=None, hub_ns=None, oso_status=None):
         po = {"metadata": {"name": "c1", "namespace": NS, "uid": "uid-c1"}, "status": status,
               "spec": {"type": "openstack", "openstack": {"environment": "web"}}}
         oso = {"metadata": {"name": "web", "namespace": NS},
-               "status": {"domainName": "tenants", "projectId": self.pid, "accountVaultPath": "cloudinfra/site-a"}}
+               "status": oso_status if oso_status is not None else
+               {"domainName": "tenants", "projectId": self.pid, "accountVaultPath": "cloudinfra/site-a"}}
         k8s = {f"CloudOSO/{NS}/web": oso, f"Namespace//{NS}": {"metadata": {"name": NS, "labels": {
             "hybridsovereign.redhat/entity": "acme"}}}}
         if hub_ns is not None:
@@ -318,7 +346,7 @@ class ClusterUserDown(unittest.TestCase):
         tasks = [{"ansible.builtin.set_fact": {"po_vault_paths": ["x/one"]}},
                  {"ansible.builtin.include_tasks": "{{ role_path }}/tasks/cluster_identity_down.yml"}]
         rc, trace, out = H.run("platformopenshift_teardown", "cluster_identity_down.yml", extra, k8s=k8s,
-                               fakes=O.FAKES, tasks=tasks, result="{'paths': po_vault_paths}")
+                               fakes=O.FAKES, tasks=tasks, result="{'paths': po_vault_paths, 'note': cid_note | default('')}")
         self.assertEqual(rc, 0, out)
         self.assertNotIn("cluster-secret-value", json.dumps(trace) + H.LAST_OUTPUT)
         return trace
@@ -373,6 +401,43 @@ class ClusterUserDown(unittest.TestCase):
         self.assertIn(self.uid, self.site.ks.users)
         self.assertEqual(H.os_calls(trace), [])
         self.assertEqual(trace[-1]["result"]["paths"], ["x/one"])
+
+    def test_an_environment_without_its_domain_or_account_is_said(self):
+        """V5(b): the user cannot be looked for: the delete says so in its result (never a silent skip)."""
+        trace = self.run_down({"buildName": BUILD}, hub_owned=True, oso_status={"projectId": self.pid})
+        self.assertIn(self.uid, self.site.ks.users)
+        self.assertIn(f"The cluster's user {BUILD} on the site could not be looked for", trace[-1]["result"]["note"])
+        # an environment that is gone took the user with it: nothing to say
+        trace = self.run_down({"buildName": BUILD}, hub_owned=True)
+        self.assertEqual(trace[-1]["result"]["note"], "")
+
+    def test_nothing_realized_still_removes_the_user_of_the_computed_name(self):
+        """V5(a): a cluster refused by an early check (nothing realized) whose earlier run made its user: the delete
+        without site cleanup removes the user by its computed name (the main.yml wiring is the one run here)."""
+        from play_helper import load
+        first = load(os.path.join(O.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown", "tasks",
+                                  "main.yml"))[0]["block"][0]
+        self.assertEqual(first["name"], "Skip the site cleanup when nothing was realized")
+        self.site.ks.users[self.uid]["name"] = self.derived()
+        po = {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift",
+              "metadata": {"name": "c1", "namespace": NS, "uid": "uid-c1"},
+              "spec": {"type": "openstack", "openstack": {"environment": "web"}},
+              "status": {"reason": "NetworkNotFound",
+                         "conditions": [{"type": "Ready", "status": "False", "reason": "NetworkNotFound"}]}}
+        oso = {"metadata": {"name": "web", "namespace": NS},
+               "status": {"domainName": "tenants", "projectId": self.pid, "accountVaultPath": "cloudinfra/site-a"}}
+        k8s = {f"CloudOSO/{NS}/web": oso, f"Namespace//{NS}": {"metadata": {"name": NS, "labels": {
+            "hybridsovereign.redhat/entity": "acme"}}}}
+        extra = {"fake_clouds_yaml": self.site.account, "shc_live_cr": po,
+                 "services_api_host": "https://services.example.org", "services_bearer_token": "services-token-not-in-data",
+                 "central_api_host": "https://central.example.org", "central_bearer_token": "central-token-not-in-data"}
+        fakes = dict(O.FAKES, **{"resolve_services_cluster_connection.yml": "[]\n",
+                                 "resolve_central_cluster_sa_from_vault.yml": "[]\n"})
+        rc, trace, out = H.run("platformopenshift_teardown", "main.yml", extra, k8s=k8s, fakes=fakes, tasks=[first])
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn(self.uid, self.site.ks.users)
+        done = [p for p in H.patches(trace) if p["body"].get("deletionComplete")]
+        self.assertTrue(done, out)
 
     def test_a_user_of_the_name_that_is_not_the_platforms_stays(self):
         self.site.ks.users[self.uid]["description"] = "someone's"
