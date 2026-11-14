@@ -5,7 +5,7 @@
 # works from ids, not from names it re-derives. shc (DESIGN cnet §4.3): the environment holds no floating IPs (each
 # OpenShift cluster allocates its own) and needs no external network; a pair an older run allocated is released
 # once no PlatformOpenshift names the environment. The environment holds no credential either: each OpenShift
-# cluster has its own Keystone user and credential (platformopenshift_provision cluster_credential.yml), people sign
+# cluster has its own Keystone user and credential (common/tasks/openstack_cluster_credential.yml), people sign
 # in with their platform identity (access.yml). An application credential an earlier release made for the
 # environment (as the site account, Vault oso/projects/<name>/clouds-config) is deleted here.
 - name: Set environmentprep spec facts

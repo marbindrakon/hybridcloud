@@ -34,8 +34,9 @@
       NetworkPlacement: [realization, l3Vni, l2Vni, namespaces]
       AttachmentCircuit: [realization, vlan, sessions]
       # floatingIPs / platformPrefixes: a cluster that allocated floating IPs or asked the platform to reach it
+      # credential: an OpenStack cluster's own site user and credential (made in its preflight)
       PlatformOpenshift: [apiURL, clusterInstalled, provisionStatus, awsHelperName, buildName, dns, floatingIPs,
-                          platformPrefixes]
+                          platformPrefixes, credential]
     teardown_unrealized_reasons:
       - SiteTypeMismatch
       - EntityNotAllowed

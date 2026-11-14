@@ -1,0 +1,92 @@
+---
+# An OpenStack cluster's own site user goes (after Hive's deprovision, which used the hub's copy of the credential,
+# and after the floating IPs were released): Keystone deletes its application credential with it, so nobody signs in
+# as the user. Then its Vault path joins the paths the teardown deletes. The user is the one status.credential
+# recorded (by id, else by name), deleted only when it carries the platform's mark (files/shc_openstack.py
+# cluster-identity-delete). An environment that is gone took the user with it (its teardown deletes the platform's
+# users with a role on its project). A cluster refused before its build name was recorded still has its credential's
+# Vault path under the build name it would have had (build_name.yml).
+# Uses po_cr, po_oso_env, platformopenshift_cr_name / _namespace, po_build_name, po_vault_paths.
+- name: The cluster's recorded credential
+  ansible.builtin.set_fact:
+    cid_cred: "{{ ((po_cr.resources | default([]) | first | default({})).status | default({}, true)).credential | default({}, true) }}"
+
+- name: The cluster's user on the site
+  when: (cid_cred.userId | default('', true) or cid_cred.user | default('', true)) | length > 0
+  block:
+    - name: Read the cluster's environment
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        name: "{{ po_oso_env }}"
+        namespace: "{{ platformopenshift_cr_namespace }}"
+      register: _cid_oso
+      when: po_oso_env | length > 0
+
+    - name: Resolve the environment's site account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloudoso_accounts.yml"
+      vars:
+        rca_cr: "{{ _cid_oso.resources[0] }}"
+      when: _cid_oso is not skipped and _cid_oso.resources | default([]) | length > 0
+
+    - name: Delete the cluster's user
+      when:
+        - _cid_oso is not skipped
+        - _cid_oso.resources | default([]) | length > 0
+        - ((_cid_oso.resources[0].status | default({}, true)).domainName | default('', true)) | length > 0
+        - (rca_account_vault_path | default('', true)) | length > 0
+      block:
+        - name: Load the site account
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+          vars:
+            os_account_vault_path: "{{ rca_account_vault_path }}"
+            os_account_tag: "po-cred-down-{{ platformopenshift_cr_name }}"
+
+        - name: Delete the user (its credential goes with it)
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+          vars:
+            os_call_no_log: false
+            os_request:
+              action: cluster-identity-delete
+              domain: "{{ _cid_oso.resources[0].status.domainName }}"
+              user_id: "{{ cid_cred.userId | default('', true) }}"
+              user_name: "{{ cid_cred.user | default('', true) }}"
+      always:
+        - name: Remove the account's temp files
+          ansible.builtin.file:
+            path: "/tmp/eda-po-cred-down-{{ platformopenshift_cr_name }}-{{ item }}"
+            state: absent
+          loop: [clouds.yaml, ca.crt]
+
+    - name: The build name the cluster would have had (none recorded)
+      when: po_build_name | default('', true) | length == 0
+      block:
+        - name: Read the cluster's namespace
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: v1
+            kind: Namespace
+            name: "{{ platformopenshift_cr_namespace }}"
+          register: _cid_ns
+
+        - name: Derive it
+          ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/build_name.yml"
+          vars:
+            bn_entity: >-
+              {{ ((_cid_ns.resources | default([]) | first | default({})).metadata | default({})).labels
+                 | default({}, true) | dict2items | selectattr('key', 'equalto', 'hybridsovereign.redhat/entity')
+                 | map(attribute='value') | first | default('') }}
+            bn_name: "{{ platformopenshift_cr_name }}"
+            bn_recorded: ""
+
+    - name: The credential's Vault path goes with the cluster's other paths
+      vars:
+        _build: "{{ po_build_name | default('', true) or bn_build_name | default('', true) }}"
+      ansible.builtin.set_fact:
+        po_vault_paths: "{{ po_vault_paths | union(['cluster/oso/' ~ _build ~ '/build/provider-creds']) }}"
+      when: _build | length > 0

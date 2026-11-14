@@ -245,6 +245,15 @@
 
     - name: Note the step
       ansible.builtin.set_fact:
+        teardown_step: cluster-user
+
+    # after the deprovision and the floating IPs: the cluster's own site user, its credential with it
+    - name: Delete the cluster's user on the site
+      ansible.builtin.include_tasks: cluster_identity_down.yml
+      when: platform_type == "openstack"
+
+    - name: Note the step
+      ansible.builtin.set_fact:
         teardown_step: central-namespace
 
     - name: Delete the cluster namespace on central

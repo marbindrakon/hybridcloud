@@ -561,7 +561,8 @@ class OpenstackPreflightFile(unittest.TestCase):
         rc, tr, out = self.run_op(k8s(), fake_os=two)
         self.assertNotEqual(rc, 0)
         self.assertIn("sees 2 network(s) named shc-n1 (net-1; net-9, your own)", out)
-        self.assertFalse([t for t in tr if "patch" in t or "create" in t or "fabric" in t])
+        # the name is checked after the address ranges (a read) and the build name, with the cluster's own credential
+        self.assertFalse([t for t in tr if "patch" in t or "create" in t])
         # a placed network the project does not see yet: wait
         none = {"network-name-check": {"visible": [], "unique": False, "external": False}}
         rc, tr, out = self.run_op(k8s(), fake_os=none)
@@ -588,8 +589,11 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(tr[-1]["result"]["ext"], "public")
         call = [t for t in tr if "os" in t][0]
-        # listed as the environment's project, with the credential the installer gets, and the site's CA bundle
-        self.assertEqual((call["as"], call["cacert"]), ("oso/projects/env1/clouds-config", "/tmp/site1-ca.crt"))
+        # listed as the environment's project, with the credential the installer gets (the cluster's own), and the
+        # site's CA bundle
+        self.assertEqual((call["as"], call["cacert"]), ("cluster/oso/shc-oso-acme-c1/build/provider-creds",
+                                                        "/tmp/site1-ca.crt"))
+        self.assertEqual([t["credential"] for t in tr if "credential" in t], ["shc-oso-acme-c1"])
         self.assertEqual(call["os"]["project_id"], "proj-1")
         # seen, but not as an external network: refused on the external path, a wait on a placed network
         seen = {"network-name-check": {"visible": [{"id": "ext-1", "project_id": "proj-admin", "shared": True,
@@ -1400,7 +1404,7 @@ class EnvironmentPair(unittest.TestCase):
 class EnvironmentStructure(unittest.TestCase):
     def test_provision_asks_for_no_floating_ips_or_external_network(self):
         t = load(os.path.join(OSO_ROLE, "tasks", "environmentprep.yml"))
-        req = by_name(t, "Create or reconcile the project and its application credential")["vars"]["os_request"]
+        req = by_name(t, "Create or reconcile the project")["vars"]["os_request"]
         self.assertNotIn("fip_descriptions", req)
         self.assertNotIn("external_network", req)
         assert_ = by_name(t, "Validate the CloudOSO environment settings")["ansible.builtin.assert"]["that"]

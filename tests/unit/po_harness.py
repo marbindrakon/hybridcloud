@@ -9,6 +9,7 @@ so that the roles' "{{ role_path }}/../../../common/..." paths resolve, with the
   openstack_call.yml    records {os: request, as: <the account's vault path>, cacert} and returns fake_os["<action>/<state>"] (or fake_os["<action>"])
   fabric_check.yml      records {fabric: request} and returns fake_fabric[<action>] (default {"errors": []})
   central_create.yml    records {create: <path>/<name>, body} and answers fake_create["<path>/<name>"] (default 201)
+  openstack_cluster_credential.yml  records {credential: <build>} and sets cb_provider_creds_vault
 and a fake kubernetes.core collection (k8s_info returns FAKE_K8S["<Kind>/<namespace>/<name>"], a list query uses
 "<Kind>/<namespace>/"; k8s records {k8s: ...}). No other collection is faked: a task file that needs one the job's
 execution environment lacks fails here too (test_ee_content.py checks the definitions). The trace is a list of JSON
@@ -28,8 +29,9 @@ EDA = os.path.join(ROOT, "eda")
 HAVE_ANSIBLE = shutil.which("ansible-playbook") is not None
 # where an execution environment image carries its collections (ansible-galaxy collection list in the image)
 SYSTEM_COLLECTIONS = "/usr/share/ansible/collections"
+LAST_OUTPUT = ""
 FAKED = ("patch_cr_status.yml", "nudge_cr.yml", "openstack_account.yml", "openstack_call.yml", "fabric_check.yml",
-         "central_create.yml")
+         "central_create.yml", "openstack_cluster_credential.yml")
 
 TRACE = """- name: trace
   ansible.builtin.shell: cat >> {{ trace_file }}
@@ -57,6 +59,11 @@ FAKE_TASKS = {
     "fabric_check.yml": TRACE % "{'fabric': fab_check}" + """- name: fake result
   ansible.builtin.set_fact:
     fab_check_result: "{{ fake_fabric[fab_check.action] | default({'errors': []}) }}"
+""",
+    # the cluster's own site credential (test_osoui_cluster_credential.py runs the real one): its Vault path
+    "openstack_cluster_credential.yml": TRACE % "{'credential': cb_app_name}" + """- name: fake credential
+  ansible.builtin.set_fact:
+    cb_provider_creds_vault: "cluster/oso/{{ cb_app_name }}/build/provider-creds"
 """,
     "central_create.yml": TRACE % "{'create': cc_path ~ '/' ~ cc_body.metadata.name, 'body': cc_body}" + """- name: fake answer
   ansible.builtin.set_fact:
@@ -200,6 +207,8 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
                               capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
         with open(trace) as fh:
             lines = [json.loads(ln) for ln in fh if ln.strip()]
+        global LAST_OUTPUT
+        LAST_OUTPUT = proc.stdout + proc.stderr   # the whole job output (a test that hunts for secrets reads it)
         return proc.returncode, lines, proc.stdout[-4000:] + proc.stderr[-2000:]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

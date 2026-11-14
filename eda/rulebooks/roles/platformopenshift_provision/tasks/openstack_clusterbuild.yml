@@ -43,7 +43,8 @@
     cb_ssh_key_vault: >-
       {{ _os.sshKeyVaultPath if 'spec.openstack.sshKeyVaultPath' not in cb_ignored_spec_fields
          and (_os.sshKeyVaultPath | default('', true)) | length > 0 else default_ssh_key_vault_path }}
-    cb_provider_creds_vault: "oso/projects/{{ oso_env_name }}/clouds-config"
+    # the cluster's own credential (common/tasks/openstack_cluster_credential.yml, made in the preflight)
+    cb_provider_creds_vault: "cluster/oso/{{ cb_app_name }}/build/provider-creds"
     # shc (§11.6 phase C): per cluster (two clusters on one CloudOSO overwrote each other)
     cb_install_config_vault: "oso/projects/{{ oso_env_name }}/clusters/{{ ansible_operator_meta.name }}/install-config"
     cb_trust_bundle: "{{ platform_spec.openstack.trustBundle | default('') }}"
@@ -62,6 +63,7 @@
       - "cluster/oso/{{ cb_app_name }}/admin-password"
       - "cluster/oso/{{ cb_app_name }}/ssh-key"
       - "cluster/oso/{{ cb_app_name }}/install-config"
+      - "{{ cb_provider_creds_vault }}"
 
 - name: Fail without a cluster-build chart
   ansible.builtin.assert:

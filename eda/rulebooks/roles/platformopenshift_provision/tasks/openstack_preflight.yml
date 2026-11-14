@@ -1,6 +1,7 @@
 ---
-# Preflight of an OpenStack cluster (DESIGN cnet §4.2), before anything is created (no floating IP, DNS record, Vault
-# path, Helm release): the cluster's network (a hybrid network placed on the environment with router attachments on,
+# Preflight of an OpenStack cluster (DESIGN cnet §4.2), before anything is created (no floating IP, DNS record, Helm
+# release; the cluster's own site user and credential are made once its build name is known to be its own, for the
+# network-name check, which lists the networks as that credential sees them): the cluster's network (a hybrid network placed on the environment with router attachments on,
 # or one of the site's global external networks: the one named, else the site's default), the network's name being
 # unique for the environment's project (the installer takes it by name), the cluster's address ranges, and its build
 # name being free on the hub. Refusals and waits through preflight_stop.yml. A refusal wins over a wait: a wait (the
@@ -96,20 +97,6 @@
              | default([], true) }}
         po_network_space: []
 
-# a placement not ready yet has no network id or name to look for: its wait stands
-- name: The network's name leads the installer to this network alone
-  ansible.builtin.include_tasks: preflight_network_name.yml
-  when:
-    - cb_external_network | length > 0
-    - cb_fip_network_id | length > 0
-  vars:
-    pnn_defer_wait: true
-    pnn_name: "{{ cb_external_network }}"
-    pnn_id: "{{ cb_fip_network_id }}"
-    pnn_hybrid: "{{ cb_platform_path | bool }}"
-    # the installer's credential (openstack_clusterbuild.yml cb_provider_creds_vault)
-    pnn_credential: "oso/projects/{{ oso_env_name }}/clouds-config"
-
 - name: Check the cluster's address ranges
   ansible.builtin.include_tasks: preflight_ranges.yml
   vars:
@@ -156,6 +143,29 @@
       PlatformOpenshift {{ ansible_operator_meta.name }}: the build name {{ cb_app_name }} is already in use on the
       platform; create the cluster with another name
   when: po_result.reason == 'NamespaceTaken'
+
+# the cluster's own user and credential on the site (common/tasks/openstack_cluster_credential.yml), once the build
+# name is known to be this cluster's: the user is named after it. Then the network-name check lists the networks as
+# that credential (the one the installer runs with) sees them. A placement not ready yet has no network id or name to
+# look for: its wait stands, and no user is made for it yet.
+- name: The cluster's own credential on the site
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_cluster_credential.yml"
+  when:
+    - cb_external_network | length > 0
+    - cb_fip_network_id | length > 0
+
+- name: The network's name leads the installer to this network alone
+  ansible.builtin.include_tasks: preflight_network_name.yml
+  when:
+    - cb_external_network | length > 0
+    - cb_fip_network_id | length > 0
+  vars:
+    pnn_defer_wait: true
+    pnn_name: "{{ cb_external_network }}"
+    pnn_id: "{{ cb_fip_network_id }}"
+    pnn_hybrid: "{{ cb_platform_path | bool }}"
+    # the installer's credential: the cluster's own (openstack_cluster_credential.yml)
+    pnn_credential: "{{ cb_provider_creds_vault }}"
 
 - name: Wait (nothing refused the cluster)
   ansible.builtin.include_tasks: preflight_stop.yml
