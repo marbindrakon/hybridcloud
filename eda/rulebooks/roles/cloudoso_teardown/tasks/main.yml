@@ -312,6 +312,8 @@
             CloudOSO {{ cloudoso_cr_name }} teardown complete.
             {{ ('Default security group ' ~ (cloudoso_leftover_sgs | join(', ')) ~
                 ' is left for a cloud admin (Neutron reserves that delete).') if cloudoso_leftover_sgs else '' }}
+            {{ ('Access group ' ~ (oad_left | join(', ')) ~ ' is left on the site: another project still uses it, or'
+                ~ ' its roles there could not be read.') if oad_left | default([]) | length > 0 else '' }}
 
     # after deletionComplete, so the waiting environment no longer counts this one as the name's holder
     - name: Give the name to the environment that waits for it

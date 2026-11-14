@@ -99,6 +99,25 @@ class TeardownAccess(unittest.TestCase):
         self.assertEqual({g["name"] for g in self.site.ks.groups.values()}, {"acme.developers", "acme.auditors"})
         self.assertFalse(any(a[0] == "group" and a[3] == self.pid for a in self.site.ks.assignments))
 
+    def test_a_group_the_site_cannot_remove_stops_the_delete(self):
+        """V4: a group whose removal fails (not "already gone") stops the delete before the project goes, naming
+        the group; the next run finishes it."""
+        sweep = by_name(load(MAIN)[0]["block"], "Delete the cluster users left in the project")
+        tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/access_down.yml"}, sweep]
+        self.site.ks.fail_next.append(("DELETE", f"/v3/groups/{self.dev}", 503, "Service Unavailable"))
+        extra = {"os_account_clouds_yaml": self.site.account, "fake_clouds_yaml": self.site.account,
+                 "cloudoso_cr_name": "web", "cloudoso_entity_for_status": "acme",
+                 "oso_project_domain": "tenants", "oso_check": {"project_exists": True, "project_id": self.pid},
+                 "oso_access": {"signInClient": "openstack-site-a", "groupDomain": "tenants",
+                                "groups": [{"group": "acme.developers"}, {"group": "acme.auditors"}]},
+                 "fake_ssg": {"all": ["acme.developers", "acme.auditors"],
+                              "owned": {"acme.developers": ["CloudOSO/web"], "acme.auditors": ["CloudOSO/web", "CloudOSO/db"]}}}
+        rc, trace, out = H.run("cloudoso_teardown", "main.yml", extra, fakes=O.FAKES, tasks=tasks)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("access group acme.developers could not be removed from the site", H.LAST_OUTPUT)
+        self.assertIn(self.dev, self.site.ks.groups)
+        self.assertEqual([t for t in trace if "os" in t and t["os"]["action"] == "leftover-users"], [])
+
 
 if __name__ == "__main__":
     unittest.main()

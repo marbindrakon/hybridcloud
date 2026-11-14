@@ -314,6 +314,227 @@
    ]
   }
  },
+ "CloudOSO/removing": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "Could not be checked this time: the sign-in directory did not answer.",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    }
+   ],
+   "removing": [
+    "acme.auditors"
+   ],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "The access groups could not be checked this time: the sign-in directory did not answer. They keep their last state; the next run checks again.",
+    "reason": "AccessNotChecked",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.developers"
+   ]
+  }
+ },
+ "CloudOSO/startDashboard": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Granted"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "2 access groups can use this environment.",
+    "reason": "GroupsGranted",
+    "status": "True",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://dashboard.site-a.example.org",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "Dashboard"
+   },
+   "signInGroups": [
+    "acme.developers",
+    "acme.auditors"
+   ]
+  }
+ },
+ "CloudOSO/ttlUnknown": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Granted"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "2 access groups can use this environment.",
+    "reason": "GroupsGranted",
+    "status": "True",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": null,
+    "state": "Unknown",
+    "validMinutesAfterSignIn": null
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.developers",
+    "acme.auditors"
+   ]
+  }
+ },
+ "CloudOSO/ttlZero": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Granted"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "2 access groups can use this environment.",
+    "reason": "GroupsGranted",
+    "status": "True",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Declared",
+    "state": "NotOffered",
+    "validMinutesAfterSignIn": 0
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.developers",
+    "acme.auditors"
+   ]
+  }
+ },
  "CloudOSO/waiting": {
   "access": {
    "groupDomain": "tenants",

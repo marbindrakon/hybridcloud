@@ -31,6 +31,6 @@ def check(test, name, value, ids):
             json.dump(data, f, indent=1, sort_keys=True)
             f.write("\n")
         return
-    test.assertIn(name, data, f"{PATH} has no case {name}: run the role tests with SHC_WRITE_FIXTURES=1")
+    test.assertTrue(name in data, f"{PATH} has no case {name}: run the role tests with SHC_WRITE_FIXTURES=1")
     test.assertEqual(value, data[name], f"the jobs' output for {name} differs from {PATH}: write it again "
                                         "(SHC_WRITE_FIXTURES=1) and let the page tests run on it")

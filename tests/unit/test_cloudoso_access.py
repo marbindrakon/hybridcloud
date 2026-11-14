@@ -67,7 +67,7 @@ class EnvironmentAccess(unittest.TestCase):
     def tearDown(self):
         self.assertEqual(self.site.ks.faults, [])
 
-    def run_access(self, tool=None, site=None, recorded=None, ssg=None, fakes=None, k8s=None):
+    def run_access(self, tool=None, site=None, recorded=None, ssg=None, fakes=None, k8s=None, rbacs=None):
         ci = site or site_obj()
         extra = {"fake_clouds_yaml": self.site.account, "oso_cloudinfra_name": "site-a", "ci_spec": ci["spec"],
                  "ci_obj": ci, "oso_spec": {"toolRbac": tool if tool is not None else
@@ -81,7 +81,8 @@ class EnvironmentAccess(unittest.TestCase):
                  "oso_domain_id": self.site.tenants, "oso_settings": {"regionName": ""}}
         tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/access.yml"},
                  {"ansible.builtin.include_tasks": "{{ role_path }}/tasks/endpoints.yml"}]
-        rc, trace, out = H.run("cloudoso_provision", "access.yml", extra, k8s=dict({f"Rbac/{NS}/": RBACS}, **(k8s or {})),
+        rc, trace, out = H.run("cloudoso_provision", "access.yml", extra,
+                               k8s=dict({f"Rbac/{NS}/": RBACS if rbacs is None else rbacs}, **(k8s or {})),
                                fakes=O.FAKES if fakes is None else fakes, tasks=tasks,
                                result="{'access': oso_access, 'cond': oso_access_condition, 'ep': oso_endpoints}")
         self.assertEqual(rc, 0, out)
@@ -218,8 +219,19 @@ class EnvironmentAccess(unittest.TestCase):
     def test_ttl_not_known_and_ttl_zero(self):
         _, res = self.run_access(site=site_obj(ttl=None, source="Unknown"))
         self.assertEqual(res["ep"]["apiCredentials"], {"state": "Unknown", "validMinutesAfterSignIn": None, "source": None})
+        self.fixture("ttlUnknown", res)
         _, res = self.run_access(site=site_obj(ttl=0, source="Declared"))
         self.assertEqual(res["ep"]["apiCredentials"], {"state": "NotOffered", "validMinutesAfterSignIn": 0, "source": "Declared"})
+        self.fixture("ttlZero", res)
+
+    def test_start_at_the_dashboard(self):
+        ci = site_obj()
+        ci["spec"]["openstack"]["signIn"]["start"] = "Dashboard"
+        ci["status"]["site"]["signIn"].update(start="Dashboard", startUrl="https://dashboard.site-a.example.org")
+        _, res = self.run_access(site=ci)
+        self.assertEqual(res["ep"]["signIn"], {"method": "TenantSSO", "idpName": "Example Platform", "start": "Dashboard"})
+        self.assertEqual(res["ep"]["console"], "https://dashboard.site-a.example.org")
+        self.fixture("startDashboard", res)
 
     def test_a_federation_group_domain(self):
         fed = self.site.ks.add_domain("platform-federated")
@@ -261,9 +273,9 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
         self.kc.add_group("/acme/auditors")
         self.site.vault.data["central/keycloak-automation/keycloak-sovereign-tenants-services"] = self.kc.vault_entry()
 
-    def run_access(self, tool=None, site=None, recorded=None, ssg=None, fakes=None, k8s=None):
+    def run_access(self, tool=None, site=None, recorded=None, ssg=None, fakes=None, k8s=None, rbacs=None):
         real = {k: v for k, v in O.FAKES.items() if k != "services_signin_groups.yml"}
-        return super().run_access(tool=tool, site=site, recorded=recorded, ssg=ssg, fakes=real,
+        return super().run_access(tool=tool, site=site, recorded=recorded, ssg=ssg, fakes=real, rbacs=rbacs,
                                   k8s={"Route/services-rhbk/": [{"spec": {"host": self.kc.host}}]})
 
     def owners(self, name):
@@ -345,7 +357,12 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
             "id": "r1", "name": "acme.developers", "description": "", "attributes": {"entity": ["globex"]}}
         _, res = self.run_access()
         self.assertEqual(res["cond"]["reason"], "GrantRefused")
-        self.assertIn("is not tagged entity=acme", res["cond"]["message"])
+        self.assertEqual(res["cond"]["message"].strip(),
+                         "The sign-in directory refused group acme.developers: Client role acme.developers of "
+                         "openstack-site-a exists but is not tagged entity=acme.")
+        # V2: the other group goes on
+        self.assertEqual([g["state"] for g in res["access"]["groups"]], ["Failed", "Granted"])
+        self.assertEqual(self.owners("acme.auditors"), ["CloudOSO/web"])
 
     def test_a_5xx_on_one_grant_keeps_its_ownership(self):
         """R5: a group the site did not answer for keeps its state and this environment's ownership of its client
@@ -399,6 +416,72 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
         self.assertEqual((res["access"]["signInClient"], res["access"]["groupDomain"], res["access"]["removing"]),
                          ("", "", []))
         self.assertEqual(res["ep"]["console"], None)
+
+    # ---- second pass: V2, V7, V8 ----------------------------------------------------------------------------------
+    def test_a_group_missing_from_the_directory_holds_no_other_removal(self):
+        """V2: a new access group whose directory group is gone is that group's fault (Waiting, named); the removal
+        of another group goes on in the same run."""
+        _, first = self.run_access()
+        rbacs = RBACS + [{"metadata": {"name": "newbies"}, "status": {"group": "/acme/newbies"}}]
+        trace, res = self.run_access(tool={"editRbac": ["developers", "newbies"]}, recorded=first["access"], rbacs=rbacs)
+        self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
+        self.assertNotIn("acme.auditors", self.groups())
+        g = {x["rbac"]: x for x in res["access"]["groups"]}
+        self.assertEqual((g["newbies"]["state"], g["newbies"]["message"]),
+                         ("Waiting", "Its group /acme/newbies is not in the sign-in directory."))
+        self.assertEqual(g["developers"]["state"], "Granted")
+        self.assertEqual(res["access"]["removing"], [])
+        self.assertEqual((res["cond"]["reason"], res["cond"]["message"].strip()),
+                         ("WaitingForGroup", "Access group newbies is not usable yet: Its group /acme/newbies is not "
+                                             "in the sign-in directory."))
+        self.assertIsNone(self.kc.role("openstack-site-a", "acme.newbies"))
+
+    def test_the_sites_client_missing_in_the_directory_still_revokes(self):
+        """V2 (Q5): the directory cannot be used at all: the Keystone role of a group no longer wanted is revoked
+        anyway (the group stays until its client role went); the next run finishes."""
+        _, first = self.run_access()
+        client = self.kc.clients.pop("openstack-site-a")
+        _, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"])
+        self.assertEqual(self.roles_on_project("acme.auditors"), set())
+        self.assertIn("acme.auditors", self.groups())
+        self.assertEqual(res["access"]["removing"], ["acme.auditors"])
+        self.assertEqual(res["cond"]["reason"], "GrantRefused")
+        self.kc.clients["openstack-site-a"] = client
+        _, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=res["access"])
+        self.assertNotIn("acme.auditors", self.groups())
+        self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
+        self.assertEqual(res["access"]["removing"], [])
+
+    def test_a_pending_removal_is_finished_at_the_next_run(self):
+        """V7: the removed group is only in status.access.removing (the groups list holds the wanted ones): the next
+        run still removes it."""
+        _, first = self.run_access()
+        self.kc.down = True
+        _, second = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"])
+        self.assertEqual(second["access"]["removing"], ["acme.auditors"])
+        self.assertEqual([g["group"] for g in second["access"]["groups"]], ["acme.developers"])
+        self.kc.down = False
+        _, third = self.run_access(tool={"editRbac": ["developers"]}, recorded=second["access"])
+        self.assertNotIn("acme.auditors", self.groups())
+        self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
+        self.assertEqual(third["access"]["removing"], [])
+        self.fixture("removing", second)
+
+    def test_an_rbac_without_its_directory_group_for_a_run_keeps_what_it_had(self):
+        """V8: while the Rbac exists and is wanted, its client role and its Keystone grant stay (Waiting); it leaves
+        when the Rbac is gone."""
+        _, first = self.run_access()
+        no_group = [{"metadata": {"name": "developers"}, "status": {}}] + RBACS[1:]
+        _, res = self.run_access(recorded=first["access"], rbacs=no_group)
+        dev = res["access"]["groups"][0]
+        self.assertEqual((dev["state"], dev["message"]), ("Waiting", "The access group has no group in the sign-in directory yet."))
+        self.assertEqual(self.owners("acme.developers"), ["CloudOSO/web"])
+        self.assertEqual(self.roles_on_project("acme.developers"), {"member"})
+        _, res = self.run_access(recorded=res["access"], rbacs=RBACS[1:])
+        self.assertIsNone(self.kc.role("openstack-site-a", "acme.developers"))
+        self.assertNotIn("acme.developers", self.groups())
+        self.assertEqual(res["access"]["groups"][0]["message"], "The access group does not exist in this tenant.")
+
 
 
 HAVE_AWS_COLLECTION = os.path.isdir(os.path.join(H.SYSTEM_COLLECTIONS, "ansible_collections", "amazon", "aws"))

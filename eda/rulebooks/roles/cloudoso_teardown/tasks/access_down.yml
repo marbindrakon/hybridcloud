@@ -60,3 +60,24 @@
         {%- endfor -%}
         {{ out }}
   when: oso_check.project_exists | bool and oad_groups | length > 0
+
+# a group the site could not remove now stops the delete before the project goes (a later run finishes it); a group
+# left on purpose (another project still uses it, or its other roles could not be read) is said in the result
+- name: Stop when a group could not be removed
+  ansible.builtin.fail:
+    msg: >-
+      CloudOSO {{ cloudoso_cr_name }}: access group {{ (_oad_errors | first).group }} could not be removed from the
+      site ({{ (_oad_errors | first).error }}); the delete goes
+      on at the next run.
+  vars:
+    _oad_errors: "{{ (os_result.groups | default([])) | selectattr('error', 'defined') | selectattr('error') | list }}"
+  when:
+    - oso_check.project_exists | bool and oad_groups | length > 0
+    - _oad_errors | length > 0
+
+- name: What is left on the site on purpose
+  ansible.builtin.set_fact:
+    oad_left: >-
+      {{ (os_result.groups | default([])) | selectattr('kept', 'defined') | selectattr('kept')
+         | rejectattr('kept', 'equalto', 'not found') | map(attribute='group') | list
+         if oso_check.project_exists | bool and oad_groups | length > 0 else [] }}

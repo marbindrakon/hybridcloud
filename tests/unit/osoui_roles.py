@@ -51,11 +51,13 @@ FAKE_SSG = TRACE % ("{'ssg': {'owner': ssg_owner, 'entity': ssg_entity, 'wanted'
     _all: "{{ (fake_ssg | default({})).all | default([]) }}"
     _owned: "{{ (fake_ssg | default({})).owned | default({}) }}"
     _wanted: "{{ ssg_wanted | map(attribute='group') | list }}"
+    _keep: "{{ ssg_keep | default([], true) | list }}"
   ansible.builtin.set_fact:
     ssg_all_role_names: "{{ _all }}"
+    ssg_faults: []
     ssg_released: >-
       {%- set out = [] -%}
-      {%- for name, owners in _owned.items() if ssg_owner in owners and name not in _wanted -%}
+      {%- for name, owners in _owned.items() if ssg_owner in owners and name not in _wanted and name not in _keep -%}
         {%- set _ = out.append({'key': name, 'value': {'owners': owners | reject('equalto', ssg_owner) | list}}) -%}
       {%- endfor -%}
       {{ out }}

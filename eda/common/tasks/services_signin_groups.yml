@@ -19,7 +19,12 @@
 #   ssg_role_description  description of a new client role (default: the services cluster's group); another
 #               site's sign-in client passes its own (entity_signin_realm / entity_signin_client /
 #               entity_signin_rbac_config name the realm, the client and the RbacConfig of its automation clients)
-# Sets ssg_released ([{key: role, value: {owners}}]: owners [] = deleted) and ssg_all_role_names (before the run).
+#   ssg_per_group  true: a wanted group the directory refuses (its Rbac group is not in the directory, or its client
+#               role is another entity's) is that group's fault, reported in ssg_faults, and the others go on; the
+#               caller keeps its ownership of that group's client role (default false: the whole step fails)
+#   ssg_keep    group names this owner keeps the client roles of although they are not wanted now (default [])
+# Sets ssg_released ([{key: role, value: {owners}}]: owners [] = deleted), ssg_all_role_names (before the run) and
+# ssg_faults ([{group, missing (bool), message}]).
 - name: Sign-in settings
   ansible.builtin.set_fact:
     ssg_realm: "{{ entity_signin_realm | default('sovereign-tenants') }}"
@@ -58,6 +63,34 @@
     krt_url: "{{ ssg_kc }}"
     krt_token_fact: ssg_members_token
 
+# per group: the Rbac groups first, a group missing from the directory is that group's fault
+- name: Find the Rbac groups (per group)
+  ansible.builtin.uri:
+    url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/group-by-path/{{ item.path | regex_replace('^/+', '') | urlencode }}"
+    headers: {Authorization: "Bearer {{ ssg_members_token }}"}
+    validate_certs: false
+    status_code: [200, 404]
+  loop: "{{ ssg_wanted }}"
+  loop_control:
+    label: "{{ item.path }}"
+  register: _ssg_pre
+  when: ssg_per_group | default(false) | bool
+
+- name: The groups that can go on
+  vars:
+    _missing: >-
+      {{ (_ssg_pre.results | default([]) | selectattr('status', 'defined') | selectattr('status', 'equalto', 404)
+          | map(attribute='item') | list) if ssg_per_group | default(false) | bool else [] }}
+  ansible.builtin.set_fact:
+    ssg_faults: >-
+      {%- set out = [] -%}
+      {%- for m in _missing -%}
+        {%- set _ = out.append({'group': m.group, 'missing': true,
+                                'message': 'Its group ' ~ m.path ~ ' is not in the sign-in directory.'}) -%}
+      {%- endfor -%}
+      {{ out }}
+    ssg_wanted_eff: "{{ ssg_wanted | rejectattr('group', 'in', _missing | map(attribute='group') | list) | list }}"
+
 - name: Find the sign-in client
   ansible.builtin.uri:
     url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients?clientId={{ ssg_client_id }}"
@@ -80,7 +113,7 @@
 - name: This entity's client roles and their owners
   ansible.builtin.set_fact:
     ssg_base: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/clients/{{ _ssg_client.json[0].id }}/roles"
-    ssg_wanted_groups: "{{ ssg_wanted | map(attribute='group') | unique | list }}"
+    ssg_wanted_groups: "{{ ssg_wanted_eff | map(attribute='group') | unique | list }}"
     ssg_entity_roles: >-
       {%- set out = {} -%}
       {%- for r in _ssg_roles_now.json -%}
@@ -92,6 +125,22 @@
       {%- endfor -%}
       {{ out }}
     ssg_all_role_names: "{{ _ssg_roles_now.json | map(attribute='name') | list }}"
+
+- name: A wanted group held by a role of another entity is that group's fault (per group)
+  vars:
+    _foreign: "{{ ssg_wanted_groups | select('in', ssg_all_role_names) | reject('in', ssg_entity_roles.keys() | list) | list }}"
+  ansible.builtin.set_fact:
+    ssg_faults: >-
+      {%- set out = ssg_faults | list -%}
+      {%- for g in _foreign -%}
+        {%- set _ = out.append({'group': g, 'missing': false,
+                                'message': 'Client role ' ~ g ~ ' of ' ~ ssg_client_id ~ ' exists but is not tagged entity='
+                                           ~ ssg_entity ~ '.'}) -%}
+      {%- endfor -%}
+      {{ out }}
+    ssg_wanted_groups: "{{ ssg_wanted_groups | reject('in', _foreign) | list }}"
+    ssg_wanted_eff: "{{ ssg_wanted_eff | rejectattr('group', 'in', _foreign) | list }}"
+  when: ssg_per_group | default(false) | bool
 
 - name: Create the client roles
   ansible.builtin.uri:
@@ -146,7 +195,7 @@
     url: "{{ ssg_kc }}/admin/realms/{{ ssg_realm }}/group-by-path/{{ item.path | regex_replace('^/+', '') | urlencode }}"
     headers: {Authorization: "Bearer {{ ssg_members_token }}"}
     validate_certs: false
-  loop: "{{ ssg_wanted }}"
+  loop: "{{ ssg_wanted_eff }}"
   loop_control:
     label: "{{ item.path }}"
   register: _ssg_groups
@@ -169,8 +218,10 @@
   ansible.builtin.set_fact:
     ssg_released: >-
       {%- set out = [] -%}
+      {%- set _held = (ssg_keep | default([], true) | list) + (ssg_faults | map(attribute='group') | list) -%}
       {%- for r in ssg_entity_roles | dict2items -%}
-        {%- if r.key not in ssg_wanted_groups and (ssg_owner in r.value.owners or ssg_purge | default(false) | bool) -%}
+        {%- if r.key not in ssg_wanted_groups and r.key not in _held
+              and (ssg_owner in r.value.owners or ssg_purge | default(false) | bool) -%}
           {%- set _ = out.append({'key': r.key, 'value': {'description': r.value.description,
                                    'owners': [] if ssg_purge | default(false) | bool
                                              else r.value.owners | reject('equalto', ssg_owner) | list}}) -%}
