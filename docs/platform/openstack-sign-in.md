@@ -230,7 +230,15 @@ environment per cluster.
 
 The cluster's status says which user it acts as (`status.credential`) and the condition `ClusterCredential`:
 True / OwnCredential, or False with UserRefused, RoleRefused, PasswordRefused or CredentialRefused and the
-identity service's message.
+identity service's message. A site that does not answer (5xx, a timeout) refuses nothing: the step fails and the next
+run tries again, with nothing changed.
+
+The platform makes a new credential only when the cluster has none recorded, or when the site says the recorded one
+is not valid. When the cluster recorded its credential but the platform's secret store no longer holds its secret
+(the path deleted, the store restored to an earlier state), nothing is changed on the site, because the cluster may
+still be using the credential: ClusterCredential False / CredentialSecretMissing. A platform administrator restores
+the secret at `cluster/oso/<build>/build/provider-creds`, or replaces the credential in the cluster by hand.
+Replacing the credential of a running cluster is not offered by the platform yet.
 
 The installation sets the user's name, roles and credential name in the realization
 (`openstack.clusterIdentity`: `userName`, `roles`, `rolesBySite`, `credentialName`; `{build}` is the build name,

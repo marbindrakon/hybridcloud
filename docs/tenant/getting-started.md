@@ -204,7 +204,9 @@ oc get cloudoso example-osp -n entity-<tenant> -o jsonpath='{.status.access}{"\n
   group>`, with its state: Granted, Waiting (the access group has no group in the sign-in directory
   yet, or the site offers no sign-in) or Failed (the site refused; the message says why). When the site or the
   sign-in directory could not be asked, a group keeps its last state and its message says so
-  (`AccessReady` False / AccessNotChecked); the next reconcile checks again. The condition `AccessReady` sums it
+  (`AccessReady` False / AccessNotChecked); the next reconcile checks again. Each group is handled on its own: a
+  group whose directory group is missing waits, and does not hold up the others. A group you removed is listed in
+  `status.access.removing` until its removal on the site is finished. The condition `AccessReady` sums it
   up; it never makes the environment not ready. An environment without an access group is ready, but nobody can
   sign in to it: add an access group.
 - For command-line tools, create an application credential in the dashboard (Identity, Application
