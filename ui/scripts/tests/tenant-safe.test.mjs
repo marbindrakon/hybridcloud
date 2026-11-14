@@ -164,11 +164,35 @@ test('CloudOSO: status.access and the new endpoints keys pass; appCredentialId d
   assert.equal('access' in m.tenantSafe('CloudOSO', odd).status, false);
 });
 
+test('CloudOSO: a key added later to a group entry or to the endpoints does not reach tenants (R25)', async () => {
+  const obj = cloudoso();
+  obj.status.access = {
+    signInClient: 'openstack-site-a', groupDomain: 'tenants', removing: ['t1.old'],
+    groups: [{ rbac: 'developers', group: 't1.developers', access: 'Edit', role: 'member', state: 'Granted', groupId: 'g-1', note: 'x' }],
+  };
+  obj.status.endpoints = { console: 'https://d.example', internalUrl: 'https://keystone.internal', signIn: { method: 'TenantSSO', mappingId: 'm1' },
+    apiCredentials: { state: 'Offered', validMinutesAfterSignIn: 60, source: 'Site', policy: 'x' } };
+  const out = m.tenantSafe('CloudOSO', obj);
+  assert.deepEqual(out.status.access, { signInClient: 'openstack-site-a', groupDomain: 'tenants', removing: ['t1.old'],
+    groups: [{ rbac: 'developers', group: 't1.developers', access: 'Edit', role: 'member', state: 'Granted' }] });
+  assert.deepEqual(out.status.endpoints, { console: 'https://d.example', signIn: { method: 'TenantSSO' },
+    apiCredentials: { state: 'Offered', validMinutesAfterSignIn: 60, source: 'Site' } });
+  // what the jobs write passes whole (tests/fixtures/osoui-status.json, made by the role tests)
+  const fix = JSON.parse((await import('node:fs')).readFileSync(`${UI}/../tests/fixtures/osoui-status.json`, 'utf8'));
+  for (const [name, st] of Object.entries(fix)) {
+    const [kind] = name.split('/');
+    const o = kind === 'CloudOSO' ? cloudoso() : platform();
+    Object.assign(o.status, st);
+    const safe = m.tenantSafe(kind, o).status;
+    for (const k of Object.keys(st)) assert.deepEqual(safe[k], st[k], `${name} ${k}`);
+  }
+});
+
 test('PlatformOpenshift: status.credential keeps ids and names only', () => {
   const obj = platform();
-  obj.status.credential = { id: 'ac9d', user: 'shc-c1', userId: 'u1', domain: 'tenants', createdAt: '2026-11-14T10:00:00Z', secret: 's', password: 'p', vaultPath: 'p/c' };
+  obj.status.credential = { id: 'ac9d', user: 'shc-c1', userId: 'u1', domain: 'tenants', domainId: 'd1', createdAt: '2026-11-14T10:00:00Z', secret: 's', password: 'p', vaultPath: 'p/c' };
   const out = m.tenantSafe('PlatformOpenshift', obj);
-  assert.deepEqual(out.status.credential, { id: 'ac9d', user: 'shc-c1', userId: 'u1', domain: 'tenants', createdAt: '2026-11-14T10:00:00Z' });
+  assert.deepEqual(out.status.credential, { id: 'ac9d', user: 'shc-c1', userId: 'u1', domain: 'tenants', domainId: 'd1', createdAt: '2026-11-14T10:00:00Z' });
   assert.deepEqual(secretKeys(out), []);
 });
 

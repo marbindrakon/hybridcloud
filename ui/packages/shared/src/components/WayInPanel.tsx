@@ -71,6 +71,11 @@ function ConsoleButton({ href, label }: { href: string; label: string }): React.
   );
 }
 
+/** A link the page may open: http(s) only (a status value is never trusted to be a URL). */
+export function safeLink(v: unknown): string | undefined {
+  return typeof v === 'string' && /^https?:\/\//i.test(v.trim()) ? v.trim() : undefined;
+}
+
 /** "name (ID id)", the name alone, or nothing. */
 function NameAndId({ name, id, t }: { name?: string; id?: string; t: T }): React.ReactElement | null {
   if (!name && !id) return null;
@@ -102,6 +107,9 @@ function OpenStackWayIn({ item, readerGroups }: { item: K8sResource; readerGroup
   const ids = osoProjectAndDomain(item);
   const api = osoApiCredentials(item);
   const noGroup = osoNoAccessGroup(item);
+  // the dashboard is offered only while people can sign in to it (the job writes no console otherwise; an object of
+  // an earlier release may still carry one)
+  const consoleUrl = offered ? safeLink(ep.console) : undefined;
 
   const groupsText = rows.length
     ? rows.map((r) => (
@@ -129,8 +137,8 @@ function OpenStackWayIn({ item, readerGroups }: { item: K8sResource; readerGroup
 
   return (
     <>
-      {ep.console ? (
-        <ConsoleButton href={ep.console} label={t('wayin.open.CloudOSO')} />
+      {consoleUrl ? (
+        <ConsoleButton href={consoleUrl} label={t('wayin.open.CloudOSO')} />
       ) : offered ? (
         <p className="sc-text-muted">{t('wayin.notPublished')}</p>
       ) : null}
@@ -185,7 +193,7 @@ function GenericWayIn({
   const { t } = useTranslation();
   const st = (item.status ?? {}) as WayInStatus;
   const ep = st.endpoints ?? {};
-  const consoleUrl = ep.console ?? (kind === 'CloudVirt' ? st.site?.console : undefined);
+  const consoleUrl = safeLink(ep.console ?? (kind === 'CloudVirt' ? st.site?.console : undefined));
   const idpName = ep.signIn?.idpName;
   const accessGroups = (st.access?.groups ?? []).filter((g): g is string => typeof g === 'string');
   const groups = ep.signInGroups ?? accessGroups;

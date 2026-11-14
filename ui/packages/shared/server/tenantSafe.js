@@ -24,8 +24,9 @@ export const COMMON_STATUS_KEYS = [
 ];
 
 /**
- * Per kind: status keys kept besides the common ones. A string keeps the key whole (still cleaned of
- * secret-looking names); [key, [subkeys]] keeps only those subkeys of an object.
+ * Per kind: status keys kept besides the common ones (a kind's entry wins over a common key of the same name). A
+ * string keeps the key whole (still cleaned of secret-looking names); [key, [subkeys]] keeps only those subkeys of
+ * an object, or of each object of a list; subkeys nest the same way.
  */
 export const TENANT_STATUS_ALLOW = {
   CloudOSO: [
@@ -37,8 +38,13 @@ export const TENANT_STATUS_ALLOW = {
     ['dns', ['mode', 'zone', 'zoneId', 'ownerProjectId', 'sharedWith', 'shareId', 'nameservers', 'delegated',
       'dnsConfig', 'globalProjectId', 'globalZoneId']],
     ['site', ['name', 'console']],
-    // the access groups that can use the environment on the site and their state
-    ['access', ['signInClient', 'groupDomain', 'groups']],
+    // the access groups that can use the environment on the site and their state, key by key
+    ['access', ['signInClient', 'groupDomain', 'removing',
+      ['groups', ['rbac', 'group', 'access', 'role', 'state', 'message']]]],
+    // how people and tools reach it, key by key
+    ['endpoints', ['console', ['signIn', ['method', 'idpName', 'start']], 'signInGroups', 'api', 'project',
+      'projectId', 'domain', 'domainId', 'region', 'location',
+      ['apiCredentials', ['state', 'validMinutesAfterSignIn', 'source']]]],
   ],
   PlatformOpenshift: [
     'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'slug', 'domain', 'apiURL', 'appsURL',
@@ -50,7 +56,7 @@ export const TENANT_STATUS_ALLOW = {
     ['dns', ['provider', 'projectId', 'records']],
     ['site', ['name', 'console']],
     // OpenStack clusters: the cluster's own user and credential on the site, ids and names only
-    ['credential', ['id', 'user', 'userId', 'domain', 'createdAt']],
+    ['credential', ['id', 'user', 'userId', 'domain', 'domainId', 'createdAt']],
   ],
 };
 
@@ -101,16 +107,30 @@ function filterStatus(kind, status) {
   for (const [k, v] of Object.entries(status)) {
     if (!allow.has(k) || SECRET_KEY_RE.test(k)) continue;
     const sub = allow.get(k);
-    if (sub && isPlainObject(v)) {
-      const picked = {};
-      for (const s of sub) if (s in v && !SECRET_KEY_RE.test(s)) picked[s] = scrub(v[s]);
-      out[k] = picked;
-    } else if (sub) {
-      // a key with a subkey list that is not an object carries nothing tenants need
-      continue;
-    } else {
+    if (!sub) {
       out[k] = scrub(v);
+      continue;
     }
+    // a key with a subkey list that is not an object carries nothing tenants need
+    if (isPlainObject(v)) out[k] = pick(sub, v);
+  }
+  return out;
+}
+
+/** The listed subkeys of an object (or of each object of a list), nested entries alike; undefined otherwise. */
+function pick(sub, v) {
+  if (Array.isArray(v)) return v.filter(isPlainObject).map((item) => pick(sub, item));
+  if (!isPlainObject(v)) return undefined;
+  const out = {};
+  for (const entry of sub) {
+    const [key, inner] = Array.isArray(entry) ? entry : [entry, null];
+    if (!(key in v) || SECRET_KEY_RE.test(key)) continue;
+    if (!inner) {
+      out[key] = scrub(v[key]);
+      continue;
+    }
+    const p = pick(inner, v[key]);
+    if (p !== undefined) out[key] = p;
   }
   return out;
 }

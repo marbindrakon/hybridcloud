@@ -416,3 +416,106 @@ test('deleting an access group names the OpenStack environments that list it', a
   const modal = fs.readFileSync(path.join(UI, 'packages/shared/src/components/DeleteConfirmModal.tsx'), 'utf8');
   assert.ok(modal.includes('deletePreview.fieldsOf.${entry.kind}.${key}'));
 });
+
+// ------------------------------------------------------------------ pages rendered from what the jobs write (R13)
+// tests/fixtures/osoui-status.json holds the status the role tests produce (tests/unit/osoui_fixtures.py): a change of
+// the jobs' output changes this file, and these tests then run on the new shape.
+const FIX = JSON.parse(fs.readFileSync(path.join(UI, '..', 'tests', 'fixtures', 'osoui-status.json'), 'utf8'));
+function fromJob(name) {
+  const st = FIX[`CloudOSO/${name}`];
+  assert.ok(st, `fixture CloudOSO/${name}`);
+  return {
+    apiVersion: 'hybridsovereign.redhat/v1alpha1',
+    kind: 'CloudOSO',
+    metadata: { name: 'web', namespace: 'entity-acme' },
+    spec: { cloudRef: { name: 'site-a' }, toolRbac: { editRbac: ['developers'], viewRbac: ['auditors'] } },
+    status: {
+      phase: 'Ready', projectName: st.endpoints.project, projectId: st.endpoints.projectId,
+      domainName: st.endpoints.domain, domainId: st.endpoints.domainId, appCredentialId: null, ...st,
+    },
+  };
+}
+const PID = FIX['CloudOSO/granted'].endpoints.projectId;
+const DID = FIX['CloudOSO/granted'].endpoints.domainId;
+
+test('from the jobs: sign-in working, two granted groups', () => {
+  const html = pages.card('CloudOSO', fromJob('granted'), ['acme.developers']);
+  const page = text(html);
+  assert.ok(page.includes(W.open.CloudOSO));
+  assert.ok(html.includes(`href="${FIX['CloudOSO/granted'].endpoints.console.replace(/&/g, '&amp;')}"`));
+  assert.equal(row(html, O.groups), 'developers (create and change) auditors (read only)');
+  assert.equal(row(html, W.you), 'You are in developers.');
+  assert.equal(row(html, W.domain), `tenants (ID ${DID})`);
+  assert.equal(row(html, W.project), `acme_web (ID ${PID})`);
+  assert.equal(row(html, O.apiCredentials), `${O.apiCredentialsIntro} ${fill(O.apiCredentialsPeriod, { period: '1 day' })}`);
+});
+
+test('from the jobs: no working sign-in shows no dashboard button (R12)', () => {
+  for (const name of ['noSignIn', 'notConfirmed']) {
+    const html = pages.card('CloudOSO', fromJob(name), ['acme.developers']);
+    const page = text(html);
+    assert.ok(!html.includes('<a '), `${name}: no dashboard button`);
+    assert.ok(!page.includes(W.open.CloudOSO), name);
+    assert.ok(page.includes(O.siteNoSignIn), name);
+    assert.equal(row(html, O.apiCredentials), null, name);
+  }
+  // an object an earlier release wrote: a console (the dashboard) and no sign-in: still no button
+  const old = fromJob('noSignIn');
+  old.status.endpoints = { ...old.status.endpoints, console: 'https://dashboard.site-a.example.org' };
+  assert.ok(!pages.card('CloudOSO', old, []).includes('<a '));
+});
+
+test('from the jobs: waiting, refused, not checked, no access group', () => {
+  assert.equal(row(pages.card('CloudOSO', fromJob('waiting'), []), O.groups),
+    'developers (create and change) newcomers (not ready: The access group has no group in the sign-in directory yet.)');
+  const refused = row(pages.card('CloudOSO', fromJob('refused'), []), O.groups);
+  assert.ok(refused.startsWith('developers (not ready: a group named acme.developers exists in domain tenants'), refused);
+  assert.ok(refused.endsWith('auditors (read only)'), refused);
+  // the site or the directory did not answer: the groups keep their last state
+  assert.equal(row(pages.card('CloudOSO', fromJob('notChecked'), []), O.groups), 'developers (create and change) auditors (read only)');
+  assert.ok(text(pages.card('CloudOSO', fromJob('noAccessGroups'), [])).includes(O.noGroup));
+});
+
+test('a console link that is not http(s) is never rendered (R24)', () => {
+  for (const href of ['javascript:alert(1)', 'data:text/html,x', ' JAVASCRIPT:x', 'ftp://x']) {
+    const item = fromJob('granted');
+    item.status.endpoints = { ...item.status.endpoints, console: href };
+    const html = pages.card('CloudOSO', item, []);
+    assert.ok(!html.includes('<a '), href);
+    const virt = { kind: 'CloudVirt', metadata: { name: 'v', namespace: 'entity-acme' }, status: { endpoints: { console: href } } };
+    assert.ok(!pages.card('CloudVirt', virt, []).includes('<a '), href);
+  }
+});
+
+test('from the jobs: the cluster site user and its domain by name and id (R17)', () => {
+  const st = FIX['PlatformOpenshift/credential'];
+  const html = pages.details('PlatformOpenshift', cluster({ credential: st.credential, conditions: st.conditions }));
+  assert.equal(row(html, W.domain), `tenants (ID ${st.credential.domainId})`);
+  assert.ok(row(html, en.detail.siteUser).startsWith(`${st.credential.user} (ID ${st.credential.userId})`));
+});
+
+test('form: the pre-fill of "Create and change" and the spec the form sends (R13)', () => {
+  const base = { type: 'cloudoso', touched: false, current: [], readerGroups: ['acme.developers', 'globex.x'], entityName: 'acme', rbacNames: ['developers', 'auditors'] };
+  assert.deepEqual(m.osoPrefillEdit(base), ['developers']);
+  assert.equal(m.osoPrefillEdit({ ...base, touched: true }), null);
+  assert.equal(m.osoPrefillEdit({ ...base, current: ['auditors'] }), null);
+  assert.equal(m.osoPrefillEdit({ ...base, type: 'cloudvirt' }), null);
+  assert.equal(m.osoPrefillEdit({ ...base, readerGroups: undefined }), null);
+  assert.equal(m.osoPrefillEdit({ ...base, rbacNames: [] }), null);
+  assert.equal(m.osoPrefillEdit({ ...base, readerGroups: ['globex.x'] }), null);
+  // the form wires both: the effect sets what osoPrefillEdit returns, the spec takes the two lists the user sees
+  const form = fs.readFileSync(path.join(UI, 'packages/shared/src/components/CreateResourceForm.tsx'), 'utf8');
+  const effect = /useEffect\(\(\) => \{\s*const next = osoPrefillEdit\(\{([\s\S]*?)\}\);\s*if \(next\) setOsoEditRbac\(next\);/.exec(form);
+  assert.ok(effect, 'the create form pre-fills "Create and change" with osoPrefillEdit');
+  for (const k of ['type,', 'touched: osoEditTouched', 'current: osoEditRbac', 'readerGroups: scopeIdentity?.groups', 'entityName: currentEntityName']) {
+    assert.ok(effect[1].includes(k), k);
+  }
+  const build = /case 'cloudoso':\s*return buildCloudOsoSpec\(\{([\s\S]*?)\}\);/.exec(form);
+  assert.ok(build, 'the cloudoso branch builds its spec with buildCloudOsoSpec');
+  assert.match(build[1], /editRbac: osoEditRbac,/);
+  assert.match(build[1], /viewRbac: osoViewRbac,/);
+  assert.ok(!/toolRbac/.test(build[1]), 'toolRbac comes from buildCloudOsoSpec alone (never an empty one)');
+  // an empty choice sends no toolRbac at all; a choice sends it
+  assert.equal('toolRbac' in m.buildCloudOsoSpec({ site: 'site-a', project: 'web', editRbac: [], viewRbac: [' '] }), false);
+  assert.deepEqual(m.buildCloudOsoSpec({ site: 'site-a', project: 'web', editRbac: ['developers'], viewRbac: [] }).toolRbac, { editRbac: ['developers'] });
+});

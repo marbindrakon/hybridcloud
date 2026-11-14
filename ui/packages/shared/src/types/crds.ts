@@ -333,8 +333,10 @@ export interface PlatformOpenshiftCredential {
   /** The cluster's user on the site */
   user?: string;
   userId?: string;
-  /** Domain of the user */
+  /** Name of the user's domain */
   domain?: string;
+  /** Id of the user's domain */
+  domainId?: string;
   createdAt?: string;
 }
 

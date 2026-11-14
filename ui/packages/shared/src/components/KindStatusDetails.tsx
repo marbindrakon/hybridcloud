@@ -1007,7 +1007,11 @@ export function PlatformOpenshiftDetails({ item }: { item: PlatformOpenshift }):
             {user.userId ? t('wayin.nameAndId', { name: user.user, id: user.userId }) : <Mono>{user.user}</Mono>}
             <div className="sc-text-muted">{t('detail.siteUserActions')}</div>
           </Fact>
-          <Fact label={t('wayin.domain')}>{user.domain}</Fact>
+          <Fact label={t('wayin.domain')}>
+            {user.domain && user.domainId
+              ? t('wayin.nameAndId', { name: user.domain, id: user.domainId })
+              : (user.domain ?? user.domainId)}
+          </Fact>
         </Facts>
       )}
     </>

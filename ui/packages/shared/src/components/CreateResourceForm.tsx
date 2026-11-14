@@ -48,7 +48,7 @@ import {
 import { kindTerm } from '../i18n/vocabulary';
 import { ClusterCreateFields, type ClusterFieldsValue } from '../forms/ClusterCreateFields';
 import { buildClusterSpec, type ClusterProvider } from '../forms/clusterSpec';
-import { buildCloudOsoSpec, prefillAccessGroups, siteOffersSignIn } from '../forms/openstackAccess';
+import { buildCloudOsoSpec, osoPrefillEdit, siteOffersSignIn } from '../forms/openstackAccess';
 import { OsoAccessGroupsField } from './OsoAccessGroupsField';
 import { useOptionalScope } from '../scope/ScopeProvider';
 import type { CloudInfrastructure, TenantProfileSite } from '../types';
@@ -489,9 +489,15 @@ export function CreateResourceForm({
   // OpenShift Virtualization form does), until the user changes the list.
   const scopeIdentity = useOptionalScope()?.identity;
   useEffect(() => {
-    if (type !== 'cloudoso' || osoEditTouched || osoEditRbac.length || !scopeIdentity || !rbacs.items.length) return;
-    const mine = prefillAccessGroups(scopeIdentity.groups, currentEntityName, rbacs.items.map((i) => i.metadata.name));
-    if (mine.length) setOsoEditRbac(mine);
+    const next = osoPrefillEdit({
+      type,
+      touched: osoEditTouched,
+      current: osoEditRbac,
+      readerGroups: scopeIdentity?.groups,
+      entityName: currentEntityName,
+      rbacNames: rbacs.items.map((i) => i.metadata.name),
+    });
+    if (next) setOsoEditRbac(next);
   }, [type, scopeIdentity, currentEntityName, rbacs.items, osoEditTouched]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** FabricSelect options for TransportLink. */

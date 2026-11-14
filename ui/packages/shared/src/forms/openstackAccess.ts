@@ -191,6 +191,24 @@ export function prefillAccessGroups(readerGroups: string[], entityName: string, 
   return Array.from(new Set(mine));
 }
 
+/**
+ * The create form's pre-fill of "Create and change" (OpenStack environment): the creator's access groups in this
+ * tenant, once, while the user has not changed the list and it is still empty; null leaves the field as it is.
+ */
+export function osoPrefillEdit(input: {
+  type: string;
+  touched: boolean;
+  current: string[];
+  readerGroups?: string[];
+  entityName: string;
+  rbacNames: string[];
+}): string[] | null {
+  if (input.type !== 'cloudoso' || input.touched || input.current.length || !input.readerGroups) return null;
+  if (!input.rbacNames.length) return null;
+  const mine = prefillAccessGroups(input.readerGroups, input.entityName, input.rbacNames);
+  return mine.length ? mine : null;
+}
+
 /** spec.toolRbac of the environment, or undefined when both lists are empty. */
 export function cloudOsoToolRbac(editRbac: string[], viewRbac: string[]): CloudOSOToolRbac | undefined {
   const clean = (l: string[]) => Array.from(new Set(l.map((s) => s.trim()).filter(Boolean)));
@@ -279,7 +297,14 @@ export function clusterSiteUser(item: K8sResource | undefined): PlatformOpenshif
   if (!isObj(c)) return null;
   const user = str(c.user);
   if (!user) return null;
-  return { user, userId: str(c.userId), domain: str(c.domain), id: str(c.id), createdAt: str(c.createdAt) };
+  return {
+    user,
+    userId: str(c.userId),
+    domain: str(c.domain),
+    domainId: str(c.domainId),
+    id: str(c.id),
+    createdAt: str(c.createdAt),
+  };
 }
 
 /** The ClusterCredential condition when it is False: what the site refused. */
