@@ -196,14 +196,17 @@ oc get cloudoso example-osp -n entity-<tenant> -o jsonpath='{.status.endpoints}{
 oc get cloudoso example-osp -n entity-<tenant> -o jsonpath='{.status.access}{"\n"}'
 ```
 
-- **Open the OpenStack dashboard** (`status.endpoints.console`). You sign in with your platform
-  identity. Where the page says so, choose the entry it names on the dashboard's sign-in page
+- **Open the OpenStack dashboard** (`status.endpoints.console`; empty while people cannot sign in to the
+  environment). You sign in with your platform identity. Where the page says so, choose the entry it names on the dashboard's sign-in page
   (`status.endpoints.signIn.idpName`). You see the project of every environment whose access groups
   you are in, with create and change rights (`member`) or read-only rights (`reader`).
 - `status.access.groups` lists each access group and its group on the site, `<tenant>.<access
   group>`, with its state: Granted, Waiting (the access group has no group in the sign-in directory
-  yet) or Failed (the site refused; the message says why). The condition `AccessReady` sums it up. An
-  environment without an access group is ready, but nobody can sign in to it: add an access group.
+  yet, or the site offers no sign-in) or Failed (the site refused; the message says why). When the site or the
+  sign-in directory could not be asked, a group keeps its last state and its message says so
+  (`AccessReady` False / AccessNotChecked); the next reconcile checks again. The condition `AccessReady` sums it
+  up; it never makes the environment not ready. An environment without an access group is ready, but nobody can
+  sign in to it: add an access group.
 - For command-line tools, create an application credential in the dashboard (Identity, Application
   Credentials) and download its clouds.yaml file. An application credential is a secret that lets a
   tool act as you in this project. It works for `status.endpoints.apiCredentials.validMinutesAfterSignIn`

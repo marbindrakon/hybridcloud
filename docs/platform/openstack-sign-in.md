@@ -74,7 +74,10 @@ domain (`spec.openstack.projectDomain`). The two choices differ in one value of 
 - **Tenant domain** (default, recommended with one tenant domain): every call of the platform stays inside the
   tenant domain, so the domain manager role on that domain is enough.
 - **Federation domain** (the domain of the people who sign in): set `spec.openstack.signIn.groupDomain` to it.
-  Each grant then crosses domains and needs the `admin` role.
+  Each grant then crosses domains and needs the `admin` role: with a domain manager account the environments'
+  access step says so (AccessReady False / GrantRefused, naming the domain), and the site probe cannot confirm the
+  group domain. A group there is deleted only when the administrator's read of its roles on other projects
+  succeeds; otherwise it is left on the site and the job says so.
 
 Mapping with the groups in the tenant domain `tenants`:
 
@@ -98,8 +101,9 @@ Mapping with the groups in the federation domain `platform-federated`:
 ]
 ```
 
-The `OIDC-` prefix is the web server's claim prefix; use the one your web server sets. The first rule gives every
-person a user, also a person without any group on this site. A group named in the token that does not exist in
+The `OIDC-` prefix is the web server's claim prefix; use the one your web server sets. The first rule is meant to give
+every person a user, also a person without any group on this site (expected from the mapping rules; what such a
+person sees has not been tried on a site yet). A group named in the token that does not exist in
 the group domain is skipped; the person signs in with the other groups. The tenant domain must exist before the
 mapping names it: a mapping that names a domain that does not exist refuses every sign-in.
 
@@ -229,7 +233,9 @@ True / OwnCredential, or False with UserRefused, RoleRefused, PasswordRefused or
 identity service's message.
 
 The installation sets the user's name, roles and credential name in the realization
-(`openstack.clusterIdentity`: `userName`, `roles`, `rolesBySite`, `credentialName`; `{build}` is the build name),
+(`openstack.clusterIdentity`: `userName`, `roles`, `rolesBySite`, `credentialName`; `{build}` is the build name,
+which already carries the platform's prefix; the default for both names is `{build}`). The platform trusts the mark
+in the user's description, never the name: a user of that name without it is refused, never changed or deleted.
 and the sign-in client and the roles of access groups (`openstack.tenantSignIn`: `clientId` with `{site}`,
 `editRoles`, `viewRoles`, `realm`).
 
