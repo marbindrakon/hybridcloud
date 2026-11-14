@@ -175,6 +175,54 @@ Open the console, sign in with **sovereign-tenants**, and create your VM in the 
 second command printed. Members of the access groups in `toolRbac` can sign in there; others see
 nothing.
 
+### On an OpenStack environment
+
+An OpenStack environment is a project on the site. Name the access groups that may use it in
+`toolRbac`, as for a VM environment:
+
+```yaml
+spec:
+  cloudRef:
+    name: site-osp
+  toolRbac:
+    editRbac: [developers]   # create, change and delete resources in the project
+    viewRbac: [auditors]     # read only
+```
+
+When the environment is ready, its page (card "How to use it") and its status say how to reach it:
+
+```bash
+oc get cloudoso example-osp -n entity-<tenant> -o jsonpath='{.status.endpoints}{"\n"}'
+oc get cloudoso example-osp -n entity-<tenant> -o jsonpath='{.status.access}{"\n"}'
+```
+
+- **Open the OpenStack dashboard** (`status.endpoints.console`). You sign in with your platform
+  identity. Where the page says so, choose the entry it names on the dashboard's sign-in page
+  (`status.endpoints.signIn.idpName`). You see the project of every environment whose access groups
+  you are in, with create and change rights (`member`) or read-only rights (`reader`).
+- `status.access.groups` lists each access group and its group on the site, `<tenant>.<access
+  group>`, with its state: Granted, Waiting (the access group has no group in the sign-in directory
+  yet) or Failed (the site refused; the message says why). The condition `AccessReady` sums it up. An
+  environment without an access group is ready, but nobody can sign in to it: add an access group.
+- For command-line tools, create an application credential in the dashboard (Identity, Application
+  Credentials) and download its clouds.yaml file. An application credential is a secret that lets a
+  tool act as you in this project. It works for `status.endpoints.apiCredentials.validMinutesAfterSignIn`
+  minutes after your last sign-in to the dashboard; sign in again to keep it working. When that
+  value is empty, the site sets it: ask the platform team. When the state is `NotOffered`, people
+  cannot create API credentials on this site: use the dashboard.
+- The API endpoint, region, project and domain (names and ids) are in `status.endpoints`.
+- To give a server an address on one of your networks, attach the network to the environment and
+  use the network the placement names on the site (`status.siteNetwork` of the network placement):
+
+```bash
+openstack server create --network <siteNetwork.name> --flavor <flavor> --image <image> --key-name <key> <server name>
+```
+
+On a site that does not offer sign-in with the platform identity, the page says so; the platform
+can still build OpenShift clusters in the environment. Each OpenShift cluster acts in the project as
+its own site user (its status names it in `status.credential.user`); actions by that user in the
+project are the cluster's.
+
 ## 7. DNS
 
 Every environment gets a DNS zone `<environment>.<tenant>.<tenant DNS domain>`, public where the

@@ -41,7 +41,7 @@ Multi-source **`cluster-builds-clusters`** `ApplicationSet` instances discover *
 - **AWS path** sets `provider.type: AWS`.  
 - **OSO path** sets `provider.type: OpenStack` with:
 
-  - `clouds.yaml` credentials resolved from **`oso/projects/{name}/clouds-config`** (and related ExternalSecrets or SyncSecret manifests created by ACM templates).  
+  - `clouds.yaml` credentials resolved from **`cluster/oso/{build}/build/provider-creds`**: the restricted application credential of the cluster's own site user, made for this cluster alone and deleted with it ([Sign-in to an OpenStack site](../../../docs/platform/openstack-sign-in.md#cluster-users)); the chart's ExternalSecret copies it to the hub.  
   - **External/provider network** identifiers required by installer + Hive validations.  
   - **Floating IP** assignments for ingress / API semantics called out inside values (mirrors helper allocation actions).
 

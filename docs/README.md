@@ -4,7 +4,7 @@
 
 | Page | What it covers |
 |---|---|
-| [Getting started](tenant/getting-started.md) | Sign in, find your tenant, a network, a VM environment, the placement, the site console, DNS, adding a colleague, Retry now, deleting. |
+| [Getting started](tenant/getting-started.md) | Sign in, find your tenant, a network, a VM environment, the placement, the site console, an OpenStack environment (dashboard sign-in, application credentials), DNS, adding a colleague, Retry now, deleting. |
 | [Glossary](tenant/glossary.md) | The words, what each is in the API and in other clouds; which project is which; what to create for what. |
 | [Access and delegation](tenant/access-and-delegation.md) | Access groups, tenant roles, access on one object, the access fields of team setups and app projects. |
 | [Status reasons](tenant/status-reasons.md) | States, the reasons and who acts on them, Retry now, deletion order and protection. |
@@ -21,6 +21,7 @@
 | [Onboard a tenant](platform/onboard-a-tenant.md) | Sites and allowed sites, the tenant and its profile, access groups, the role table, the access fields, membership, sign-in checks, offboarding. |
 | [IPv6 realization](platform/ipv6-realization.md) | Platform IPv6 pools, block sizes, tenant allowance and hold-down, exclusive ranges, per-site switches and sources, site capabilities, AWS and Google Cloud placements, translation, IPv6 egress, the dual-stack core, reverse DNS, the AWS and Google Cloud edges. |
 | [Platform access to tenant networks](platform/platform-access.md) | What a deployment needs so the platform can build and manage OpenShift clusters on tenant networks: the hub's ranges, the service routing domain, the platform's edge connections, the hub's network, OpenStack floating IP advertisement, DNS, the checklist. |
+| [Sign-in to an OpenStack site](platform/openstack-sign-in.md) | What the cloud's operator sets up once (client, identity provider, mapping for either group domain, authorization TTL), the site declaration, what the platform checks, the rights of the platform's account, the cluster users. |
 | [Router advertisement service](platform/router-advertisement-service.md) | What the site component does and why it is temporary, the guard, the API, settings, install on an OpenStack-on-OpenShift control plane or on hosts, the realization entry, verify, remove. |
 | [Border gateway nodes](platform/border-gateway-nodes.md) | What the fabric does on a border gateway node on either core transport: VRFs kept from the node's own addresses, what the host must not have, the TCP MSS clamps, a network leaving a node, the orphan check, teardown. |
 | [SRv6 core transport](platform/srv6-core-transport.md) | The fabric's core transport switch, the SID block and locators, what a border gateway node needs, the guard and the routing rule, readiness, status fields, changing transport. |
