@@ -13,6 +13,7 @@ export interface ReasonEntry {
 }
 
 export const REASONS: Record<string, ReasonEntry> = {
+  "AccessNotChecked": { actor: "A", class: "waiting", summary: "The access groups could not be checked this time. They keep their last state; the next run checks again." },
   "AccessNotMapped": { actor: "T", class: "failed", summary: "No access group named here exists in this tenant; nobody can sign in yet." },
   "AddressConflict": { actor: "T", class: "failed", summary: "The cluster's address ranges overlap each other or the network's addresses; the message names both." },
   "AsExpected": { actor: "A", class: "ready", summary: "Ready." },

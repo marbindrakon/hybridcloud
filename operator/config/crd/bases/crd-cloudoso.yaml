@@ -203,10 +203,14 @@ spec:
                   properties:
                     signInClient:
                       type: string
-                      description: The client of the platform's sign-in directory that the site's sign-in uses.
+                      description: >-
+                        The client of the platform's sign-in directory that the site's sign-in uses. Kept after the
+                        site stops offering sign-in until the environment's groups are removed.
                     groupDomain:
                       type: string
-                      description: Domain of the site's identity service that holds the environment's groups.
+                      description: >-
+                        Domain of the site's identity service that holds the environment's groups. Kept after the
+                        site stops offering sign-in until the environment's groups are removed.
                     groups:
                       type: array
                       description: One entry per access group in spec.toolRbac.
@@ -229,11 +233,20 @@ spec:
                           state:
                             type: string
                             description: >-
-                              Granted, Waiting (the access group has no group in the sign-in directory yet) or
-                              Failed (the site refused; message says why).
+                              Granted, Waiting (not usable yet: the access group has no group in the sign-in
+                              directory yet, or the site offers no sign-in; message says which) or Failed (the site
+                              refused; message says why). When the site or the sign-in directory could not be
+                              asked, the group keeps its last state and message says so.
                           message:
                             type: string
-                            description: Why the group is waiting or failed, in plain words.
+                            description: Why the group is waiting or failed, or why its state was not checked, in plain words.
+                    removing:
+                      type: array
+                      description: >-
+                        Groups the environment no longer wants whose removal from the site or the sign-in directory
+                        is not finished; the next reconcile goes on with it.
+                      items:
+                        type: string
                 endpoints:
                   type: object
                   description: How people and tools reach the environment.
@@ -241,8 +254,8 @@ spec:
                     console:
                       type: string
                       description: >-
-                        The link that opens the site's dashboard for this environment, with sign-in where the
-                        site offers it. Empty when the site publishes no dashboard.
+                        The link that opens the site's dashboard for this environment and starts sign-in. Empty when
+                        people cannot sign in to the environment (the site offers no sign-in, or it is not working).
                     signIn:
                       type: object
                       description: How people sign in to the dashboard.

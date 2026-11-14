@@ -115,6 +115,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 
 | Reason | What it means | Who acts |
 |---|---|---|
+| `AccessNotChecked` | The access groups could not be checked this time. They keep their last state; the next run checks again. | Nobody: it continues by itself |
 | `CredentialsUnavailable` | The site credentials are not available yet. The platform team is looking at it. | The platform team |
 | `InUse` | A setting turned off waits until the environment no longer uses it; the message lists what still does. | You (the tenant) |
 | `LinkedNotReady` | Waiting for its team setup, app projects and OpenShift cluster to be ready. | Nobody: it continues by itself |

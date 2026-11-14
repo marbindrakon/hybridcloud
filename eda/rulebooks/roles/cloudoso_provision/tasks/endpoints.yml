@@ -3,8 +3,9 @@
 # sign in, the site's identity endpoint, the project and its domain (names and ids), the region and where the site
 # is. No Vault path or credential reference. From the site object (its probe publishes status.site.dashboard and
 # status.site.signIn: the start URL and the authorization TTL with its source) and access.yml (oso_access,
-# oso_signin_ok). Where the site offers no sign-in, signIn.method is NotAvailable and the console is the dashboard's
-# URL when the site publishes one. Keys that no longer apply are written as null (the status is merge-patched).
+# oso_signin_ok). The console link is there only while people can sign in (sign-in declared and confirmed): without
+# it signIn.method is NotAvailable and console is null, so no page offers a dashboard nobody can enter. Keys that no
+# longer apply are written as null (the status is merge-patched).
 # Sets oso_endpoints.
 - name: Set the environment's way in
   vars:
@@ -18,8 +19,7 @@
     _granted: "{{ (oso_access | default({})).groups | default([]) | selectattr('state', 'equalto', 'Granted') | map(attribute='group') | list }}"
   ansible.builtin.set_fact:
     oso_endpoints: >-
-      {{ {'console': (_si.startUrl | default('', true)) if _ok | bool
-                     else (_site.dashboard | default('', true) or _site.console | default('', true)),
+      {{ {'console': (_si.startUrl | default(_site.dashboard | default('', true), true) or none) if _ok | bool else none,
           'api': _site.endpoint | default('', true),
           'signIn': ({'method': 'TenantSSO', 'idpName': _si.displayName | default(_si.identityProvider | default(''), true),
                       'start': _si.start | default('Dashboard', true)} if _ok | bool

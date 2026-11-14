@@ -151,7 +151,7 @@
         # it holds no role elsewhere)
         - name: Remove the environment's access groups
           ansible.builtin.include_tasks: access_down.yml
-          when: (oso_access.groups | default([], true)) | length > 0
+          when: ((oso_access.groups | default([], true)) + (oso_access.removing | default([], true))) | length > 0
 
         - name: Note the step
           ansible.builtin.set_fact:

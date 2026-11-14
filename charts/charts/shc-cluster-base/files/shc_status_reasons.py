@@ -67,6 +67,7 @@ REASONS = {
     "WaitingForSiteEdge": _r("A", WAITING, "Waiting for the site connection to be ready."),
     "WaitingForSecret": _r("A", WAITING, "Waiting for a required credential to be available."),
     "WaitingForGroup": _r("A", WAITING, "An access group has no group in the sign-in directory yet."),
+    "AccessNotChecked": _r("A", WAITING, "The access groups could not be checked this time. They keep their last state; the next run checks again."),
     "NoAccessGroups": _r("T", WAITING, "No access group can use this environment. Add an access group so that people can sign in."),
     "SignInNotSetUp": _r("P", WAITING, "Sign-in with the platform identity is not set up on this site. Clusters can still be built."),
     "WaitingForGateway": _r("A", WAITING, "Waiting for the site connection to be ready."),

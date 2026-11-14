@@ -1,0 +1,391 @@
+{
+ "CloudOSO/granted": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Granted"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "2 access groups can use this environment.",
+    "reason": "GroupsGranted",
+    "status": "True",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.developers",
+    "acme.auditors"
+   ]
+  }
+ },
+ "CloudOSO/noAccessGroups": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "No access group can use this environment. Nobody can sign in to it.",
+    "reason": "NoAccessGroups",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": []
+  }
+ },
+ "CloudOSO/noSignIn": {
+  "access": {
+   "groupDomain": "",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "Sign-in with the platform identity is not set up on site site-a.",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Waiting"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "Sign-in with the platform identity is not set up on site site-a.",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Waiting"
+    }
+   ],
+   "removing": [],
+   "signInClient": ""
+  },
+  "conditions": [
+   {
+    "message": "Sign-in with the platform identity is not set up on site site-a.",
+    "reason": "SignInNotSetUp",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": null,
+    "state": "NotOffered",
+    "validMinutesAfterSignIn": null
+   },
+   "console": null,
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": null,
+    "method": "NotAvailable",
+    "start": null
+   },
+   "signInGroups": []
+  }
+ },
+ "CloudOSO/notChecked": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "Could not be checked this time: the sign-in directory did not answer.",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "Could not be checked this time: the sign-in directory did not answer.",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Granted"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "The access groups could not be checked this time: the sign-in directory did not answer. They keep their last state; the next run checks again.",
+    "reason": "AccessNotChecked",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.developers",
+    "acme.auditors"
+   ]
+  }
+ },
+ "CloudOSO/notConfirmed": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "Sign-in with the platform identity is not set up on site site-a.",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Waiting"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "Sign-in with the platform identity is not set up on site site-a.",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Waiting"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "Sign-in with the platform identity is not set up on site site-a.",
+    "reason": "SignInNotSetUp",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": null,
+    "state": "NotOffered",
+    "validMinutesAfterSignIn": null
+   },
+   "console": null,
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": null,
+    "method": "NotAvailable",
+    "start": null
+   },
+   "signInGroups": []
+  }
+ },
+ "CloudOSO/refused": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "a group named acme.developers exists in domain tenants and is not the platform's",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Failed"
+    },
+    {
+     "access": "View",
+     "group": "acme.auditors",
+     "message": "",
+     "rbac": "auditors",
+     "role": "reader",
+     "state": "Granted"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "The site refused the role for group acme.developers: a group named acme.developers exists in domain tenants and is not the platform's.",
+    "reason": "GrantRefused",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.auditors"
+   ]
+  }
+ },
+ "CloudOSO/waiting": {
+  "access": {
+   "groupDomain": "tenants",
+   "groups": [
+    {
+     "access": "Edit",
+     "group": "acme.developers",
+     "message": "",
+     "rbac": "developers",
+     "role": "member",
+     "state": "Granted"
+    },
+    {
+     "access": "Edit",
+     "group": "acme.newcomers",
+     "message": "The access group has no group in the sign-in directory yet.",
+     "rbac": "newcomers",
+     "role": "member",
+     "state": "Waiting"
+    }
+   ],
+   "removing": [],
+   "signInClient": "openstack-site-a"
+  },
+  "conditions": [
+   {
+    "message": "Access group newcomers has no group in the sign-in directory yet.",
+    "reason": "WaitingForGroup",
+    "status": "False",
+    "type": "AccessReady"
+   }
+  ],
+  "endpoints": {
+   "api": "https://identity.site-a.example.org",
+   "apiCredentials": {
+    "source": "Site",
+    "state": "Offered",
+    "validMinutesAfterSignIn": 1440
+   },
+   "console": "https://identity.site-a.example.org/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "location": "On-premises",
+   "project": "acme_web",
+   "projectId": "8a1f0c2b9d4e4f00a1b2c3d4e5f60708",
+   "region": "RegionOne",
+   "signIn": {
+    "idpName": "Example Platform",
+    "method": "TenantSSO",
+    "start": "IdentityProvider"
+   },
+   "signInGroups": [
+    "acme.developers"
+   ]
+  }
+ },
+ "PlatformOpenshift/credential": {
+  "conditions": [
+   {
+    "message": "The cluster uses its own credential on the site, owned by the site user shc-oso-acme-c1-0a1b2.",
+    "reason": "OwnCredential",
+    "status": "True",
+    "type": "ClusterCredential"
+   }
+  ],
+  "credential": {
+   "createdAt": "2026-11-14T00:00:00.000000",
+   "domain": "tenants",
+   "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+   "id": "ac9d00112233445566778899aabbccdd",
+   "user": "shc-oso-acme-c1-0a1b2",
+   "userId": "0f3c11223344556677889900aabbccdd"
+  }
+ }
+}

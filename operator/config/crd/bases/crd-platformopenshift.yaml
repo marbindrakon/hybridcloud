@@ -494,7 +494,10 @@ spec:
                       description: Identifier of that user.
                       type: string
                     domain:
-                      description: Identifier of the domain of the site's identity service that holds the user.
+                      description: Name of the domain of the site's identity service that holds the user.
+                      type: string
+                    domainId:
+                      description: Identifier of that domain.
                       type: string
                     createdAt:
                       description: When the credential was made, as the site reports it.

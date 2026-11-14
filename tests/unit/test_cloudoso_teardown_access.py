@@ -51,7 +51,7 @@ class TeardownAccess(unittest.TestCase):
         ks.grant("group", self.dev, "project", self.pid, "member")
         ks.grant("group", self.aud, "project", self.pid, "reader")
         ks.grant("group", self.aud, "project", self.other, "reader")
-        self.left = ks.add_user("shc-shc-oso-acme-c1-0a1b2", self.site.tenants, description="c. " + MARKER)
+        self.left = ks.add_user("shc-oso-acme-c1-0a1b2", self.site.tenants, description="c. " + MARKER)
         ks.grant("user", self.left, "project", self.pid, "member")
         self.person = ks.add_user("someone", self.site.tenants)
         ks.grant("user", self.person, "project", self.pid, "member")
@@ -80,6 +80,24 @@ class TeardownAccess(unittest.TestCase):
         self.assertNotIn(self.left, self.site.ks.users)
         self.assertIn(self.person, self.site.ks.users)
         self.assertNotIn(self.site.account_password, str(trace) + out)
+
+    def test_without_the_directory_no_group_is_deleted(self):
+        """A record without a client (the directory was never asked): the groups' roles are revoked, no group is
+        deleted (whether another environment's client role still uses it is not known); a pending removal of an
+        earlier run (status.access.removing) is part of the record."""
+        tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/access_down.yml"}]
+        extra = {"os_account_clouds_yaml": self.site.account, "fake_clouds_yaml": self.site.account,
+                 "cloudoso_cr_name": "web", "cloudoso_entity_for_status": "acme",
+                 "oso_project_domain": "tenants", "oso_check": {"project_exists": True, "project_id": self.pid},
+                 "oso_access": {"signInClient": "", "groupDomain": "tenants",
+                                "groups": [{"group": "acme.developers"}], "removing": ["acme.auditors"]}}
+        rc, trace, out = H.run("cloudoso_teardown", "main.yml", extra, fakes=O.FAKES, tasks=tasks)
+        self.assertEqual(rc, 0, out)
+        req = [t["os"] for t in trace if "os" in t][0]
+        self.assertEqual(req["groups"], [{"group": "acme.developers", "delete": False},
+                                         {"group": "acme.auditors", "delete": False}])
+        self.assertEqual({g["name"] for g in self.site.ks.groups.values()}, {"acme.developers", "acme.auditors"})
+        self.assertFalse(any(a[0] == "group" and a[3] == self.pid for a in self.site.ks.assignments))
 
 
 if __name__ == "__main__":
