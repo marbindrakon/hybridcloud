@@ -59,14 +59,18 @@ class SiteSignIn(unittest.TestCase):
         acct = S.Account({"clouds_yaml": clouds or self.site.account})
         conn = acct.own_scope()
         notes = []
-        out = S.sign_in_reads(S.Keystone(acct), conn.session.get_token(),
-                              conn.session.auth.get_access(conn.session).user_id,
+        # as site_probe: an administrator's own token, a domain manager's scoped to the project domain
+        access = conn.session.auth.get_access(conn.session)
+        admin = "admin" in access.role_names
+        ks = S.Keystone(acct)
+        out = S.sign_in_reads(ks, S.identity_token(ks, conn.session.get_token(), admin, "tenants", notes),
+                              access.user_id,
                               {"identity_provider": decl["identityProvider"], "protocol": decl["protocol"],
                                "group_domain": decl.get("groupDomain") or "tenants", "start": decl.get("start"),
-                               "dashboard_url": dashboard}, notes)
+                               "dashboard_url": dashboard, "project_domain": "tenants", "admin": admin}, notes)
         return out, notes
 
-    def run_si(self, decl, reads=None, notes=(), kcc=None, dashboard=DASH):
+    def run_si(self, decl, reads=None, notes=(), kcc=None, dashboard=DASH, previous=None):
         ci_os = {"projectDomain": "tenants", "dashboard": {"url": dashboard}} if dashboard else {"projectDomain": "tenants"}
         if decl:
             ci_os["signIn"] = decl
@@ -77,6 +81,8 @@ class SiteSignIn(unittest.TestCase):
                  "services_api_host": "https://services.example.org", "services_bearer_token": "services-token-not-in-data"}
         if kcc is not None:
             extra["fake_kcc"] = kcc
+        if previous is not None:
+            extra["cloudinfrastructure_cr_lookup"] = {"resources": [{"status": previous}]}
         # the probe's facts as openstack.yml set them (extra vars could not be changed by the file)
         tasks = [{"ansible.builtin.set_fact": {
                      "ci_site_out": {"endpoint": "https://identity.site-a.example.org", "region": "RegionOne"},
@@ -175,6 +181,28 @@ class SiteSignIn(unittest.TestCase):
         self.assertEqual(self.cond(r), ("True", "MappingWarning", "The site's mapping does not look groups up in "
                                                                   "tenants, has no stable user id."))
         self.assertTrue(r["caps"]["consoleSignIn"])
+
+    def test_a_site_that_does_not_answer_keeps_the_last_result(self):
+        """R6: a 503 on the identity provider (or the group domain) is not "does not exist": the last condition, the
+        published sign-in and the capabilities stand, a note says why."""
+        self.declare()
+        reads, notes = self.reads(DECL)
+        _, first = self.run_si(DECL, reads, notes)
+        previous = {"conditions": [first["cond"]], "site": first["site"], "capabilities": first["caps"]}
+        for path in ("/v3/OS-FEDERATION/identity_providers/platform-tenants", "/v3/domains"):
+            self.site.ks.fail_next.append(("GET", path, 503, "Service Unavailable"))
+            reads, notes = self.reads(DECL)
+            self.assertTrue(reads["unreadable"])
+            _, r = self.run_si(DECL, reads, notes, previous=previous)
+            self.assertEqual(self.cond(r), self.cond(first))
+            self.assertEqual(r["site"]["signIn"], first["site"]["signIn"])
+            self.assertEqual((r["caps"]["consoleSignIn"], r["caps"]["apiCredentials"]), (True, True))
+            self.assertTrue(any("could not be read this time" in n for n in r["notes"]), r["notes"])
+        # a first probe that cannot read the site does not say the provider is missing
+        self.site.ks.fail_next.append(("GET", "/v3/OS-FEDERATION/identity_providers/platform-tenants", 503, "x"))
+        reads, notes = self.reads(DECL)
+        _, r = self.run_si(DECL, reads, notes)
+        self.assertEqual(r["cond"]["reason"], "DeclaredNotConfirmed")
 
     def test_a_directory_that_could_not_be_asked(self):
         self.declare()
