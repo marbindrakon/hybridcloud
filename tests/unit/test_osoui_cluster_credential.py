@@ -57,6 +57,41 @@ class Order(unittest.TestCase):
         self.assertLess(n.index("Delete the cluster's user on the site"), n.index("Delete the cluster's Vault paths"))
 
 
+@unittest.skipUnless(__import__("shutil").which("helm"), "helm not installed")
+class ChartCopy(unittest.TestCase):
+    """The cluster build's values name the cluster's own path; the chart's ExternalSecret copies clouds.yaml from it
+    to the hub, where Hive's ClusterDeployment uses it."""
+
+    def test_the_external_secret_reads_the_clusters_path(self):
+        import subprocess
+        import tempfile
+        import yaml
+        with open(os.path.join(O.ROOT, "eda", "rulebooks", "roles", "platformopenshift_provision", "templates",
+                               "build-values.yaml.j2")) as f:
+            self.assertIn('providerCredsVault: "{{ cb_provider_creds_vault }}"', f.read())
+        values = {"cluster": {"name": BUILD, "clusterName": "c1", "baseDomain": "web.acme.example.org",
+                              "clusterImageSet": "img", "controlPlaneCount": 3, "workerCount": 2, "apiVIP": "192.0.2.5",
+                              "ingressVIP": "192.0.2.7", "pullSecretVault": "p", "sshKeyVault": "s"},
+                  "provider": {"type": "OpenStack", "providerCredsVault": f"cluster/oso/{BUILD}/build/provider-creds",
+                               "openstack": {"cloud": "openstack", "externalNetwork": "n", "controlPlaneFlavor": "f",
+                                             "workerFlavor": "f", "computeFlavor": "f"}},
+                  "secretStoreName": "vault-backend"}
+        with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+            yaml.safe_dump(values, f)
+        try:
+            p = subprocess.run(["helm", "template", BUILD, os.path.join(O.ROOT, "charts", "charts", "mce-cluster-build"),
+                                "-f", f.name], capture_output=True, text=True, timeout=120)
+        finally:
+            os.unlink(f.name)
+        self.assertEqual(p.returncode, 0, p.stderr[-2000:])
+        docs = [d for d in yaml.safe_load_all(p.stdout) if isinstance(d, dict)]
+        es = next(d for d in docs if d.get("kind") == "ExternalSecret" and d["metadata"]["name"] == f"{BUILD}-provider-creds")
+        self.assertEqual(es["spec"]["data"], [{"secretKey": "clouds.yaml", "remoteRef": {
+            "key": f"cluster/oso/{BUILD}/build/provider-creds", "property": "clouds.yaml"}}])
+        cd = next(d for d in docs if d.get("kind") == "ClusterDeployment")
+        self.assertEqual(cd["spec"]["platform"]["openstack"]["credentialsSecretRef"]["name"], f"{BUILD}-provider-creds")
+
+
 @unittest.skipUnless(H.HAVE_ANSIBLE and HAVE_SDK, "ansible-playbook / openstacksdk not installed")
 class ClusterCredential(unittest.TestCase):
     manager = False
