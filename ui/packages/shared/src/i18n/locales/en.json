@@ -1408,7 +1408,13 @@
     "vmsListedAndMore_other": "({{count}} VMs): {{names}} and {{more}} more",
     "vmsInNamespace_one": "({{count}} VM)",
     "vmsInNamespace_other": "({{count}} VMs)",
-    "listedAt": "Listed from the site at {{time}}; a VM created or deleted since then may be missing or still listed. The delete waits for the VMs that are really there."
+    "listedAt": "Listed from the site at {{time}}; a VM created or deleted since then may be missing or still listed. The delete waits for the VMs that are really there.",
+    "fieldsOf": {
+      "CloudOSO": {
+        "editRbac": "create and change",
+        "viewRbac": "read only"
+      }
+    }
   },
   "donut": {
     "total": "Total",

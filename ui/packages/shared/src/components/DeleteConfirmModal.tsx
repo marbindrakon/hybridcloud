@@ -91,7 +91,9 @@ function EntryText({ section, entry }: { section: PreviewSection; entry: Preview
   const href = entry.kind && !entry.noLink ? routeFor(entry.kind, entry.name) : undefined;
   const label = entry.kind ? `${kindTerm(t, entry.kind)} ` : '';
   const nameNode = href ? <Link to={href}>{entry.name}</Link> : <strong>{entry.name}</strong>;
-  const fieldLabel = (key: string) => t(`deletePreview.fields.${key}`, { defaultValue: key });
+  // a kind may name a field in its own words (an OpenStack environment's groups), else the shared label
+  const fieldLabel = (key: string) =>
+    t(entry.kind ? [`deletePreview.fieldsOf.${entry.kind}.${key}`, `deletePreview.fields.${key}`] : `deletePreview.fields.${key}`, { defaultValue: key });
   switch (section.key) {
     case 'waitVmEnvironments':
     case 'waitSiteNamespace':

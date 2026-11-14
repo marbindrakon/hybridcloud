@@ -402,3 +402,17 @@ test('cluster: the site user with its sentence; the refusal when ClusterCredenti
   const aws = { ...cluster(), spec: { type: 'aws' } };
   assert.equal(pages.details('PlatformOpenshift', aws), '');
 });
+
+test('deleting an access group names the OpenStack environments that list it', async () => {
+  const dp = await import(path.join(OUT, 'deletePreview.mjs'));
+  const objects = { CloudOSO: [{ ...env(), spec: { cloudRef: { name: 'site-a' }, toolRbac: { editRbac: ['developers'], viewRbac: ['auditors'] } } }] };
+  const p = dp.deletePreview('Rbac', { kind: 'Rbac', metadata: { name: 'auditors', namespace: 'entity-acme' }, spec: {} }, { objects });
+  const tool = p.sections.find((s) => s.key === 'toolRoles');
+  assert.deepEqual(tool.entries.map((e) => `${e.kind}/${e.name}/${e.detail}`), ['CloudOSO/web/viewRbac']);
+  // the dialog names the field in the card's words, not the VM ones
+  assert.equal(en.deletePreview.fieldsOf.CloudOSO.viewRbac, 'read only');
+  assert.equal(en.deletePreview.fieldsOf.CloudOSO.editRbac, 'create and change');
+  assert.equal(typeof fr.deletePreview.fieldsOf.CloudOSO.viewRbac, 'string');
+  const modal = fs.readFileSync(path.join(UI, 'packages/shared/src/components/DeleteConfirmModal.tsx'), 'utf8');
+  assert.ok(modal.includes('deletePreview.fieldsOf.${entry.kind}.${key}'));
+});
