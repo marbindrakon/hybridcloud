@@ -5118,6 +5118,16 @@ hybridsovereignPrimaryOperator:
             region: ATUIN
             projectDomain: shc-tenants
             externalNetwork: internet
+            # osoui: tenant sign-in through the tenant realm's client openstack-atuin, set up by the cloud's operator
+            # (identity provider shc-client in the federation domain shc-client; the groups are looked up in the
+            # project domain shc-tenants, the default); one day of group memberships after a sign-in
+            dashboard: {url: https://atuin.signal9.gg}
+            signIn:
+              identityProvider: shc-client
+              protocol: openid
+              displayName: "SHC Client Login"
+              start: IdentityProvider
+              authorizationTTLMinutes: 1440
           # TENANT-DNS D1: environment zones in Atuin Designate, owned by shc-tenant-dns (which holds the global
           # zone) and shared with the environment's project. Atuin Designate (2026-10-17) schedules new zones into an
           # internal lab pool unless scope:public is set: public zones are served by ns1/ns0/ns2 via dns-master.
