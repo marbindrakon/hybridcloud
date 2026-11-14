@@ -9,21 +9,39 @@ Keystone, the project for its resources), so the account's own scope keys are dr
 the account's own scope. A private CA comes as request["cacert"] (a file path) or clouds.yaml `cacert`.
 
 Actions (request["action"]):
-  provision     project in the domain, `member` for the account, the project's application credential
-                (reused by id or recreated); returns every id it touched so teardown can work from the record.
+  provision     project in the domain, `member` for the account; returns every id it touched so teardown can work
+                from the record. legacy_app_cred_ids / legacy_app_cred_name (optional): application credentials an
+                earlier release made as the account for the environment are deleted (the account owns them).
                 fip_descriptions (optional, a request of an earlier release): floating IPs found or created by
                 description on external_network. Without it no external network is looked up.
   check-empty   lists what is left in a project besides the recorded floating IPs (and DNS
                 records under a suffix); teardown refuses to delete a project that isn't empty.
-  teardown      deletes the recorded floating IPs, application credentials and the project.
+  teardown      deletes the recorded floating IPs, legacy application credentials of the account and the project.
+  access-groups the environment's access groups on the site (Keystone groups in the sign-in group domain, marked as
+                the platform's, with roles on the project): state present ensures and grants the wanted ones and
+                reports the platform's groups with a role on the project that are no longer wanted; state absent
+                revokes the platform's roles of the named groups on the project and deletes a group that holds no
+                role anywhere any more (when asked to).
+  cluster-identity  an OpenShift cluster's own Keystone user in the environment's domain (marked as the platform's,
+                no stored password, the user options below) with roles on the project, and its restricted
+                application credential: kept while the one in Vault still signs in, else made again (password set,
+                wait, sign-in as the user, the user's credentials deleted, one created, a second password set; the
+                unit is retried on HTTP 401). The clouds.yaml goes to a private file (a Vault write body), never to
+                stdout.
+  cluster-identity-delete  deletes a cluster's user (its credentials go with it).
+  leftover-users  deletes the platform's users of the domain that hold a role on the project (what a failed cluster
+                teardown left), before the project goes.
   dns-upsert    creates or updates A records in a Designate zone (scoped to the zone's project).
   dns-delete    deletes recordsets by name/type from a Designate zone; reports what was missing.
   site-probe    CloudInfrastructure probe (cloud admin): authenticates, reports the catalog, Neutron's
                 extensions (evpn), the named external network and the site's global external networks (those
                 with an access_as_external RBAC policy for every project, target "*"; a network external for some
                 projects only is never listed); ensures the tenant project domain (created
-                only when asked) with the account's admin role on it, and the site's DNS project (created
-                only when asked) with the account's member role on it.
+                only when asked; the account's admin role on it only when the account holds admin already, else
+                its roles there are reported), and the site's DNS project (created only when asked) with the
+                account's member role on it. sign_in (optional): the declared identity provider, its protocol and
+                mapping are read where the account may (403 = not confirmed), the group domain is looked up and
+                the account's own role assignments are reported. Nothing of the site's federation is changed.
   platform-project  a platform-owned project (CloudGateway, design/P7-PLAN.md §12.3.2) in a domain, with
                 `member` for the account: state present ensures it; state absent deletes it only when it holds
                 no networks, routers, ports or RBAC policies (refused otherwise).
@@ -64,8 +82,13 @@ Actions (request["action"]):
 """
 import ipaddress
 import json
+import os
+import random
+import secrets
 import ssl
 import sys
+import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -150,18 +173,10 @@ def provision(req):
             ip = conn_p.network.create_ip(floating_network_id=net.id, description=desc)
             fips[key] = {"id": ip.id, "ip": ip.floating_ip_address, "created": True}
 
-    app_cred = None
-    name = req["app_cred_name"]
-    same_name = list(conn_p.identity.application_credentials(user=user_id, name=name))
-    reuse = req.get("reuse_app_cred_id")
-    if reuse and any(c.id == reuse for c in same_name):
-        app_cred = {"id": reuse, "created": False}
-    else:
-        for old in same_name:
-            conn_p.identity.delete_application_credential(user_id, old.id)
-        c = conn_p.identity.create_application_credential(
-            user=user_id, name=name, description=req.get("app_cred_description", ""))
-        app_cred = {"id": c.id, "secret": c.secret, "created": True}
+    # an earlier release made the environment's application credential as the account (which owns it): it goes, by
+    # the recorded id and by its name (a credential whose id never reached the record); Keystone refuses application
+    # credential calls on a domain-scoped token, hence the project scope
+    legacy = delete_legacy_app_creds(conn_p, user_id, req)
 
     zone = None
     if req.get("dns_zone_id"):
@@ -171,8 +186,19 @@ def provision(req):
 
     return {"project": {"id": project.id, "name": project.name, "domain_id": domain_id,
                         "domain_name": req["domain"], "created": created},
-            "user_id": user_id, "role": role.name, "fips": fips, "app_cred": app_cred,
+            "user_id": user_id, "role": role.name, "fips": fips, "legacy_app_creds_deleted": legacy,
             "auth_url": acct.auth.get("auth_url", ""), "region": acct.region, "dns_zone": zone}
+
+
+def delete_legacy_app_creds(conn_p, user_id, req):
+    """The account's own application credentials of an earlier release (recorded ids, and those of the legacy name);
+    a missing one counts as deleted. Returns the ids deleted."""
+    ids = {i for i in (req.get("legacy_app_cred_ids") or []) if i}
+    if req.get("legacy_app_cred_name"):
+        ids.update(c.id for c in conn_p.identity.application_credentials(user=user_id, name=req["legacy_app_cred_name"]))
+    for cid in sorted(ids):
+        conn_p.identity.delete_application_credential(user_id, cid, ignore_missing=True)
+    return sorted(ids)
 
 
 def describe(r, *fields):
@@ -256,14 +282,9 @@ def teardown(req):
         # Neutron only lets cloud admins delete a project's default security group; report it.
         result["default_security_groups"] = [g.id for g in conn.network.security_groups(project_id=pid)
                                              if g.name == "default"]
-        # Keystone refuses application credential calls on a domain-scoped token, and deletes a
-        # project's credentials with the project, so they go here while the project exists.
-        creds = set(req.get("app_cred_ids", []))
-        if req.get("app_cred_name"):
-            creds.update(c.id for c in conn.identity.application_credentials(user=user_id, name=req["app_cred_name"]))
-        for cid in sorted(creds):
-            conn.identity.delete_application_credential(user_id, cid, ignore_missing=True)
-            result["app_creds"].append(cid)
+        # an environment an earlier release made and that was never reconciled since still has the account's own
+        # application credential: it goes while the project exists (a domain-scoped token may not delete it)
+        result["app_creds"] = delete_legacy_app_creds(conn, user_id, req)
         conn_d.identity.delete_project(project, ignore_missing=True)
         result["project"] = pid
         if find_project(conn_d, domain_id, project_id=pid) is not None:
@@ -383,13 +404,19 @@ def site_probe(req):
         if dom is None:
             out["project_domain"] = {"name": name, "found": False}
         else:
-            admin = conn.identity.find_role("admin", ignore_missing=False)
+            # the domain-scoped calls of the tenant jobs need a role on the domain: an account that holds admin
+            # already gets admin there; any other account (a domain manager) is only reported, never widened
             granted = False
-            if not conn.identity.validate_user_has_domain_role(dom, access.user_id, admin):
-                conn.identity.assign_domain_role_to_user(dom, access.user_id, admin)
-                granted = True
+            if "admin" in out["roles"]:
+                admin = conn.identity.find_role("admin", ignore_missing=False)
+                if not conn.identity.validate_user_has_domain_role(dom, access.user_id, admin):
+                    conn.identity.assign_domain_role_to_user(dom, access.user_id, admin)
+                    granted = True
             out["project_domain"] = {"name": name, "found": True, "id": dom.id, "enabled": dom.is_enabled,
                                      "created": created, "admin_granted": granted}
+    if req.get("sign_in"):
+        out["sign_in"] = sign_in_reads(Keystone(acct), conn.session.get_token(), access.user_id, req["sign_in"],
+                                       out["notes"])
     if req.get("dns_project"):
         # the site's DNS project (tenant DNS, design/TENANT-DNS.md): owns the platform's parent zone and the
         # environment zones; the account needs `member` there to create and share them
@@ -1067,17 +1094,533 @@ def project_routers(req):
     return {"routers": out}
 
 
+# ---- Keystone: access groups, cluster users, federation reads --------------------------------------------------
+# Raw v3 calls with the shapes proven on a site's Keystone. The site account's token comes from its clouds.yaml entry
+# (openstacksdk, any auth type); a cluster user's token from a password sign-in. Passwords and credential secrets live
+# in this process only: they are never returned, printed, put into an exception text or written anywhere but the
+# private Vault write body of cluster-identity.
+
+# Every object the platform creates in Keystone carries this text in its description; an object of the same name
+# without it is someone else's and is never adopted, changed or deleted.
+MARKER = "Managed by the sovereign cloud platform; do not change."
+# The cluster user's options: it never signs in by itself (no inactivity or expiry), a wrong password sent by anybody
+# cannot lock the platform out, and only an administrator sets its password.
+USER_OPTIONS = {"ignore_user_inactivity": True, "ignore_password_expiry": True,
+                "ignore_change_password_upon_first_use": True, "ignore_lockout_failure_attempts": True,
+                "lock_password": True}
+# Keystone revokes the tokens of a user issued up to the second of a password set: a token issued in that second is
+# refused on its first use. Sign in only this long after a set.
+PASSWORD_SETTLE_SECONDS = 2.0
+UNIT_ATTEMPTS = 5
+UNIT_RETRY_WAIT = (1.0, 4.0)
+_SECRETS = []
+
+
+def _hide(value):
+    """Remember a secret so that no message of this process can carry it."""
+    if value:
+        _SECRETS.append(str(value))
+    return value
+
+
+def scrub(text):
+    text = str(text)
+    for s in _SECRETS:
+        if s and s in text:
+            text = text.replace(s, "<secret>")
+    return text
+
+
+def _password():
+    # 48 random characters from three classes plus one of each (a site's password rule may ask for them)
+    return _hide(secrets.token_urlsafe(36)[:44] + "aZ9!")
+
+
+class KsError(Exception):
+    """A Keystone answer other than the expected one: the status and Keystone's own message (never a request body)."""
+
+    def __init__(self, status, message):
+        super().__init__(f"HTTP {status}: {message}")
+        self.status, self.message = status, message
+
+
+class Refusal(Exception):
+    """The site refused a step of the job: reason and message go to the object's condition."""
+
+    def __init__(self, reason, message):
+        super().__init__(message)
+        self.reason, self.message = reason, message
+
+
+def _keystone_base(auth_url):
+    base = (auth_url or "").rstrip("/")
+    return base if base.endswith("/v3") else base + "/v3"
+
+
+class Keystone:
+    """Raw Keystone v3 calls against the account's auth_url."""
+
+    def __init__(self, acct, timeout=60):
+        import requests  # keystoneauth's dependency; imported here so the other actions do not need it
+        self.acct = acct
+        self.base = _keystone_base(acct.own_auth.get("auth_url", ""))
+        self.http = requests.Session()
+        verify = acct.verify
+        if isinstance(verify, str) and verify.strip().lower() in ("false", "no", "off", "0"):
+            verify = False
+        self.http.verify = verify
+        self.timeout = timeout
+        self._site = {}
+
+    def request(self, token, method, path, body=None, headers=None):
+        url = path if path.startswith("http") else self.base + path
+        h = dict(headers or {})
+        if token:
+            h["X-Auth-Token"] = token
+        r = self.http.request(method, url, json=body, headers=h, timeout=self.timeout, allow_redirects=False)
+        try:
+            data = r.json() if r.content else {}
+        except ValueError:
+            data = {}
+        return r.status_code, data, r
+
+    def call(self, token, method, path, body=None, ok=(200, 201, 204)):
+        status, data, _ = self.request(token, method, path, body)
+        if status not in ok:
+            raise KsError(status, scrub(((data.get("error") or {}).get("message")) if isinstance(data, dict) else "")
+                          or f"{method} {path.split('?')[0]}")
+        return data
+
+    def site(self, domain_name):
+        """The site account's token scoped to a domain (cached per domain), its user id and the domain's id."""
+        if domain_name not in self._site:
+            conn = self.acct.domain(domain_name)
+            token = conn.session.get_token()
+            user_id, domain_id, _ = token_info(conn)
+            self._site[domain_name] = (token, user_id, domain_id)
+        return self._site[domain_name]
+
+    def site_project(self, project_id):
+        conn = self.acct.project(project_id)
+        return conn.session.get_token()
+
+    def role_ids(self, token, names):
+        out = {}
+        for n in names:
+            roles = [r for r in self.call(token, "GET", "/roles?name=" + urllib.parse.quote(n)).get("roles", [])
+                     if r.get("name") == n and not r.get("domain_id")]
+            if not roles:
+                raise KsError(404, f"role {n} does not exist on the site")
+            out[n] = roles[0]["id"]
+        return out
+
+    def password_token(self, user_id, password, project_id):
+        """(status, token, body) of a password sign-in as the user, scoped to the project."""
+        status, data, r = self.request(None, "POST", "/auth/tokens", {"auth": {
+            "identity": {"methods": ["password"], "password": {"user": {"id": user_id, "password": password}}},
+            "scope": {"project": {"id": project_id}}}})
+        return status, r.headers.get("X-Subject-Token"), data
+
+    def app_cred_token(self, cred_id, secret):
+        status, data, r = self.request(None, "POST", "/auth/tokens", {"auth": {
+            "identity": {"methods": ["application_credential"],
+                         "application_credential": {"id": cred_id, "secret": secret}}}})
+        return status, r.headers.get("X-Subject-Token"), data
+
+
+def _marked(obj):
+    return MARKER in ((obj or {}).get("description") or "")
+
+
+def _assigned(ks, token, project_id, kind, oid):
+    """The role ids the user or group holds directly on the project."""
+    data = ks.call(token, "GET", f"/role_assignments?{kind}.id={oid}&scope.project.id={project_id}")
+    return {a["role"]["id"] for a in data.get("role_assignments", []) if "role" in a}
+
+
+def _find_by_name(ks, token, kind, name, domain_id):
+    q = urllib.parse.urlencode({"name": name, "domain_id": domain_id})
+    items = [o for o in ks.call(token, "GET", f"/{kind}?{q}").get(kind, [])
+             if o.get("name") == name and o.get("domain_id") == domain_id]
+    return items[0] if items else None
+
+
+def access_groups(req):
+    """state present: {domain (the project's), project_id, group_domain, entity, managed_roles, groups: [{group,
+    roles, description}], keep: [names wanted but not ready]} -> {groupDomainId, groups: [{group, id, roles, state
+    Granted|Failed, message, created}], unwanted: [names]}. state absent: {..., groups: [{group, delete}]} ->
+    {groups: [{group, id, revoked, deleted, kept}]}."""
+    acct = Account(req)
+    ks = Keystone(acct)
+    gtoken, _, gdom = ks.site(req["group_domain"])
+    ptoken, _, _ = ks.site(req["domain"])
+    pid = req["project_id"]
+    managed = ks.role_ids(ptoken, req.get("managed_roles") or [])
+    by_id = {v: k for k, v in managed.items()}
+    if req.get("state", "present") == "absent":
+        out = []
+        for g in req.get("groups") or []:
+            name = g["group"]
+            grp = _find_by_name(ks, gtoken, "groups", name, gdom)
+            if grp is None:
+                out.append({"group": name, "id": "", "revoked": [], "deleted": False, "kept": "not found"})
+                continue
+            if not _marked(grp):
+                out.append({"group": name, "id": grp["id"], "revoked": [], "deleted": False,
+                            "kept": "not the platform's"})
+                continue
+            revoked = []
+            for rid in sorted(_assigned(ks, ptoken, pid, "group", grp["id"]) & set(by_id)):
+                ks.call(ptoken, "DELETE", f"/projects/{pid}/groups/{grp['id']}/roles/{rid}", ok=(204, 404))
+                revoked.append(by_id[rid])
+            deleted, kept = False, ""
+            if g.get("delete"):
+                left = ks.call(gtoken, "GET", f"/role_assignments?group.id={grp['id']}").get("role_assignments", [])
+                if left:
+                    kept = "holds a role on another project"
+                else:
+                    ks.call(gtoken, "DELETE", f"/groups/{grp['id']}", ok=(204, 404))
+                    deleted = True
+            out.append({"group": name, "id": grp["id"], "revoked": revoked, "deleted": deleted, "kept": kept})
+        return {"groups": out}
+
+    wanted = {g["group"] for g in req.get("groups") or []} | set(req.get("keep") or [])
+    out = []
+    for g in req.get("groups") or []:
+        name = g["group"]
+        rec = {"group": name, "id": "", "roles": list(g.get("roles") or []), "state": "Granted", "message": "",
+               "created": False}
+        try:
+            grp = _find_by_name(ks, gtoken, "groups", name, gdom)
+            if grp is not None and not _marked(grp):
+                raise KsError(409, f"a group named {name} exists in domain {req['group_domain']} and is not the "
+                                   "platform's")
+            if grp is None:
+                grp = ks.call(gtoken, "POST", "/groups", {"group": {
+                    "name": name, "domain_id": gdom,
+                    "description": f"{g.get('description') or 'Access group ' + name}. {MARKER}"}})["group"]
+                rec["created"] = True
+            rec["id"] = grp["id"]
+            want = ks.role_ids(ptoken, rec["roles"])
+            have = _assigned(ks, ptoken, pid, "group", grp["id"])
+            for rid in sorted(set(want.values()) - have):
+                ks.call(ptoken, "PUT", f"/projects/{pid}/groups/{grp['id']}/roles/{rid}")
+            # an access group that moved between edit and view keeps only the role it has now
+            for rid in sorted((have & set(by_id)) - set(want.values())):
+                ks.call(ptoken, "DELETE", f"/projects/{pid}/groups/{grp['id']}/roles/{rid}", ok=(204, 404))
+        except KsError as e:
+            rec.update({"state": "Failed", "message": e.message})
+        out.append(rec)
+    unwanted = []
+    prefix = (req.get("entity") or "") + "."
+    data = ks.call(ptoken, "GET", f"/role_assignments?scope.project.id={pid}")
+    for gid in sorted({a["group"]["id"] for a in data.get("role_assignments", []) if "group" in a
+                       and a.get("role", {}).get("id") in by_id}):
+        status, body, _ = ks.request(gtoken, "GET", f"/groups/{gid}")
+        grp = body.get("group") if status == 200 else None
+        if (grp and _marked(grp) and grp.get("domain_id") == gdom and grp.get("name", "").startswith(prefix)
+                and grp["name"] not in wanted):
+            unwanted.append(grp["name"])
+    return {"groupDomainId": gdom, "groups": out, "unwanted": sorted(set(unwanted))}
+
+
+def _step_refusal(reason, step, e):
+    return Refusal(reason, f"The site refused {step}: {e.message if isinstance(e, KsError) else scrub(e)}. "
+                           "The cluster cannot be built.")
+
+
+def _read_vault_credential(path):
+    """The application credential id and secret of a Vault read written to a file (the KV v2 answer), or None."""
+    if not path or not os.path.exists(path):
+        return None
+    try:
+        with open(path) as f:
+            body = json.load(f)
+        text = ((body.get("data") or {}).get("data") or {}).get("clouds.yaml") or ""
+        auth = ((yaml.safe_load(text) or {}).get("clouds") or {}).get("openstack", {}).get("auth") or {}
+    except (ValueError, yaml.YAMLError, AttributeError):
+        return None
+    cid, secret = auth.get("application_credential_id"), _hide(auth.get("application_credential_secret"))
+    return (cid, secret) if cid and secret else None
+
+
+def _write_private(path, data):
+    """A file only this user can read, written in full or not at all."""
+    d = os.path.dirname(os.path.abspath(path))
+    fd, tmp = tempfile.mkstemp(dir=d, prefix=".shc-", suffix=".tmp")
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w") as f:
+            json.dump(data, f)
+        os.replace(tmp, path)
+    except BaseException:
+        if os.path.exists(tmp):
+            os.unlink(tmp)
+        raise
+
+
+def cluster_identity(req):
+    """{domain (the environment project's domain name), project_id, user_name, description, roles, credential_name,
+    credential_description, vault_file (the Vault read of the cluster's credential path, '' = none), out_file (where
+    a new credential's Vault write body goes)} -> {user: {id, name, domainId, created}, roles: {granted}, credential:
+    {id, name, kept, createdAt}, wrote}. A refusal exits with {reason, message} (UserRefused, RoleRefused,
+    PasswordRefused, CredentialRefused)."""
+    acct = Account(req)
+    ks = Keystone(acct)
+    pid = req["project_id"]
+    name = req["user_name"]
+    if len(name) > 255 or len(req["credential_name"]) > 255:
+        raise Refusal("UserRefused", f"The cluster's user name {name} is longer than the site's identity service "
+                                     "allows (255 characters). The cluster cannot be built.")
+    token, _, dom = ks.site(req["domain"])
+    # the user
+    try:
+        user = _find_by_name(ks, token, "users", name, dom)
+        created = False
+        if user is not None and not _marked(user):
+            raise KsError(409, f"a user named {name} exists in domain {req['domain']} and is not the platform's")
+        if user is None:
+            user = ks.call(token, "POST", "/users", {"user": {
+                "name": name, "domain_id": dom, "enabled": True, "options": USER_OPTIONS,
+                "description": f"{req.get('description') or 'OpenShift cluster user'}. {MARKER}"}})["user"]
+            created = True
+        elif any((user.get("options") or {}).get(k) is not v for k, v in USER_OPTIONS.items()):
+            user = ks.call(token, "PATCH", f"/users/{user['id']}", {"user": {"options": USER_OPTIONS}})["user"]
+    except KsError as e:
+        raise _step_refusal("UserRefused", "the cluster's user " + name, e)
+    uid = user["id"]
+    # its roles on the environment's project
+    granted = []
+    try:
+        want = ks.role_ids(token, req.get("roles") or ["member"])
+        have = _assigned(ks, token, pid, "user", uid)
+        for rname, rid in want.items():
+            if rid not in have:
+                try:
+                    ks.call(token, "PUT", f"/projects/{pid}/users/{uid}/roles/{rid}")
+                except KsError as e:
+                    raise _step_refusal("RoleRefused", f"the role {rname} on the project for user {name}", e)
+                granted.append(rname)
+    except KsError as e:
+        raise _step_refusal("RoleRefused", f"the roles on the project for user {name}", e)
+    result = {"user": {"id": uid, "name": name, "domainId": dom, "created": created}, "roles": {"granted": granted}}
+    # the credential in Vault still signs in as this user on this project: kept, no password touched
+    have_cred = _read_vault_credential(req.get("vault_file"))
+    if have_cred:
+        status, _, body = ks.app_cred_token(*have_cred)
+        tok = (body or {}).get("token") or {}
+        if (status == 201 and (tok.get("user") or {}).get("id") == uid
+                and (tok.get("project") or {}).get("id") == pid):
+            result["credential"] = {"id": have_cred[0], "name": req["credential_name"], "kept": True, "createdAt": ""}
+            result["wrote"] = False
+            return result
+    cred = _credential_unit(ks, token, uid, name, pid, req)
+    clouds = {"clouds": {"openstack": {
+        "auth": {"auth_url": acct.own_auth.get("auth_url", ""), "application_credential_id": cred["id"],
+                 "application_credential_secret": cred["secret"]},
+        "region_name": acct.region or "", "interface": "public", "identity_api_version": 3,
+        "auth_type": "v3applicationcredential"}}}
+    _write_private(req["out_file"], {"data": {"clouds.yaml": yaml.safe_dump(clouds, default_flow_style=False)}})
+    result["credential"] = {"id": cred["id"], "name": req["credential_name"], "kept": False,
+                            "createdAt": cred.get("createdAt", "")}
+    result["wrote"] = True
+    return result
+
+
+def _credential_unit(ks, token, uid, name, pid, req):
+    """Password set, wait, sign-in as the user, the user's credentials deleted, one restricted credential created, a
+    second password set (the used one is dead and its tokens revoked). Retried as a whole on HTTP 401: another job
+    reset the same password, or the token was issued in the second of the set."""
+    last = None
+    for attempt in range(UNIT_ATTEMPTS):
+        if attempt:
+            time.sleep(random.uniform(*UNIT_RETRY_WAIT))
+        used = _password()
+        try:
+            ks.call(token, "PATCH", f"/users/{uid}", {"user": {"password": used}})
+        except KsError as e:
+            raise _step_refusal("PasswordRefused", f"the password of user {name}", e)
+        time.sleep(PASSWORD_SETTLE_SECONDS)
+        status, utok, body = ks.password_token(uid, used, pid)
+        if status == 401:
+            last = KsError(401, "the user's sign-in was refused")
+            continue
+        if status != 201:
+            raise _step_refusal("PasswordRefused", f"the sign-in of user {name}",
+                                KsError(status, scrub(((body or {}).get("error") or {}).get("message") or "")))
+        try:
+            mine = ks.call(utok, "GET", f"/users/{uid}/application_credentials").get("application_credentials", [])
+            for c in mine:
+                ks.call(utok, "DELETE", f"/users/{uid}/application_credentials/{c['id']}", ok=(204, 404))
+            made = ks.call(utok, "POST", f"/users/{uid}/application_credentials", {"application_credential": {
+                "name": req["credential_name"], "description": req.get("credential_description") or "",
+                "unrestricted": False, "roles": [{"name": r} for r in (req.get("roles") or ["member"])]}},
+                ok=(201,))["application_credential"]
+        except KsError as e:
+            if e.status == 401:
+                last = e
+                continue
+            raise _step_refusal("CredentialRefused", f"the credential of user {name}", e)
+        cred = {"id": made["id"], "secret": _hide(made["secret"]), "createdAt": made.get("created_at", "")}
+        try:
+            ks.call(token, "PATCH", f"/users/{uid}", {"user": {"password": _password()}})
+        except KsError as e:
+            raise _step_refusal("PasswordRefused", f"the second password of user {name}", e)
+        return cred
+    raise _step_refusal("CredentialRefused", f"the credential of user {name} after {UNIT_ATTEMPTS} attempts",
+                        last or KsError(401, "unauthorized"))
+
+
+def cluster_identity_delete(req):
+    """{domain, user_id, user_name} -> {found, deleted, id}: the cluster's user (by id, else by name), only when it is
+    the platform's; Keystone deletes its application credentials with it."""
+    acct = Account(req)
+    ks = Keystone(acct)
+    token, _, dom = ks.site(req["domain"])
+    user = None
+    if req.get("user_id"):
+        status, body, _ = ks.request(token, "GET", f"/users/{req['user_id']}")
+        user = body.get("user") if status == 200 else None
+    if user is None and req.get("user_name"):
+        user = _find_by_name(ks, token, "users", req["user_name"], dom)
+    if user is None:
+        return {"found": False, "deleted": False, "id": ""}
+    if not _marked(user) or user.get("domain_id") != dom:
+        return {"found": True, "deleted": False, "id": user["id"], "kept": "not the platform's"}
+    ks.call(token, "DELETE", f"/users/{user['id']}", ok=(204, 404))
+    return {"found": True, "deleted": True, "id": user["id"]}
+
+
+def leftover_users(req):
+    """{domain, project_id} -> {deleted: [{id, name}]}: the platform's users of the domain that hold a role on the
+    project (a cluster user a failed teardown left); run before the project goes (its assignments go with it)."""
+    acct = Account(req)
+    ks = Keystone(acct)
+    token, own, dom = ks.site(req["domain"])
+    data = ks.call(token, "GET", f"/role_assignments?scope.project.id={req['project_id']}")
+    deleted = []
+    for uid in sorted({a["user"]["id"] for a in data.get("role_assignments", []) if "user" in a}):
+        if uid == own:
+            continue
+        status, body, _ = ks.request(token, "GET", f"/users/{uid}")
+        user = body.get("user") if status == 200 else None
+        if user and _marked(user) and user.get("domain_id") == dom:
+            ks.call(token, "DELETE", f"/users/{uid}", ok=(204, 404))
+            deleted.append({"id": uid, "name": user.get("name", "")})
+    return {"deleted": deleted}
+
+
+def _mapping_warnings(rules, group_domain, group_domain_id):
+    """What in the site's mapping works against tenant sign-in (the mapping is the operator's: only reported)."""
+    projects = groups_here = user_id = False
+    for rule in rules or []:
+        for el in rule.get("local") or []:
+            if not isinstance(el, dict):
+                continue
+            projects = projects or "projects" in el
+            if "groups" in el:
+                d = el.get("domain") or {}
+                if d.get("name") == group_domain or (group_domain_id and d.get("id") == group_domain_id):
+                    groups_here = True
+            if isinstance(el.get("user"), dict) and el["user"].get("id"):
+                user_id = True
+    out = []
+    if projects:
+        out.append("uses a project list")
+    if not groups_here:
+        out.append(f"does not look groups up in {group_domain}")
+    if not user_id:
+        out.append("has no stable user id")
+    return out
+
+
+def sign_in_reads(ks, token, user_id, si, notes):
+    """The declared sign-in, read where the account may: {identityProvider, protocol, mapping, groupDomain,
+    userDomain, account}; each part read True/False (False: refused, 403) and found. Never writes."""
+    out = {}
+
+    def get(path):
+        status, body, _ = ks.request(token, "GET", path)
+        return status, body
+
+    idp = urllib.parse.quote(si.get("identity_provider") or "", safe="")
+    proto = urllib.parse.quote(si.get("protocol") or "", safe="")
+    status, body = get(f"/OS-FEDERATION/identity_providers/{idp}")
+    ip = body.get("identity_provider") or {}
+    out["identityProvider"] = {"read": status != 403, "found": status == 200, "status": status,
+                               "enabled": bool(ip.get("enabled")), "domainId": ip.get("domain_id") or "",
+                               "remoteIds": ip.get("remote_ids") or [],
+                               "authorizationTTL": ip.get("authorization_ttl") if status == 200 else None}
+    out["protocol"] = {"read": False, "found": False, "mappingId": ""}
+    out["mapping"] = {"read": False, "found": False, "warnings": []}
+    if status == 200:
+        st, b = get(f"/OS-FEDERATION/identity_providers/{idp}/protocols/{proto}")
+        pr = b.get("protocol") or {}
+        out["protocol"] = {"read": st != 403, "found": st == 200, "mappingId": pr.get("mapping_id") or ""}
+    # the group domain (a domain manager may list domains)
+    gd = si.get("group_domain") or ""
+    st, b = get("/domains?" + urllib.parse.urlencode({"name": gd}))
+    doms = [d for d in (b.get("domains") or []) if d.get("name") == gd] if st == 200 else []
+    out["groupDomain"] = {"name": gd, "read": st != 403, "found": bool(doms), "id": doms[0]["id"] if doms else ""}
+    if out["protocol"]["found"] and out["protocol"]["mappingId"]:
+        st, b = get(f"/OS-FEDERATION/mappings/{urllib.parse.quote(out['protocol']['mappingId'], safe='')}")
+        mp = b.get("mapping") or {}
+        out["mapping"] = {"read": st != 403, "found": st == 200,
+                          "warnings": _mapping_warnings(mp.get("rules"), gd, out["groupDomain"]["id"])
+                          if st == 200 else []}
+    out["userDomain"] = {"id": out["identityProvider"]["domainId"], "name": ""}
+    if out["userDomain"]["id"]:
+        st, b = get(f"/domains/{out['userDomain']['id']}")
+        out["userDomain"]["name"] = (b.get("domain") or {}).get("name", "") if st == 200 else ""
+    # the account's own role assignments (what it may do on the site)
+    st, b = get(f"/role_assignments?user.id={user_id}&include_names=true")
+    roles = []
+    if st == 200:
+        for a in b.get("role_assignments") or []:
+            sc = a.get("scope") or {}
+            where = ("system" if "system" in sc else
+                     f"domain {(sc.get('domain') or {}).get('name') or (sc.get('domain') or {}).get('id', '')}"
+                     if "domain" in sc else
+                     f"project {(sc.get('project') or {}).get('name') or (sc.get('project') or {}).get('id', '')}")
+            roles.append({"role": (a.get("role") or {}).get("name", ""), "scope": where})
+    else:
+        notes.append(f"the account's role assignments were not readable (HTTP {st})")
+    out["account"] = {"read": st == 200, "roles": sorted(roles, key=lambda r: (r["scope"], r["role"]))}
+    # the start URL answers with a redirect (one unauthenticated GET; never followed)
+    url = si.get("start_url") or ""
+    out["startUrl"] = {"checked": False, "redirects": False}
+    if url:
+        try:
+            r = ks.http.get(url, timeout=15, allow_redirects=False)
+            out["startUrl"] = {"checked": True, "redirects": r.status_code in (301, 302, 303, 307, 308),
+                               "status": r.status_code}
+        except Exception as e:  # noqa: BLE001 - a note, never a failure of the probe
+            notes.append(f"the sign-in start URL did not answer: {type(e).__name__}")
+    return out
+
+
 ACTIONS = {"provision": provision, "check-empty": check_empty, "teardown": teardown,
            "dns-upsert": dns_upsert, "dns-delete": dns_delete, "site-probe": site_probe,
            "platform-project": platform_project, "placement-network": placement_network,
            "cluster-fips": cluster_fips, "router-advertisement": router_advertisement,
            "network-name-check": network_name_check,
-           "platform-inventory": platform_inventory, "project-routers": project_routers}
+           "platform-inventory": platform_inventory, "project-routers": project_routers,
+           "access-groups": access_groups, "cluster-identity": cluster_identity,
+           "cluster-identity-delete": cluster_identity_delete, "leftover-users": leftover_users}
+
+
+def main(stdin=sys.stdin, stdout=sys.stdout):
+    request = json.load(stdin)
+    try:
+        print(scrub(json.dumps(ACTIONS[request["action"]](request))), file=stdout)
+        return 0
+    except Refusal as e:
+        print(scrub(json.dumps({"error": e.message, "reason": e.reason, "message": e.message})), file=stdout)
+        return 1
+    except Exception as e:  # one line for the job log; the role turns it into status.deletion/message
+        print(scrub(json.dumps({"error": f"{type(e).__name__}: {e}"})), file=stdout)
+        return 1
+
 
 if __name__ == "__main__":
-    request = json.load(sys.stdin)
-    try:
-        print(json.dumps(ACTIONS[request["action"]](request)))
-    except Exception as e:  # one line for the job log; the role turns it into status.deletion/message
-        print(json.dumps({"error": f"{type(e).__name__}: {e}"}))
-        sys.exit(1)
+    sys.exit(main())
