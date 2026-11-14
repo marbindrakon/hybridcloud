@@ -145,6 +145,7 @@ REASONS = {
     "CredentialsMissing": _r("P", FAILED, "The site credentials are missing. The platform team is looking at it."),
     "CredentialsInvalid": _r("P", FAILED, "The site credentials were refused. The platform team is looking at it."),
     "InvalidSecret": _r("P", FAILED, "A required credential is not valid. The platform team is looking at it."),
+    "CredentialSecretMissing": _r("P", FAILED, "The cluster's credential is recorded, but its secret is not in the platform's secret store. Nothing was changed; the platform team restores the secret or replaces the credential."),
     "GrantRefused": _r("P", FAILED, "The site refused a role for an access group. The platform team is looking at it."),
     "IdentityProviderNotFound": _r("P", FAILED, "The site has no identity provider of the declared name. The platform team is looking at it."),
     "GroupDomainNotFound": _r("P", FAILED, "The site has no domain of the declared group domain. The platform team is looking at it."),

@@ -396,14 +396,7 @@ def site_probe(req):
     if req.get("project_domain"):
         name = req["project_domain"]
         # a domain manager reads its domain with a token scoped to it (a project-scoped one is refused the read)
-        dconn = conn
-        if "admin" not in out["roles"]:
-            try:
-                dconn = acct.domain(name)
-                dconn.authorize()
-            except Exception as e:  # noqa: BLE001 - the read below says what is missing
-                out["notes"].append(f"the account could not sign in to domain {name}: {type(e).__name__}")
-                dconn = conn
+        dconn = identity_conn(acct, conn, "admin" in out["roles"], name, out["notes"])
         dom = dconn.identity.find_domain(name)
         created = False
         if dom is None and req.get("create_project_domain"):
@@ -431,35 +424,52 @@ def site_probe(req):
                                        dict(req["sign_in"], project_domain=req.get("project_domain") or "",
                                             admin=admin), out["notes"])
     if req.get("dns_project"):
-        # the site's DNS project (tenant DNS, design/TENANT-DNS.md): owns the platform's parent zone and the
-        # environment zones; the account needs `member` there to create and share them
-        dp = req["dns_project"]
-        dom = conn.identity.find_domain(dp["domain"], ignore_missing=False)
-        proj = conn.identity.find_project(dp["name"], domain_id=dom.id)
-        created = False
-        if proj is None and dp.get("create"):
-            proj = conn.identity.create_project(name=dp["name"], domain_id=dom.id,
-                                                description=dp.get("description", ""))
-            created = True
-        if proj is None:
-            out["dns_project"] = {"name": dp["name"], "found": False}
-        else:
-            member = conn.identity.find_role("member", ignore_missing=False)
-            granted = False
-            if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
-                conn.identity.assign_project_role_to_user(proj, access.user_id, member)
-                granted = True
-            quota = None
-            if dp.get("zone_quota"):
-                # every environment zone counts against the DNS project's zone quota (Designate default 10)
-                cur = conn.dns.get_quota(proj.id)
-                quota = {"zones": cur.zones, "raised": False}
-                if (cur.zones or 0) < int(dp["zone_quota"]):
-                    conn.dns.update_quota(proj.id, zones=int(dp["zone_quota"]))
-                    quota = {"zones": int(dp["zone_quota"]), "raised": True}
-            out["dns_project"] = {"name": dp["name"], "found": True, "id": proj.id, "created": created,
-                                  "member_granted": granted, "zone_quota": quota}
+        out["dns_project"] = probe_dns_project(acct, conn, access.user_id, "admin" in out["roles"],
+                                               req["dns_project"], out["notes"])
     return out
+
+
+def identity_conn(acct, conn, admin, domain, notes):
+    """The connection for identity calls in a domain: an administrator's own; any other account's scoped to the
+    domain (spike B: a domain manager's project-scoped token is refused every identity read)."""
+    if admin:
+        return conn
+    try:
+        dconn = acct.domain(domain)
+        dconn.authorize()
+        return dconn
+    except Exception as e:  # noqa: BLE001 - the calls below say what is missing
+        notes.append(f"the account could not sign in to domain {domain}: {type(e).__name__}")
+        return conn
+
+
+def probe_dns_project(acct, conn, user_id, admin, dp, notes):
+    """The site's DNS project (tenant DNS, design/TENANT-DNS.md): owns the platform's parent zone and the environment
+    zones; the account needs `member` there to create and share them. Identity calls with identity_conn."""
+    iconn = identity_conn(acct, conn, admin, dp["domain"], notes)
+    dom = iconn.identity.find_domain(dp["domain"], ignore_missing=False)
+    proj = iconn.identity.find_project(dp["name"], domain_id=dom.id)
+    created = False
+    if proj is None and dp.get("create"):
+        proj = iconn.identity.create_project(name=dp["name"], domain_id=dom.id, description=dp.get("description", ""))
+        created = True
+    if proj is None:
+        return {"name": dp["name"], "found": False}
+    member = iconn.identity.find_role("member", ignore_missing=False)
+    granted = False
+    if not iconn.identity.validate_user_has_project_role(proj, user_id, member):
+        iconn.identity.assign_project_role_to_user(proj, user_id, member)
+        granted = True
+    quota = None
+    if dp.get("zone_quota"):
+        # every environment zone counts against the DNS project's zone quota (Designate default 10)
+        cur = conn.dns.get_quota(proj.id)
+        quota = {"zones": cur.zones, "raised": False}
+        if (cur.zones or 0) < int(dp["zone_quota"]):
+            conn.dns.update_quota(proj.id, zones=int(dp["zone_quota"]))
+            quota = {"zones": int(dp["zone_quota"]), "raised": True}
+    return {"name": dp["name"], "found": True, "id": proj.id, "created": created, "member_granted": granted,
+            "zone_quota": quota}
 
 
 def platform_project(req):
@@ -1458,6 +1468,11 @@ def access_groups(req):
 
 
 def _step_refusal(reason, step, e):
+    """The site's answer to a step: a refusal (4xx), or, for an answer that is not one (5xx, 408, 429, no
+    connection), "the site did not answer" (nothing refused; the next run tries again)."""
+    if transient(e):
+        return NotAnswered(f"The site did not answer {step} ({scrub(_plain(e))}); nothing was refused, the next run "
+                           "tries again.")
     return Refusal(reason, f"The site refused {step}: {e.message if isinstance(e, KsError) else scrub(e)}. "
                            "The cluster cannot be built.")
 
@@ -1499,8 +1514,18 @@ def cluster_identity(req):
     credential_description, vault_file (the Vault read of the cluster's credential path, '' = none), out_file (where
     a new credential's Vault write body goes)} -> {user: {id, name, domainId, created}, roles: {granted}, credential:
     {id, name, kept, createdAt}, wrote}. A refusal exits with {reason, message} (UserRefused, RoleRefused,
-    PasswordRefused, CredentialRefused)."""
+    PasswordRefused, CredentialRefused, CredentialSecretMissing). recorded_credential_id: the credential the cluster
+    recorded; with one, nothing usable in vault_file changes nothing on the site (the cluster may still run on the
+    credential): CredentialSecretMissing. A new credential is made only when none is recorded, or when the site says
+    the recorded one is not valid."""
     _require(req, "domain", "project_id", "user_name", "credential_name")
+    have_cred = _read_vault_credential(req.get("vault_file"))
+    recorded = str(req.get("recorded_credential_id") or "").strip()
+    if recorded and not have_cred:
+        raise Refusal("CredentialSecretMissing", f"The cluster's credential {recorded} is recorded, but its secret is "
+                      "not in the platform's secret store. The cluster may still be using the credential, so nothing "
+                      "was changed on the site. A platform administrator must restore the secret or replace the "
+                      "credential in the cluster.")
     acct = Account(req)
     ks = Keystone(acct)
     pid = req["project_id"]
@@ -1544,7 +1569,6 @@ def cluster_identity(req):
     # that says the credential is not valid (401, 404) or a token of another user or project makes a new one; any
     # other answer (5xx, a timeout, no connection) stops here with nothing changed: the cluster's working credential
     # is never replaced because the site had a bad moment
-    have_cred = _read_vault_credential(req.get("vault_file"))
     if have_cred:
         try:
             status, _, body = ks.app_cred_token(*have_cred)
@@ -1592,7 +1616,8 @@ def _credential_unit(ks, token, uid, name, pid, req):
             continue
         if status != 201:
             raise _step_refusal("PasswordRefused", f"the sign-in of user {name}",
-                                KsError(status, scrub(((body or {}).get("error") or {}).get("message") or "")))
+                                KsError(status, scrub(((body or {}).get("error") or {}).get("message") or "")
+                                        or f"the site answered HTTP {status}"))
         try:
             mine = ks.call(utok, "GET", f"/users/{uid}/application_credentials").get("application_credentials", [])
             for c in mine:

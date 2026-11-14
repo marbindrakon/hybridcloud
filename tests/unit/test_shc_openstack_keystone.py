@@ -591,7 +591,7 @@ class KeepCheck(Base):
 
     def test_a_5xx_or_no_answer_changes_nothing(self):
         out, vf = self.first()
-        for status in (500, 503):
+        for status in (500, 503, 403, 429, 400, 408):
             n = len(self.ks.log)
             # the site account's password sign-ins pass, the credential's sign-in is answered with the status once
             orig = self.ks._auth
@@ -874,6 +874,63 @@ class SignInReadFaults(SignInReads):
         out, notes = self.read(clouds=self.manager_account(), group_domain="federated")
         self.assertEqual((out["groupDomain"]["read"], out["groupDomain"]["found"]), (False, False))
         self.assertIn("only an administrator account can find it", " ".join(notes))
+
+
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class SecondPass(Base):
+    """V1: a recorded credential whose secret is not in Vault is never replaced by the job. V3: an answer that is not a
+    refusal is "the site did not answer", never UserRefused / RoleRefused / PasswordRefused. V6: the probe's DNS
+    project lookup works for a domain manager (identity reads with a domain-scoped token)."""
+
+    def test_a_recorded_credential_without_its_secret_changes_nothing(self):
+        out = S.cluster_identity(cluster_req(self))
+        cid = out["credential"]["id"]
+        garbage = os.path.join(TMP, f"garbage-{id(self)}.yaml")
+        with open(garbage, "w") as f:
+            f.write("not: [yaml")
+        for vf in ("", garbage, os.path.join(TMP, "does-not-exist.yaml")):
+            n = len(self.ks.log)
+            with self.assertRaises(S.Refusal) as cm:
+                S.cluster_identity(cluster_req(self, vault_file=vf, recorded_credential_id=cid))
+            self.assertEqual(cm.exception.reason, "CredentialSecretMissing")
+            self.assertIn("not in the platform's secret store", cm.exception.message)
+            self.assertIn("nothing was changed", cm.exception.message)
+            self.assertEqual(self.ks.log[n:], [])
+            self.assertIn(cid, self.ks.app_creds)
+        # nothing recorded: a new credential is made (no cluster can hold one)
+        again = S.cluster_identity(cluster_req(self, vault_file="", recorded_credential_id=""))
+        self.assertFalse(again["credential"]["kept"])
+
+    def test_a_5xx_outside_the_keep_check_is_not_a_refusal(self):
+        cases = [("GET", "/v3/users", "the cluster's user"), ("PUT", f"/v3/projects/{self.pid}/users", "the role"),
+                 ("PATCH", "/v3/users/", "the password")]
+        for method, prefix, step in cases:
+            self.ks.fail_next.append((method, prefix, 503, "Service Unavailable"))
+            with self.assertRaises(S.NotAnswered) as cm:
+                S.cluster_identity(cluster_req(self, user_name=f"shc-oso-acme-c{len(self.ks.log)}-x",
+                                               credential_name="c"))
+            self.assertIn("did not answer " + step, cm.exception.message)
+            self.assertNotIn("cannot be built", cm.exception.message)
+            self.ks.fail_next.clear()
+        # the exit: transient, no reason
+        self.ks.fail_next.append(("GET", "/v3/users", 503, "Service Unavailable"))
+        buf = io.StringIO()
+        self.assertEqual(S.main(io.StringIO(json.dumps(cluster_req(self))), buf), 1)
+        body = json.loads(buf.getvalue())
+        self.assertTrue(body["transient"])
+        self.assertNotIn("reason", body)
+
+    def test_the_dns_project_lookup_of_a_domain_manager(self):
+        mgr = self.manager_account()
+        dns = self.ks.add_project("platform-dns", self.tenants)
+        acct = S.Account({"clouds_yaml": mgr})
+        conn = acct.own_scope()
+        access = conn.session.auth.get_access(conn.session)
+        notes = []
+        out = S.probe_dns_project(acct, conn, access.user_id, False, {"domain": "tenants", "name": "platform-dns"}, notes)
+        self.assertEqual((out["found"], out["id"], out["member_granted"]), (True, dns, True))
+        self.assertEqual(notes, [])
 
 
 if __name__ == "__main__":

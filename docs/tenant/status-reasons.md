@@ -172,6 +172,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `CnvNotAvailable` | The site does not offer virtual machines yet. The platform team is looking at it. | The platform team |
 | `ConfigNotFound` | The named connection does not exist. | You (the tenant) |
 | `CredentialRefused` | The site refused the cluster's credential. The platform team is looking at it. | The platform team |
+| `CredentialSecretMissing` | The cluster's credential is recorded, but its secret is not in the platform's secret store. Nothing was changed; the platform team restores the secret or replaces the credential. | The platform team |
 | `CredentialsInvalid` | The site credentials were refused. The platform team is looking at it. | The platform team |
 | `CredentialsMissing` | The site credentials are missing. The platform team is looking at it. | The platform team |
 | `DnsProjectNotFound` | The DNS project does not exist. The platform team is looking at it. | The platform team |
