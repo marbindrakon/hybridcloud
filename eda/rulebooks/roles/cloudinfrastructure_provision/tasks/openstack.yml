@@ -13,6 +13,8 @@
     # tenant DNS (design/TENANT-DNS.md): native = environment zones in this site's Designate, owned by dns.project
     ci_dns: "{{ ci_cr_spec.dns | default({}, true) }}"
     ci_dns_native: "{{ ((ci_cr_spec.dns | default({}, true)).mode | default('platform', true)) == 'native' }}"
+    # sign-in with the platform's tenant identities, as the site's operator set it up (openstack_signin.yml)
+    ci_signin: "{{ (ci_cr_spec.openstack | default({}, true)).signIn | default({}, true) }}"
 
 - name: Load the site's cloud-admin account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -38,6 +40,13 @@
                 'create': ci_dns.createProject | default(false) | bool, 'zone_quota': ci_dns.zoneQuota | default(1000) | int,
                 'description': 'Tenant DNS of the sovereign cloud platform: the parent zone and environment zones (CloudInfrastructure ' ~ cloudinfrastructure_cr_name ~ ')'}
                if (ci_dns_native | bool) else {} }}
+          # read only: the declared identity provider, its protocol and mapping, the group domain, the account's roles
+          sign_in: >-
+            {{ {'identity_provider': ci_signin.identityProvider, 'protocol': ci_signin.protocol | default('', true),
+                'group_domain': ci_signin.groupDomain | default(ci_os.projectDomain | default('', true), true),
+                'start': ci_signin.start | default('Dashboard', true),
+                'dashboard_url': (ci_os.dashboard | default({}, true)).url | default('', true)}
+               if (ci_signin.identityProvider | default('', true)) | length > 0 else {} }}
   rescue:
     - name: Set the probe failure reason
       ansible.builtin.set_fact:
@@ -203,6 +212,11 @@
       Keystone ok, services {{ ci_probe.services | join(',') }}; tenant domain
       {{ ci_os.projectDomain | default('-', true) }}, external network {{ ci_os.externalNetwork | default('-', true) }},
       DNS {{ ('native in project ' ~ ci_dns.project) if (ci_dns_native | bool) else (ci_dns.mode | default('platform', true)) }}.
+
+# the declared sign-in and what the probe confirmed: status.site.dashboard / signIn, SignInConfigured, the capabilities
+# consoleSignIn / apiCredentials (never fails the probe)
+- name: The site's sign-in for people
+  ansible.builtin.include_tasks: openstack_signin.yml
 
 - name: Publish the global external networks
   ansible.builtin.set_fact:

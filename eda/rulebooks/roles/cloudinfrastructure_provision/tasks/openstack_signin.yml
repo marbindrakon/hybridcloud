@@ -1,0 +1,130 @@
+---
+# Sign-in to an OpenStack site with the platform's tenant identities (spec.openstack.signIn), as the site's operator
+# set it up; the platform never creates or changes the site's identity providers, protocols or mappings. The probe
+# (files/shc_openstack.py site-probe sign_in) read what the account may: the identity provider (enabled, its domain,
+# authorization_ttl), its protocol and mapping (warnings), the group domain, the account's roles, the start URL's
+# redirect. Here: the site's sign-in client in the tenant realm (common/tasks/keycloak_client_check.yml), then
+# status.site.dashboard and status.site.signIn, the condition SignInConfigured and the capabilities consoleSignIn and
+# apiCredentials. A key that no longer applies is written as null (the status is merge-patched). Never fails the
+# probe. Uses ci_os, ci_signin, ci_probe, ci_site_out, ci_capabilities_out, cloudinfrastructure_cr_name.
+# Sets ci_extra_conditions (the SignInConfigured condition), updates ci_site_out and ci_capabilities_out.
+- name: Load the realization defaults (tenant sign-in on OpenStack sites)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The declared sign-in
+  vars:
+    _real: "{{ fabric_realization_defaults | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _si_os: "{{ (_real.openstack | default({})).tenantSignIn | default({}) }}"
+    _si_ocp: "{{ (_real.openshift | default({})).tenantSignIn | default({}) }}"
+  ansible.builtin.set_fact:
+    cis_declared: "{{ (ci_signin.identityProvider | default('', true)) | length > 0 }}"
+    cis_group_domain: "{{ ci_signin.groupDomain | default(ci_os.projectDomain | default('', true), true) }}"
+    cis_client_id: "{{ (_si_os.clientId | default('openstack-{site}', true)) | replace('{site}', cloudinfrastructure_cr_name) }}"
+    cis_realm: "{{ _si_os.realm | default('', true) or _si_ocp.realm | default('', true) }}"
+    cis_rbac_config: "{{ _si_os.rbacConfig | default('', true) or _si_ocp.rbacConfig | default('', true) }}"
+    cis_dashboard: "{{ (ci_os.dashboard | default({}, true)).url | default('', true) | regex_replace('/+$', '') }}"
+    cis_reads: "{{ ci_probe.sign_in | default({}, true) }}"
+
+- name: The site's sign-in client in the tenant realm
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_check.yml"
+  vars:
+    kcc_realm: "{{ cis_realm }}"
+    kcc_client_id: "{{ cis_client_id }}"
+    kcc_rbac_config: "{{ cis_rbac_config }}"
+  when: cis_declared | bool
+
+- name: What was confirmed and what not
+  vars:
+    _r: "{{ cis_reads }}"
+    _ip: "{{ _r.identityProvider | default({}, true) }}"
+    _pr: "{{ _r.protocol | default({}, true) }}"
+    _mp: "{{ _r.mapping | default({}, true) }}"
+    _gd: "{{ _r.groupDomain | default({}, true) }}"
+    _su: "{{ _r.startUrl | default({}, true) }}"
+    _cl: "{{ kcc_result | default({}, true) }}"
+    _ttl_site: "{{ '' if _ip.authorizationTTL is not defined or _ip.authorizationTTL is none else _ip.authorizationTTL | string }}"
+    _ttl_decl: "{{ '' if ci_signin.authorizationTTLMinutes is not defined or ci_signin.authorizationTTLMinutes is none else ci_signin.authorizationTTLMinutes | string }}"
+  ansible.builtin.set_fact:
+    cis_checks: >-
+      {{ {'identityProvider': _ip.found | default(false) | bool if _ip.read | default(false) | bool else none,
+          'protocol': _pr.found | default(false) | bool if _pr.read | default(false) | bool else none,
+          'mapping': _mp.found | default(false) | bool if _mp.read | default(false) | bool else none,
+          'groupDomain': _gd.found | default(false) | bool if _gd.read | default(false) | bool else none,
+          'client': _cl.found | default(false) | bool if _cl.checked | default(false) | bool else none,
+          'startUrl': _su.redirects | default(false) | bool if _su.checked | default(false) | bool else none} }}
+    cis_ttl: "{{ _ttl_site if _ttl_site is match('^[0-9]+$') else (_ttl_decl if _ttl_decl is match('^[0-9]+$') else '') }}"
+    cis_ttl_source: >-
+      {{ 'Site' if _ttl_site is match('^[0-9]+$') else ('Declared' if _ttl_decl is match('^[0-9]+$') else 'Unknown') }}
+    cis_warnings: "{{ _mp.warnings | default([], true) if _mp.found | default(false) | bool else [] }}"
+    cis_start_url: "{{ _su.url | default('', true) or cis_dashboard }}"
+
+- name: SignInConfigured
+  vars:
+    _c: "{{ cis_checks }}"
+    _name: "{{ ci_signin.identityProvider | default('') }}"
+  ansible.builtin.set_fact:
+    cis_condition: >-
+      {%- if not (cis_declared | bool) -%}
+        {{ {'status': 'False', 'reason': 'NotDeclared', 'message': 'No sign-in is declared for this site.'} }}
+      {%- elif _c.groupDomain is sameas false -%}
+        {{ {'status': 'False', 'reason': 'GroupDomainNotFound',
+            'message': 'The group domain ' ~ cis_group_domain ~ ' does not exist on the site.'} }}
+      {%- elif _c.identityProvider is sameas false -%}
+        {{ {'status': 'False', 'reason': 'IdentityProviderNotFound',
+            'message': 'Identity provider ' ~ _name ~ ' does not exist on the site.'} }}
+      {%- elif _c.protocol is sameas false -%}
+        {{ {'status': 'False', 'reason': 'IdentityProviderNotFound',
+            'message': 'Identity provider ' ~ _name ~ ' has no protocol ' ~ ci_signin.protocol ~ ' on the site.'} }}
+      {%- elif _c.client is sameas false -%}
+        {{ {'status': 'False', 'reason': 'ClientNotFound',
+            'message': 'The sign-in directory has no client ' ~ cis_client_id ~ ' for this site.'} }}
+      {%- elif cis_warnings | length > 0 -%}
+        {{ {'status': 'True', 'reason': 'MappingWarning',
+            'message': "The site's mapping " ~ (cis_warnings | join(', ')) ~ '.'} }}
+      {%- elif _c.identityProvider is sameas true and _c.mapping is sameas true -%}
+        {{ {'status': 'True', 'reason': 'Confirmed',
+            'message': 'Identity provider ' ~ _name ~ ', its protocol and mapping were read from the site.'} }}
+      {%- else -%}
+        {{ {'status': 'True', 'reason': 'DeclaredNotConfirmed',
+            'message': "Declared by the platform team. The account may not read the site's federation settings."} }}
+      {%- endif -%}
+
+- name: The site's sign-in in its status and capabilities
+  vars:
+    _ok: "{{ (cis_declared | bool) and (cis_condition.status | string) == 'True' }}"
+    _account: "{{ (cis_reads.account | default({}, true)).roles | default([], true) }}"
+  ansible.builtin.set_fact:
+    ci_site_out: >-
+      {{ ci_site_out | combine({
+           'dashboard': cis_dashboard if cis_dashboard | length > 0 else none,
+           'signIn': ({'identityProvider': ci_signin.identityProvider, 'protocol': ci_signin.protocol | default(''),
+                       'displayName': ci_signin.displayName | default(ci_signin.identityProvider, true),
+                       'groupDomain': cis_group_domain,
+                       'groupDomainId': (cis_reads.groupDomain | default({}, true)).id | default('', true),
+                       'userDomain': (cis_reads.userDomain | default({}, true)).name | default('', true),
+                       'start': ci_signin.start | default('Dashboard', true),
+                       'startUrl': cis_start_url,
+                       'authorizationTTLMinutes': (cis_ttl | int) if cis_ttl | length > 0 else none,
+                       'authorizationTTLSource': cis_ttl_source | trim,
+                       'confirmed': cis_checks | dict2items | selectattr('value', 'sameas', true) | map(attribute='key') | list,
+                       'notConfirmed': cis_checks | dict2items | rejectattr('value', 'sameas', true) | map(attribute='key') | list,
+                       'warnings': cis_warnings,
+                       'account': _account}
+                      if cis_declared | bool else none)}) }}
+    ci_capabilities_out: >-
+      {{ ci_capabilities_out | combine({'consoleSignIn': _ok | bool,
+                                        'apiCredentials': (_ok | bool) and cis_ttl | length > 0 and (cis_ttl | int) > 0}) }}
+    ci_extra_conditions:
+      - type: SignInConfigured
+        status: "{{ cis_condition.status }}"
+        lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
+        reason: "{{ cis_condition.reason }}"
+        message: "{{ cis_condition.message }}"
+    ci_notes: >-
+      {{ ci_notes + (['sign-in: ' ~ cis_condition.message] if cis_declared | bool else [])
+         + (ci_probe.notes | default([], true) | select('search', '^the (sign-in start URL|account.s role assignments)') | list)
+         + ([kcc_result.note] if (kcc_result | default({})).note | default('', true) | length > 0 else [])
+         + (['sign-in client ' ~ cis_client_id ~ ' puts no groups claim into its tokens']
+            if (kcc_result | default({})).found | default(false) | bool
+               and not ((kcc_result | default({})).groupsMapper | default(false) | bool) else []) }}

@@ -1,0 +1,60 @@
+---
+# Read only: does the tenant realm have a sign-in client of this name, with a mapper that puts the user's roles of
+# that client into the groups claim (oidc-usermodel-client-role-mapper, claim groups)? With the realm's own automation
+# client (purpose clients, obtain_keycloak_realm_token.yml). Never fails: a directory that cannot be asked gives
+# checked false and a note.
+# Inputs: kcc_realm, kcc_client_id, kcc_rbac_config ('' = the default RbacConfig of obtain_keycloak_realm_token.yml).
+# Uses services_api_host / services_bearer_token (the directory's route on the services cluster).
+# Sets kcc_result {checked, found, groupsMapper, note}.
+- name: Ask the sign-in directory
+  block:
+    - name: Discover the Keycloak route on services
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: route.openshift.io/v1
+        kind: Route
+        namespace: services-rhbk
+        label_selectors: ["app=keycloak"]
+      register: _kcc_route
+
+    - name: Realm token for the realm's clients
+      ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
+      vars:
+        krt_purpose: clients
+        krt_rbac_config: "{{ kcc_rbac_config | default('', true) or 'keycloak-sovereign-tenants-services' }}"
+        krt_url: "https://{{ _kcc_route.resources[0].spec.host }}"
+        krt_token_fact: _kcc_token
+
+    - name: Find the client
+      ansible.builtin.uri:
+        url: "https://{{ _kcc_route.resources[0].spec.host }}/admin/realms/{{ kcc_realm }}/clients?clientId={{ kcc_client_id | urlencode }}"
+        headers: {Authorization: "Bearer {{ _kcc_token }}"}
+        validate_certs: false
+      register: _kcc_client
+
+    - name: The client and its groups mapper
+      vars:
+        _c: "{{ _kcc_client.json | default([], true) | selectattr('clientId', 'equalto', kcc_client_id) | list }}"
+        _m: >-
+          {{ ((_c | first).protocolMappers | default([], true)) if _c | length > 0 else [] }}
+      ansible.builtin.set_fact:
+        kcc_result:
+          checked: true
+          found: "{{ _c | length > 0 }}"
+          groupsMapper: >-
+            {%- set ns = namespace(ok=false) -%}
+            {%- for m in _m if (m.protocolMapper | default('')) == 'oidc-usermodel-client-role-mapper' -%}
+              {%- if ((m.config | default({}, true))['claim.name'] | default('')) == 'groups' -%}{%- set ns.ok = true -%}{%- endif -%}
+            {%- endfor -%}
+            {{ ns.ok }}
+          note: ""
+  rescue:
+    - name: The directory could not be asked
+      ansible.builtin.set_fact:
+        kcc_result:
+          checked: false
+          found: false
+          groupsMapper: false
+          note: "the sign-in directory could not be asked about client {{ kcc_client_id }}"

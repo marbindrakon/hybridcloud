@@ -198,6 +198,12 @@ class Keystone:
             return 200, {"version": self._version()}, None
         if p == "/v3/auth/tokens" and method == "POST":
             return self._auth(body or {})
+        if method == "GET" and p.startswith("/v3/auth/OS-FEDERATION/identity_providers/") and p.endswith("/websso"):
+            # the per-provider sign-in start: the web server sends the browser to the provider (no token needed)
+            idp = self.idps.get(p.split("/")[5])
+            if not idp:
+                return self._err(404, "Could not find Identity Provider")
+            return 302, None, {"Location": (idp.get("remote_ids") or ["https://idp.example.org"])[0] + "/auth"}
         tok = self._token(headers.get("X-Auth-Token"))
         if tok is None:
             return self._err(401, "The request you have made requires authentication.")

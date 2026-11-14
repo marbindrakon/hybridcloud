@@ -9,7 +9,9 @@
 #   state         Available when the last probe authenticated (status.capabilities.api), the site is not failed,
 #                 not paused and not being deleted (the rule of resolve_cloud_infrastructure.yml); else Unavailable
 #   capabilities  Virtualization (openshift site with OpenShift Virtualization), HybridNetworking (evpn), DNS (dns),
-#                 IPv6, IPv6Only, IPv6NetworkSource, IPv6ProviderSource, IPv6Translation (the ipv6* capabilities)
+#                 IPv6, IPv6Only, IPv6NetworkSource, IPv6ProviderSource, IPv6Translation (the ipv6* capabilities),
+#                 ConsoleSignIn (consoleSignIn: people sign in to the site's dashboard with their platform identity),
+#                 ApiCredentials (apiCredentials: people can make credentials for command-line tools there)
 #   location      spec.location, in words, for every site type when the platform set it (a tenant view shows it,
 #                 falling back to the region of an aws or gcp site)
 #   region        aws and gcp sites only (spec.<type>.region, else the probed region)
@@ -36,7 +38,8 @@
         {%- if caps.evpn | default(false) | bool -%}{%- set _ = c.append('HybridNetworking') -%}{%- endif -%}
         {%- if caps.dns | default(false) | bool -%}{%- set _ = c.append('DNS') -%}{%- endif -%}
         {%- for k, v in [('ipv6', 'IPv6'), ('ipv6Only', 'IPv6Only'), ('ipv6NetworkSource', 'IPv6NetworkSource'),
-                         ('ipv6ProviderSource', 'IPv6ProviderSource'), ('ipv6Translation', 'IPv6Translation')] -%}
+                         ('ipv6ProviderSource', 'IPv6ProviderSource'), ('ipv6Translation', 'IPv6Translation'),
+                         ('consoleSignIn', 'ConsoleSignIn'), ('apiCredentials', 'ApiCredentials')] -%}
           {%- if caps[k] | default(false) | bool -%}{%- set _ = c.append(v) -%}{%- endif -%}
         {%- endfor -%}
         {%- set sc = [] -%}

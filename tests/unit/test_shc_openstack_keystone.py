@@ -474,6 +474,17 @@ class SignInReads(Base):
         self.assertFalse(out["mapping"]["read"])
         self.assertTrue(out["groupDomain"]["found"])
 
+    def test_the_start_url(self):
+        self.declare()
+        out, _ = self.read(start="IdentityProvider", dashboard_url="https://dashboard.site-a.example.org/")
+        self.assertEqual(out["startUrl"]["url"],
+                         self.ks.url + "/v3/auth/OS-FEDERATION/identity_providers/platform-tenants/protocols/openid/"
+                         "websso?origin=https%3A%2F%2Fdashboard.site-a.example.org%2Fauth%2Fwebsso%2F")
+        self.assertEqual((out["startUrl"]["checked"], out["startUrl"]["redirects"]), (True, True))
+        out, _ = self.read(start="Dashboard", dashboard_url="https://dashboard.site-a.example.org")
+        self.assertEqual(out["startUrl"], {"url": "https://dashboard.site-a.example.org", "checked": False,
+                                           "redirects": False})
+
     def test_a_provider_that_does_not_exist(self):
         out, _ = self.read(identity_provider="nobody")
         self.assertEqual((out["identityProvider"]["read"], out["identityProvider"]["found"]), (True, False))

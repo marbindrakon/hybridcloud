@@ -80,6 +80,22 @@
     # the router advertisement call below replaces os_result
     np_place_result: "{{ os_result }}"
 
+# what a tenant chooses when it attaches a server (status.siteNetwork): the network's name and id on the site, the
+# project that owns it and its subnets
+- name: The network on the site, for the tenant
+  vars:
+    _subnets: >-
+      {%- set out = [] -%}
+      {%- for prefix, sid in (np_place_result.subnets | default({}, true)).items() -%}
+        {%- set _ = out.append({'family': 6 if ':' in prefix else 4, 'prefix': prefix, 'id': sid,
+                                'gateway': (np_place_result.gateways | default({}, true))[prefix] | default('', true)}) -%}
+      {%- endfor -%}
+      {{ out | sort(attribute='family') }}
+  ansible.builtin.set_fact:
+    np_status: >-
+      {{ np_status | combine({'siteNetwork': {'name': np_names.osNetwork, 'id': np_place_result.networkId,
+                                             'project': fab_real.openstack.platformProject, 'subnets': _subnets}}) }}
+
 # the router advertisement: present while router attachments are on or still in use; absent once off, but only when
 # the last run recorded the service holding it; nothing at all for a placement that never used them
 - name: Decide on the router advertisement

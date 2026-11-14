@@ -1586,13 +1586,19 @@ def sign_in_reads(ks, token, user_id, si, notes):
     else:
         notes.append(f"the account's role assignments were not readable (HTTP {st})")
     out["account"] = {"read": st == 200, "roles": sorted(roles, key=lambda r: (r["scope"], r["role"]))}
-    # the start URL answers with a redirect (one unauthenticated GET; never followed)
-    url = si.get("start_url") or ""
-    out["startUrl"] = {"checked": False, "redirects": False}
-    if url:
+    # the link environments show: the dashboard, or (start IdentityProvider) the identity service's per-provider
+    # sign-in URL that returns to the dashboard's sign-in endpoint; that one answers with a redirect to the identity
+    # provider (one unauthenticated GET, never followed)
+    dash = (si.get("dashboard_url") or "").rstrip("/")
+    url = dash
+    if si.get("start") == "IdentityProvider" and dash:
+        origin = urllib.parse.quote(dash + "/auth/websso/", safe="")
+        url = f"{ks.base}/auth/OS-FEDERATION/identity_providers/{idp}/protocols/{proto}/websso?origin={origin}"
+    out["startUrl"] = {"url": url, "checked": False, "redirects": False}
+    if url and si.get("start") == "IdentityProvider":
         try:
             r = ks.http.get(url, timeout=15, allow_redirects=False)
-            out["startUrl"] = {"checked": True, "redirects": r.status_code in (301, 302, 303, 307, 308),
+            out["startUrl"] = {"url": url, "checked": True, "redirects": r.status_code in (301, 302, 303, 307, 308),
                                "status": r.status_code}
         except Exception as e:  # noqa: BLE001 - a note, never a failure of the probe
             notes.append(f"the sign-in start URL did not answer: {type(e).__name__}")
