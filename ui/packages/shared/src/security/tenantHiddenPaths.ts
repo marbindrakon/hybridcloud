@@ -13,6 +13,8 @@ export const TENANT_HIDDEN_PATHS: Partial<Record<HybridSovereignKind, string[]>>
     'status.route53VaultPath',
     'status.vaultPaths',
     'status.dns.dnsConfigSecret',
+    // the platform's former installer credential: nothing a tenant can use
+    'status.appCredentialId',
   ],
   PlatformOpenshift: [
     'spec.openstack.pullSecretVaultPath',

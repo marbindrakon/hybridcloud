@@ -29,13 +29,16 @@ export const COMMON_STATUS_KEYS = [
  */
 export const TENANT_STATUS_ALLOW = {
   CloudOSO: [
+    // appCredentialId is not kept: it named the platform's own credential, nothing a tenant can use
     'name', 'namespace', 'entity', 'cloudInfrastructure', 'projectId', 'projectName', 'domainId', 'domainName',
-    'appCredentialId', 'apiFloatingIPId', 'ingressFloatingIPId', 'apiVIP', 'ingressVIP', 'externalNetwork',
+    'apiFloatingIPId', 'ingressFloatingIPId', 'apiVIP', 'ingressVIP', 'externalNetwork',
     'slug', 'domain', 'dnsProvider', 'dnsZoneId', 'dnsZoneName', 'dnsProjectId', 'route53ZoneId',
     'leftoverDefaultSecurityGroups',
     ['dns', ['mode', 'zone', 'zoneId', 'ownerProjectId', 'sharedWith', 'shareId', 'nameservers', 'delegated',
       'dnsConfig', 'globalProjectId', 'globalZoneId']],
     ['site', ['name', 'console']],
+    // the access groups that can use the environment on the site and their state
+    ['access', ['signInClient', 'groupDomain', 'groups']],
   ],
   PlatformOpenshift: [
     'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'slug', 'domain', 'apiURL', 'appsURL',
@@ -46,6 +49,8 @@ export const TENANT_STATUS_ALLOW = {
     ['floatingIPs', ['network', 'api', 'ingress']],
     ['dns', ['provider', 'projectId', 'records']],
     ['site', ['name', 'console']],
+    // OpenStack clusters: the cluster's own user and credential on the site, ids and names only
+    ['credential', ['id', 'user', 'userId', 'domain', 'createdAt']],
   ],
 };
 

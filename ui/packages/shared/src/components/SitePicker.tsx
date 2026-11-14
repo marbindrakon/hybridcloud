@@ -35,6 +35,8 @@ const CAPABILITY_KEYS: Record<string, string> = {
   Virtualization: 'sites.capVirtualization',
   HybridNetworking: 'sites.capNetworking',
   DNS: 'sites.capDns',
+  ConsoleSignIn: 'sites.capConsoleSignIn',
+  ApiCredentials: 'sites.capApiCredentials',
 };
 
 export function siteOptionLabel(site: TenantProfileSite, t: (k: string, o?: Record<string, unknown>) => string): string {

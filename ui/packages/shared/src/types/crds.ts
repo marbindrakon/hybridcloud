@@ -46,13 +46,52 @@ export interface EnvironmentEndpoints {
     method?: string;
     /** Name of the sign-in button on the site's login page */
     idpName?: string;
+    /** OpenStack: IdentityProvider (the console link starts sign-in) or Dashboard (the dashboard's sign-in page) */
+    start?: 'IdentityProvider' | 'Dashboard' | string;
   };
   /** Groups whose members can sign in */
   signInGroups?: string[];
   /** Site namespaces or the cloud project */
   project?: string | string[];
+  /** OpenStack: the project's id */
+  projectId?: string;
   domain?: string;
+  /** OpenStack: the domain's id */
+  domainId?: string;
+  /** OpenStack: the region of the identity service */
+  region?: string;
   location?: string;
+  /** OpenStack: whether people can create API credentials (application credentials) in the dashboard */
+  apiCredentials?: EnvironmentApiCredentials;
+}
+
+/** status.endpoints.apiCredentials of an OpenStack environment */
+export interface EnvironmentApiCredentials {
+  /** Offered, NotOffered (the site keeps no group membership after sign-in, or no sign-in) or Unknown */
+  state?: 'Offered' | 'NotOffered' | 'Unknown' | string;
+  /** How long an application credential keeps working after its owner's last sign-in */
+  validMinutesAfterSignIn?: number;
+  /** Site (read from the site) or Declared (stated by the platform team) */
+  source?: 'Site' | 'Declared' | string;
+}
+
+/** One access group of an OpenStack environment (status.access.groups[]) */
+export interface CloudOSOAccessGroup {
+  /** Access group (Rbac name in the tenant namespace) */
+  rbac?: string;
+  /** Group in the sign-in directory */
+  group?: string;
+  access?: 'Edit' | 'View' | string;
+  role?: string;
+  state?: 'Granted' | 'Waiting' | 'Failed' | string;
+  message?: string;
+}
+
+/** status.access of an OpenStack environment */
+export interface CloudOSOAccessStatus {
+  signInClient?: string;
+  groupDomain?: string;
+  groups?: CloudOSOAccessGroup[];
 }
 
 /** One automation job run recorded on the object */
@@ -283,6 +322,20 @@ export interface PlatformOpenshiftStatus extends OperatorStatus {
   floatingIPs?: { network?: string; api?: ClusterFloatingIP; ingress?: ClusterFloatingIP };
   apiURL?: string;
   consoleURL?: string;
+  /** OpenStack clusters: the cluster's own credential on the site and its user (ids and names only) */
+  credential?: PlatformOpenshiftCredential;
+}
+
+/** status.credential of an OpenStack cluster */
+export interface PlatformOpenshiftCredential {
+  /** Id of the application credential */
+  id?: string;
+  /** The cluster's user on the site */
+  user?: string;
+  userId?: string;
+  /** Domain of the user */
+  domain?: string;
+  createdAt?: string;
 }
 
 export type PlatformOpenshift = K8sResource<PlatformOpenshiftSpec, PlatformOpenshiftStatus>;
@@ -390,9 +443,26 @@ export interface CloudOSOSpec {
   designateProjectId?: string;
   enableVRF?: boolean;
   vrfId?: string;
+  /** Who can use the environment on the site (access groups, Rbac names in this namespace) */
+  toolRbac?: CloudOSOToolRbac;
 }
 
-export type CloudOSO = K8sResource<CloudOSOSpec>;
+export interface CloudOSOToolRbac {
+  /** Access groups whose members can create, change and delete resources in the project */
+  editRbac?: string[];
+  /** Access groups whose members get read-only access to the project */
+  viewRbac?: string[];
+}
+
+export interface CloudOSOStatus extends OperatorStatus {
+  projectName?: string;
+  projectId?: string;
+  domainName?: string;
+  domainId?: string;
+  access?: CloudOSOAccessStatus;
+}
+
+export type CloudOSO = K8sResource<CloudOSOSpec, CloudOSOStatus>;
 
 /** CloudAWS — AWS account environment */
 export interface CloudAWSSpec {
@@ -924,8 +994,19 @@ export interface NetworkPlacementStatus extends OperatorStatus {
   lastValidatedAt?: string;
   /** OpenStack environments: the state of each use */
   use?: { virtualMachines?: PlacementUseStatusEntry; routerAttachments?: PlacementUseStatusEntry };
+  /** OpenStack environments: the network on the site that carries this placement */
+  siteNetwork?: PlacementSiteNetwork;
   /** Informational; depends on the platform */
   realization?: Record<string, unknown>;
+}
+
+/** status.siteNetwork of a placement on an OpenStack environment */
+export interface PlacementSiteNetwork {
+  name?: string;
+  id?: string;
+  /** Project that owns the network */
+  project?: string;
+  subnets?: Array<{ family?: number; prefix?: string; gateway?: string; id?: string }>;
 }
 
 export type NetworkPlacement = K8sResource<NetworkPlacementSpec, NetworkPlacementStatus>;
