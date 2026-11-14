@@ -26,6 +26,8 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 EDA = os.path.join(ROOT, "eda")
 HAVE_ANSIBLE = shutil.which("ansible-playbook") is not None
+# where an execution environment image carries its collections (ansible-galaxy collection list in the image)
+SYSTEM_COLLECTIONS = "/usr/share/ansible/collections"
 FAKED = ("patch_cr_status.yml", "nudge_cr.yml", "openstack_account.yml", "openstack_call.yml", "fabric_check.yml",
          "central_create.yml")
 
@@ -106,7 +108,7 @@ def _link(src, dst):
 def build_tree(tmp, real=(), fakes=None):
     roles = os.path.join(tmp, "eda", "rulebooks", "roles")
     for role in ("platformopenshift_provision", "platformopenshift_teardown", "cloudoso_provision", "cloudoso_teardown",
-                 "networkplacement_provision"):
+                 "networkplacement_provision", "cloudinfrastructure_provision"):
         for sub in ("tasks", "files", "templates", "defaults"):
             src = os.path.join(EDA, "rulebooks", "roles", role, sub)
             if os.path.isdir(src):
@@ -187,7 +189,9 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
         with open(os.path.join(tmp, "vars.json"), "w") as fh:
             json.dump(dict(base, **extra_vars), fh)
         env = dict(os.environ, ANSIBLE_CONFIG=os.path.join(tmp, "ansible.cfg"),
-                   ANSIBLE_COLLECTIONS_PATH=os.path.join(tmp, "coll") + os.pathsep + os.path.join(EDA, "rulebooks", "collections"),
+                   # the image's own collections last (the fakes and the project's collections win)
+                   ANSIBLE_COLLECTIONS_PATH=os.pathsep.join([os.path.join(tmp, "coll"), os.path.join(EDA, "rulebooks", "collections"),
+                                                             SYSTEM_COLLECTIONS]),
                    ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false",
                    ANSIBLE_REMOTE_TMP=os.path.join(tmp, "remote-tmp"), ANSIBLE_LOCAL_TEMP=os.path.join(tmp, "local-tmp"),
                    ANSIBLE_COLLECTIONS_SCAN_SYS_PATH="false",
