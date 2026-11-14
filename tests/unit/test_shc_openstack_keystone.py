@@ -933,5 +933,114 @@ class SecondPass(Base):
         self.assertEqual(notes, [])
 
 
+
+@unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
+class RecordedAgainstVault(Base):
+    """W1: the credential in Vault is compared with the recorded one. (a) the same id: 201 keep, 401/404 replace,
+    anything else nothing changed; (b) another id: kept only when it signs in as this cluster's user on this project,
+    else CredentialSecretMissing with nothing changed; (c) nothing recorded: as before."""
+
+    def first(self):
+        req = cluster_req(self)
+        out = S.cluster_identity(req)
+        return out, out["credential"]["id"], out["user"]["id"]
+
+    def vault_with(self, cid, secret):
+        path = os.path.join(TMP, f"v-{id(self)}-{cid}.yaml")
+        import yaml
+        with open(path, "w") as f:
+            yaml.safe_dump({"clouds": {"openstack": {"auth": {"application_credential_id": cid,
+                                                               "application_credential_secret": secret}}}}, f)
+        return path
+
+    def extra_cred(self, uid, pid=None, cid="other-cred"):
+        self.ks.app_creds[cid] = {"id": cid, "user": uid, "project": pid or self.pid, "name": "x", "description": "",
+                                  "secret": "secret-" + cid, "roles": ["member"], "unrestricted": False,
+                                  "expires_at": None, "created_at": ""}
+        return cid, "secret-" + cid
+
+    def writes(self, n):
+        return [c for c in self.ks.log[n:] if c[0] in ("PATCH", "PUT", "DELETE")
+                or (c[0] == "POST" and c[1] != "/v3/auth/tokens")]
+
+    def test_a_same_id_401_is_replaced_and_a_5xx_changes_nothing(self):
+        _, x, uid = self.first()
+        secret = self.ks.app_creds[x]["secret"]
+        vf = self.vault_with(x, secret)
+        orig = self.ks._auth
+
+        def auth(body):
+            if "application_credential" in (((body.get("auth") or {}).get("identity") or {}).get("methods") or []):
+                self.ks._auth = orig
+                return self.ks._err(503, "x")
+            return orig(body)
+        self.ks._auth = auth
+        n = len(self.ks.log)
+        with self.assertRaises(S.NotAnswered):
+            S.cluster_identity(cluster_req(self, vault_file=vf, recorded_credential_id=x))
+        self.assertEqual(self.writes(n), [])
+        # the site says the recorded credential is not valid: made again
+        del self.ks.app_creds[x]
+        again = S.cluster_identity(cluster_req(self, vault_file=vf, recorded_credential_id=x))
+        self.assertFalse(again["credential"]["kept"])
+
+    def test_another_id_that_signs_in_as_this_cluster_is_kept(self):
+        """A raced first write (or a run whose record failed): Vault holds Y, the record names X, Y is this
+        cluster's: kept, its id returned (the role records it), X untouched, no password set."""
+        _, x, uid = self.first()
+        y, ysecret = self.extra_cred(uid)
+        n = len(self.ks.log)
+        out = S.cluster_identity(cluster_req(self, vault_file=self.vault_with(y, ysecret), recorded_credential_id=x))
+        self.assertEqual((out["credential"]["id"], out["credential"]["kept"]), (y, True))
+        self.assertEqual(self.writes(n), [])
+        self.assertIn(x, self.ks.app_creds)
+
+    def test_another_id_the_site_refuses_changes_nothing(self):
+        """A rolled-back Vault version: Vault holds Z (gone from the site), the record names X the cluster runs on:
+        CredentialSecretMissing, X stays, no password set."""
+        _, x, uid = self.first()
+        z, zsecret = self.extra_cred(uid, cid="old-z")
+        del self.ks.app_creds[z]
+        n = len(self.ks.log)
+        with self.assertRaises(S.Refusal) as cm:
+            S.cluster_identity(cluster_req(self, vault_file=self.vault_with(z, zsecret), recorded_credential_id=x))
+        self.assertEqual(cm.exception.reason, "CredentialSecretMissing")
+        self.assertIn("holds another credential (old-z)", cm.exception.message)
+        self.assertEqual(self.writes(n), [])
+        self.assertIn(x, self.ks.app_creds)
+
+    def test_another_id_of_another_user_or_project_changes_nothing(self):
+        _, x, uid = self.first()
+        stranger = self.ks.add_user("someone", self.tenants, description=S.MARKER)
+        self.ks.grant("user", stranger, "project", self.pid, "member")
+        s_id, s_secret = self.extra_cred(stranger, cid="stranger-cred")
+        other_pid = self.ks.add_project("acme_env9", self.tenants)
+        self.ks.grant("user", uid, "project", other_pid, "member")
+        o_id, o_secret = self.extra_cred(uid, pid=other_pid, cid="other-project-cred")
+        for cid, sec in ((s_id, s_secret), (o_id, o_secret)):
+            n = len(self.ks.log)
+            with self.assertRaises(S.Refusal) as cm:
+                S.cluster_identity(cluster_req(self, vault_file=self.vault_with(cid, sec), recorded_credential_id=x))
+            self.assertEqual(cm.exception.reason, "CredentialSecretMissing")
+            self.assertEqual(self.writes(n), [])
+            self.assertIn(x, self.ks.app_creds)
+
+    def test_another_id_with_the_site_not_answering_changes_nothing(self):
+        _, x, uid = self.first()
+        y, ysecret = self.extra_cred(uid)
+        orig = self.ks._auth
+
+        def auth(body):
+            if "application_credential" in (((body.get("auth") or {}).get("identity") or {}).get("methods") or []):
+                self.ks._auth = orig
+                return self.ks._err(503, "x")
+            return orig(body)
+        self.ks._auth = auth
+        n = len(self.ks.log)
+        with self.assertRaises(S.NotAnswered):
+            S.cluster_identity(cluster_req(self, vault_file=self.vault_with(y, ysecret), recorded_credential_id=x))
+        self.assertEqual(self.writes(n), [])
+
+
 if __name__ == "__main__":
     unittest.main()

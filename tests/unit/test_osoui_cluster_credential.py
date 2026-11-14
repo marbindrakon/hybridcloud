@@ -273,6 +273,36 @@ class ClusterCredential(unittest.TestCase):
         self.assertEqual(set(self.site.ks.app_creds), creds)
         self.assertNotIn(PATH, self.site.vault.data)
 
+    def test_vault_holding_another_credential_of_this_cluster_is_kept_and_recorded(self):
+        """W1 (b): the record names X, Vault holds Y of this cluster's user and project (a raced first write): Y is
+        kept and recorded, no password set; a Y the site refuses changes nothing (CredentialSecretMissing)."""
+        import yaml
+        trace = self.run_cred()
+        x = trace[-1]["result"]["cred"]["credential"]["id"]
+        uid = self.user()["id"]
+        ks = self.site.ks
+        ks.app_creds["y-cred"] = {"id": "y-cred", "user": uid, "project": self.pid, "name": "y", "description": "",
+                                  "secret": "secret-y-cred-value", "roles": ["member"], "unrestricted": False,
+                                  "expires_at": None, "created_at": ""}
+        clouds = yaml.safe_load(self.site.vault.data[PATH]["clouds.yaml"])
+        clouds["clouds"]["openstack"]["auth"].update(application_credential_id="y-cred",
+                                                     application_credential_secret="secret-y-cred-value")
+        self.site.vault.data[PATH] = {"clouds.yaml": yaml.safe_dump(clouds)}
+        recorded = {"resources": [{"status": {"credential": {"id": x, "user": BUILD}}}]}
+        n = len(ks.log)
+        trace = self.run_cred(po_cr_current=recorded)
+        self.assertEqual(H.patches(trace)[-1]["body"]["credential"]["id"], "y-cred")
+        self.assertEqual([c for c in ks.log[n:] if c[0] in ("PATCH", "PUT", "DELETE")], [])
+        # the site no longer knows Y: the recorded X may be the running cluster's, nothing changes
+        del ks.app_creds["y-cred"]
+        n = len(ks.log)
+        trace = self.run_cred(po_cr_current=recorded)
+        ref = [t["refused"] for t in trace if "refused" in t][0]
+        self.assertEqual(ref["reason"], "CredentialSecretMissing")
+        self.assertEqual([c for c in ks.log[n:] if c[0] in ("PATCH", "PUT", "DELETE")
+                          or (c[0] == "POST" and c[1] != "/v3/auth/tokens")], [])
+        self.assertIn(x, ks.app_creds)
+
     def test_a_5xx_at_the_users_lookup_is_not_a_refusal(self):
         """V3: the site not answering a step outside the keep check fails the job plainly, refuses nothing."""
         self.site.ks.fail_next.append(("GET", "/v3/users", 503, "Service Unavailable"))
@@ -411,9 +441,40 @@ class ClusterUserDown(unittest.TestCase):
         trace = self.run_down({"buildName": BUILD}, hub_owned=True)
         self.assertEqual(trace[-1]["result"]["note"], "")
 
+    def unrealized(self, conditions):
+        from play_helper import load
+        first = load(os.path.join(O.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown", "tasks",
+                                  "main.yml"))[0]["block"][0]
+        self.assertEqual(first["name"], "Skip the site cleanup when nothing was realized")
+        po = {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift",
+              "metadata": {"name": "c1", "namespace": NS, "uid": "uid-c1"},
+              "spec": {"type": "openstack", "openstack": {"environment": "web"}},
+              "status": {"reason": "NetworkNotFound", "conditions": conditions}}
+        oso = {"metadata": {"name": "web", "namespace": NS},
+               "status": {"domainName": "tenants", "projectId": self.pid, "accountVaultPath": "cloudinfra/site-a"}}
+        k8s = {f"CloudOSO/{NS}/web": oso, f"Namespace//{NS}": {"metadata": {"name": NS, "labels": {
+            "hybridsovereign.redhat/entity": "acme"}}}}
+        extra = {"fake_clouds_yaml": self.site.account, "shc_live_cr": po,
+                 "services_api_host": "https://services.example.org", "services_bearer_token": "services-token-not-in-data",
+                 "central_api_host": "https://central.example.org", "central_bearer_token": "central-token-not-in-data"}
+        fakes = dict(O.FAKES, **{"resolve_services_cluster_connection.yml": "[]\n",
+                                 "resolve_central_cluster_sa_from_vault.yml": "[]\n"})
+        return H.run("platformopenshift_teardown", "main.yml", extra, k8s=k8s, fakes=fakes, tasks=[first])
+
+    def test_never_realized_without_the_identity_step_needs_no_site(self):
+        """W3: a cluster whose identity step never ran (no credential, no ClusterCredential condition) is deleted
+        without a call to the site, also while the site is down."""
+        self.site.ks.users[self.uid]["name"] = self.derived()
+        self.site.ks.stop()
+        rc, trace, out = self.unrealized([{"type": "Ready", "status": "False", "reason": "NetworkNotFound"}])
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(trace), [])
+        self.assertTrue([p for p in H.patches(trace) if p["body"].get("deletionComplete")], out)
+
     def test_nothing_realized_still_removes_the_user_of_the_computed_name(self):
-        """V5(a): a cluster refused by an early check (nothing realized) whose earlier run made its user: the delete
-        without site cleanup removes the user by its computed name (the main.yml wiring is the one run here)."""
+        """V5(a): a cluster refused by an early check (nothing realized) whose earlier run made its user (its
+        identity step ran: a ClusterCredential condition): the delete without site cleanup removes the user by its
+        computed name (the main.yml wiring is the one run here)."""
         from play_helper import load
         first = load(os.path.join(O.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown", "tasks",
                                   "main.yml"))[0]["block"][0]
@@ -423,7 +484,8 @@ class ClusterUserDown(unittest.TestCase):
               "metadata": {"name": "c1", "namespace": NS, "uid": "uid-c1"},
               "spec": {"type": "openstack", "openstack": {"environment": "web"}},
               "status": {"reason": "NetworkNotFound",
-                         "conditions": [{"type": "Ready", "status": "False", "reason": "NetworkNotFound"}]}}
+                         "conditions": [{"type": "Ready", "status": "False", "reason": "NetworkNotFound"},
+                                        {"type": "ClusterCredential", "status": "False", "reason": "RoleRefused"}]}}
         oso = {"metadata": {"name": "web", "namespace": NS},
                "status": {"domainName": "tenants", "projectId": self.pid, "accountVaultPath": "cloudinfra/site-a"}}
         k8s = {f"CloudOSO/{NS}/web": oso, f"Namespace//{NS}": {"metadata": {"name": NS, "labels": {

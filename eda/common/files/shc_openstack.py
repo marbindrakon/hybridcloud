@@ -1515,9 +1515,12 @@ def cluster_identity(req):
     a new credential's Vault write body goes)} -> {user: {id, name, domainId, created}, roles: {granted}, credential:
     {id, name, kept, createdAt}, wrote}. A refusal exits with {reason, message} (UserRefused, RoleRefused,
     PasswordRefused, CredentialRefused, CredentialSecretMissing). recorded_credential_id: the credential the cluster
-    recorded; with one, nothing usable in vault_file changes nothing on the site (the cluster may still run on the
-    credential): CredentialSecretMissing. A new credential is made only when none is recorded, or when the site says
-    the recorded one is not valid."""
+    recorded. The rule: (a) recorded, and Vault holds the same credential: the site answers 201 = kept, 401/404 = made
+    again, anything else = stop, nothing changed; (b) recorded, and Vault holds another credential (a run whose record
+    failed, a raced first write, a rolled-back version): kept (and recorded) only when it signs in as this cluster's
+    user on this project, else CredentialSecretMissing with nothing changed (the recorded credential may be the one
+    the running cluster uses); nothing usable in Vault: CredentialSecretMissing; (c) nothing recorded: a credential
+    in Vault that signs in is kept, else one is made."""
     _require(req, "domain", "project_id", "user_name", "credential_name")
     have_cred = _read_vault_credential(req.get("vault_file"))
     recorded = str(req.get("recorded_credential_id") or "").strip()
@@ -1534,6 +1537,8 @@ def cluster_identity(req):
         raise Refusal("UserRefused", f"The cluster's user name {name} is longer than the site's identity service "
                                      f"allows ({USER_NAME_MAX} characters). The cluster cannot be built.")
     token, _, dom = ks.site(req["domain"])
+    if recorded and have_cred[0] != recorded:
+        _check_other_credential(ks, token, req, recorded, have_cred, name, dom, pid)
     # the user
     try:
         user = _find_by_name(ks, token, "users", name, dom)
@@ -1594,6 +1599,31 @@ def cluster_identity(req):
                             "createdAt": cred.get("createdAt", "")}
     result["wrote"] = True
     return result
+
+
+def _check_other_credential(ks, token, req, recorded, have_cred, name, dom, pid):
+    """Vault holds another credential than the recorded one: before anything is written, it must sign in as this
+    cluster's user (by name, the platform's) on this project; a site that does not answer stops with nothing changed;
+    any other answer is CredentialSecretMissing (the recorded credential may still be the running cluster's)."""
+    missing = Refusal("CredentialSecretMissing", f"The cluster's credential {recorded} is recorded, but the platform's "
+                      f"secret store holds another credential ({have_cred[0]}) that does not sign in as this cluster. "
+                      "The cluster may still be using the recorded credential, so nothing was changed on the site. A "
+                      "platform administrator must restore the secret or replace the credential in the cluster.")
+    try:
+        user = _find_by_name(ks, token, "users", name, dom)
+        status, _, body = ks.app_cred_token(*have_cred)
+    except Exception as e:  # noqa: BLE001 - classified
+        if isinstance(e, KsError) and not transient(e):
+            raise _step_refusal("UserRefused", "the cluster's user " + name, e) from None
+        raise NotAnswered("The site's identity service did not answer the check of the cluster's credential "
+                          f"({_plain(e)}); nothing was changed, the next run checks again.") from None
+    if status >= 500 or status in (408, 429):
+        raise NotAnswered("The site's identity service did not answer the check of the cluster's credential "
+                          f"(HTTP {status}); nothing was changed, the next run checks again.")
+    tok = (body or {}).get("token") or {}
+    if not (status == 201 and user is not None and _marked(user) and (tok.get("user") or {}).get("id") == user["id"]
+            and (tok.get("project") or {}).get("id") == pid):
+        raise missing
 
 
 def _credential_unit(ks, token, uid, name, pid, req):
