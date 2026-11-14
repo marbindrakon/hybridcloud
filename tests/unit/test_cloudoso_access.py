@@ -150,9 +150,12 @@ class EnvironmentAccess(unittest.TestCase):
         trace, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"],
                                      ssg={"all": ["acme.developers", "acme.auditors"],
                                           "owned": {"acme.developers": ["CloudOSO/web"], "acme.auditors": ["CloudOSO/web"]}})
-        self.assertEqual(self.steps(trace), ["access-groups/present", "client-roles", "access-groups/absent"])
-        absent = [t["os"] for t in trace if "os" in t and t["os"].get("state") == "absent"][0]
-        self.assertEqual(absent["groups"], [{"group": "acme.auditors", "delete": True}])
+        # the revoke first, on its own; then the delete once the client role went
+        self.assertEqual(self.steps(trace), ["access-groups/present", "client-roles", "access-groups/absent",
+                                             "access-groups/absent"])
+        revoke, delete = [t["os"] for t in trace if "os" in t and t["os"].get("state") == "absent"]
+        self.assertEqual(revoke["groups"], [{"group": "acme.auditors", "delete": False}])
+        self.assertEqual(delete["groups"], [{"group": "acme.auditors", "delete": True}])
         self.assertNotIn("acme.auditors", self.groups())
         self.assertEqual(self.roles_on_project("acme.developers"), {"member"})
         self.assertEqual(res["cond"]["message"].strip(), "1 access group can use this environment.")
@@ -304,7 +307,7 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
     def test_an_access_group_removed(self):
         _, first = self.run_access()
         trace, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"])
-        absent = [t["os"] for t in trace if "os" in t and t["os"].get("state") == "absent"][0]
+        absent = [t["os"] for t in trace if "os" in t and t["os"].get("state") == "absent"][-1]
         self.assertEqual(absent["groups"], [{"group": "acme.auditors", "delete": True}])
         self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
         self.assertNotIn("acme.auditors", self.groups())
@@ -316,7 +319,7 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
         _, first = self.run_access()
         self.other_env_owns("acme.auditors")
         trace, _ = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"])
-        absent = [t["os"] for t in trace if "os" in t and t["os"].get("state") == "absent"][0]
+        absent = [t["os"] for t in trace if "os" in t and t["os"].get("state") == "absent"][-1]
         self.assertEqual(absent["groups"], [{"group": "acme.auditors", "delete": False}])
         self.assertEqual(self.owners("acme.auditors"), ["CloudOSO/db"])
         self.assertIn("acme.auditors", self.groups())
@@ -391,7 +394,7 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
         _, first = self.run_access()
         trace, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"],
                                      site=site_obj(confirmed=False))
-        self.assertEqual(self.steps(trace), ["access-groups/absent"])
+        self.assertEqual(self.steps(trace), ["access-groups/absent", "access-groups/absent"])
         self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
         self.assertNotIn("acme.auditors", self.groups())
         self.assertEqual(self.owners("acme.developers"), ["CloudOSO/web"])
@@ -448,6 +451,24 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
         self.assertEqual(res["cond"]["reason"], "GrantRefused")
         self.kc.clients["openstack-site-a"] = client
         _, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=res["access"])
+        self.assertNotIn("acme.auditors", self.groups())
+        self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
+        self.assertEqual(res["access"]["removing"], [])
+
+    def test_without_a_confirmed_sign_in_the_revoke_never_waits_for_the_directory(self):
+        """W2 (Q5): sign-in not confirmed and the site's client missing in the directory: the removed group's role on
+        the project is revoked in the same run; the directory part stays in removing until a later run."""
+        _, first = self.run_access()
+        client = self.kc.clients.pop("openstack-site-a")
+        _, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=first["access"],
+                                 site=site_obj(confirmed=False))
+        self.assertEqual(self.roles_on_project("acme.auditors"), set())
+        self.assertEqual(self.roles_on_project("acme.developers"), {"member"})
+        self.assertIn("acme.auditors", self.groups())
+        self.assertEqual(res["access"]["removing"], ["acme.auditors"])
+        self.kc.clients["openstack-site-a"] = client
+        _, res = self.run_access(tool={"editRbac": ["developers"]}, recorded=res["access"],
+                                 site=site_obj(confirmed=False))
         self.assertNotIn("acme.auditors", self.groups())
         self.assertIsNone(self.kc.role("openstack-site-a", "acme.auditors"))
         self.assertEqual(res["access"]["removing"], [])

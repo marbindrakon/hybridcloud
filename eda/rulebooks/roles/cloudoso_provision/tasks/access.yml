@@ -71,6 +71,7 @@
     oa_fault: {}
     oa_present: {}
     oa_absent: {}
+    oa_revoke: {}
     oa_gone: []
 
 - name: Read the access groups of the namespace
@@ -112,6 +113,8 @@
   ansible.builtin.set_fact:
     oa_gone: "{{ oa_recorded | reject('in', _keep) | list }}"
     oa_keep: "{{ _keep }}"
+    # where the groups no longer wanted live: the site's group domain with a confirmed sign-in, else the recorded one
+    oa_rm_group_domain: "{{ (oa_group_domain | trim) if oa_signin_ok | bool else (oa_rec_group_domain or oa_group_domain | trim) }}"
 
 # 1. Keystone groups and their roles first (a token that names a group Keystone does not have yet loses nothing),
 # then the client roles of the site's sign-in client, group by group
@@ -205,11 +208,12 @@
         oaf_into: oa_fault
         oaf_helper: "{{ oa_present }}"
 
-# 2. the groups no longer wanted, each on its own, whatever happened to the wanted ones: this environment leaves their
-# client roles (where the directory can be asked), their role on this project is revoked, and a group is deleted once
-# the directory was asked, its client role went and it holds no role elsewhere. What is not finished is recorded
-# (status.access.removing) and the next run goes on with it.
-- name: The groups this environment no longer wants, on the site and in the directory
+# 2. the groups no longer wanted, each on its own, whatever happened to the wanted ones. First their role on this
+# project is revoked, never waiting for the directory (a token that still names the group gets nothing on the
+# project); then this environment leaves their client roles where the directory can be asked; then a group is
+# deleted once the directory was asked, its client role went and it holds no role elsewhere. What is not finished is
+# recorded (status.access.removing) and the next run goes on with it.
+- name: Revoke the groups no longer wanted on the project
   when:
     - oa_gone | length > 0
     - oa_signin_ok | bool or oa_rec_client | length > 0 or oa_rec_group_domain | length > 0
@@ -220,8 +224,48 @@
         os_account_vault_path: "{{ ep_vault_path }}"
         os_account_tag: "cloudoso-{{ cloudoso_cr_name }}"
 
-    # without a confirmed sign-in: the recorded client; this environment keeps the recorded groups still wanted
-    - name: The client roles of the recorded sign-in client
+    - name: Revoke their roles
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: access-groups
+          state: absent
+          domain: "{{ ep_project_domain }}"
+          project_id: "{{ ep_os.project.id }}"
+          group_domain: "{{ oa_rm_group_domain }}"
+          managed_roles: "{{ (oa_edit_roles + oa_view_roles) | unique | list }}"
+          groups: >-
+            {%- set out = [] -%}
+            {%- for g in oa_gone -%}
+              {%- set _ = out.append({'group': g, 'delete': false}) -%}
+            {%- endfor -%}
+            {{ out }}
+
+    - name: Keep the site's answer to the revoke
+      ansible.builtin.set_fact:
+        oa_revoke: "{{ os_result }}"
+
+    - name: Stop at the site's answer to the revoke
+      ansible.builtin.fail:
+        msg: "{{ oa_revoke.message | default('', true) or oa_revoke.error }}"
+      when: (oa_revoke.error | default('', true)) | length > 0
+  rescue:
+    - name: The revoke's fault
+      ansible.builtin.include_tasks: access_fault.yml
+      vars:
+        oaf_into: oa_rm_fault
+        oaf_helper: "{{ oa_revoke }}"
+
+# without a confirmed sign-in: the recorded client; this environment keeps the recorded groups still wanted
+- name: The client roles of the recorded sign-in client
+  when:
+    - oa_gone | length > 0
+    - not (oa_signin_ok | bool)
+    - oa_rec_client | length > 0 and oa_realm | length > 0
+  block:
+    - name: Leave the client roles of the groups no longer wanted
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
       vars:
         ssg_entity: "{{ entity_name }}"
@@ -233,18 +277,25 @@
         entity_signin_realm: "{{ oa_realm }}"
         entity_signin_client: "{{ oa_rec_client }}"
         entity_signin_rbac_config: "{{ oa_rbac_config }}"
-      when:
-        - not (oa_signin_ok | bool)
-        - oa_rec_client | length > 0 and oa_realm | length > 0
 
     - name: The directory's side is done
       ansible.builtin.set_fact:
         oa_dir_done: true
-      when:
-        - not (oa_signin_ok | bool)
-        - oa_rec_client | length > 0 and oa_realm | length > 0
+  rescue:
+    - name: The directory's fault for the removal
+      ansible.builtin.include_tasks: access_fault.yml
+      vars:
+        oaf_into: oa_rm_fault
+        oaf_helper: {}
 
-    - name: Revoke the groups on the project
+- name: Delete the groups whose client role went
+  when:
+    - oa_gone | length > 0
+    - oa_dir_done | bool
+    - (oa_revoke.error | default('', true)) | length == 0
+    - (oa_revoke.groups | default([])) | length > 0
+  block:
+    - name: Delete them
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
       vars:
         _oa_deleted: "{{ ssg_released | default([]) | rejectattr('value.owners') | map(attribute='key') | list }}"
@@ -255,14 +306,12 @@
           state: absent
           domain: "{{ ep_project_domain }}"
           project_id: "{{ ep_os.project.id }}"
-          group_domain: "{{ (oa_group_domain | trim) if oa_signin_ok | bool else (oa_rec_group_domain or oa_group_domain | trim) }}"
+          group_domain: "{{ oa_rm_group_domain }}"
           managed_roles: "{{ (oa_edit_roles + oa_view_roles) | unique | list }}"
-          # a group is deleted only when the directory was asked and its client role is gone
           groups: >-
             {%- set out = [] -%}
             {%- for g in oa_gone -%}
-              {%- set _ = out.append({'group': g, 'delete': (oa_dir_done | bool)
-                                       and (g in _oa_deleted or g not in ssg_all_role_names | default([g]))}) -%}
+              {%- set _ = out.append({'group': g, 'delete': g in _oa_deleted or g not in ssg_all_role_names | default([g])}) -%}
             {%- endfor -%}
             {{ out }}
 
@@ -289,6 +338,7 @@
     _fault: "{{ oa_fault }}"
     _dir_faults: "{{ oa_ssg_faults }}"
     _absent: "{{ oa_absent.groups | default([]) if (oa_absent.error | default('', true)) | length == 0 else [] }}"
+    _revoked: "{{ oa_revoke.groups | default([]) if (oa_revoke.error | default('', true)) | length == 0 else [] }}"
     _dir_needed: "{{ oa_signin_ok | bool or oa_rec_client | length > 0 }}"
     _can_remove: "{{ oa_signin_ok | bool or oa_rec_client | length > 0 or oa_rec_group_domain | length > 0 }}"
     _computed: >-
@@ -328,14 +378,16 @@
                                    'message': msg}) -%}
       {%- endfor -%}
       {%- for name in oa_gone if _can_remove | bool -%}
+        {%- set v = (_revoked | selectattr('group', 'equalto', name) | list + [{}]) | first -%}
         {%- set r = (_absent | selectattr('group', 'equalto', name) | list + [{}]) | first -%}
-        {%- if not r or r.error | default('', true) | length > 0 or (_dir_needed | bool and not (oa_dir_done | bool)) -%}
+        {%- if not v or v.error | default('', true) | length > 0
+              or (_dir_needed | bool and (not (oa_dir_done | bool) or not r or r.error | default('', true) | length > 0)) -%}
           {%- set _ = removing.append(name) -%}
         {%- elif r.kept | default('', true) | length > 0 and r.kept not in ['not found', 'holds a role on another project'] -%}
           {%- set _ = left.append(name ~ ': ' ~ r.kept) -%}
         {%- endif -%}
       {%- endfor -%}
-      {%- set rm_errors = _absent | selectattr('error', 'defined') | selectattr('error') | list -%}
+      {%- set rm_errors = (_revoked + _absent) | selectattr('error', 'defined') | selectattr('error') | list -%}
       {{ {'groups': groups, 'unchecked': unchecked, 'removing': removing | sort, 'left': left, 'refused': refused,
           'rmCause': ((rm_errors | first).group ~ ': ' ~ (rm_errors | first).error) if rm_errors
                      else (oa_rm_fault.message | default('') or (_fault.message | default('') if _fault else ''))} }}
