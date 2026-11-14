@@ -362,6 +362,8 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       },
       { path: 'project', labelKey: 'fields.osoProject', widget: 'text' },
       { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
+      { path: 'toolRbac.editRbac', labelKey: 'fields.osoEditRbacEdit', widget: 'rbacRefList', helpKey: 'fields.osoEditRbacHelp' },
+      { path: 'toolRbac.viewRbac', labelKey: 'fields.osoViewRbacEdit', widget: 'rbacRefList', helpKey: 'fields.osoViewRbacHelp' },
       { path: 'baseDomain', labelKey: 'fields.baseDomain', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
       { path: 'projectDomain', labelKey: 'fields.projectDomain', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },
       { path: 'externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', helpKey: 'fields.osoLegacyFieldHelp', omitWhenEmpty: true },

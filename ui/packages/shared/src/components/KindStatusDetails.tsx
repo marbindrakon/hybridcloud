@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import {
   Alert,
+  ClipboardCopy,
   DescriptionList,
   DescriptionListDescription,
   DescriptionListGroup,
@@ -20,6 +21,7 @@ import type {
   HybridSovereignKind,
   K8sResource,
   NetworkPlacement,
+  PlatformOpenshift,
 } from '../types';
 import { useTranslation } from '../i18n';
 import { displayText, objectLabel } from '../i18n/vocabulary';
@@ -31,6 +33,7 @@ import { Ipv6GuestReference } from './Ipv6GuestReference';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
 import { familyUnavailableText, ipv6ReasonText, networkIpv6Mode, networkProviderPrefixes, placementSubnets, placementTranslation } from '../forms/ipv6';
 import { placementUseOffered } from '../forms/placementUse';
+import { clusterCredentialRefusal, clusterSiteUser, placementSiteNetwork, serverCreateCommand } from '../forms/openstackAccess';
 import { PlacementUses } from './PlacementTabs';
 import { NetworkPlatformSections } from './NetworkPlatformAccess';
 
@@ -55,9 +58,15 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
     'validated',
     'lastValidatedAt',
     'use',
+    // the network on an OpenStack site: shown by the placement panel
+    'siteNetwork',
   ],
   // access: shown by the way-in panel (groups that can sign in)
   CloudVirt: ['site', 'namespaces', 'dns', 'storageClass', 'access'],
+  // access: shown by the way-in panel (groups that can use it)
+  CloudOSO: ['access'],
+  // credential: the cluster's site user, shown by the cluster panel
+  PlatformOpenshift: ['credential'],
   // loginUrl / orgUrl: shown by the sign-in panel
   AAPOrg: ['loginUrl', 'orgUrl'],
   QuayOrg: ['loginUrl', 'orgUrl'],
@@ -941,7 +950,66 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
           <RelativeTime iso={st.lastValidatedAt} />
         </Fact>
       </Facts>
+      {spec.backend?.kind === 'CloudOSO' && <PlacementSiteNetworkBlock item={item} />}
       <Ipv6GuestReference item={item} caps={siteCaps.capsFor(st.site)} />
+    </>
+  );
+}
+
+/**
+ * A placement on an OpenStack environment: the network on the site to choose for a server, and the command
+ * that does it (status.siteNetwork). Nothing before the platform records it.
+ */
+export function PlacementSiteNetworkBlock({ item }: { item: NetworkPlacement }): React.ReactElement | null {
+  const { t } = useTranslation();
+  const net = placementSiteNetwork(item);
+  if (!net?.name) return null;
+  return (
+    <section className="sc-mb sc-site-network">
+      <p>
+        <strong>
+          {net.id ? t('detail.siteNetwork', { name: net.name, id: net.id }) : t('detail.siteNetworkNoId', { name: net.name })}
+        </strong>
+      </p>
+      <p className="sc-text-muted">{t('detail.siteNetworkUse')}</p>
+      <ClipboardCopy
+        isCode
+        isReadOnly
+        hoverTip={t('detail.copy')}
+        clickTip={t('detail.copied')}
+        textAriaLabel={t('detail.siteNetworkCommand')}
+      >
+        {serverCreateCommand(net.name)}
+      </ClipboardCopy>
+    </section>
+  );
+}
+
+/**
+ * An OpenStack cluster's own user on the site (status.credential) and, when the site refused to set it up,
+ * the ClusterCredential condition's message. Other clusters: nothing.
+ */
+export function PlatformOpenshiftDetails({ item }: { item: PlatformOpenshift }): React.ReactElement | null {
+  const { t } = useTranslation();
+  const user = clusterSiteUser(item);
+  const refused = clusterCredentialRefusal(item);
+  if (!user && !refused) return null;
+  return (
+    <>
+      {refused && (
+        <Alert variant="danger" isInline title={t('detail.clusterCredentialRefused')} className="sc-mb">
+          {refused.message ? displayText(t, refused.message) : refused.reason}
+        </Alert>
+      )}
+      {user && (
+        <Facts>
+          <Fact label={t('detail.siteUser')}>
+            {user.userId ? t('wayin.nameAndId', { name: user.user, id: user.userId }) : <Mono>{user.user}</Mono>}
+            <div className="sc-text-muted">{t('detail.siteUserActions')}</div>
+          </Fact>
+          <Fact label={t('wayin.domain')}>{user.domain}</Fact>
+        </Facts>
+      )}
     </>
   );
 }
@@ -1050,6 +1118,8 @@ export function KindStatusDetails({ kind, item }: KindStatusDetailsProps): React
       return <NetworkPlacementDetails item={item as NetworkPlacement} />;
     case 'CloudVirt':
       return <CloudVirtDetails item={item as CloudVirt} />;
+    case 'PlatformOpenshift':
+      return <PlatformOpenshiftDetails item={item as PlatformOpenshift} />;
     case 'AAPOrg':
     case 'QuayOrg':
     case 'VaultKV':

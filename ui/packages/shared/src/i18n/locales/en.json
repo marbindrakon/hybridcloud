@@ -733,7 +733,16 @@
     "publicCloudSiteHelp": "The platform reaches this region with its own workload identity; no keys are stored. Tenant environments here get accounts or projects the platform assigns.",
     "cloudAwsSiteHelp": "The AWS site this environment lives in; the platform assigns the account.",
     "networkIpv4Prefixes": "IPv4 address space",
-    "networkIpv4PrefixesHelp": "The network's IPv4 prefixes (up to 8 prefixes in all; /8 to /29; canonical form with host bits zero, e.g. 10.60.0.0/16). Optional when the network has IPv6. The platform allocates the placements' subnets from them. Prefixes can be added at any time; one can be removed only while no placement's subnet lies in it."
+    "networkIpv4PrefixesHelp": "The network's IPv4 prefixes (up to 8 prefixes in all; /8 to /29; canonical form with host bits zero, e.g. 10.60.0.0/16). Optional when the network has IPv6. The platform allocates the placements' subnets from them. Prefixes can be added at any time; one can be removed only while no placement's subnet lies in it.",
+    "osoAccessGroups": "Groups that can use this environment",
+    "osoAccessGroupsHelp": "Members can sign in to the site's dashboard and work in the project. Pre-filled with your access groups in this tenant.",
+    "osoEditRbac": "Create and change",
+    "osoViewRbac": "Read only",
+    "osoSiteNoSignIn": "People cannot sign in on this site yet. The platform can still build OpenShift clusters in the environment.",
+    "osoEditRbacEdit": "Groups that can use this environment: create and change",
+    "osoViewRbacEdit": "Groups that can use this environment: read only",
+    "osoEditRbacHelp": "Access groups whose members can create, change and delete resources in the environment's project.",
+    "osoViewRbacHelp": "Access groups whose members get read-only access to the environment's project."
   },
   "detail": {
     "allocated": "Allocated",
@@ -837,7 +846,16 @@
     "cliGetTitle": "Read this object from the command line",
     "conditionEvent": "Event {{id}}",
     "placementUses": "Uses",
-    "tenantDescription": "Tenant description"
+    "tenantDescription": "Tenant description",
+    "siteNetwork": "Network on the site: {{name}} ({{id}})",
+    "siteNetworkNoId": "Network on the site: {{name}}",
+    "siteNetworkUse": "Choose this network when you create a server. It is shared with your project and owned by the platform.",
+    "siteNetworkCommand": "Command that creates a server on this network",
+    "copy": "Copy",
+    "copied": "Copied",
+    "siteUser": "Site user",
+    "siteUserActions": "Actions by this user in the project are this cluster's.",
+    "clusterCredentialRefused": "The cluster has no credential on the site"
   },
   "networkOverview": {
     "loading": "Loading the network overview",
@@ -1058,7 +1076,9 @@
     "noneOfType": "No site of this type is available to this tenant. Ask the platform team.",
     "capVirtualization": "Virtual machines",
     "capNetworking": "Hybrid networks",
-    "capDns": "DNS"
+    "capDns": "DNS",
+    "capConsoleSignIn": "Dashboard sign-in",
+    "capApiCredentials": "API credentials"
   },
   "kindsOne": {
     "Entity": "Tenant",
@@ -1198,7 +1218,7 @@
     "title": "How to use it",
     "open": {
       "CloudVirt": "Open OpenShift Virtualization console",
-      "CloudOSO": "Open OpenStack dashboard",
+      "CloudOSO": "Open the OpenStack dashboard",
       "CloudAWS": "Open AWS console",
       "CloudGCP": "Open Google Cloud console"
     },
@@ -1217,7 +1237,34 @@
     "youAreIn": "You are in {{groups}}.",
     "youAreNotIn": "You are not in any of these groups; ask your tenant's access administrator.",
     "virtScope": "Sovereign Cloud does not create VMs, volumes or security groups; create them in the site console.",
-    "openstackScope": "Sovereign Cloud creates the project; servers, volumes and security groups are made with the OpenStack API or dashboard."
+    "openstackScope": "Sovereign Cloud creates the project; servers, volumes and security groups are made with the OpenStack API or dashboard.",
+    "region": "Region",
+    "nameAndId": "{{name}} (ID {{id}})",
+    "oso": {
+      "signInIdentityProvider": "You sign in with your platform identity.",
+      "signInDashboard": "On the sign-in page, choose {{name}}. You sign in with your platform identity.",
+      "groups": "Groups that can use it",
+      "groupEdit": "{{group}} (create and change)",
+      "groupView": "{{group}} (read only)",
+      "groupNotReady": "{{group}} (not ready: {{message}})",
+      "groupNotReadyNoMessage": "{{group}} (not ready)",
+      "youAreNotIn": "You are not in any of these groups. Ask your tenant's access administrator to add you to one.",
+      "noGroup": "No access group can use this environment. Nobody can sign in to it. Add an access group to the environment.",
+      "apiCredentials": "API credentials",
+      "apiCredentialsIntro": "For command-line tools, create an application credential in the dashboard (Identity, Application Credentials) and download its clouds.yaml file. An application credential is a secret that lets a tool act as you in this project.",
+      "apiCredentialsPeriod": "It works for {{period}} after your last sign-in to the dashboard. Sign in again to keep it working.",
+      "apiCredentialsUnknown": "How long it works after your last sign-in is set by the site. Ask the platform team.",
+      "apiCredentialsNotOffered": "People cannot create API credentials on this site. Use the dashboard, or ask the platform team.",
+      "siteNoSignIn": "Sign-in with the platform identity is not set up on this site. People cannot use this environment directly. The platform can still build OpenShift clusters in it."
+    },
+    "period": {
+      "day_one": "{{count}} day",
+      "day_other": "{{count}} days",
+      "hour_one": "{{count}} hour",
+      "hour_other": "{{count}} hours",
+      "minute_one": "{{count}} minute",
+      "minute_other": "{{count}} minutes"
+    }
   },
   "toolSignIn": {
     "title": "Sign in",

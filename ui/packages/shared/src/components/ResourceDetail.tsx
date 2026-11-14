@@ -68,9 +68,10 @@ const DIAGNOSTIC_KEYS = ['delivery', 'edaJobs', 'observedGeneration', 'lastRecon
 /**
  * Status keys of helper objects that no longer exist (the API says "No longer set"); old
  * objects may still carry them. scripts/check-content.py leaves the same keys out of its
- * runtime label check (any status key with "helper" in its name).
+ * runtime label check (any status key with "helper" in its name). appCredentialId: the credential
+ * environments used before each cluster had its own (written as null since).
  */
-export const LEGACY_STATUS_KEYS = ['osoHelperName', 'osoHelperCreated', 'awsHelperName', 'awsHelperCreated', 'helperName', 'helperProvider'];
+export const LEGACY_STATUS_KEYS = ['osoHelperName', 'osoHelperCreated', 'awsHelperName', 'awsHelperCreated', 'helperName', 'helperProvider', 'appCredentialId'];
 
 function formatValue(val: unknown): React.ReactNode {
   if (val === null || val === undefined || val === '') {

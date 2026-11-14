@@ -48,6 +48,10 @@ import {
 import { kindTerm } from '../i18n/vocabulary';
 import { ClusterCreateFields, type ClusterFieldsValue } from '../forms/ClusterCreateFields';
 import { buildClusterSpec, type ClusterProvider } from '../forms/clusterSpec';
+import { buildCloudOsoSpec, prefillAccessGroups, siteOffersSignIn } from '../forms/openstackAccess';
+import { OsoAccessGroupsField } from './OsoAccessGroupsField';
+import { useOptionalScope } from '../scope/ScopeProvider';
+import type { CloudInfrastructure, TenantProfileSite } from '../types';
 
 export type SelfServiceFormType =
   | 'team'
@@ -320,6 +324,12 @@ export function CreateResourceForm({
   const [externalNetwork, setExternalNetwork] = useState('');
   const [route53VaultPath, setRoute53VaultPath] = useState('');
   const [landingzone, setLandingzone] = useState(DEFAULT_LANDING_ZONE);
+  // CloudOSO: the access groups that can use the environment (spec.toolRbac) and whether the site offers sign-in
+  const [osoEditRbac, setOsoEditRbac] = useState<string[]>([]);
+  const [osoViewRbac, setOsoViewRbac] = useState<string[]>([]);
+  const [osoEditTouched, setOsoEditTouched] = useState(false);
+  const [osoProfileSite, setOsoProfileSite] = useState<TenantProfileSite | undefined>();
+  const [osoSiteObj, setOsoSiteObj] = useState<CloudInfrastructure | undefined>();
   // CloudAWS / CloudGCP: the site (spec.cloudRef); the platform assigns the account or project.
   const [awsSiteRef, setAwsSiteRef] = useState('');
   const [gcpSiteRef, setGcpSiteRef] = useState('');
@@ -440,7 +450,8 @@ export function CreateResourceForm({
         type === 'assignment' ||
         type === 'platformopenshift' ||
         type === 'team' ||
-        type === 'project') &&
+        type === 'project' ||
+        type === 'cloudoso') &&
       !!entityNs,
   });
   // Integration connections live in the platform's integration namespace, which only platform
@@ -473,6 +484,15 @@ export function CreateResourceForm({
     names(items)[0]?.value;
 
   const currentEntityName = (entityNs || '').replace(/^entity-/, '');
+
+  // OpenStack environment: "Create and change" starts with the creator's access groups in this tenant (as the
+  // OpenShift Virtualization form does), until the user changes the list.
+  const scopeIdentity = useOptionalScope()?.identity;
+  useEffect(() => {
+    if (type !== 'cloudoso' || osoEditTouched || osoEditRbac.length || !scopeIdentity || !rbacs.items.length) return;
+    const mine = prefillAccessGroups(scopeIdentity.groups, currentEntityName, rbacs.items.map((i) => i.metadata.name));
+    if (mine.length) setOsoEditRbac(mine);
+  }, [type, scopeIdentity, currentEntityName, rbacs.items, osoEditTouched]); // eslint-disable-line react-hooks/exhaustive-deps
 
   /** FabricSelect options for TransportLink. */
   const fabricSelectOptions = fabrics.items.map((f) => ({
@@ -613,20 +633,21 @@ export function CreateResourceForm({
         };
       }
       case 'cloudoso':
-        return {
-          ...(cloudRefName.trim() ? { cloudRef: { name: cloudRefName.trim() } } : {}),
-          project: osoProject.trim(),
-          ...optional('landingzone', landingzone),
-          ...optional('baseDomain', baseDomain),
-          ...optional('projectDomain', projectDomain),
-          ...optional('externalNetwork', externalNetwork),
-          ...optional('regionName', osoRegionName),
-          ...optional('dnsProvider', osoDnsProvider),
-          ...optional('designateZoneId', osoDesignateZoneId),
-          ...optional('designateProjectId', osoDesignateProjectId),
-          ...(audience === 'admin' ? optional('vaultPath', osoVaultPath) : {}),
-          ...(audience === 'admin' ? optional('route53VaultPath', route53VaultPath) : {}),
-        };
+        return buildCloudOsoSpec({
+          site: cloudRefName,
+          project: osoProject,
+          landingzone,
+          baseDomain,
+          projectDomain,
+          externalNetwork,
+          regionName: osoRegionName,
+          dnsProvider: osoDnsProvider,
+          designateZoneId: osoDesignateZoneId,
+          designateProjectId: osoDesignateProjectId,
+          editRbac: osoEditRbac,
+          viewRbac: osoViewRbac,
+          ...(audience === 'admin' ? { vaultPath: osoVaultPath, route53VaultPath } : {}),
+        });
       case 'cloudaws':
         // The CRD needs only the site; the platform assigns the account (UX-038).
         return { cloudRef: { name: awsSiteRef.trim() } };
@@ -1084,7 +1105,12 @@ export function CreateResourceForm({
                     id="oso-cloudref"
                     label={t('fields.site')}
                     value={cloudRefName}
-                    onChange={setCloudRefName}
+                    onChange={(v) => {
+                      setCloudRefName(v);
+                      if (!v) setOsoSiteObj(undefined);
+                    }}
+                    onSite={setOsoProfileSite}
+                    onInfrastructure={setOsoSiteObj}
                     types={['openstack']}
                     namespace={entityNs}
                     audience={audience}
@@ -1100,6 +1126,17 @@ export function CreateResourceForm({
                   <FormGroup label={t('fields.landingzone')} fieldId="oso-lz">
                     <TextInput id="oso-lz" value={landingzone} onChange={(_e, v) => setLandingzone(v)} />
                   </FormGroup>
+                  <OsoAccessGroupsField
+                    editRbac={osoEditRbac}
+                    viewRbac={osoViewRbac}
+                    onEditChange={(v) => {
+                      setOsoEditTouched(true);
+                      setOsoEditRbac(v);
+                    }}
+                    onViewChange={setOsoViewRbac}
+                    options={names(rbacs.items)}
+                    siteSignIn={cloudRefName ? siteOffersSignIn(osoProfileSite, osoSiteObj) : undefined}
+                  />
                   <ExpandableSection
                     toggleText={t('form.osoLegacySection')}
                     isExpanded={osoLegacyOpen}
