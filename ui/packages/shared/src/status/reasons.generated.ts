@@ -36,7 +36,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "ControllerRestarting": { actor: "P", class: "blocked", summary: "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost." },
   "ControllerUnavailable": { actor: "P", class: "blocked", summary: "Changes in this tenant are delayed. The platform team is alerted; nothing you created is lost." },
   "CredentialRefused": { actor: "P", class: "failed", summary: "The site refused the cluster's credential. The platform team is looking at it." },
-  "CredentialSecretMissing": { actor: "P", class: "failed", summary: "The cluster's credential is recorded, but its secret is not in the platform's secret store. Nothing was changed; the platform team restores the secret or replaces the credential." },
+  "CredentialSecretMissing": { actor: "P", class: "failed", summary: "The cluster's credential secret is missing from the platform's secret store. Nothing was changed. The platform team acts." },
   "CredentialsInvalid": { actor: "P", class: "failed", summary: "The site credentials were refused. The platform team is looking at it." },
   "CredentialsMissing": { actor: "P", class: "failed", summary: "The site credentials are missing. The platform team is looking at it." },
   "CredentialsUnavailable": { actor: "P", class: "waiting", summary: "The site credentials are not available yet. The platform team is looking at it." },
