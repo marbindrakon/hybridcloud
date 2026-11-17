@@ -103,6 +103,17 @@
         # who could use the environment (status.access): the site client's roles and the Keystone groups go
         oso_access: "{{ _st.access | default({}, true) }}"
 
+    # the environment's readers (cloudoso_provision reader_access.yml): this environment leaves the owners of the
+    # services sign-in client's roles (a role goes with its last owner); the Role and RoleBinding go with the
+    # CloudOSO by their owner reference
+    - name: The environment's readers leave the services sign-in client
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ cloudoso_entity_for_status }}"
+        ssg_owner: "CloudOSO/{{ cloudoso_cr_name }}"
+        ssg_label: "CloudOSO {{ cloudoso_cr_name }} (readers)"
+        ssg_wanted: []
+
     - name: Tear down the OpenStack project
       when: oso_vault_path | length > 0 and oso_project_domain | length > 0
       block:

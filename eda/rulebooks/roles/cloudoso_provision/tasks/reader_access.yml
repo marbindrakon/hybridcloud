@@ -1,0 +1,113 @@
+---
+# The environment's access groups may read the environment's own object on the services cluster (get, list, watch on
+# this one CloudOSO), so their members see its page and its dashboard link even when the tenant's roles do not let
+# them read environments. Each access group of spec.toolRbac (edit and view) whose Rbac has a group in the sign-in
+# directory:
+#   - gets the services sign-in client's role <entity>.<rbac> with this environment among its owners
+#     (common/tasks/services_signin_groups.yml), so a member's token on the services cluster carries the group;
+#   - is a subject of the RoleBinding <environment>-readers to the Role <environment>-readers (resourceNames: this
+#     environment). Both are owned by the CloudOSO: they go with it. A group that leaves spec.toolRbac leaves the
+#     subjects and this environment leaves the client role's owners (the role goes with its last owner).
+# Never fails the environment: a directory fault is a note (oso_reader_note); the Role and RoleBinding are written
+# anyway. Uses cloudoso_cr_name, cloudoso_cr_namespace, cloudoso_cr_lookup, oso_spec, entity_name.
+- name: The access groups that read this environment
+  vars:
+    _tool: "{{ oso_spec.toolRbac | default({}, true) }}"
+  ansible.builtin.set_fact:
+    _or_names: "{{ ((_tool.editRbac | default([], true)) + (_tool.viewRbac | default([], true))) | unique | list }}"
+    oso_reader_note: ""
+
+- name: Read the access groups of the namespace (readers)
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Rbac
+    namespace: "{{ cloudoso_cr_namespace }}"
+  register: _or_rbacs
+  when: _or_names | length > 0
+
+- name: The readers' groups
+  vars:
+    _rbacs: "{{ _or_rbacs.resources | default([]) }}"
+  ansible.builtin.set_fact:
+    oso_readers: >-
+      {%- set out = [] -%}
+      {%- for n in _or_names -%}
+        {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', n) | list + [{}]) | first -%}
+        {%- set path = (r.status | default({}, true)).group | default('', true) -%}
+        {%- if path | length > 0 -%}
+          {%- set _ = out.append({'rbac': n, 'path': path, 'group': entity_name ~ '.' ~ n}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: The readers' groups in the services sign-in client
+  block:
+    - name: Services sign-in client roles owned by this environment
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ entity_name }}"
+        ssg_owner: "CloudOSO/{{ cloudoso_cr_name }}"
+        ssg_label: "CloudOSO {{ cloudoso_cr_name }} (readers)"
+        ssg_wanted: "{{ oso_readers }}"
+        ssg_per_group: true
+  rescue:
+    - name: The directory could not be asked (readers)
+      ansible.builtin.set_fact:
+        oso_reader_note: >-
+          the sign-in groups that read this environment could not be set in the sign-in directory this time
+          ({{ ansible_failed_result.msg | default('no answer', true) | trim }}); the next run tries again
+
+- name: The Role that reads this environment
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: Role
+      metadata:
+        name: "{{ cloudoso_cr_name }}-readers"
+        namespace: "{{ cloudoso_cr_namespace }}"
+        ownerReferences: "{{ _or_owner }}"
+      rules:
+        - apiGroups: [hybridsovereign.redhat]
+          resources: [cloudosos]
+          resourceNames: ["{{ cloudoso_cr_name }}"]
+          verbs: [get, list, watch]
+  vars:
+    _or_owner:
+      - apiVersion: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        name: "{{ cloudoso_cr_name }}"
+        uid: "{{ cloudoso_cr_lookup.resources[0].metadata.uid }}"
+
+- name: The access groups that may read it
+  kubernetes.core.k8s:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    state: present
+    definition:
+      apiVersion: rbac.authorization.k8s.io/v1
+      kind: RoleBinding
+      metadata:
+        name: "{{ cloudoso_cr_name }}-readers"
+        namespace: "{{ cloudoso_cr_namespace }}"
+        ownerReferences: "{{ _or_owner }}"
+      roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: "{{ cloudoso_cr_name }}-readers"}
+      subjects: >-
+        {%- set out = [] -%}
+        {%- for g in oso_readers -%}
+          {%- set _ = out.append({'kind': 'Group', 'apiGroup': 'rbac.authorization.k8s.io', 'name': g.group}) -%}
+        {%- endfor -%}
+        {{ out }}
+  vars:
+    _or_owner:
+      - apiVersion: hybridsovereign.redhat/v1alpha1
+        kind: CloudOSO
+        name: "{{ cloudoso_cr_name }}"
+        uid: "{{ cloudoso_cr_lookup.resources[0].metadata.uid }}"
