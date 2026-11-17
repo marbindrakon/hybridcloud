@@ -153,6 +153,26 @@ class NotAnAdministrator(unittest.TestCase):
         self.assertEqual(S.global_external_networks(empty, notes, admin=True), [])   # an administrator: none exist
         self.assertEqual(notes, [])
 
+    def test_the_site_probe_passes_the_accounts_own_roles(self):
+        """F4: site_probe itself lists the networks only for an account whose token holds admin (the A5 rule wired
+        through the probe, not just the function)."""
+        from unittest import mock
+        for roles, listed in ((["manager", "member"], False), (["admin", "member"], True)):
+            conn = site()
+            conn.authorize = lambda: None
+            access = Obj(role_names=roles, user_id="u1", project_id="p1",
+                         service_catalog=Obj(catalog=[{"type": "network"}]))
+            conn.session = Obj(auth=Obj(get_access=lambda _s, a=access: a))
+            conn.network.extensions = lambda: []
+            acct = mock.MagicMock()
+            acct.own_scope.return_value = conn
+            acct.own_auth = {"auth_url": "https://keystone.example.org/v3"}
+            acct.region = "r1"
+            with mock.patch.object(S, "Account", return_value=acct):
+                out = S.site_probe({})
+            self.assertEqual("external_networks" in out, listed, roles)
+            self.assertEqual(any(n.startswith("external networks not listed") for n in out["notes"]), not listed)
+
     def test_volume_types_refused(self):
         class Refusing:
             def get(self, *_):

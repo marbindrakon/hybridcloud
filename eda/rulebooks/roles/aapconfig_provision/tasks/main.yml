@@ -150,6 +150,16 @@
           KEY: "{{ aap_oidc_client_id }}"
           GROUPS_CLAIM: "{{ aap_oidc_groups_claim }}"
 
+    # never an endpoint without the Keycloak's address ("/realms/<realm>"): neither created nor converged
+    - name: The authenticator needs the Keycloak's address
+      ansible.builtin.assert:
+        that: _aap_auth_wanted.OIDC_ENDPOINT is match('^https?://[^/]+')
+        quiet: true
+        fail_msg: >-
+          The sign-in directory's address is not known (no Route in services-rhbk carries the label app=keycloak,
+          and the job's environment does not set KEYCLOAK_EXTERNAL_URL), so the AAP sign-in authenticator was neither
+          created nor changed.
+
     - name: Configure OIDC authenticator via AAP gateway
       ansible.builtin.uri:
         url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/"

@@ -22,7 +22,8 @@ sys.path.insert(0, os.path.dirname(__file__))
 from play_helper import HAVE_ANSIBLE, ROOT, by_name, load  # noqa: E402
 
 ROLE = os.path.join(ROOT, "eda", "rulebooks", "roles", "aapconfig_provision", "tasks", "main.yml")
-STEPS = ["The authenticator's wanted settings", "Configure OIDC authenticator via AAP gateway",
+STEPS = ["The authenticator's wanted settings", "The authenticator needs the Keycloak's address",
+         "Configure OIDC authenticator via AAP gateway",
          "Handle existing authenticator — fetch by slug", "What differs in the existing authenticator",
          "Converge the existing authenticator (endpoint, client, groups claim)", "Read the authenticator's callback"]
 SECRET = "kc-client-secret-value-not-in-output"
@@ -96,7 +97,7 @@ class Gateway:
         self.httpd.server_close()
 
 
-def run(gw, keycloak_url):
+def run(gw, keycloak_url, client_id="aap-aap-sovereign-services"):
     tasks = load(ROLE)
     steps = [by_name(tasks, n) for n in STEPS]
     tmp = tempfile.mkdtemp(prefix="shc-aapauth-")
@@ -109,7 +110,7 @@ def run(gw, keycloak_url):
         with open(os.path.join(tmp, "vars.json"), "w") as f:
             json.dump({"aap_gateway_internal_url": gw.url, "aap_username": "admin", "aap_password": "aap-pw",
                        "aapconfig_cr_name": "aap-sovereign-services", "keycloak_external_url": keycloak_url,
-                       "keycloak_realm": "tenants", "aap_oidc_client_id": "aap-aap-sovereign-services",
+                       "keycloak_realm": "tenants", "aap_oidc_client_id": client_id,
                        "aap_oidc_groups_claim": "groups", "_kc_client_secret": {"json": {"value": SECRET}}}, f)
         env = dict(os.environ, ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false",
                    ANSIBLE_NOCOLOR="1", ANSIBLE_LOCAL_TEMP=os.path.join(tmp, "lt"),
@@ -166,6 +167,37 @@ class Authenticator(unittest.TestCase):
         self.assertEqual(rc, 0, out[-3000:])
         self.assertEqual(len(self.patches(n)), 1)
         self.assertEqual(self.gw.auths[1]["configuration"]["GROUPS_CLAIM"], "groups")
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class AuthenticatorMore(unittest.TestCase):
+    setUp = Authenticator.setUp
+    patches = Authenticator.patches
+
+    def test_a_changed_client_id_converges(self):
+        """F4: the client id is compared too."""
+        run(self.gw, "https://auth.example.org")
+        n = len(self.gw.log)
+        rc, out = run(self.gw, "https://auth.example.org", client_id="aap-renamed")
+        self.assertEqual(rc, 0, out[-3000:])
+        self.assertEqual(len(self.patches(n)), 1)
+        self.assertEqual(self.gw.auths[1]["configuration"]["KEY"], "aap-renamed")
+
+    def test_no_address_no_write(self):
+        """F2: an empty address fails the job plainly before any write, for an existing authenticator and for a new
+        one; the endpoint never becomes /realms/<realm>."""
+        run(self.gw, "https://auth.example.org")
+        n = len(self.gw.log)
+        rc, out = run(self.gw, "")
+        self.assertNotEqual(rc, 0)
+        self.assertIn("The sign-in directory's address is not known", " ".join(out.split()))
+        self.assertEqual([e[0] for e in self.gw.log[n:]], [])
+        self.assertEqual(self.gw.auths[1]["configuration"]["OIDC_ENDPOINT"], "https://auth.example.org/realms/tenants")
+        fresh = Gateway()
+        self.addCleanup(fresh.stop)
+        rc, out = run(fresh, "")
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(fresh.log, [])
 
 
 if __name__ == "__main__":
