@@ -154,7 +154,7 @@ sovereignNamespacesServices:
       identityProviderName: "sovereign-services"
       clientId: "openshift-services"
       clientSecretName: "sovereign-services-oauth-secret"
-      issuer: "https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants"
+      issuer: "https://auth.shc.signal9.gg/realms/sovereign-tenants"
       caConfigMap: "keycloak-services-ca"
 
 # ─── RHBK Central (Keycloak) ─────────────────────────────────────────────────
@@ -210,7 +210,10 @@ rhbkServices:
     keycloak:
       enabled: true
       instances: 2
-      hostname: "rhbk-services.apps.services.shc.signal9.gg"
+      hostname: "auth.shc.signal9.gg"
+      # the chart's routes serve the Keycloak (the operator's Ingress and its Route go)
+      ingress:
+        enabled: false
       db:
         enabled: true
         vendor: postgres
@@ -230,16 +233,19 @@ rhbkServices:
           backupStorage: 10Gi
       tls:
         enabled: false
-      # The public name auth.shc.signal9.gg (owner 11-14), step A: a second Route with its own Let's Encrypt
-      # certificate (ECDSA: the services cluster's consumers pin the ingress CA bundle, which holds the ECDSA chain).
-      # The host name and the operator's Ingress are unchanged, and this Route carries no app=keycloak label, so the
-      # Keycloak, its issuer and the Route the automation reads stay as they are. Step B (the switch) is separate.
+      # The public name auth.shc.signal9.gg (owner 11-14): the primary Route (label app=keycloak, which the
+      # automation reads) with its own Let's Encrypt certificate (ECDSA: the services cluster's consumers pin the
+      # ingress CA bundle, which holds the ECDSA chain); the old name stays on a legacy Route (router certificate, no
+      # label) until nothing uses it any more.
       routes:
         - name: rhbk-services-auth
           host: auth.shc.signal9.gg
+          primary: true
           certificate:
             clusterIssuer: letsencrypt-shc
             privateKey: {algorithm: ECDSA, size: 256}
+        - name: rhbk-services-legacy
+          host: rhbk-services.apps.services.shc.signal9.gg
 
 # ─── RHBK Config (DEPRECATED — replaced by sovereignJobs keycloak* jobs) ─────
 rhbkConfig:
@@ -2233,7 +2239,7 @@ iaasClusterDefaults:
         enabled: true
         identityProvider:
           name: sovereign-tenants
-          issuer: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants
+          issuer: https://auth.shc.signal9.gg/realms/sovereign-tenants
       # TENANT-DNS D3 (owner 10-14: the cluster's Vault policy reads dns/tenant-designate): tenants publish names in
       # their CloudVirt environment zone with DNSEndpoints and Service/Route hostname annotations
       tenantDns:
@@ -2733,7 +2739,7 @@ quayServices:
     oidc:
       enabled: true
       clientId: quay-services
-      server: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants
+      server: https://auth.shc.signal9.gg/realms/sovereign-tenants
       clientSecret:
         vaultKey: keycloak-clients-services
         property: quay-services
@@ -3578,7 +3584,7 @@ sovereignJobs:
         - name: KEYCLOAK_CENTRAL_URL
           value: "https://rhbk-central.apps.central.shc.signal9.gg"
         - name: KEYCLOAK_SERVICES_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
           value: "rhbk-central-initial-admin"
         - name: KEYCLOAK_ADMIN_SECRET_NS
@@ -3684,7 +3690,7 @@ sovereignJobs:
         - name: SHC_SECURITY_RUN_ID
           value: "ux-h1-v8"
         - name: KEYCLOAK_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
           value: "rhbk-services-admin"
         - name: KEYCLOAK_ADMIN_SECRET_NS
@@ -3700,7 +3706,7 @@ sovereignJobs:
       syncWave: "29"
       env:
         - name: KEYCLOAK_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
           value: "rhbk-services-admin"
         - name: KEYCLOAK_ADMIN_SECRET_NS
@@ -3732,7 +3738,7 @@ sovereignJobs:
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-services"
         - name: KEYCLOAK_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
           value: "rhbk-services-admin"
         - name: KEYCLOAK_ADMIN_SECRET_NS
@@ -3768,7 +3774,7 @@ sovereignJobs:
         - name: VAULT_CLIENTS_KEY
           value: "keycloak-clients-iaas"
         - name: KEYCLOAK_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_ADMIN_SECRET
           value: "rhbk-services-admin"
         - name: KEYCLOAK_ADMIN_SECRET_NS
@@ -3823,7 +3829,7 @@ sovereignJobs:
         - name: KEYCLOAK_CENTRAL_URL
           value: "https://rhbk-central.apps.central.shc.signal9.gg"
         - name: KEYCLOAK_SERVICES_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_CENTRAL_REALM
           value: "sovereign-central"
         - name: KEYCLOAK_SERVICES_REALM
@@ -4311,7 +4317,7 @@ sovereignJobs:
         - name: KEYCLOAK_CENTRAL_URL
           value: "https://rhbk-central.apps.central.shc.signal9.gg"
         - name: KEYCLOAK_SERVICES_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_CENTRAL_REALM
           value: "sovereign-central"
         - name: KEYCLOAK_SERVICES_REALM
@@ -4435,7 +4441,7 @@ sovereignJobs:
         - name: VAULT_SECRET_PATH
           value: "central/quay-services-admin"
         - name: KEYCLOAK_URL
-          value: "https://rhbk-services.apps.services.shc.signal9.gg"
+          value: "https://auth.shc.signal9.gg"
         - name: KEYCLOAK_REALM
           value: "sovereign-tenants"
         - name: KEYCLOAK_CLIENT_ID
@@ -4770,7 +4776,7 @@ platformOpenshiftOperator:
       - name: quay-pull-secret
     keycloak:
       internalUrl: "http://rhbk-services-service.services-rhbk.svc:8080"
-      externalUrl: "https://rhbk-services.apps.services.shc.signal9.gg"
+      externalUrl: "https://auth.shc.signal9.gg"
       realm: "sovereign-tenants"
       adminSecretName: "rhbk-admin-credentials"
       adminSecret:
@@ -4885,7 +4891,7 @@ sovereignDashboard:
         vaultPath: "dashboard-oauth"
         refreshInterval: "1h"
       # "Sign out" ends the Keycloak session too (realm sovereign-tenants, the sovereign-services IdP of this cluster)
-      logoutUrl: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
+      logoutUrl: https://auth.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
       # openshiftSar: chart default (list hybridfabrics in sovereign-cloud = a platform role)
       pages:
         # Offered to tenant users on the denial page (installation value, the chart has no default)
@@ -4925,7 +4931,7 @@ tenancyDashboard:
         vaultPath: "tenancy-dashboard-oauth"
         refreshInterval: "1h"
       # "Sign out" ends the Keycloak session too (realm sovereign-tenants, the sovereign-services IdP of this cluster)
-      logoutUrl: https://rhbk-services.apps.services.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
+      logoutUrl: https://auth.shc.signal9.gg/realms/sovereign-tenants/protocol/openid-connect/logout
     route:
       enabled: true
     env:
