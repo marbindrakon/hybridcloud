@@ -488,6 +488,29 @@ class EnvironmentAccessRealDirectory(EnvironmentAccess):
         self.assertEqual(third["access"]["removing"], [])
         self.fixture("removing", second)
 
+    def test_the_access_groups_step_is_changed_only_when_it_changed_something(self):
+        """Gate part 2 G-4: the helper says whether it wrote anything; the job's step reports "changed" only then."""
+        import re as _re
+
+        def states():
+            return _re.findall(r"TASK \[OpenStack access-groups\] \*+\n(\w+):", H.LAST_OUTPUT)
+        _, first = self.run_access()
+        self.assertIn("changed", states())
+        self.run_access(recorded=first["access"])
+        self.assertTrue(states())
+        self.assertEqual(set(states()), {"ok"})
+
+    def test_a_recorded_group_name_over_the_sites_limit_leaves_removing(self):
+        """Gate part 2 G-1: a group the site refused for its length, now no longer wanted, is removed at once (it
+        cannot exist there): status.access.removing empties, no "None" message, the site is not asked by that name."""
+        long = "acme." + "r" * 60
+        _, first = self.run_access()
+        recorded = dict(first["access"], removing=[long])
+        _, res = self.run_access(recorded=recorded)
+        self.assertEqual(res["access"]["removing"], [])
+        self.assertNotIn("None", str(res))
+        self.assertEqual(self.site.ks.long_name_lookups, [])
+
     def test_an_rbac_without_its_directory_group_for_a_run_keeps_what_it_had(self):
         """V8: while the Rbac exists and is wanted, its client role and its Keystone grant stay (Waiting); it leaves
         when the Rbac is gone."""

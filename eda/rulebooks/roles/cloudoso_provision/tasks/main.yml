@@ -148,9 +148,10 @@
                 OpenStack project {{ oso_project_name }} ({{ oso_project_id }})
                 provisioned by EDA in Keystone domain {{ oso_domain_name }}.
             # a warning, not a failure: Ready stays True (clusters can be built without people's access)
+            # no lastTransitionTime: the status writer sets it (now, kept while the status stays), in the same
+            # form as the other conditions
             - type: AccessReady
               status: "{{ oso_access_condition.status }}"
-              lastTransitionTime: "{{ cloudoso_status_time }}"
               reason: "{{ oso_access_condition.reason | trim }}"
               message: "{{ oso_access_condition.message | trim }}"
 
