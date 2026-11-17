@@ -1,0 +1,128 @@
+{{- /*
+Routes this chart owns for the Keycloak (keycloak.routes, see values.yaml): edge TLS to the HTTP port of the
+operator's Service <instanceName>-service, optionally with a cert-manager Certificate served through the Route's
+externalCertificate. The Certificates and the router's read access in keycloak.certificateSyncWave, the Routes in
+keycloak.routeSyncWave: both after the Keycloak, and a Route only once its certificate is issued.
+*/ -}}
+{{- if and .Values.keycloak.enabled .Values.keycloak.routes }}
+{{- $root := . -}}
+{{- $ingress := include "rhbk.ingressEnabled" . -}}
+{{- $hostname := .Values.keycloak.hostname | default "" -}}
+{{- if .Values.keycloak.tls.enabled }}
+{{- fail "keycloak.routes needs keycloak.tls.enabled false: the routes terminate TLS at the router and reach the Keycloak's HTTP port" }}
+{{- end }}
+{{- $hosts := dict -}}
+{{- $names := dict -}}
+{{- $primary := 0 -}}
+{{- $secrets := list -}}
+{{- range $i, $r := .Values.keycloak.routes }}
+{{- if not $r.host }}
+{{- fail (printf "keycloak.routes[%d].host is required" $i) }}
+{{- end }}
+{{- if hasKey $hosts $r.host }}
+{{- fail (printf "keycloak.routes: host %s is named twice" $r.host) }}
+{{- end }}
+{{- $_ := set $hosts $r.host true }}
+{{- $name := include "rhbk.routeName" (dict "r" $r "i" $i "root" $root) }}
+{{- if hasKey $names $name }}
+{{- fail (printf "keycloak.routes: route name %s is used twice" $name) }}
+{{- end }}
+{{- $_ := set $names $name true }}
+{{- if and $ingress (eq $r.host $hostname) }}
+{{- fail (printf "keycloak.routes: host %s is keycloak.hostname, which the operator's Ingress serves while keycloak.ingress.enabled is true; set keycloak.ingress.enabled false to serve it from this chart's route" $r.host) }}
+{{- end }}
+{{- if $r.primary }}
+{{- $primary = add1 $primary }}
+{{- if $ingress }}
+{{- fail (printf "keycloak.routes: route %s is primary while keycloak.ingress.enabled is true; the operator's Route carries the label app=keycloak then, and only one Route may carry it" $name) }}
+{{- end }}
+{{- if and $hostname (ne $r.host $hostname) }}
+{{- fail (printf "keycloak.routes: the primary route's host %s is not keycloak.hostname %s; the platform takes the Keycloak's public address from the primary route, so the two must be the same" $r.host $hostname) }}
+{{- end }}
+{{- end }}
+{{- if $r.certificate }}
+{{- if not $r.certificate.clusterIssuer }}
+{{- fail (printf "keycloak.routes[%d].certificate.clusterIssuer is required with a certificate" $i) }}
+{{- end }}
+{{- $secrets = append $secrets ($r.certificate.secretName | default (printf "%s-tls" $name)) }}
+{{- end }}
+{{- end }}
+{{- if gt $primary 1 }}
+{{- fail "keycloak.routes: more than one route is primary; only one Route may carry the label app=keycloak" }}
+{{- end }}
+{{- range $i, $r := .Values.keycloak.routes }}
+{{- $name := include "rhbk.routeName" (dict "r" $r "i" $i "root" $root) }}
+{{- $secret := "" }}
+{{- if $r.certificate }}
+{{- $secret = $r.certificate.secretName | default (printf "%s-tls" $name) }}
+{{- $key := $r.certificate.privateKey | default dict }}
+---
+apiVersion: cert-manager.io/v1
+kind: Certificate
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $root.Values.keycloak.certificateSyncWave | quote }}
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  secretName: {{ $secret }}
+  dnsNames: [{{ $r.host | quote }}]
+  issuerRef: {kind: ClusterIssuer, name: {{ $r.certificate.clusterIssuer | quote }}}
+  privateKey:
+    algorithm: {{ $key.algorithm | default "ECDSA" }}
+    size: {{ $key.size | default 256 }}
+    rotationPolicy: Always
+{{- end }}
+---
+apiVersion: route.openshift.io/v1
+kind: Route
+metadata:
+  name: {{ $name }}
+  namespace: {{ $root.Values.namespace }}
+  {{- if $r.primary }}
+  labels:
+    app: keycloak
+  {{- end }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ $root.Values.keycloak.routeSyncWave | quote }}
+spec:
+  host: {{ $r.host | quote }}
+  to: {kind: Service, name: {{ printf "%s-service" $root.Values.instanceName }}}
+  port: {targetPort: http}
+  tls:
+    termination: edge
+    insecureEdgeTerminationPolicy: Redirect
+    {{- if $secret }}
+    externalCertificate:
+      name: {{ $secret }}
+    {{- end }}
+{{- end }}
+{{- if $secrets }}
+---
+# The router reads the routes' certificate Secrets (a Route's externalCertificate needs it).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: {{ .Values.instanceName }}-router-certs
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.keycloak.certificateSyncWave | quote }}
+rules:
+  - apiGroups: [""]
+    resources: [secrets]
+    resourceNames: {{ toJson $secrets }}
+    verbs: [get, list, watch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: {{ .Values.instanceName }}-router-certs
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: {{ .Values.keycloak.certificateSyncWave | quote }}
+roleRef: {apiGroup: rbac.authorization.k8s.io, kind: Role, name: {{ .Values.instanceName }}-router-certs}
+subjects:
+  - {kind: ServiceAccount, name: router, namespace: openshift-ingress}
+{{- end }}
+{{- end }}
