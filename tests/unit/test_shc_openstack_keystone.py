@@ -10,6 +10,7 @@ import stat
 import sys
 import tempfile
 import unittest
+import urllib.parse
 from unittest import mock
 
 HERE = os.path.dirname(__file__)
@@ -759,6 +760,32 @@ class GroupFaults(Base):
         k = S.Keystone(S.Account({"clouds_yaml": self.clouds}))
         tok, _, dom = k.site("tenants")
         self.assertEqual(k.request(tok, "POST", "/groups", {"group": {"name": long, "domain_id": dom}})[0], 400)
+
+    def test_removing_a_group_name_over_the_limit_finishes(self):
+        """Gate part 2 G-1: Keystone 2026.2 answers a lookup by an over-long name with HTTP 500 and a page. Such a name
+        cannot exist on the site: its removal is "not found" at once, without a call, and the other groups go on."""
+        long = "acme." + "r" * 60
+        S.access_groups(group_req(self))
+        out = S.access_groups(group_req(self, state="absent", groups=[{"group": long, "delete": True},
+                                                                       {"group": "acme.developers", "delete": True}]))
+        rec = {g["group"]: g for g in out["groups"]}
+        self.assertEqual((rec[long]["kept"], rec[long]["error"]), ("not found", ""))
+        self.assertTrue(rec["acme.developers"]["deleted"])
+        self.assertEqual(self.ks.long_name_lookups, [])
+        # the fake answers such a lookup as Keystone does
+        k = S.Keystone(S.Account({"clouds_yaml": self.clouds}))
+        tok, _, dom = k.site("tenants")
+        status, data, _ = k.request(tok, "GET", "/groups?" + urllib.parse.urlencode({"name": long, "domain_id": dom}))
+        self.assertEqual((status, data), (500, {}))
+
+    def test_an_answer_without_json_is_plain(self):
+        """A failure answered with a page (no JSON): its status in plain words, never "None"."""
+        k = S.Keystone(S.Account({"clouds_yaml": self.clouds}))
+        tok, _, dom = k.site("tenants")
+        with self.assertRaises(S.KsError) as cm:
+            k.call(tok, "GET", "/groups?" + urllib.parse.urlencode({"name": "x" * 70, "domain_id": dom}))
+        self.assertEqual(cm.exception.message, "the site answered HTTP 500")
+        self.assertEqual(S._plain(cm.exception), "the site answered HTTP 500")
 
     def test_a_missing_managed_role_fails_only_the_group_that_needs_it(self):
         groups = [{"group": "acme.developers", "roles": ["member"]}, {"group": "acme.auditors", "roles": ["observer"]}]

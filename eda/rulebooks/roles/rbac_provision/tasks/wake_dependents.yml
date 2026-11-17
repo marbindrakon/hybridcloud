@@ -1,6 +1,8 @@
 ---
 # An access group (Rbac) that just became ready, or whose Keycloak group changed, wakes what names it: the Entity
-# when a spec.namespaceRbac list names it, and the Teams and Projects of the namespace whose access fields name it.
+# when a spec.namespaceRbac list names it, the Teams and Projects of the namespace whose access fields name it, and
+# the environments (CloudOSO, CloudVirt) whose spec.toolRbac names it (an access group they hold as Waiting is then
+# granted at once).
 # Without this they keep the binding without the group until their next change. Objects being deleted are skipped.
 # Only on a transition (not ready -> ready, or a new group), so a steady access group nudges nothing.
 # Input: rbac_cr_name, rbac_cr_namespace, entity_name, rbac_group_path_display, shc_live_cr (the Rbac before the job)
@@ -27,7 +29,7 @@
   register: _wd_entity
   when: rbac_transitioned | bool
 
-- name: List the namespace's Teams and Projects
+- name: List the namespace's Teams, Projects and environments
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
     api_key: "{{ services_bearer_token }}"
@@ -35,7 +37,7 @@
     api_version: hybridsovereign.redhat/v1alpha1
     kind: "{{ item }}"
     namespace: "{{ rbac_cr_namespace }}"
-  loop: [Team, Project]
+  loop: [Team, Project, CloudOSO, CloudVirt]
   register: _wd_objs
   when: rbac_transitioned | bool
 
@@ -54,8 +56,10 @@
       {%- for r in _wd_objs.results | default([]) -%}
         {%- for o in r.resources | default([]) if o.metadata.deletionTimestamp is not defined -%}
           {%- set sp = o.spec | default({}, true) -%}
-          {%- if _fields | map('extract', sp) | select('defined') | select('iterable') | map('list') | flatten
-                 | select('equalto', rbac_cr_name) | list | length > 0 -%}
+          {%- set tr = sp.toolRbac | default({}, true) -%}
+          {%- set named = (_fields | map('extract', sp) | select('defined') | select('iterable') | map('list') | flatten | list)
+                          + (tr.editRbac | default([], true) | list) + (tr.viewRbac | default([], true) | list) -%}
+          {%- if rbac_cr_name in named -%}
             {%- set _ = out.append({'kind': r.item, 'namespace': o.metadata.namespace, 'name': o.metadata.name}) -%}
           {%- endif -%}
         {%- endfor -%}

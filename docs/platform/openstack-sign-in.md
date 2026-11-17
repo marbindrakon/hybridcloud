@@ -142,6 +142,14 @@ memberships after a sign-in. It decides two things:
 - How long a person removed from an access group keeps API access: up to `authorization_ttl` minutes after the
   last sign-in. Dashboard access ends when the person's token expires.
 
+The identity service caches role, token and application credential data, so both directions can lag by some
+minutes: a person's application credential can keep working for a while after the lifetime above ran out, and stay
+refused for a while after the next sign-in; a role granted to or revoked from an access group can take as long to
+show. On a site tried, the lag was about ten minutes. The settings an operator looks at are `cache_time` in the
+`[role]`, `[token]` and `[application_credential]` sections of `keystone.conf`; unset, they use
+`[cache] expiration_time` (default 600 seconds) (Keystone configuration reference; the site's own values were not
+read).
+
 Use a value from 480 to 10080 (eight hours to seven days). A shorter value cuts a removed person off sooner and
 makes people sign in more often. With 0, people cannot create application credentials. When the attribute is not
 set, the identity service uses its configuration default, which no API reports; declare the value then (below), or
@@ -236,7 +244,8 @@ administrator of the cloud, the network service shows no network policies but th
 cloud may refuse the volume types (on a 2026.2 cloud with its default policies, the probe of a manager-only account
 got none of the networks and "ForbiddenException" for the volume types). The probe then does not publish empty
 lists: `status.site.externalNetworks` and `status.site.volumeTypes` keep what they held (nothing on a new site), and
-the site's message says "external networks not listed: the account is not an administrator of the cloud, ..." and
+the site's message says "external networks not listed: the account is not an administrator of the cloud, ..." (also
+when such an account sees some networks: that list could be incomplete) and
 "volume types not listed: the account may not read them ...". Tenants then have no external network to pick in the
 cluster form. Give the account the right to read those lists (an administrator account, or a site policy that lets
 it read them) where tenants should pick.

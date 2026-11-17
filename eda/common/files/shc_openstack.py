@@ -361,7 +361,13 @@ def global_external_networks(conn, notes, admin=True):
     access_as_external RBAC policy with target "*" (Neutron writes one when a network's router:external flag is set);
     a network external for some projects only (per-project policies) is never listed. None when the list cannot be
     read (a note says why; the caller keeps what it had). An account that is not an administrator of the cloud (e.g.
-    a domain manager) is shown no policy but its own project's, so an empty list from it says nothing: None too."""
+    a domain manager) is shown only its own project's policies, so what it sees may be part of the list or nothing:
+    not listed (None) either way, never published as the site's list."""
+    if not admin:
+        notes.append("external networks not listed: the account is not an administrator of the cloud, and the site "
+                      "shows such an account only its own project's network policies, so the list could be "
+                      "incomplete; the last list stands")
+        return None
     try:
         out, seen = [], set()
         for rp in conn.network.rbac_policies(action="access_as_external", target_project_id="*"):
@@ -371,10 +377,6 @@ def global_external_networks(conn, notes, admin=True):
             net = conn.network.get_network(rp.object_id)
             families = sorted({int(sn.ip_version) for sn in conn.network.subnets(network_id=net.id)})
             out.append({"name": net.name, "id": net.id, "families": families, "shared": bool(net.is_shared)})
-        if not out and not admin:
-            notes.append("external networks not listed: the account is not an administrator of the cloud, and the "
-                         "site shows such an account no network policies but its own project's; the last list stands")
-            return None
         return sorted(out, key=lambda n: (n["name"] or "", n["id"]))
     except Exception as e:  # noqa: BLE001 - a missing list must not fail the site probe
         notes.append(f"external networks not listed: {type(e).__name__}")
@@ -1267,8 +1269,9 @@ class Keystone:
     def call(self, token, method, path, body=None, ok=(200, 201, 204)):
         status, data, _ = self.request(token, method, path, body)
         if status not in ok:
-            raise KsError(status, scrub(((data.get("error") or {}).get("message")) if isinstance(data, dict) else "")
-                          or f"the site answered HTTP {status}")
+            # Keystone's own message, else the status in plain words (a page without JSON: never "None")
+            msg = ((data.get("error") or {}).get("message")) if isinstance(data, dict) else None
+            raise KsError(status, scrub(msg) if msg else f"the site answered HTTP {status}")
         return data
 
     def site(self, domain_name):
@@ -1336,6 +1339,11 @@ def _assigned(ks, token, project_id, kind, oid):
 
 
 def _find_by_name(ks, token, kind, name, domain_id):
+    """The object of that name in the domain, or None. A name longer than the site allows cannot exist there: None,
+    and no call (Keystone 2026.2 answers a lookup by such a name with HTTP 500)."""
+    limit = {"groups": GROUP_NAME_MAX, "users": USER_NAME_MAX, "projects": GROUP_NAME_MAX}.get(kind)
+    if limit and len(name or "") > limit:
+        return None
     q = urllib.parse.urlencode({"name": name, "domain_id": domain_id})
     items = [o for o in ks.call(token, "GET", f"/{kind}?{q}").get(kind, [])
              if o.get("name") == name and o.get("domain_id") == domain_id]
@@ -1382,13 +1390,13 @@ def _roles_elsewhere(ks, req, gtoken, gid):
 
 
 def access_groups(req):
-    """state present: {domain (the project's), project_id, group_domain, entity, managed_roles, groups: [{group,
-    roles, description}], keep: [names wanted but not ready]} -> {groupDomainId, groups: [{group, id, roles, state
+    """state present: {domain (the project's), project_id, group_domain, entity, managed_roles, groups: [{group, roles,
+    description}], keep: [names wanted but not ready]} -> {groupDomainId, groups: [{group, id, roles, state
     Granted|Failed|Unchecked, message, created, held}], unwanted: [names]}. Failed = the site refused (Keystone's
     message); Unchecked = the site did not answer (5xx, no connection): nothing is known, the group keeps what it had.
     held = the group held its roles on the project before this run. state absent: {..., groups: [{group, delete}]} ->
-    {groups: [{group, id, revoked, deleted, kept, error}]}: each group on its own (one that cannot be removed now is
-    reported with error and the others go on)."""
+    {groups: [{group, id, revoked, deleted, kept, error}]}; both report changed (anything written): each group on its
+    own (one that cannot be removed now is reported with error and the others go on)."""
     _require(req, "domain", "project_id", "group_domain")
     acct = Account(req)
     ks = Keystone(acct)
@@ -1396,6 +1404,7 @@ def access_groups(req):
     pid = req["project_id"]
     managed = ks.role_ids(ptoken, req.get("managed_roles") or [], missing_ok=True)
     by_id = {v: k for k, v in managed.items()}
+    changed = False   # anything written on the site (the job reports "changed" only then)
     if req.get("state", "present") == "absent":
         out = []
         for g in req.get("groups") or []:
@@ -1417,6 +1426,7 @@ def access_groups(req):
                 for rid in sorted(_assigned(ks, ptoken, pid, "group", grp["id"]) & set(by_id)):
                     ks.call(ptoken, "DELETE", f"/projects/{pid}/groups/{grp['id']}/roles/{rid}", ok=(204, 404))
                     rec["revoked"].append(by_id[rid])
+                    changed = True
                 if g.get("delete"):
                     trusted, left = _roles_elsewhere(ks, req, gtoken, grp["id"])
                     if not trusted:
@@ -1426,9 +1436,10 @@ def access_groups(req):
                     else:
                         ks.call(gtoken, "DELETE", f"/groups/{grp['id']}", ok=(204, 404))
                         rec["deleted"] = True
+                        changed = True
             except Exception as e:  # noqa: BLE001 - reported per group: the others go on
                 rec["error"] = scrub(_plain(e))
-        return {"groups": out}
+        return {"groups": out, "changed": changed}
 
     wanted = {g["group"] for g in req.get("groups") or []} | set(req.get("keep") or [])
     out = []
@@ -1449,15 +1460,18 @@ def access_groups(req):
                     "name": name, "domain_id": gdom,
                     "description": f"{g.get('description') or 'Access group ' + name}. {MARKER}"}})["group"]
                 rec["created"] = True
+                changed = True
             rec["id"] = grp["id"]
             want = ks.role_ids(ptoken, rec["roles"])
             have = _assigned(ks, ptoken, pid, "group", grp["id"])
             rec["held"] = bool(want) and set(want.values()) <= have
             for rid in sorted(set(want.values()) - have):
                 ks.call(ptoken, "PUT", f"/projects/{pid}/groups/{grp['id']}/roles/{rid}")
+                changed = True
             # an access group that moved between edit and view keeps only the role it has now
             for rid in sorted((have & set(by_id)) - set(want.values())):
                 ks.call(ptoken, "DELETE", f"/projects/{pid}/groups/{grp['id']}/roles/{rid}", ok=(204, 404))
+                changed = True
         except Exception as e:  # noqa: BLE001 - per group: a refusal is the group's, a fault of the moment too
             if isinstance(e, (KsError, Refusal)) and not transient(e):
                 rec.update({"state": "Failed", "message": scrub(_plain(e))})
@@ -1477,7 +1491,7 @@ def access_groups(req):
             if (grp and _marked(grp) and grp.get("domain_id") == gdom and grp.get("name", "").startswith(prefix)
                     and grp["name"] not in wanted):
                 unwanted.append(grp["name"])
-    return {"groupDomainId": gdom, "groups": out, "unwanted": sorted(set(unwanted))}
+    return {"groupDomainId": gdom, "groups": out, "unwanted": sorted(set(unwanted)), "changed": changed}
 
 
 def _step_refusal(reason, step, e):

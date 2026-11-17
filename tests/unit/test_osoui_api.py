@@ -177,3 +177,23 @@ class Realization(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class AccessReadyTime(unittest.TestCase):
+    """Gate part 2 G-4: AccessReady carries no time of its own; the status writer gives it the form of the other
+    conditions (seconds, Z) and keeps it while its status stays."""
+
+    def test_the_status_writer_times_it(self):
+        sys.path.insert(0, os.path.dirname(__file__))
+        from play_helper import load, walk
+        main = load(os.path.join(ROOT, "eda", "rulebooks", "roles", "cloudoso_provision", "tasks", "main.yml"))
+        conds = [c for t in walk(main) for c in (((t.get("vars") or {}).get("cr_status_body") or {}).get("conditions")
+                                                 or []) if isinstance(c, dict) and c.get("type") == "AccessReady"]
+        self.assertTrue(conds)
+        for c in conds:
+            self.assertNotIn("lastTransitionTime", c)
+        sys.path.insert(0, os.path.join(ROOT, "eda", "rulebooks", "collections", "ansible_collections", "hybridsovereign",
+                                        "shc", "plugins", "module_utils"))
+        import shc_status
+        out = shc_status.merge_conditions([], [{"type": "AccessReady", "status": "True", "reason": "GroupsGranted"}])
+        self.assertRegex(out[0]["lastTransitionTime"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")

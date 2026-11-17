@@ -12,7 +12,7 @@ from that directory with required OCP environment variables set.
 - [ ] ArgoCD accessible at `https://openshift-gitops-server-openshift-gitops.apps.central.lab.example.com/`
 - [ ] Vault accessible at `https://vault-central.apps.central.lab.example.com/`
 - [ ] Services Vault accessible at `https://vault-services.apps.services.lab.example.com/`
-- [ ] Keycloak SSO accessible at `https://sso-rhbk-services.apps.services.lab.example.com/`
+- [ ] Keycloak SSO accessible at its public address (`KEYCLOAK_EXTERNAL_URL`, for example `https://auth.example.com/`)
 - [ ] OCI registry credentials verified (`make check-env` from bootstrap repo)
 
 ## Infrastructure Checks

@@ -54,6 +54,7 @@ class Keystone:
         self.idps, self.protocols, self.mappings = {}, {}, {}
         self.log = []
         self.faults = []                  # tracebacks of the fake's own errors (a test asserts there are none)
+        self.long_name_lookups = []       # group lookups by a name over 64 characters (answered 500)
         self.fail_next = []               # [(method, path prefix, status, message)] answered once, in order
         self.on_request = None            # optional hook(method, path) run before a request is handled
         self.secrets_seen = []            # every password set and credential secret made (a test's secret hunt)
@@ -125,12 +126,13 @@ class Keystone:
                     import traceback
                     ks.faults.append(traceback.format_exc())
                     status, out, headers = 500, {"error": {"code": 500, "message": f"fake: {type(e).__name__}"}}, None
-                data = b"" if out is None else json.dumps(out).encode()
+                raw_html = isinstance(out, bytes)    # a page, not JSON (Keystone's 500 for an over-long name filter)
+                data = out if raw_html else (b"" if out is None else json.dumps(out).encode())
                 self.send_response(status)
                 for k, v in (headers or {}).items():
                     self.send_header(k, v)
                 if data:
-                    self.send_header("Content-Type", "application/json")
+                    self.send_header("Content-Type", "text/html" if raw_html else "application/json")
                 self.send_header("Content-Length", str(len(data)))
                 self.end_headers()
                 if data:
@@ -594,6 +596,10 @@ class Keystone:
             did = q.get("domain_id")
             if not (self.is_admin(tok) or (did and self.manager_of(tok, did))):
                 return self._forbidden("identity:list_groups")
+            if len(q.get("name") or "") > 64:
+                # Keystone 2026.2 (gate part 2): a lookup by a name longer than the column answers 500 with a page
+                self.long_name_lookups.append(q["name"])
+                return 500, b"<html><body><h1>500 Internal Server Error</h1></body></html>", None
             gs = [g for g in self.groups.values() if (not did or g["domain_id"] == did)
                   and ("name" not in q or g["name"] == q["name"])]
             return 200, {"groups": gs}, None

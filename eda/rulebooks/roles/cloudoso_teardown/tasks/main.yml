@@ -286,6 +286,18 @@
         vault_kv_delete_paths: "{{ oso_vault_paths }}"
       when: not (cloudoso_name_in_use | bool)
 
+    # the environment's readers (cloudoso_provision reader_access.yml), last: only once the project and the rest are
+    # gone does this environment leave the owners of the services sign-in client's roles (a role goes with its last
+    # owner), so a refused delete (a project that still holds servers) leaves the access groups able to open the
+    # environment's page and read why; the Role and RoleBinding go with the CloudOSO by their owner reference
+    - name: The environment's readers leave the services sign-in client
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ cloudoso_entity_for_status }}"
+        ssg_owner: "CloudOSO/{{ cloudoso_cr_name }}"
+        ssg_label: "CloudOSO {{ cloudoso_cr_name }} (readers)"
+        ssg_wanted: []
+
     - name: Get deletion reconcile timestamp
       ansible.builtin.set_fact:
         cloudoso_delete_status_time: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"

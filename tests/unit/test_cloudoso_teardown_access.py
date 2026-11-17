@@ -119,5 +119,22 @@ class TeardownAccess(unittest.TestCase):
         self.assertEqual([t for t in trace if "os" in t and t["os"]["action"] == "leftover-users"], [])
 
 
+    def test_a_group_name_over_the_sites_limit_does_not_block_the_delete(self):
+        """Gate part 2 G-1: a recorded access group whose name is longer than the site allows (it was refused, so it
+        never existed) is "not found": the delete goes on to the user sweep; the site is not asked by that name."""
+        long = "acme." + "r" * 60
+        sweep = by_name(load(MAIN)[0]["block"], "Delete the cluster users left in the project")
+        tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/access_down.yml"}, sweep]
+        extra = {"os_account_clouds_yaml": self.site.account, "fake_clouds_yaml": self.site.account,
+                 "cloudoso_cr_name": "web", "cloudoso_entity_for_status": "acme",
+                 "oso_project_domain": "tenants", "oso_check": {"project_exists": True, "project_id": self.pid},
+                 "oso_access": {"signInClient": "", "groupDomain": "tenants",
+                                "groups": [{"group": "acme.developers"}], "removing": [long]}}
+        rc, trace, out = H.run("cloudoso_teardown", "main.yml", extra, fakes=O.FAKES, tasks=tasks)
+        self.assertEqual(rc, 0, out)
+        self.assertNotIn("could not be removed from the site", H.LAST_OUTPUT)
+        self.assertIn("leftover-users", [t["os"]["action"] for t in trace if "os" in t])
+        self.assertEqual(self.site.ks.long_name_lookups, [])
+
 if __name__ == "__main__":
     unittest.main()

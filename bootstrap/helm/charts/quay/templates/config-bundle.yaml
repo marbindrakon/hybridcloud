@@ -15,11 +15,15 @@ metadata:
   annotations:
     argocd.argoproj.io/sync-wave: "3"
 type: Opaque
-stringData:
-  config.yaml: |
-    {{- .Values.registry.configBundle | nindent 4 }}
-    {{- if $dbUri }}
-    DB_URI: {{ $dbUri }}
-    {{- end }}
+# shc: rendered as data (base64), not stringData. The Application ignores /data/config.yaml (the live bundle holds what
+# the db-init hook and the operators added: DB_URI, storage and sign-in settings, superusers added later); with
+# RespectIgnoreDifferences Argo applies the live value for an ignored pointer, which only works when the manifest
+# has that pointer. A stringData manifest has none, so a sync wrote the chart's base config over the live bundle.
+{{- $config := .Values.registry.configBundle }}
+{{- if $dbUri }}
+{{- $config = printf "%s\nDB_URI: %s\n" (trimSuffix "\n" $config) $dbUri }}
+{{- end }}
+data:
+  config.yaml: {{ $config | b64enc }}
 {{- end }}
 {{- end }}

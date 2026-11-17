@@ -1,4 +1,33 @@
 {{- if and .Values.crunchy.enabled (not .Values.registry.components.postgres.managed) }}
+{{- $settings := dict }}
+{{- if .Values.oidc.enabled }}
+{{- $o := .Values.oidc }}
+{{- $_ := set $settings "AUTHENTICATION_TYPE" $o.authenticationType }}
+{{- $_ := set $settings $o.configKey (dict "SERVICE_NAME" $o.serviceName "CLIENT_ID" (required "oidc.clientId is required" $o.clientId) "OIDC_SERVER" (printf "%s/" (trimSuffix "/" (required "oidc.server is required" $o.server))) "LOGIN_SCOPES" $o.loginScopes "PREFERRED_GROUP_CLAIM_NAME" $o.groupClaim) }}
+{{- end }}
+{{- if .Values.rgw.enabled }}
+{{- $r := .Values.rgw }}
+{{- $_ := set $settings "DISTRIBUTED_STORAGE_CONFIG" (dict "default" (list "RadosGWStorage" (dict "hostname" (required "rgw.hostname is required" $r.hostname) "port" ($r.port | int) "is_secure" $r.isSecure "bucket_name" (required "rgw.bucket is required" $r.bucket) "storage_path" $r.storagePath))) }}
+{{- $_ := set $settings "DISTRIBUTED_STORAGE_DEFAULT_LOCATIONS" (list) }}
+{{- $_ := set $settings "DISTRIBUTED_STORAGE_PREFERENCE" (list "default") }}
+{{- end }}
+{{- if or .Values.oidc.enabled .Values.rgw.enabled }}
+---
+# shc: the non-secret config-bundle settings (sign-in server, client id, storage location). A tracked object, not
+# only the hook's environment: when a value changes (a new sign-in server) this ConfigMap differs, the Application
+# goes OutOfSync, its automated sync runs, and with it the Sync hook below, which merges the settings into the config
+# bundle (patching only keys that differ). Without it a changed value never reached the bundle: an Application whose
+# only change is a hook stays Synced and its hook never runs again.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ .Values.registry.name }}-bundle-settings
+  namespace: {{ .Values.namespace }}
+  annotations:
+    argocd.argoproj.io/sync-wave: "3"
+data:
+  settings.json: {{ $settings | toJson | quote }}
+{{- end }}
 ---
 apiVersion: v1
 kind: ServiceAccount
@@ -15,10 +44,19 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "3"
+# shc: only the two Secrets the hook touches: it reads the database user's Secret and reads and patches the bundle
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "patch", "update"]
+    resourceNames:
+      - "{{ .Values.crunchy.name }}-pguser-quay"
+      - "{{ .Values.registry.configBundleSecretName | default (printf "%s-config-bundle" .Values.registry.name) }}"
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - "{{ .Values.registry.configBundleSecretName | default (printf "%s-config-bundle" .Values.registry.name) }}"
+    verbs: ["patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -137,21 +175,12 @@ spec:
                   key: secret_key
             {{- end }}
             {{- if or .Values.oidc.enabled .Values.rgw.enabled }}
-            {{- $settings := dict }}
-            {{- if .Values.oidc.enabled }}
-            {{- $o := .Values.oidc }}
-            {{- $_ := set $settings "AUTHENTICATION_TYPE" $o.authenticationType }}
-            {{- $_ := set $settings $o.configKey (dict "SERVICE_NAME" $o.serviceName "CLIENT_ID" (required "oidc.clientId is required" $o.clientId) "OIDC_SERVER" (printf "%s/" (trimSuffix "/" (required "oidc.server is required" $o.server))) "LOGIN_SCOPES" $o.loginScopes "PREFERRED_GROUP_CLAIM_NAME" $o.groupClaim) }}
-            {{- end }}
-            {{- if .Values.rgw.enabled }}
-            {{- $r := .Values.rgw }}
-            {{- $_ := set $settings "DISTRIBUTED_STORAGE_CONFIG" (dict "default" (list "RadosGWStorage" (dict "hostname" (required "rgw.hostname is required" $r.hostname) "port" ($r.port | int) "is_secure" $r.isSecure "bucket_name" (required "rgw.bucket is required" $r.bucket) "storage_path" $r.storagePath))) }}
-            {{- $_ := set $settings "DISTRIBUTED_STORAGE_DEFAULT_LOCATIONS" (list) }}
-            {{- $_ := set $settings "DISTRIBUTED_STORAGE_PREFERENCE" (list "default") }}
-            {{- end }}
-            # shc: non-secret config-bundle settings (JSON); the job adds the secrets from env
+            # shc: non-secret config-bundle settings (JSON, the ConfigMap above); the job adds the secrets from env
             - name: SHC_BUNDLE_SETTINGS
-              value: {{ $settings | toJson | quote }}
+              valueFrom:
+                configMapKeyRef:
+                  name: {{ .Values.registry.name }}-bundle-settings
+                  key: settings.json
             {{- end }}
           volumeMounts:
             - name: shared-data
@@ -189,12 +218,18 @@ spec:
               if os.environ.get("RGW_ACCESS_KEY"):
                   loc = want["DISTRIBUTED_STORAGE_CONFIG"]["default"][1]
                   loc["access_key"], loc["secret_key"] = os.environ["RGW_ACCESS_KEY"], os.environ["RGW_SECRET_KEY"]
-              changed = sorted(k for k in want if cur.get(k) != want[k])
+              # a block (a mapping such as the login config) keeps keys added to it by hand: the chart's keys are
+              # merged into the existing block, never the block replaced whole
+              new = dict(cur)
+              for k, v in want.items():
+                  if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                      new[k] = {**cur[k], **v}
+                  else:
+                      new[k] = v
+              changed = sorted(k for k in want if cur.get(k) != new[k])
               if not changed:
                   print("configBundle already has the shc settings")
               else:
-                  new = dict(cur)
-                  new.update(want)
                   data = base64.b64encode(yaml.safe_dump(new, sort_keys=False).encode()).decode()
                   subprocess.check_call(["oc", "patch", "secret", name, "-n", ns, "--type=merge",
                                          "-p", json.dumps({"data": {"config.yaml": data}})])
