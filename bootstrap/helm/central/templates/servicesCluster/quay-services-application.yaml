@@ -36,6 +36,9 @@ spec:
       - ServerSideApply=true
       - SkipDryRunOnMissingResource=true
       - RespectIgnoreDifferences=true
+      # only objects that differ are applied: the config bundle (its config.yaml ignored) is never re-applied over
+      # what the db-init hook and later changes put into it
+      - ApplyOutOfSyncOnly=true
     retry:
       limit: 10
       backoff:

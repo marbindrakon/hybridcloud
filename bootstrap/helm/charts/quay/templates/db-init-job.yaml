@@ -44,10 +44,19 @@ metadata:
   namespace: {{ .Values.namespace }}
   annotations:
     argocd.argoproj.io/sync-wave: "3"
+# shc: only the two Secrets the hook touches: it reads the database user's Secret and reads and patches the bundle
 rules:
   - apiGroups: [""]
     resources: ["secrets"]
-    verbs: ["get", "patch", "update"]
+    resourceNames:
+      - "{{ .Values.crunchy.name }}-pguser-quay"
+      - "{{ .Values.registry.configBundleSecretName | default (printf "%s-config-bundle" .Values.registry.name) }}"
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["secrets"]
+    resourceNames:
+      - "{{ .Values.registry.configBundleSecretName | default (printf "%s-config-bundle" .Values.registry.name) }}"
+    verbs: ["patch"]
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding
@@ -209,12 +218,18 @@ spec:
               if os.environ.get("RGW_ACCESS_KEY"):
                   loc = want["DISTRIBUTED_STORAGE_CONFIG"]["default"][1]
                   loc["access_key"], loc["secret_key"] = os.environ["RGW_ACCESS_KEY"], os.environ["RGW_SECRET_KEY"]
-              changed = sorted(k for k in want if cur.get(k) != want[k])
+              # a block (a mapping such as the login config) keeps keys added to it by hand: the chart's keys are
+              # merged into the existing block, never the block replaced whole
+              new = dict(cur)
+              for k, v in want.items():
+                  if isinstance(v, dict) and isinstance(cur.get(k), dict):
+                      new[k] = {**cur[k], **v}
+                  else:
+                      new[k] = v
+              changed = sorted(k for k in want if cur.get(k) != new[k])
               if not changed:
                   print("configBundle already has the shc settings")
               else:
-                  new = dict(cur)
-                  new.update(want)
                   data = base64.b64encode(yaml.safe_dump(new, sort_keys=False).encode()).decode()
                   subprocess.check_call(["oc", "patch", "secret", name, "-n", ns, "--type=merge",
                                          "-p", json.dumps({"data": {"config.yaml": data}})])
