@@ -254,3 +254,103 @@ class GlobalCheck(unittest.TestCase):
         rc, passed, out = self.check({})
         self.assertNotEqual(rc, 0)
         self.assertIn("Set KEYCLOAK_EXTERNAL_URL to the tenant sign-in directory's public address", out)
+
+
+# the role callers: (task file, the step after the include, the variable it sets, whether the job needs an address)
+ROLE_CALLERS = [
+    ("aapconfig_provision/tasks/main.yml", "Override keycloak_internal_url with discovered Route",
+     ["keycloak_internal_url", "keycloak_external_url"], False),
+    ("quayconfig_provision/tasks/main.yml", "Override keycloak_internal_url with discovered Route",
+     ["keycloak_internal_url"], False),
+    ("platformopenshift_provision/tasks/keycloak_admin_session.yml", "Set the Keycloak URL", ["kc_base_url"], True),
+    ("rbac_provision/tasks/main.yml", "Set Keycloak URL", ["svc_keycloak_url"], True),
+    ("rbac_teardown/tasks/main.yml", "Set Keycloak URL", ["svc_keycloak_url"], True),
+    ("rbacconfig_provision/tasks/main.yml", "Set Keycloak URL", ["plugin_rbac_keycloak_url"], True),
+    ("rbacconfig_teardown/tasks/main.yml", "Set Keycloak URL", ["plugin_rbac_keycloak_url"], True),
+    ("vault_provision/tasks/configure_oidc.yml", "Set Keycloak external URL", ["kc_external_url"], True),
+    ("vault_teardown/tasks/main.yml", "Set Keycloak URL", ["kc_external_url_fin"], True),
+    ("cloudvirt_provision/tasks/access.yml", "Keycloak URL", ["cv_kc"], True),
+]
+BEFORE = {"keycloak_internal_url": "http://kc-internal.example.org:8080",
+          "keycloak_external_url": "https://kc-from-env.example.org"}
+
+
+def run_caller(fake, rel, follow, names, env=None):
+    """The caller's own two steps (the include of the shared file, the step that uses its answer), run with the
+    role's role_path, the real k8s_info and the fake API; returns (rc, {name: value}, output)."""
+    from play_helper import by_name, load
+    path = os.path.join(ROLES, rel)
+    tasks = load(path)
+    steps = [by_name(tasks, "The sign-in directory's address"), by_name(tasks, follow)]
+    tmp = tempfile.mkdtemp(prefix="shc-skc-caller-")
+    try:
+        out = os.path.join(tmp, "out.json")
+        with open(os.path.join(tmp, "steps.yml"), "w") as f:
+            yaml.safe_dump(steps, f)
+        with open(os.path.join(tmp, "play.yml"), "w") as f:
+            f.write(textwrap.dedent(f'''\
+                - hosts: localhost
+                  connection: local
+                  gather_facts: false
+                  tasks:
+                    - ansible.builtin.set_fact:
+                        keycloak_internal_url: "{BEFORE['keycloak_internal_url']}"
+                        keycloak_external_url: "{BEFORE['keycloak_external_url']}"
+                    - ansible.builtin.include_tasks: steps.yml
+                    - ansible.builtin.copy:
+                        dest: {out}
+                        content: "{{{{ skc_test_names | map('extract', vars) | list | to_json }}}}"
+                '''))
+        role_path = os.path.dirname(os.path.dirname(path))
+        with open(os.path.join(tmp, "vars.json"), "w") as f:
+            json.dump({"services_api_host": fake.url, "services_bearer_token": "token-of-the-job",
+                       "role_path": role_path, "skc_test_names": names}, f)
+        e = {k: v for k, v in os.environ.items() if k != "KEYCLOAK_EXTERNAL_URL"}
+        e.update(ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false", ANSIBLE_NOCOLOR="1",
+                 ANSIBLE_LOCAL_TEMP=os.path.join(tmp, "lt"), ANSIBLE_REMOTE_TMP=os.path.join(tmp, "rt"), TMPDIR=tmp)
+        e.update(env or {})
+        p = subprocess.run(["ansible-playbook", "-i", "localhost,", "play.yml", "-e", "@vars.json"], cwd=tmp, env=e,
+                           capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
+        res = dict(zip(names, json.load(open(out)))) if os.path.exists(out) else None
+        return p.returncode, res, p.stdout + p.stderr
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+
+
+@unittest.skipUnless(HAVE_ANSIBLE and have_k8s_collection(), "ansible-playbook / kubernetes.core not installed")
+class CallerSteps(unittest.TestCase):
+    """Each role's own steps around the shared lookup (A3): the labelled Route wins over the setting; without a Route
+    the AAP and Quay jobs keep their environment's URLs, every other job takes the setting or fails plainly."""
+
+    def fake(self, *routes):
+        f = FakeK8s(routes)
+        self.addCleanup(f.stop)
+        return f
+
+    def test_the_route_wins_over_the_setting(self):
+        fake = self.fake(route("kc-auth", "auth.example.org", {"app": "keycloak"}))
+        for rel, follow, names, _ in ROLE_CALLERS:
+            with self.subTest(rel):
+                rc, res, out = run_caller(fake, rel, follow, names,
+                                          env={"KEYCLOAK_EXTERNAL_URL": "https://setting.example.org"})
+                self.assertEqual(rc, 0, out[-2000:])
+                self.assertEqual(res, {n: "https://auth.example.org" for n in names})
+
+    def test_without_a_route(self):
+        fake = self.fake(route("kc-legacy", "kc.apps.example.org"))
+        for rel, follow, names, required in ROLE_CALLERS:
+            with self.subTest(rel):
+                rc, res, out = run_caller(fake, rel, follow, names,
+                                          env={"KEYCLOAK_EXTERNAL_URL": "https://setting.example.org"})
+                self.assertEqual(rc, 0, out[-2000:])
+                if required:
+                    self.assertEqual(res, {n: "https://setting.example.org" for n in names})
+                else:   # AAP and Quay keep what their environment gave them
+                    self.assertEqual(res, {n: BEFORE[n] for n in names})
+                rc, res, out = run_caller(fake, rel, follow, names)
+                if required:
+                    self.assertNotEqual(rc, 0)
+                    self.assertIn("The sign-in directory's address is not known", " ".join(out.split()))
+                else:
+                    self.assertEqual(rc, 0, out[-2000:])
+                    self.assertEqual(res, {n: BEFORE[n] for n in names})

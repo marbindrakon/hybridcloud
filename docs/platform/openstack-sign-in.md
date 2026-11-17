@@ -236,7 +236,8 @@ administrator of the cloud, the network service shows no network policies but th
 cloud may refuse the volume types (on a 2026.2 cloud with its default policies, the probe of a manager-only account
 got none of the networks and "ForbiddenException" for the volume types). The probe then does not publish empty
 lists: `status.site.externalNetworks` and `status.site.volumeTypes` keep what they held (nothing on a new site), and
-the site's message says "external networks not listed: the account is not an administrator of the cloud, ..." and
+the site's message says "external networks not listed: the account is not an administrator of the cloud, ..." (also
+when such an account sees some networks: that list could be incomplete) and
 "volume types not listed: the account may not read them ...". Tenants then have no external network to pick in the
 cluster form. Give the account the right to read those lists (an administrator account, or a site policy that lets
 it read them) where tenants should pick.

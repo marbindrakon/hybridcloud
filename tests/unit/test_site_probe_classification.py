@@ -137,19 +137,20 @@ class NotAnAdministrator(unittest.TestCase):
     policies but its own project's, and the volume types are refused it. The probe says so in plain words and leaves
     both lists out (the site keeps what it had) instead of publishing empty lists."""
 
-    def test_an_empty_policy_list_of_a_non_administrator_is_not_listed(self):
-        conn = site()
-        conn.network.rbacs = []    # what Neutron shows a non-administrator
+    def test_a_non_administrators_list_is_never_published(self):
+        """Neutron shows a non-administrator only its own project's policies: an empty list says nothing, and a
+        non-empty one may be part of the site's list (A5). Neither is published; the network service is not asked."""
+        note = ("external networks not listed: the account is not an administrator of the cloud, and the site shows "
+                "such an account only its own project's network policies, so the list could be incomplete; the last "
+                "list stands")
+        for conn in (site(), Obj(network=FakeNetwork([], [], []))):
+            notes = []
+            self.assertIsNone(S.global_external_networks(conn, notes, admin=False))
+            self.assertEqual(notes, [note])
+            self.assertEqual(conn.network.filters, [])
+        empty = Obj(network=FakeNetwork([], [], []))
         notes = []
-        self.assertIsNone(S.global_external_networks(conn, notes, admin=False))
-        self.assertEqual(notes, ["external networks not listed: the account is not an administrator of the cloud, "
-                                 "and the site shows such an account no network policies but its own project's; the "
-                                 "last list stands"])
-        notes = []
-        self.assertEqual(S.global_external_networks(conn, notes, admin=True), [])   # an administrator: none exist
-        self.assertEqual(notes, [])
-        notes = []                 # a non-administrator that is shown some (a site policy): listed
-        self.assertEqual(len(S.global_external_networks(site(), notes, admin=False)), 3)
+        self.assertEqual(S.global_external_networks(empty, notes, admin=True), [])   # an administrator: none exist
         self.assertEqual(notes, [])
 
     def test_volume_types_refused(self):

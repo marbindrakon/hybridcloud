@@ -361,7 +361,13 @@ def global_external_networks(conn, notes, admin=True):
     access_as_external RBAC policy with target "*" (Neutron writes one when a network's router:external flag is set);
     a network external for some projects only (per-project policies) is never listed. None when the list cannot be
     read (a note says why; the caller keeps what it had). An account that is not an administrator of the cloud (e.g.
-    a domain manager) is shown no policy but its own project's, so an empty list from it says nothing: None too."""
+    a domain manager) is shown only its own project's policies, so what it sees may be part of the list or nothing:
+    not listed (None) either way, never published as the site's list."""
+    if not admin:
+        notes.append("external networks not listed: the account is not an administrator of the cloud, and the site "
+                      "shows such an account only its own project's network policies, so the list could be "
+                      "incomplete; the last list stands")
+        return None
     try:
         out, seen = [], set()
         for rp in conn.network.rbac_policies(action="access_as_external", target_project_id="*"):
@@ -371,10 +377,6 @@ def global_external_networks(conn, notes, admin=True):
             net = conn.network.get_network(rp.object_id)
             families = sorted({int(sn.ip_version) for sn in conn.network.subnets(network_id=net.id)})
             out.append({"name": net.name, "id": net.id, "families": families, "shared": bool(net.is_shared)})
-        if not out and not admin:
-            notes.append("external networks not listed: the account is not an administrator of the cloud, and the "
-                         "site shows such an account no network policies but its own project's; the last list stands")
-            return None
         return sorted(out, key=lambda n: (n["name"] or "", n["id"]))
     except Exception as e:  # noqa: BLE001 - a missing list must not fail the site probe
         notes.append(f"external networks not listed: {type(e).__name__}")
