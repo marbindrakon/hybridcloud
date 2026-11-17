@@ -318,3 +318,17 @@ class HookAccess(unittest.TestCase):
             {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["pg-pguser-quay", "reg1-config-bundle"],
              "verbs": ["get"]},
             {"apiGroups": [""], "resources": ["secrets"], "resourceNames": ["reg1-config-bundle"], "verbs": ["patch"]}])
+
+
+class RollbackNote(unittest.TestCase):
+    """Review N1: the chart says how to roll it back without resetting the live bundle."""
+
+    def test_the_chart_states_the_rollback_rule(self):
+        with open(os.path.join(CHART, "README.md")) as f:
+            text = " ".join(f.read().split())
+        self.assertIn("Roll back the chart **version** only.", text)
+        self.assertIn("Never remove `ApplyOutOfSyncOnly=true`", text)
+        self.assertIn("renders the config bundle as `stringData`", text)
+        with open(os.path.join(ROOT, "bootstrap", "helm", "central", "templates", "servicesCluster",
+                               "quay-services-application.yaml")) as f:
+            self.assertIn("charts/quay/README.md", f.read())

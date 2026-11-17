@@ -37,7 +37,7 @@ spec:
       - SkipDryRunOnMissingResource=true
       - RespectIgnoreDifferences=true
       # only objects that differ are applied: the config bundle (its config.yaml ignored) is never re-applied over
-      # what the db-init hook and later changes put into it
+      # what the db-init hook and later changes put into it. Never remove this (rollback rule: charts/quay/README.md)
       - ApplyOutOfSyncOnly=true
     retry:
       limit: 10
