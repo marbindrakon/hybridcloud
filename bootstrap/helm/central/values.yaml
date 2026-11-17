@@ -4876,7 +4876,7 @@ sovereignDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/sovereign-cloud-dashboard
-      tag: "img-2.3.18"  # img-2.3.18: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-2.3.17: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-2.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-2.3.15: gate follow-up (messages, floating IP and DNS display); img-2.3.14: platform access, placement use settings
+      tag: "img-2.3.19"  # img-2.3.19: readers of one environment see it; the cluster credential's time; status details (osoui r2); img-2.3.18: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-2.3.17: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-2.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-2.3.15: gate follow-up (messages, floating IP and DNS display); img-2.3.14: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4916,7 +4916,7 @@ tenancyDashboard:
     clusterDomain: apps.services.shc.signal9.gg
     image:
       repository: quay.signal9.gg/shc/tenancy-dashboard
-      tag: "img-5.3.18"  # img-5.3.18: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-5.3.17: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-5.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-5.3.15: gate follow-up (messages, floating IP and DNS display); img-5.3.14: platform access, placement use settings
+      tag: "img-5.3.19"  # img-5.3.19: readers of one environment see it; the cluster credential's time; status details (osoui r2); img-5.3.18: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-5.3.17: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-5.3.16: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-5.3.15: gate follow-up (messages, floating IP and DNS display); img-5.3.14: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4950,7 +4950,7 @@ sovereignAdminPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-admin-plugin
-      tag: "img-1.4.19"  # img-1.4.19: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-1.4.18: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-1.4.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.4.16: gate follow-up (messages, floating IP and DNS display); img-1.4.15: platform access, placement use settings
+      tag: "img-1.4.20"  # img-1.4.20: readers of one environment see it; the cluster credential's time; status details (osoui r2); img-1.4.19: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-1.4.18: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-1.4.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.4.16: gate follow-up (messages, floating IP and DNS display); img-1.4.15: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -4975,7 +4975,7 @@ sovereignTenantPlugin:
     namespace: sovereign-cloud
     image:
       repository: quay.signal9.gg/shc/sovereign-tenant-plugin
-      tag: "img-1.5.19"  # img-1.5.19: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-1.5.18: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-1.5.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.5.16: gate follow-up (messages, floating IP and DNS display); img-1.5.15: platform access, placement use settings
+      tag: "img-1.5.20"  # img-1.5.20: readers of one environment see it; the cluster credential's time; status details (osoui r2); img-1.5.19: an OpenStack environment people can use: sign-in, access groups, API credentials, the site network, the cluster's site user (osoui); img-1.5.18: reason texts ServiceLinkDown and RoutingDaemonRestarted (bnode); img-1.5.17: clusters on networks: any range the platform does not refuse, the refused ranges listed first (svc2); img-1.5.16: gate follow-up (messages, floating IP and DNS display); img-1.5.15: platform access, placement use settings
       pullPolicy: Always
     imagePullSecrets:
       - name: quay-pull-secret
@@ -5070,7 +5070,7 @@ amqStreams:
 # ─── HybridSovereign Primary Operator (services) ─────────────────────────────
 hybridsovereignPrimaryOperator:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.1.22-shc.43"  # shc.43: CRDs of a usable OpenStack environment: CloudOSO toolRbac, access and endpoints; CloudInfrastructure dashboard and signIn; PlatformOpenshift credential; NetworkPlacement siteNetwork; TenantProfile ConsoleSignIn and ApiCredentials (osoui); shc.42: the primary operator deployment carries PLATFORM_NAMESPACE (it realizes the platform's AttachmentCircuits in its own namespace); shc.41: AttachmentCircuit ceConfig acceptedRanges/refusedRanges/advertisedRanges/maxPrefixes, HybridNetwork prefix row installed, TenantProfile managedClusterRanges text (svc2); shc.40: placement routerAdvertisement record (message, confirmedAt, stale, mode NotApplicable); shc.39: CRDs for platform access, placement use, clusters on networks
+  chartVersion: "0.1.22-shc.44"  # shc.44: CRD text: PlatformOpenshift status.credential.createdAt is the platform's time (osoui r2); shc.43: CRDs of a usable OpenStack environment: CloudOSO toolRbac, access and endpoints; CloudInfrastructure dashboard and signIn; PlatformOpenshift credential; NetworkPlacement siteNetwork; TenantProfile ConsoleSignIn and ApiCredentials (osoui); shc.42: the primary operator deployment carries PLATFORM_NAMESPACE (it realizes the platform's AttachmentCircuits in its own namespace); shc.41: AttachmentCircuit ceConfig acceptedRanges/refusedRanges/advertisedRanges/maxPrefixes, HybridNetwork prefix row installed, TenantProfile managedClusterRanges text (svc2); shc.40: placement routerAdvertisement record (message, confirmedAt, stale, mode NotApplicable); shc.39: CRDs for platform access, placement use, clusters on networks
   syncWave: "38"
   destinationNamespace: sovereign-cloud
   values:
