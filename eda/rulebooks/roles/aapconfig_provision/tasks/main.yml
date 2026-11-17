@@ -66,27 +66,17 @@
         aap_oidc_client_id: "aap-{{ aapconfig_cr_name }}"
         keycloak_vault_path: "{{ _rbac_config.resources[0].spec.secret | default('rhbk-services-admin') }}"
 
-    - name: Discover Keycloak external URL from services cluster Route
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: route.openshift.io/v1
-        kind: Route
-        namespace: services-rhbk
-        label_selectors:
-          - "app=keycloak"
-      register: kc_route
-
-    - name: Debug Keycloak route discovery
-      ansible.builtin.debug:
-        msg: "Found {{ kc_route.resources | length }} Keycloak route(s) in services-rhbk"
+    # without a labelled Route the job keeps KEYCLOAK_INTERNAL_URL / KEYCLOAK_EXTERNAL_URL of its environment
+    - name: The sign-in directory's address
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
+      vars:
+        skc_required: false
 
     - name: Override keycloak_internal_url with discovered Route
       ansible.builtin.set_fact:
-        keycloak_internal_url: "https://{{ kc_route.resources[0].spec.host }}"
-        keycloak_external_url: "https://{{ kc_route.resources[0].spec.host }}"
-      when: kc_route.resources | length > 0
+        keycloak_internal_url: "{{ skc_url }}"
+        keycloak_external_url: "{{ skc_url }}"
+      when: skc_source == 'route'
 
     - name: Discover AAP gateway Route from services cluster
       kubernetes.core.k8s_info:

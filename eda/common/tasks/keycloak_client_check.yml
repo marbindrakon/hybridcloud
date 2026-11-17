@@ -4,32 +4,33 @@
 # client (purpose clients, obtain_keycloak_realm_token.yml). Never fails: a directory that cannot be asked gives
 # checked false and a note.
 # Inputs: kcc_realm, kcc_client_id, kcc_rbac_config ('' = the default RbacConfig of obtain_keycloak_realm_token.yml).
-# Uses services_api_host / services_bearer_token (the directory's route on the services cluster).
-# Sets kcc_result {checked, found, groupsMapper, note}.
+# Uses services_api_host / services_bearer_token (the directory's address: services_keycloak_url.yml).
+# Sets kcc_result {checked, found, groupsMapper, note, issuer}; issuer = <the directory's address>/realms/<realm>
+# ('' when the address is not known).
+- name: The sign-in directory's address is not known yet
+  ansible.builtin.set_fact:
+    _kcc_url: ""
+
 - name: Ask the sign-in directory
   block:
-    - name: Discover the Keycloak route on services
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: route.openshift.io/v1
-        kind: Route
-        namespace: services-rhbk
-        label_selectors: ["app=keycloak"]
-      register: _kcc_route
+    - name: The sign-in directory's address
+      ansible.builtin.include_tasks: services_keycloak_url.yml
+
+    - name: Keep the address
+      ansible.builtin.set_fact:
+        _kcc_url: "{{ skc_url }}"
 
     - name: Realm token for the realm's clients
       ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
       vars:
         krt_purpose: clients
         krt_rbac_config: "{{ kcc_rbac_config | default('', true) or 'keycloak-sovereign-tenants-services' }}"
-        krt_url: "https://{{ _kcc_route.resources[0].spec.host }}"
+        krt_url: "{{ _kcc_url }}"
         krt_token_fact: _kcc_token
 
     - name: Find the client
       ansible.builtin.uri:
-        url: "https://{{ _kcc_route.resources[0].spec.host }}/admin/realms/{{ kcc_realm }}/clients?clientId={{ kcc_client_id | urlencode }}"
+        url: "{{ _kcc_url }}/admin/realms/{{ kcc_realm }}/clients?clientId={{ kcc_client_id | urlencode }}"
         headers: {Authorization: "Bearer {{ _kcc_token }}"}
         validate_certs: false
       register: _kcc_client
@@ -50,6 +51,7 @@
             {%- endfor -%}
             {{ ns.ok }}
           note: ""
+          issuer: "{{ _kcc_url ~ '/realms/' ~ kcc_realm }}"
   rescue:
     - name: The directory could not be asked
       ansible.builtin.set_fact:
@@ -57,4 +59,8 @@
           checked: false
           found: false
           groupsMapper: false
-          note: "the sign-in directory could not be asked about client {{ kcc_client_id }}"
+          note: >-
+            the sign-in directory could not be asked about client {{ kcc_client_id
+            }}{{ '' if _kcc_url | length > 0 or (ansible_failed_result.msg | default('', true) | trim) | length == 0
+            else ': ' ~ (ansible_failed_result.msg | trim) }}
+          issuer: "{{ (_kcc_url ~ '/realms/' ~ kcc_realm) if _kcc_url | length > 0 else '' }}"

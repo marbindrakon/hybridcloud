@@ -1,4 +1,3 @@
 ---
 plugin_rbac_operator_namespace: sovereign-cloud-plugins
 plugin_rbac_keycloak_realm: sovereign-tenants
-plugin_rbac_keycloak_url_default: "https://rhbk-services.apps.services.shc.signal9.gg"

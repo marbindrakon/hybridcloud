@@ -4,29 +4,13 @@
 # and the admin Secret it read doesn't exist there; use the RHBK Route and the account in central
 # Vault (as rbac_provision does). Sets kc_base_url and kc_admin_token (a token of the tenant realm's clients
 # automation client).
-- name: Discover the Keycloak Route on services
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: route.openshift.io/v1
-    kind: Route
-    namespace: services-rhbk
-    label_selectors:
-      - app=keycloak
-  register: _kc_route
+# the labelled Route, else KEYCLOAK_EXTERNAL_URL; neither fails the job with a message that names the setting
+- name: The sign-in directory's address
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
 
 - name: Set the Keycloak URL
   ansible.builtin.set_fact:
-    kc_base_url: >-
-      {{ ('https://' ~ _kc_route.resources[0].spec.host) if (_kc_route.resources | default([]) | length > 0)
-         else keycloak_external_url }}
-
-- name: Fail without a Keycloak URL
-  ansible.builtin.assert:
-    that:
-      - kc_base_url | length > 0
-    fail_msg: No Keycloak Route in services-rhbk and KEYCLOAK_EXTERNAL_URL is unset
+    kc_base_url: "{{ skc_url }}"
 
 # the tenant realm's clients automation client (published by the RbacConfig job), not the master realm admin;
 # kc_admin_token keeps its name for the callers

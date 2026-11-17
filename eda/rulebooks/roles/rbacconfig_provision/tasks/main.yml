@@ -48,29 +48,13 @@
           - rbac_config_spec.type == 'keycloak'
         fail_msg: spec.type must be 'keycloak'
 
-    - name: Discover Keycloak external URL from services cluster Route
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: route.openshift.io/v1
-        kind: Route
-        namespace: services-rhbk
-        label_selectors:
-          - "app=keycloak"
-      register: kc_route
+    # the labelled Route, else KEYCLOAK_EXTERNAL_URL; neither fails the job with a message that names the setting
+    - name: The sign-in directory's address
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
 
-    - name: Set Keycloak URL from Route
+    - name: Set Keycloak URL
       ansible.builtin.set_fact:
-        plugin_rbac_keycloak_url: "https://{{ kc_route.resources[0].spec.host }}"
-      when: kc_route.resources | length > 0
-
-    - name: Fallback to configured Keycloak URL
-      ansible.builtin.set_fact:
-        plugin_rbac_keycloak_url: >-
-          {{ lookup('env', 'KEYCLOAK_EXTERNAL_URL')
-             | default(plugin_rbac_keycloak_url_default, true) }}
-      when: kc_route.resources | length == 0
+        plugin_rbac_keycloak_url: "{{ skc_url }}"
 
     - name: Load Keycloak admin credentials
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"

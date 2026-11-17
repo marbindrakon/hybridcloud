@@ -31,20 +31,12 @@
     ssg_client_id: "{{ entity_signin_client | default('openshift-services') }}"
     ssg_legacy_owner: "Entity/{{ ssg_entity }}"
 
-- name: Discover the Keycloak route on services
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: route.openshift.io/v1
-    kind: Route
-    namespace: services-rhbk
-    label_selectors: ["app=keycloak"]
-  register: _ssg_kc_route
+- name: The sign-in directory's address
+  ansible.builtin.include_tasks: services_keycloak_url.yml
 
 - name: Keycloak URL
   ansible.builtin.set_fact:
-    ssg_kc: "https://{{ _ssg_kc_route.resources[0].spec.host }}"
+    ssg_kc: "{{ skc_url }}"
 
 # the tenant realm's own automation clients: clients (the sign-in client's roles) and membership (group mappings)
 - name: Realm token for the sign-in client's roles

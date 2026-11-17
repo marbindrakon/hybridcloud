@@ -93,26 +93,13 @@
     - name: Run Keycloak OIDC client cleanup
       when: vault_fin_oidc_client_id is defined
       block:
-        - name: Get Keycloak external URL
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            api_version: route.openshift.io/v1
-            kind: Route
-            namespace: services-rhbk
-            label_selectors:
-              - "app=keycloak"
-          register: kc_route_fin
+        # the labelled Route, else KEYCLOAK_EXTERNAL_URL (the block's errors are ignored: the delete goes on)
+        - name: The sign-in directory's address
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
 
         - name: Set Keycloak URL
           ansible.builtin.set_fact:
-            kc_external_url_fin: >-
-              {{
-                ('https://' + kc_route_fin.resources[0].spec.host)
-                if (kc_route_fin.resources | length > 0)
-                else lookup('env', 'KEYCLOAK_EXTERNAL_URL') | default('https://rhbk-services.apps.cluster.local', true)
-              }}
+            kc_external_url_fin: "{{ skc_url }}"
 
         - name: Obtain the realm token for the Vault sign-in client
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"

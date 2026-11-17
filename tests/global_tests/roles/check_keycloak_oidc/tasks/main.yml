@@ -1,7 +1,20 @@
 ---
-- name: Check sovereign-tenants OIDC discovery endpoint
+# The tenant sign-in directory's public address comes from KEYCLOAK_EXTERNAL_URL (https://<host>), the setting the
+# jobs fall back to; the realm from KEYCLOAK_REALM (default sovereign-tenants). The issuer must be that address.
+- name: The sign-in directory to check
+  ansible.builtin.set_fact:
+    check_keycloak_oidc_url: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') | default('', true) | regex_replace('/+$', '') }}"
+    check_keycloak_oidc_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"
+
+- name: Require the address
+  ansible.builtin.assert:
+    that: check_keycloak_oidc_url | length > 0
+    fail_msg: Set KEYCLOAK_EXTERNAL_URL to the tenant sign-in directory's public address (https://<host>).
+    quiet: true
+
+- name: Check the tenant realm's OIDC discovery endpoint
   ansible.builtin.uri:
-    url: "https://sso-rhbk-services.apps.services.{{ lookup('env', 'LAB_DOMAIN') }}/realms/sovereign-tenants/.well-known/openid-configuration"
+    url: "{{ check_keycloak_oidc_url }}/realms/{{ check_keycloak_oidc_realm }}/.well-known/openid-configuration"
     method: GET
     validate_certs: false
     status_code: [200, 301, 302, 401, 403, 503]
@@ -17,7 +30,7 @@
     keycloak_oidc_check_passed: >-
       {{
         (keycloak_oidc.status | default(0)) == 200
-        and (keycloak_oidc.json.issuer | default('') | length) > 0
+        and (keycloak_oidc.json.issuer | default('')) == check_keycloak_oidc_url ~ '/realms/' ~ check_keycloak_oidc_realm
       }}
 
 - name: Report Keycloak OIDC summary

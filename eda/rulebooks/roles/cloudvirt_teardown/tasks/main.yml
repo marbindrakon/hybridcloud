@@ -145,29 +145,21 @@
               vars:
                 fab_real_fabric: ""
 
-            - name: Discover the Keycloak route on services
-              kubernetes.core.k8s_info:
-                host: "{{ services_api_host }}"
-                api_key: "{{ services_bearer_token }}"
-                validate_certs: false
-                api_version: route.openshift.io/v1
-                kind: Route
-                namespace: services-rhbk
-                label_selectors: ["app=keycloak"]
-              register: _cvd_kc_route
+            - name: The sign-in directory's address
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
 
             - name: Realm token for the sign-in client's roles
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
               vars:
                 krt_purpose: clients
                 krt_rbac_config: "{{ fab_real.openshift.tenantSignIn.rbacConfig | default('keycloak-sovereign-tenants-services', true) }}"
-                krt_url: "https://{{ _cvd_kc_route.resources[0].spec.host }}"
+                krt_url: "{{ skc_url }}"
                 krt_token_fact: cvd_clients_token
 
             - name: Find the sign-in client
               ansible.builtin.uri:
                 url: >-
-                  https://{{ _cvd_kc_route.resources[0].spec.host }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
+                  {{ skc_url }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
                   }}/clients?clientId={{ fab_st.access.signInClient }}
                 headers: {Authorization: "Bearer {{ cvd_clients_token }}"}
                 validate_certs: false
@@ -176,7 +168,7 @@
             - name: Delete the client roles
               ansible.builtin.uri:
                 url: >-
-                  https://{{ _cvd_kc_route.resources[0].spec.host }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
+                  {{ skc_url }}/admin/realms/{{ fab_real.openshift.tenantSignIn.realm
                   }}/clients/{{ _cvd_client.json[0].id }}/roles/{{ item | urlencode }}
                 method: DELETE
                 headers: {Authorization: "Bearer {{ cvd_clients_token }}"}

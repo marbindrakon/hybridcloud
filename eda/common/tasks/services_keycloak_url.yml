@@ -1,0 +1,50 @@
+---
+# The public address of the tenant sign-in directory (the Keycloak on the services cluster): the host of the one Route
+# in namespace skc_namespace that carries the label app=keycloak. More than one such Route is a plain failure (which
+# one a list returns first is not defined). Without such a Route: the job environment's KEYCLOAK_EXTERNAL_URL. Without
+# both: a plain failure that names the setting, unless skc_required is false.
+# Inputs: services_api_host, services_bearer_token; skc_namespace (default services-rhbk), skc_required (default
+# true). Sets skc_url ("https://<host>" or the setting without a trailing slash; "" when not found and not required)
+# and skc_source (route, setting or none).
+- name: Find the sign-in directory's Route on the services cluster
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: route.openshift.io/v1
+    kind: Route
+    namespace: "{{ skc_namespace | default('services-rhbk', true) }}"
+    label_selectors: ["app=keycloak"]
+  register: _skc_routes
+
+- name: At most one Route may carry the label
+  vars:
+    _rs: "{{ _skc_routes.resources | default([], true) }}"
+  ansible.builtin.assert:
+    that: _rs | length < 2
+    quiet: true
+    fail_msg: >-
+      {{ _rs | length }} Routes in namespace {{ skc_namespace | default('services-rhbk', true) }} on the services
+      cluster carry the label app=keycloak ({% for r in _rs %}{{ (r.metadata | default({}, true)).name
+      | default('a Route', true) }} for {{ (r.spec | default({}, true)).host | default('no host', true)
+      }}{{ '' if loop.last else ', ' }}{% endfor %}). The platform takes the sign-in directory's address from that
+      label, so only one Route may carry it: remove the label from the others.
+
+- name: The sign-in directory's address
+  vars:
+    _rs: "{{ _skc_routes.resources | default([], true) }}"
+    _setting: "{{ lookup('env', 'KEYCLOAK_EXTERNAL_URL') | default('', true) | trim | regex_replace('/+$', '') }}"
+  ansible.builtin.set_fact:
+    skc_url: "{{ ('https://' ~ (_rs | first).spec.host) if _rs | length == 1 else _setting }}"
+    skc_source: "{{ 'route' if _rs | length == 1 else ('setting' if _setting | length > 0 else 'none') }}"
+
+- name: Fail without an address
+  ansible.builtin.assert:
+    that: skc_url | length > 0
+    quiet: true
+    fail_msg: >-
+      The sign-in directory's address is not known: no Route in namespace
+      {{ skc_namespace | default('services-rhbk', true) }} on the services cluster carries the label app=keycloak,
+      and the job's environment does not set KEYCLOAK_EXTERNAL_URL. Label the Keycloak's public Route app=keycloak,
+      or set KEYCLOAK_EXTERNAL_URL to its address (https://<host>).
+  when: skc_required | default(true) | bool
