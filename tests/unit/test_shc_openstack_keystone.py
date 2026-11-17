@@ -404,7 +404,7 @@ class Provision(Base):
         legacy = "legacy-cred"
         self.ks.app_creds[legacy] = {"id": legacy, "user": self.uid, "project": self.pid, "name": "sovereign-acme_env1",
                                      "description": "", "secret": "old-secret", "roles": ["member"],
-                                     "unrestricted": False, "expires_at": None, "created_at": ""}
+                                     "unrestricted": False, "expires_at": None}
         self.ks.app_creds["by-name"] = dict(self.ks.app_creds[legacy], id="by-name")
         self.ks.app_creds["by-name"]["name"] = "sovereign-acme_env1"
         n = len(self.ks.app_creds)
@@ -956,7 +956,7 @@ class RecordedAgainstVault(Base):
     def extra_cred(self, uid, pid=None, cid="other-cred"):
         self.ks.app_creds[cid] = {"id": cid, "user": uid, "project": pid or self.pid, "name": "x", "description": "",
                                   "secret": "secret-" + cid, "roles": ["member"], "unrestricted": False,
-                                  "expires_at": None, "created_at": ""}
+                                  "expires_at": None}
         return cid, "secret-" + cid
 
     def writes(self, n):

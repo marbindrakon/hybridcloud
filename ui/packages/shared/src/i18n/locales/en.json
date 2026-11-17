@@ -855,6 +855,7 @@
     "copied": "Copied",
     "siteUser": "Site user",
     "siteUserActions": "Actions by this user in the project are this cluster's.",
+    "siteCredentialMade": "Credential made",
     "clusterCredentialRefused": "The cluster has no credential on the site",
     "clusterCredentialSecretMissing": "The cluster's credential needs the platform team"
   },

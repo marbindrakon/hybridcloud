@@ -330,7 +330,9 @@ def dns_delete(req):
 
 def public_volume_types(conn, services, notes):
     """The public Cinder volume types (what any project of the cloud may use), [{name, default}]; read only.
-    Private types belong to other consumers of a shared cloud and are never listed."""
+    Private types belong to other consumers of a shared cloud and are never listed. None when the list cannot be read
+    (an account that may not read volume types, e.g. a domain manager): a note says so and the site keeps what it
+    had."""
     if not ({"volumev3", "block-storage", "volume"} & set(services)):
         return []
     try:
@@ -345,16 +347,21 @@ def public_volume_types(conn, services, notes):
                 continue
             out.append({"name": t.name, "default": bool(default) and t.name == default})
         return sorted(out, key=lambda x: x["name"])
+    except openstack.exceptions.ForbiddenException:
+        notes.append("volume types not listed: the account may not read them (an administrator of the cloud may); "
+                     "the last list stands")
+        return None
     except Exception as e:  # noqa: BLE001 - a missing list must not fail the site probe
-        notes.append(f"volume types not listed: {type(e).__name__}")
-        return []
+        notes.append(f"volume types not listed: {type(e).__name__}; the last list stands")
+        return None
 
 
-def global_external_networks(conn, notes):
+def global_external_networks(conn, notes, admin=True):
     """The site's global external networks, [{name, id, families, shared}] sorted by name; read only. Global = an
     access_as_external RBAC policy with target "*" (Neutron writes one when a network's router:external flag is set);
     a network external for some projects only (per-project policies) is never listed. None when the list cannot be
-    read (a note says why; the caller keeps what it had)."""
+    read (a note says why; the caller keeps what it had). An account that is not an administrator of the cloud (e.g.
+    a domain manager) is shown no policy but its own project's, so an empty list from it says nothing: None too."""
     try:
         out, seen = [], set()
         for rp in conn.network.rbac_policies(action="access_as_external", target_project_id="*"):
@@ -364,6 +371,10 @@ def global_external_networks(conn, notes):
             net = conn.network.get_network(rp.object_id)
             families = sorted({int(sn.ip_version) for sn in conn.network.subnets(network_id=net.id)})
             out.append({"name": net.name, "id": net.id, "families": families, "shared": bool(net.is_shared)})
+        if not out and not admin:
+            notes.append("external networks not listed: the account is not an administrator of the cloud, and the "
+                         "site shows such an account no network policies but its own project's; the last list stands")
+            return None
         return sorted(out, key=lambda n: (n["name"] or "", n["id"]))
     except Exception as e:  # noqa: BLE001 - a missing list must not fail the site probe
         notes.append(f"external networks not listed: {type(e).__name__}")
@@ -384,13 +395,15 @@ def site_probe(req):
     aliases = sorted(e.alias for e in conn.network.extensions())
     out["evpn_extension"] = "evpn" in aliases
     out["network_extensions"] = [a for a in aliases if a.startswith(("bgp", "evpn"))]
-    out["volume_types"] = public_volume_types(conn, out["services"], out["notes"])
+    types = public_volume_types(conn, out["services"], out["notes"])
+    if types is not None:
+        out["volume_types"] = types
     if req.get("external_network"):
         net = conn.network.find_network(req["external_network"])
         out["external_network"] = {"found": net is not None,
                                    "external": bool(net and net.is_router_external),
                                    "id": net.id if net else ""}
-    nets = global_external_networks(conn, out["notes"])
+    nets = global_external_networks(conn, out["notes"], "admin" in out["roles"])
     if nets is not None:
         out["external_networks"] = nets
     if req.get("project_domain"):
@@ -1509,18 +1522,23 @@ def _write_private(path, data):
         raise
 
 
+def _utc_now():
+    """Now in UTC, ISO 8601 / RFC 3339 to the second (2026-11-14T18:19:03Z)."""
+    return time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+
+
 def cluster_identity(req):
     """{domain (the environment project's domain name), project_id, user_name, description, roles, credential_name,
-    credential_description, vault_file (the Vault read of the cluster's credential path, '' = none), out_file (where
-    a new credential's Vault write body goes)} -> {user: {id, name, domainId, created}, roles: {granted}, credential:
-    {id, name, kept, createdAt}, wrote}. A refusal exits with {reason, message} (UserRefused, RoleRefused,
-    PasswordRefused, CredentialRefused, CredentialSecretMissing). recorded_credential_id: the credential the cluster
-    recorded. The rule: (a) recorded, and Vault holds the same credential: the site answers 201 = kept, 401/404 = made
-    again, anything else = stop, nothing changed; (b) recorded, and Vault holds another credential (a run whose record
-    failed, a raced first write, a rolled-back version): kept (and recorded) only when it signs in as this cluster's
-    user on this project, else CredentialSecretMissing with nothing changed (the recorded credential may be the one
-    the running cluster uses); nothing usable in Vault: CredentialSecretMissing; (c) nothing recorded: a credential
-    in Vault that signs in is kept, else one is made."""
+    credential_description, vault_file (the Vault read of the cluster's credential path, '' = none), out_file (where a
+    new credential's Vault write body goes)} -> {user: {id, name, domainId, created}, roles: {granted}, credential: {id,
+    name, kept, createdAt (UTC, when this run made it; "" for a kept credential)}, wrote}. A refusal exits with {reason,
+    message} (UserRefused, RoleRefused, PasswordRefused, CredentialRefused, CredentialSecretMissing).
+    recorded_credential_id: the credential the cluster recorded. The rule: (a) recorded, and Vault holds the same
+    credential: the site answers 201 = kept, 401/404 = made again, anything else = stop, nothing changed; (b) recorded,
+    and Vault holds another credential (a run whose record failed, a raced first write, a rolled-back version): kept
+    (and recorded) only when it signs in as this cluster's user on this project, else CredentialSecretMissing with
+    nothing changed (the recorded credential may be the one the running cluster uses); nothing usable in Vault:
+    CredentialSecretMissing; (c) nothing recorded: a credential in Vault that signs in is kept, else one is made."""
     _require(req, "domain", "project_id", "user_name", "credential_name")
     have_cred = _read_vault_credential(req.get("vault_file"))
     recorded = str(req.get("recorded_credential_id") or "").strip()
@@ -1661,7 +1679,8 @@ def _credential_unit(ks, token, uid, name, pid, req):
                 last = e
                 continue
             raise _step_refusal("CredentialRefused", f"the credential of user {name}", e)
-        cred = {"id": made["id"], "secret": _hide(made["secret"]), "createdAt": made.get("created_at", "")}
+        # the identity service reports no creation time for an application credential: the helper's own clock
+        cred = {"id": made["id"], "secret": _hide(made["secret"]), "createdAt": _utc_now()}
         try:
             ks.call(token, "PATCH", f"/users/{uid}", {"user": {"password": _password()}})
         except KsError as e:

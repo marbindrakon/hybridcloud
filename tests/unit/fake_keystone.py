@@ -561,7 +561,7 @@ class Keystone:
             rec = {"id": cid, "user": user["id"], "project": tok["scope"][1], "name": c.get("name"),
                    "description": c.get("description"), "secret": _secrets.token_urlsafe(48),
                    "roles": roles, "unrestricted": bool(c.get("unrestricted", False)),
-                   "expires_at": c.get("expires_at"), "created_at": "2026-11-14T00:00:00.000000"}
+                   "expires_at": c.get("expires_at")}
             self.app_creds[cid] = rec
             self.secrets_seen.append(rec["secret"])
             return 201, {"application_credential": dict(self._cred_view(rec), secret=rec["secret"])}, None
@@ -586,7 +586,7 @@ class Keystone:
     def _cred_view(self, c):
         return {"id": c["id"], "name": c["name"], "description": c["description"], "project_id": c["project"],
                 "roles": [{"id": self.role(r), "name": r} for r in c["roles"]], "unrestricted": c["unrestricted"],
-                "expires_at": c["expires_at"], "user_id": c["user"], "created_at": c["created_at"]}
+                "expires_at": c["expires_at"], "user_id": c["user"]}
 
     def _groups(self, method, parts, q, tok, body):
         n = len(parts)

@@ -48,6 +48,28 @@ The platform team gives the operator the issuer URL of the tenant realm, the cli
 operator's own secure channel. The operator gives back the redirect URI of the identity service's web server and
 the values of the site declaration below.
 
+### Prerequisite: the issuer's length
+
+The identity provider's remote ID is the issuer URL of the tenant realm, and an identity service can limit its
+length: Keystone 2026.2 accepts at most **64 characters** and refuses a longer one when the provider is registered
+(HTTP 400, "is too long"). The issuer is
+
+```text
+https://<host name of the sign-in directory>/realms/<tenant realm>
+```
+
+that is 8 + the host name + 8 + the realm name characters. With the realm `sovereign-tenants` (17 characters) the
+host name may have at most 64 - 33 = 31 characters: `auth.cloud.example.com` (22, issuer 55 characters) fits; a
+generated route name such as `keycloak-sso.apps.services.cloud.example.com` (44) does not. Give the sign-in
+directory a short host name of its own before the first OpenStack site declares sign-in (the Keycloak chart's
+`keycloak.routes`, with `keycloak.ingress.enabled: false` and `keycloak.hostname` set to the same name). The issuer
+is part of every token and of every client's configuration, so changing it later moves every sign-in of the
+platform.
+
+When an identity provider that a site declares is not on the site and the tenant issuer is longer than 64
+characters, the site's `SignInConfigured` message says so (IdentityProviderNotFound, with the issuer and its
+length).
+
 ## What the operator sets up once
 
 | # | Step | kolla-ansible | Red Hat OpenStack Services on OpenShift 18 |
@@ -71,8 +93,10 @@ value), or a `user.id` taken from a name (a renamed person would get a new user)
 The group domain is a choice of the operator. By default the platform looks for the groups in the site's tenant
 domain (`spec.openstack.projectDomain`). The two choices differ in one value of the mapping:
 
-- **Tenant domain** (default, recommended with one tenant domain): every call of the platform stays inside the
-  tenant domain, so the domain manager role on that domain is enough.
+- **Tenant domain** (default, recommended with one tenant domain): every identity call of the platform stays
+  inside the tenant domain, so the domain manager role on that domain is enough for the identity steps (projects,
+  users, groups and their roles). It is not enough for the site's shared lists: see
+  [Rights of the platform's account](#rights-of-the-platforms-account).
 - **Federation domain** (the domain of the people who sign in): set `spec.openstack.signIn.groupDomain` to it.
   Each grant then crosses domains and needs the `admin` role: with a domain manager account the environments'
   access step says so (AccessReady False / GrantRefused, naming the domain), and the site probe cannot confirm the
@@ -203,6 +227,19 @@ or later; Red Hat OpenStack Services on OpenShift 18.0.21 or later). Without it,
 | Application credential create, list, delete | `.../v3/users/{u}/application_credentials` | none: always done as the owner (the cluster user) |
 | Federation reads | `GET /v3/OS-FEDERATION/...` | `admin`; optional (a domain manager gets 403, so sign-in is "declared, not confirmed") |
 | Tenant domain create (`createProjectDomain`) | `POST /v3/domains` | `admin`; optional |
+| The site's shared external networks (what tenants pick for a cluster) | `GET /v2.0/rbac-policies?action=access_as_external&target_project_id=*` | `admin` (see below) |
+| The site's public volume types | `GET /v3/<project>/types` | `admin` on a cloud whose policy refuses others (see below) |
+
+A domain manager is enough for the identity steps only. The site probe also reads two lists of the cloud that are
+not in any domain: the shared external networks and the public volume types. For an account that is not an
+administrator of the cloud, the network service shows no network policies but the account's own project's, and a
+cloud may refuse the volume types (on a 2026.2 cloud with its default policies, the probe of a manager-only account
+got none of the networks and "ForbiddenException" for the volume types). The probe then does not publish empty
+lists: `status.site.externalNetworks` and `status.site.volumeTypes` keep what they held (nothing on a new site), and
+the site's message says "external networks not listed: the account is not an administrator of the cloud, ..." and
+"volume types not listed: the account may not read them ...". Tenants then have no external network to pick in the
+cluster form. Give the account the right to read those lists (an administrator account, or a site policy that lets
+it read them) where tenants should pick.
 
 Facts that decide the design: a domain manager cannot delete another user's application credential (403), but can
 delete the user, and the user's credentials go with it. A domain manager cannot read identity providers (403). The
@@ -212,7 +249,7 @@ reports the roles it found.
 ## Cluster users
 
 Each OpenShift cluster on an OpenStack environment acts as its own user of the environment's domain, named
-`shc-<build name>` by default, with `member` on the environment's project. The user:
+after the cluster's build name by default, with `member` on the environment's project. The user:
 
 - has no stored password: to make the cluster's application credential the platform sets a random password, waits
   two seconds, signs in as the user, deletes the user's credentials, creates one restricted application credential
@@ -228,7 +265,8 @@ the platform's secret store and in the cluster (`kube-system/openstack-credentia
 change everything in the environment's project, other clusters there included: where that matters, use one
 environment per cluster.
 
-The cluster's status says which user it acts as (`status.credential`) and the condition `ClusterCredential`:
+The cluster's status says which user it acts as (`status.credential`, with `createdAt`: when the platform made the
+credential, in UTC; the identity service does not report it) and the condition `ClusterCredential`:
 True / OwnCredential, or False with UserRefused, RoleRefused, PasswordRefused or CredentialRefused and the
 identity service's message. A site that does not answer (5xx, a timeout) refuses nothing: the step fails and the next
 run tries again, with nothing changed.
@@ -244,8 +282,8 @@ The installation sets the user's name, roles and credential name in the realizat
 (`openstack.clusterIdentity`: `userName`, `roles`, `rolesBySite`, `credentialName`; `{build}` is the build name,
 which already carries the platform's prefix; the default for both names is `{build}`). The platform trusts the mark
 in the user's description, never the name: a user of that name without it is refused, never changed or deleted.
-and the sign-in client and the roles of access groups (`openstack.tenantSignIn`: `clientId` with `{site}`,
-`editRoles`, `viewRoles`, `realm`).
+The realization also sets the sign-in client and the roles of access groups (`openstack.tenantSignIn`: `clientId`
+with `{site}`, `editRoles`, `viewRoles`, `realm`).
 
 ## Environments of an earlier release
 

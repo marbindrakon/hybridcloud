@@ -184,6 +184,12 @@
     ci_notes: "{{ ci_notes + (ci_probe.notes | default([], true) | select('search', '^external networks') | list) }}"
   when: not (ci_external_networks.listed | bool)
 
+# an account that may not read the volume types (a domain manager): the recorded list stands, the message says why
+- name: Note a volume type list the probe could not read
+  ansible.builtin.set_fact:
+    ci_notes: "{{ ci_notes + (ci_probe.notes | default([], true) | select('search', '^volume types') | list) }}"
+  when: ci_probe.volume_types is not defined
+
 - name: Set openstack result facts
   ansible.builtin.set_fact:
     ci_credentials_message: "Keystone token issued for project {{ ci_probe.project_id }} (roles {{ ci_probe.roles | join(', ') }})."
@@ -200,7 +206,6 @@
       region: "{{ ci_probe.region }}"
       services: "{{ ci_probe.services }}"
       networkExtensions: "{{ ci_probe.network_extensions }}"
-      volumeTypes: "{{ ci_probe.volume_types | default([]) }}"
       externalNetworkId: "{{ (ci_probe.external_network | default({})).id | default('') }}"
       projectDomainId: "{{ (ci_probe.project_domain | default({})).id | default('') }}"
       dns: >-
@@ -217,6 +222,11 @@
 # consoleSignIn / apiCredentials (never fails the probe)
 - name: The site's sign-in for people
   ansible.builtin.include_tasks: openstack_signin.yml
+
+- name: Publish the volume types
+  ansible.builtin.set_fact:
+    ci_site_out: "{{ ci_site_out | combine({'volumeTypes': ci_probe.volume_types}) }}"
+  when: ci_probe.volume_types is defined
 
 - name: Publish the global external networks
   ansible.builtin.set_fact:

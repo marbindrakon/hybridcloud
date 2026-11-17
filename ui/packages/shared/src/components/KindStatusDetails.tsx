@@ -1021,6 +1021,11 @@ export function PlatformOpenshiftDetails({ item }: { item: PlatformOpenshift }):
               ? t('wayin.nameAndId', { name: user.domain, id: user.domainId })
               : (user.domain ?? user.domainId)}
           </Fact>
+          {user.createdAt && (
+            <Fact label={t('detail.siteCredentialMade')}>
+              <RelativeTime iso={user.createdAt} />
+            </Fact>
+          )}
         </Facts>
       )}
     </>

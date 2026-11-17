@@ -541,7 +541,7 @@ class Migration(unittest.TestCase):
         pid = first["project"]
         ks.app_creds["legacy-1"] = {"id": "legacy-1", "user": self.site.account_user, "project": pid,
                                     "name": "sovereign-acme_web", "description": "", "secret": "legacy-secret-value",
-                                    "roles": ["member"], "unrestricted": False, "expires_at": None, "created_at": ""}
+                                    "roles": ["member"], "unrestricted": False, "expires_at": None}
         self.site.vault.data["central/oso/projects/web/clouds-config"] = {"clouds.yaml": "legacy-secret-value"}
         trace, res = self.run_prep({"appCredentialId": "legacy-1", "projectId": pid})
         self.assertNotIn("legacy-1", ks.app_creds)

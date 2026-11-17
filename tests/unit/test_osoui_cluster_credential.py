@@ -181,7 +181,35 @@ class ClusterCredential(unittest.TestCase):
             status["conditions"][0]["status"] = str(status["conditions"][0]["status"])
             osoui_fixtures.check(self, "PlatformOpenshift/credential", status,
                                  {cred[0]["id"]: "ac9d00112233445566778899aabbccdd", user["id"]: "0f3c11223344556677889900aabbccdd",
-                                  self.site.tenants: "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921"})
+                                  self.site.tenants: "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
+                                  body["credential"]["createdAt"]: "2026-11-14T10:00:00Z"})
+
+    def test_the_time_the_credential_was_made_is_recorded_and_kept(self):
+        """The site reports no creation time for an application credential: the status records when this run made
+        it (UTC, to the second); a run that keeps the credential keeps the recorded time, never an empty one, and a
+        time recorded for another credential is not carried over."""
+        import datetime
+        before = datetime.datetime.now(datetime.timezone.utc).replace(microsecond=0)
+        trace = self.run_cred()
+        after = datetime.datetime.now(datetime.timezone.utc)
+        rec = [t for t in H.patches(trace)][-1]["body"]["credential"]
+        self.assertRegex(rec["createdAt"], r"^\d{4}-\d\d-\d\dT\d\d:\d\d:\d\dZ$")
+        made = datetime.datetime.strptime(rec["createdAt"], "%Y-%m-%dT%H:%M:%SZ").replace(tzinfo=datetime.timezone.utc)
+        self.assertTrue(before <= made <= after, (before, made, after))
+        self.assertNotIn("created_at", next(iter(self.site.ks.app_creds.values())))   # as the real identity service
+        # a steady run keeps the credential and the recorded time
+        current = {"resources": [{"status": {"credential": dict(rec)}}]}
+        trace = self.run_cred(po_cr_current=current)
+        self.assertTrue(trace[-1]["result"]["cred"]["credential"]["kept"])
+        self.assertEqual([t for t in H.patches(trace)][-1]["body"]["credential"]["createdAt"], rec["createdAt"])
+        # nothing recorded (an earlier release): stays empty, not made up
+        trace = self.run_cred(po_cr_current={"resources": [{"status": {"credential": dict(rec, createdAt="")}}]})
+        self.assertEqual([t for t in H.patches(trace)][-1]["body"]["credential"]["createdAt"], "")
+        # a time recorded for another credential id is not this credential's
+        other = dict(rec, id="another-credential", createdAt="2026-01-01T00:00:00Z")
+        trace = self.run_cred(po_cr_current={"resources": [{"status": {"credential": other}}]})
+        rec2 = [t for t in H.patches(trace)][-1]["body"]["credential"]
+        self.assertEqual((rec2["id"], rec2["createdAt"]), (rec["id"], ""))
 
     def test_a_steady_run_touches_no_password_and_writes_no_vault(self):
         self.run_cred()
@@ -283,7 +311,7 @@ class ClusterCredential(unittest.TestCase):
         ks = self.site.ks
         ks.app_creds["y-cred"] = {"id": "y-cred", "user": uid, "project": self.pid, "name": "y", "description": "",
                                   "secret": "secret-y-cred-value", "roles": ["member"], "unrestricted": False,
-                                  "expires_at": None, "created_at": ""}
+                                  "expires_at": None}
         clouds = yaml.safe_load(self.site.vault.data[PATH]["clouds.yaml"])
         clouds["clouds"]["openstack"]["auth"].update(application_credential_id="y-cred",
                                                      application_credential_secret="secret-y-cred-value")
@@ -350,7 +378,7 @@ class ClusterUserDown(unittest.TestCase):
         ks.grant("user", self.uid, "project", self.pid, "member")
         ks.app_creds["c1"] = {"id": "c1", "user": self.uid, "project": self.pid, "name": BUILD,
                               "description": "", "secret": "cluster-secret-value", "roles": ["member"],
-                              "unrestricted": False, "expires_at": None, "created_at": ""}
+                              "unrestricted": False, "expires_at": None}
         env = mock.patch.dict(os.environ, self.site.env())
         env.start()
         self.addCleanup(env.stop)

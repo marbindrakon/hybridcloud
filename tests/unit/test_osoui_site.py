@@ -173,6 +173,30 @@ class SiteSignIn(unittest.TestCase):
         self.assertEqual(self.cond(r), ("False", "ClientNotFound",
                                         "The sign-in directory has no client openstack-site-a for this site."))
 
+    def test_a_missing_provider_and_a_long_issuer(self):
+        """An identity service can accept at most 64 characters as an identity provider's remote ID (Keystone
+        2026.2): a provider that is not on the site, with a tenant issuer longer than that, gets the hint."""
+        long_issuer = "https://sso-directory.apps.platform-services.example.org/realms/tenants"   # 71
+        short_issuer = "https://sso.example.org/realms/tenants"
+        self.assertGreater(len(long_issuer), 64)
+        found = {"checked": True, "found": True, "groupsMapper": True, "note": ""}
+        reads, _ = self.reads(DECL)   # no provider on the site
+        _, r = self.run_si(DECL, reads, kcc=dict(found, issuer=long_issuer))
+        self.assertEqual(self.cond(r), ("False", "IdentityProviderNotFound",
+                                        "Identity provider platform-tenants does not exist on the site. The tenant "
+                                        f"issuer of the platform, {long_issuer}, is 71 characters long: an identity "
+                                        "service that accepts at most 64 characters as the remote ID of an identity "
+                                        "provider (Keystone 2026.2 does) cannot register it."))
+        for kcc in (dict(found, issuer=short_issuer), dict(found, issuer=""), found):
+            _, r = self.run_si(DECL, reads, kcc=kcc)
+            self.assertEqual(self.cond(r), ("False", "IdentityProviderNotFound",
+                                            "Identity provider platform-tenants does not exist on the site."))
+        self.declare()   # the provider exists: no hint, whatever the issuer's length
+        reads, notes = self.reads(DECL)
+        _, r = self.run_si(DECL, reads, notes, kcc=dict(found, issuer=long_issuer))
+        self.assertEqual(r["cond"]["reason"], "Confirmed")
+        self.assertNotIn("characters", r["cond"]["message"])
+
     def test_a_mapping_warning_does_not_switch_sign_in_off(self):
         self.declare(rules=[{"local": [{"user": {"name": "{0}"}}, {"group": {"name": "{1}", "domain": {"name": "x"}}}],
                              "remote": [{"type": "OIDC-preferred_username"}, {"type": "OIDC-groups"}]}])
@@ -248,6 +272,50 @@ class PlacementSiteNetwork(unittest.TestCase):
         self.assertEqual(out[0], {"name": "hn51001", "id": "net-1", "project": "platform", "subnets": [
             {"family": 4, "prefix": "192.0.2.0/24", "id": "sn-4", "gateway": "192.0.2.1"},
             {"family": 6, "prefix": "2001:db8:1::/64", "id": "sn-6", "gateway": "2001:db8:1::1"}]})
+
+
+@unittest.skipUnless(HAVE_ANSIBLE and HAVE_SDK, "ansible-playbook / openstacksdk not installed")
+class DirectoryCheck(unittest.TestCase):
+    """The real common/tasks/keycloak_client_check.yml against a sign-in directory over HTTPS (fake_keycloak.py) and
+    the realm automation credentials in a Vault over HTTP: it finds the client and its groups mapper and gives the
+    tenant issuer (the directory's address from the labelled Route, /realms/<realm>) that the site probe's hint
+    reads; when the address is not known the note says why and the issuer is empty."""
+
+    def setUp(self):
+        import fake_keycloak
+        self.site = O.Site()
+        self.addCleanup(self.site.stop)
+        self.kc = fake_keycloak.Keycloak().start()
+        self.addCleanup(self.kc.stop)
+        self.kc.add_client("openstack-site-a")
+        self.site.vault.data["central/keycloak-automation/keycloak-sovereign-tenants-services"] = self.kc.vault_entry()
+        env = mock.patch.dict(os.environ, self.site.env())
+        env.start()
+        self.addCleanup(env.stop)
+
+    def check(self, routes):
+        tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/../../../common/tasks/keycloak_client_check.yml",
+                  "vars": {"kcc_realm": "sovereign-tenants", "kcc_client_id": "openstack-site-a", "kcc_rbac_config": ""}}]
+        rc, trace, out = H.run("cloudinfrastructure_provision", "openstack_signin.yml",
+                               {"services_api_host": "https://services.example.org",
+                                "services_bearer_token": "services-token-not-in-data"},
+                               k8s={"Route/services-rhbk/": routes}, tasks=tasks, result="kcc_result")
+        self.assertEqual(rc, 0, out)
+        return trace[-1]["result"]
+
+    def test_the_issuer_from_the_labelled_route(self):
+        res = self.check([{"metadata": {"name": "kc"}, "spec": {"host": self.kc.host}}])
+        self.assertEqual((res["checked"], res["found"], res["note"]), (True, True, ""))
+        self.assertEqual(res["issuer"], f"https://{self.kc.host}/realms/sovereign-tenants")
+
+    def test_two_labelled_routes(self):
+        res = self.check([{"metadata": {"name": "kc-a"}, "spec": {"host": self.kc.host}},
+                          {"metadata": {"name": "kc-b"}, "spec": {"host": "kc-b.example.org"}}])
+        self.assertEqual((res["checked"], res["issuer"]), (False, ""))
+        note = " ".join(res["note"].split())
+        self.assertTrue(note.startswith("the sign-in directory could not be asked about client openstack-site-a: 2 "
+                                        "Routes in namespace services-rhbk"), note)
+        self.assertIn(f"kc-a for {self.kc.host}, kc-b for kc-b.example.org", note)
 
 
 if __name__ == "__main__":

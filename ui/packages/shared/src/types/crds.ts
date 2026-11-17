@@ -339,6 +339,7 @@ export interface PlatformOpenshiftCredential {
   domain?: string;
   /** Id of the user's domain */
   domainId?: string;
+  /** When the platform made the credential (UTC); empty when not known */
   createdAt?: string;
 }
 

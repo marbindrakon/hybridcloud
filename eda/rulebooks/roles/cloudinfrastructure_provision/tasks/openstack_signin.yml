@@ -67,10 +67,18 @@
     cis_warnings: "{{ _mp.warnings | default([], true) if _mp.found | default(false) | bool else [] }}"
     cis_start_url: "{{ _su.url | default('', true) or cis_dashboard }}"
 
+# an identity service can limit the remote ID of an identity provider (the issuer) to 64 characters (Keystone 2026.2
+# does): a provider that is not on the site gets that hint when the tenant issuer is longer
 - name: SignInConfigured
   vars:
     _c: "{{ cis_checks }}"
     _name: "{{ ci_signin.identityProvider | default('') }}"
+    _issuer: "{{ (kcc_result | default({}, true)).issuer | default('', true) }}"
+    _issuer_hint: >-
+      {{ ('The tenant issuer of the platform, ' ~ _issuer ~ ', is ' ~ (_issuer | length) ~ ' characters long: an'
+          ~ ' identity service that accepts at most ' ~ _issuer_max ~ ' characters as the remote ID of an identity'
+          ~ ' provider (Keystone 2026.2 does) cannot register it.') if _issuer | length > _issuer_max | int else '' }}
+    _issuer_max: 64
   ansible.builtin.set_fact:
     cis_condition: >-
       {%- if not (cis_declared | bool) -%}
@@ -80,7 +88,8 @@
             'message': 'The group domain ' ~ cis_group_domain ~ ' does not exist on the site.'} }}
       {%- elif _c.identityProvider is sameas false -%}
         {{ {'status': 'False', 'reason': 'IdentityProviderNotFound',
-            'message': 'Identity provider ' ~ _name ~ ' does not exist on the site.'} }}
+            'message': 'Identity provider ' ~ _name ~ ' does not exist on the site.'
+                       ~ ((' ' ~ (_issuer_hint | trim)) if _issuer_hint | trim | length > 0 else '')} }}
       {%- elif _c.protocol is sameas false -%}
         {{ {'status': 'False', 'reason': 'IdentityProviderNotFound',
             'message': 'Identity provider ' ~ _name ~ ' has no protocol ' ~ ci_signin.protocol ~ ' on the site.'} }}

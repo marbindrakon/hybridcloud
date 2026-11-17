@@ -132,6 +132,64 @@ class GlobalExternalNetworks(unittest.TestCase):
         self.assertEqual(notes, ["external networks not listed: PermissionError"])
 
 
+class NotAnAdministrator(unittest.TestCase):
+    """A site account that is not an administrator of the cloud (a domain manager): Neutron shows it no network
+    policies but its own project's, and the volume types are refused it. The probe says so in plain words and leaves
+    both lists out (the site keeps what it had) instead of publishing empty lists."""
+
+    def test_an_empty_policy_list_of_a_non_administrator_is_not_listed(self):
+        conn = site()
+        conn.network.rbacs = []    # what Neutron shows a non-administrator
+        notes = []
+        self.assertIsNone(S.global_external_networks(conn, notes, admin=False))
+        self.assertEqual(notes, ["external networks not listed: the account is not an administrator of the cloud, "
+                                 "and the site shows such an account no network policies but its own project's; the "
+                                 "last list stands"])
+        notes = []
+        self.assertEqual(S.global_external_networks(conn, notes, admin=True), [])   # an administrator: none exist
+        self.assertEqual(notes, [])
+        notes = []                 # a non-administrator that is shown some (a site policy): listed
+        self.assertEqual(len(S.global_external_networks(site(), notes, admin=False)), 3)
+        self.assertEqual(notes, [])
+
+    def test_volume_types_refused(self):
+        class Refusing:
+            def get(self, *_):
+                raise S.openstack.exceptions.ForbiddenException("refused")
+
+            def types(self):
+                raise S.openstack.exceptions.ForbiddenException("refused")
+        notes = []
+        self.assertIsNone(S.public_volume_types(Obj(block_storage=Refusing()), ["volumev3"], notes))
+        self.assertEqual(notes, ["volume types not listed: the account may not read them (an administrator of the "
+                                 "cloud may); the last list stands"])
+
+
+@unittest.skipIf(yaml is None or not HAVE_ANSIBLE, "PyYAML or ansible-playbook missing")
+class SiteStatusVolumeTypes(unittest.TestCase):
+    """The site job publishes the volume types only when the probe read them; otherwise the probe's note joins the
+    message and status.site.volumeTypes stays as it was (the status is merge-patched)."""
+
+    def test_cases(self):
+        tasks = load(OS_TASKS)
+        steps = [{"ansible.builtin.set_fact": {"ci_probe": "{{ case.probe }}", "ci_notes": ["earlier note"],
+                                               "ci_site_out": {"region": "r1"}}}]
+        steps += [by_name(tasks, n) for n in ("Note a volume type list the probe could not read",
+                                              "Publish the volume types")]
+        res = run_cases(steps, [
+            {"probe": {"volume_types": [{"name": "ceph", "default": True}], "notes": []}},
+            {"probe": {"volume_types": [], "notes": []}},
+            {"probe": {"notes": ["volume types not listed: the account may not read them (an administrator of the "
+                                 "cloud may); the last list stands", "external networks not listed: X"]}},
+        ], "{'site': ci_site_out, 'notes': ci_notes}")
+        self.assertEqual(res[0], {"site": {"region": "r1", "volumeTypes": [{"name": "ceph", "default": True}]},
+                                  "notes": ["earlier note"]})
+        self.assertEqual(res[1]["site"], {"region": "r1", "volumeTypes": []})
+        self.assertEqual(res[2]["site"], {"region": "r1"})
+        self.assertEqual(res[2]["notes"], ["earlier note", "volume types not listed: the account may not read them (an "
+                                                           "administrator of the cloud may); the last list stands"])
+
+
 @unittest.skipIf(yaml is None or not HAVE_ANSIBLE, "PyYAML or ansible-playbook missing")
 class SiteStatusExternalNetworks(unittest.TestCase):
     """The site job's status.site.externalNetworks: the three tasks of openstack.yml in ansible-playbook."""

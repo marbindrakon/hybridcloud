@@ -7871,7 +7871,7 @@ spec:
                       description: Identifier of that domain.
                       type: string
                     createdAt:
-                      description: When the credential was made, as the site reports it.
+                      description: When the platform made the credential (UTC, RFC 3339). The site's identity service does not report it; empty when it is not known.
                       type: string
                 floatingIPs:
                   description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."

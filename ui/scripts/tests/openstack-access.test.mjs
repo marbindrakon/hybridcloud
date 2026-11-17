@@ -395,6 +395,11 @@ test('cluster: the site user with its sentence; the refusal when ClusterCredenti
   }));
   assert.equal(row(ok, en.detail.siteUser), `shc-c1-x7k2p (ID 0f3c11) ${en.detail.siteUserActions}`);
   assert.equal(row(ok, W.domain), 'tenants');
+  // the time the platform made the credential: shown when recorded, no row when not known
+  assert.ok(ok.includes('title="2026-11-14T10:00:00Z"'));
+  assert.match(row(ok, en.detail.siteCredentialMade), /^\d+d ago$/);
+  const unknown = pages.details('PlatformOpenshift', cluster({ credential: { ...credential, createdAt: '' } }));
+  assert.equal(row(unknown, en.detail.siteCredentialMade), null);
   assert.ok(!text(ok).includes(en.detail.clusterCredentialRefused));
   const refused = pages.details('PlatformOpenshift', cluster({
     conditions: [{ type: 'ClusterCredential', status: 'False', reason: 'RoleRefused', message: 'The site refused the role member: You are not authorized. The cluster cannot be built.' }],
