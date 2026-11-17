@@ -2730,7 +2730,7 @@ quay:
 # ─── Quay (services) ────────────────────────────────────────────────────────
 quayServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.6.4-shc.2"  # shc: OIDC and RGW storage through the config bundle
+  chartVersion: "0.6.4-shc.3"  # shc: OIDC and RGW storage through the config bundle; .3: the settings in a tracked ConfigMap (a changed sign-in server reaches the bundle)
   syncWave: "35"
   destinationNamespace: services-quay
   values:
