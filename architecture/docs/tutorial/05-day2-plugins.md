@@ -34,7 +34,7 @@ metadata:
   name: default-rbac-config
   namespace: sovereign-cloud-plugins
 spec:
-  keycloakUrl: "https://rhbk-services.apps.services.lab.example.com"
+  keycloakUrl: "https://auth.example.com"
   realm: "sovereign-tenants"
   adminSecretName: "rhbk-services-admin"   # ExternalSecret from Vault
   adminSecretNamespace: "sovereign-cloud-plugins"
@@ -74,7 +74,7 @@ oc get namespace entity-acme-corp -o jsonpath='{.metadata.labels}'
 
 # Keycloak connectivity
 oc exec -n sovereign-cloud-plugins deploy/plugin-rbac -- \
-  curl -sk https://rhbk-services.apps.services.lab.example.com/realms/sovereign-tenants \
+  curl -sk https://auth.example.com/realms/sovereign-tenants \
   | jq .realm
 ```
 
@@ -138,7 +138,7 @@ oc get namespace entity-acme-corp --show-labels
 
 # OIDC client creation failing — check Keycloak connectivity
 oc exec -n sovereign-cloud-plugins deploy/plugin-vault -- \
-  curl -sk "https://rhbk-services.apps.services.lab.example.com/health/live" | jq .
+  curl -sk "https://auth.example.com/health/live" | jq .
 ```
 
 ---
