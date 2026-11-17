@@ -73,7 +73,7 @@ test('nobody else is recognised: no named environment, no tenant', async () => {
   }
 });
 
-function fakeApi() {
+function fakeApi({ listStatus = 403, rulesStatus = 201, names = ['web'], getStatus = {} } = {}) {
   const reqs = [];
   const server = http.createServer((req, res) => {
     let data = '';
@@ -82,10 +82,18 @@ function fakeApi() {
       const url = req.url.split('?')[0];
       reqs.push({ method: req.method, url, auth: req.headers.authorization });
       const send = (code, body) => { res.writeHead(code, { 'Content-Type': 'application/json' }); res.end(JSON.stringify(body)); };
-      if (req.method === 'GET' && url === P) return send(403, { kind: 'Status', code: 403, reason: 'Forbidden', message: 'cannot list' });
-      if (req.method === 'POST' && url.endsWith('/selfsubjectrulesreviews')) return send(201, { status: NAMED });
-      if (req.method === 'GET' && url === `${P}/web`) {
-        return send(200, { kind: 'CloudOSO', metadata: { name: 'web', namespace: NS },
+      if (req.method === 'GET' && url === P) {
+        return send(listStatus, listStatus === 200 ? { items: [] } : { kind: 'Status', code: listStatus, message: 'list answer' });
+      }
+      if (req.method === 'POST' && url.endsWith('/selfsubjectrulesreviews')) {
+        return send(rulesStatus, { status: { resourceRules: [{ verbs: ['get', 'list', 'watch'],
+          apiGroups: ['hybridsovereign.redhat'], resources: ['cloudosos'], resourceNames: names }] } });
+      }
+      const m = url.startsWith(`${P}/`) ? decodeURIComponent(url.slice(P.length + 1)) : null;
+      if (req.method === 'GET' && m) {
+        const code = getStatus[m] ?? 200;
+        if (code !== 200) return send(code, { kind: 'Status', code });
+        return send(200, { kind: 'CloudOSO', metadata: { name: m, namespace: NS },
           spec: { vaultPath: 'kv/hidden', region: 'r1' }, status: { phase: 'Ready', endpoints: { console: 'https://dash.example.org' } } });
       }
       return send(404, { kind: 'Status', code: 404 });
@@ -93,6 +101,41 @@ function fakeApi() {
   });
   return new Promise((resolve) => server.listen(0, '127.0.0.1', () => resolve({ server, reqs })));
 }
+
+async function listWith(opts) {
+  const { server, reqs } = await fakeApi(opts);
+  try {
+    const { createK8sHandlers } = await import(pathToFileURL(path.join(UI, 'packages/tenant-dashboard/server/k8s-proxy.js')).href);
+    const k8s = createK8sHandlers(`http://127.0.0.1:${server.address().port}`);
+    return { out: await call(k8s.listCloudOSOs, { namespace: NS }), reqs };
+  } finally {
+    server.close();
+  }
+}
+
+test('only a refused list falls back: a 5xx is an error, and no rules review is asked', async () => {
+  const { out, reqs } = await listWith({ listStatus: 500 });
+  assert.ok(out.code >= 500, `got ${out.code}`);
+  assert.ok(!reqs.some((r) => r.url.endsWith('/selfsubjectrulesreviews')));
+});
+
+test('a named read or the rules review that fails is an error, never a shorter list', async () => {
+  let r = await listWith({ names: ['db', 'web'], getStatus: { db: 503 } });
+  assert.ok(r.out.code >= 500, `got ${r.out.code}`);
+  r = await listWith({ rulesStatus: 500 });
+  assert.ok(r.out.code >= 500, `got ${r.out.code}`);
+  // gone or no longer readable: left out, the others listed
+  r = await listWith({ names: ['db', 'web'], getStatus: { db: 404 } });
+  assert.equal(r.out.code, 200);
+  assert.deepEqual(r.out.body.map((o) => o.metadata.name), ['web']);
+});
+
+test('only valid object names from the rules are used in a path', async () => {
+  const { out, reqs } = await listWith({ names: ['web', '../../secrets', 'Upper', 'a/b', '-x', ''] });
+  assert.equal(out.code, 200);
+  assert.deepEqual(out.body.map((o) => o.metadata.name), ['web']);
+  assert.deepEqual(reqs.filter((r) => r.method === 'GET' && r.url !== P).map((r) => r.url), [`${P}/web`]);
+});
 
 function call(handler, query) {
   return new Promise((resolve) => {

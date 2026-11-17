@@ -48,13 +48,15 @@ const PLATFORM_GROUP = "hybridsovereign.redhat";
 /**
  * The names of a platform kind a person may `get` by name only (a Role with resourceNames, e.g. an environment's
  * access groups reading that environment), from a SelfSubjectRulesReview in the namespace with the person's token.
+ * Returns { names } or, when the review itself failed, { error } (the upstream answer). Only names that are valid
+ * Kubernetes object names are kept (they go into a request path).
  */
 export async function namedReadable(apiServer, token, namespace, plural) {
   const resp = await upstreamRequest({
     apiServer, path: "/apis/authorization.k8s.io/v1/selfsubjectrulesreviews", method: "POST", token,
     body: { apiVersion: "authorization.k8s.io/v1", kind: "SelfSubjectRulesReview", spec: { namespace } },
   });
-  if (!resp || resp.status >= 400) return [];
+  if (!resp || resp.status >= 400) return { error: resp, names: [] };
   const names = new Set();
   for (const r of resp.body?.status?.resourceRules || []) {
     const groups = r.apiGroups || [];
@@ -65,7 +67,7 @@ export async function namedReadable(apiServer, token, namespace, plural) {
     if (!(verbs.includes("get") || verbs.includes("*"))) continue;
     for (const n of r.resourceNames || []) if (typeof n === "string" && NAME_PATTERN.test(n)) names.add(n);
   }
-  return [...names].sort();
+  return { names: [...names].sort() };
 }
 
 const PLUGINS_NS = "sovereign-cloud-plugins";
@@ -483,14 +485,18 @@ export function createK8sHandlers(apiServer) {
       }
       try {
         const resp = await k8sRequest(apiServer, cloudososCollectionPath(namespace), "GET", token);
+        // only a refused list (403) falls back; any other failure (5xx, a timeout) is an error, never a short list
         if (resp.status === 403) {
           // a person who may read only some environments by name (their access groups): those, one by one
-          const names = await namedReadable(apiServer, token, namespace, "cloudosos");
+          const { names, error } = await namedReadable(apiServer, token, namespace, "cloudosos");
+          if (error) return sendUpstreamError(res, error.status === 403 ? resp : error);
           if (names.length === 0) return sendUpstreamError(res, resp);
           const items = [];
           for (const n of names) {
             const one = await k8sRequest(apiServer, `${cloudososCollectionPath(namespace)}/${encodeURIComponent(n)}`, "GET", token);
-            if (one.status < 400 && one.body) items.push(tenantSafe("CloudOSO", one.body));
+            if (one.status === 404 || one.status === 403) continue;   // gone, or no longer readable
+            if (one.status >= 400) return sendUpstreamError(res, one);
+            if (one.body) items.push(tenantSafe("CloudOSO", one.body));
           }
           return res.json(items);
         }

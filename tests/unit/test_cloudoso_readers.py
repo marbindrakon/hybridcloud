@@ -95,15 +95,48 @@ class Readers(unittest.TestCase):
         self.run_readers({})
         self.assertEqual(self.owners("acme.developers"), ["Entity/acme"])
 
-    def test_the_environments_delete_leaves_the_client_roles(self):
-        self.run_readers({"editRbac": ["developers"], "viewRbac": ["auditors"]})
-        step = by_name(load(TEARDOWN)[0]["block"], "The environment's readers leave the services sign-in client")
+    def run_delete(self, empty):
+        """The delete's own project step and the readers' release, in the order of the delete (the site faked:
+        check-empty answers `empty`)."""
+        block = load(TEARDOWN)[0]["block"]
+        tasks = [by_name(block, "Tear down the OpenStack project"),
+                 by_name(block, "The environment's readers leave the services sign-in client")]
+        check = {"empty": empty, "found": {} if empty else {"servers": ["vm-1"]}, "project_exists": True,
+                 "project_id": "p1"}
         extra = {"cloudoso_entity_for_status": "acme", "cloudoso_cr_name": "web", "cloudoso_cr_namespace": NS,
-                 "services_api_host": "https://services.example.org", "services_bearer_token": "token-not-in-data"}
-        rc, trace, out = H.run("cloudoso_teardown", "main.yml", extra, k8s=self.k8s(), tasks=[step])
+                 "services_api_host": "https://services.example.org", "services_bearer_token": "token-not-in-data",
+                 "oso_vault_path": "cloudinfra/site-a", "oso_project_domain": "tenants", "oso_project_id": "p1",
+                 "oso_project_name": "acme_web", "oso_fip_ids": [], "oso_dns_provider": "", "oso_env_dns": {},
+                 "oso_dns_zone_id": "", "oso_dns_project_id": "", "oso_domain": "", "oso_app_cred_ids": [],
+                 "oso_access": {}, "fake_clouds_yaml": "clouds: {}",
+                 "fake_os": {"check-empty": check, "leftover-users": {"deleted": []}, "teardown": {"deleted": True}}}
+        real_directory = {k: v for k, v in O.FAKES.items() if k != "services_signin_groups.yml"}
+        return H.run("cloudoso_teardown", "main.yml", extra, k8s=self.k8s(), fakes=real_directory, tasks=tasks)
+
+    def test_the_environments_delete_leaves_the_client_roles_last(self):
+        self.run_readers({"editRbac": ["developers"], "viewRbac": ["auditors"]})
+        rc, trace, out = self.run_delete(empty=True)
         self.assertEqual(rc, 0, out)
+        self.assertEqual([t["os"]["action"] for t in trace if "os" in t], ["check-empty", "leftover-users", "teardown"])
         self.assertIsNone(self.kc.role("openshift-services", "acme.developers"))
         self.assertIsNone(self.kc.role("openshift-services", "acme.auditors"))
+
+    def test_a_refused_delete_keeps_the_readers(self):
+        """Review N2: a project that still holds servers stops the delete; the access groups keep the group on the
+        services cluster, so they can open the environment's page and read why."""
+        self.run_readers({"editRbac": ["developers"], "viewRbac": ["auditors"]})
+        rc, trace, out = self.run_delete(empty=False)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("is not empty, kept it", H.LAST_OUTPUT)
+        self.assertEqual(self.owners("acme.developers"), ["CloudOSO/web"])
+        self.assertEqual(self.owners("acme.auditors"), ["CloudOSO/web"])
+
+    def test_the_release_is_the_deletes_last_step(self):
+        names = [t.get("name") for t in load(TEARDOWN)[0]["block"]]
+        release = names.index("The environment's readers leave the services sign-in client")
+        for before in ("Tear down the OpenStack project", "Delete the project's Vault paths"):
+            self.assertLess(names.index(before), release, before)
+        self.assertLess(release, names.index("Mark CloudOSO deletion complete on services cluster"))
 
 
 if __name__ == "__main__":
