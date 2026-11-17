@@ -156,7 +156,7 @@
         that: _aap_auth_wanted.OIDC_ENDPOINT is match('^https?://[^/]+')
         quiet: true
         fail_msg: >-
-          The sign-in directory's address is not known (no Route in services-rhbk carries the label app=keycloak,
+          The sign-in directory's address is not known (no labelled Route of the Keycloak on the services cluster,
           and the job's environment does not set KEYCLOAK_EXTERNAL_URL), so the AAP sign-in authenticator was neither
           created nor changed.
 
