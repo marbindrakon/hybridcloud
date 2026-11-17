@@ -197,7 +197,7 @@ rhbk:
 # ─── RHBK Services (Keycloak) ────────────────────────────────────────────────
 rhbkServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.10.2"
+  chartVersion: "0.10.2-shc.1"  # 0.10.2-shc.1: the chart's own routes (keycloak.routes, keycloak.ingress)
   syncWave: "20"
   destinationNamespace: services-rhbk
   values:
@@ -230,6 +230,16 @@ rhbkServices:
           backupStorage: 10Gi
       tls:
         enabled: false
+      # The public name auth.shc.signal9.gg (owner 11-14), step A: a second Route with its own Let's Encrypt
+      # certificate (ECDSA: the services cluster's consumers pin the ingress CA bundle, which holds the ECDSA chain).
+      # The host name and the operator's Ingress are unchanged, and this Route carries no app=keycloak label, so the
+      # Keycloak, its issuer and the Route the automation reads stay as they are. Step B (the switch) is separate.
+      routes:
+        - name: rhbk-services-auth
+          host: auth.shc.signal9.gg
+          certificate:
+            clusterIssuer: letsencrypt-shc
+            privateKey: {algorithm: ECDSA, size: 256}
 
 # ─── RHBK Config (DEPRECATED — replaced by sovereignJobs keycloak* jobs) ─────
 rhbkConfig:
