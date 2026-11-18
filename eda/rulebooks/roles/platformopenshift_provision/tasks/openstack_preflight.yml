@@ -166,6 +166,11 @@
     pnn_hybrid: "{{ cb_platform_path | bool }}"
     # the installer's credential: the cluster's own (openstack_cluster_credential.yml)
     pnn_credential: "{{ cb_provider_creds_vault }}"
+    # the flavors the installer will ask for (the workers' only when there are workers)
+    pnn_flavors: >-
+      {{ ([oso_control_plane_flavor | default('', true)]
+          + ([oso_worker_flavor | default('', true)] if (oso_worker_count | default(0, true) | int) > 0 else []))
+         | select | list }}
 
 - name: Wait (nothing refused the cluster)
   ansible.builtin.include_tasks: preflight_stop.yml

@@ -160,6 +160,7 @@ install). [Status reasons](status-reasons.md) lists every reason and who acts.
 | `NetworkChoiceRequired` | The site has no default external network: choose a network. |
 | `ExternalNetworkNotListed` | The external network named is not one of the site's. |
 | `NetworkNameNotUnique` | The environment sees another network with the same name as the cluster's network, and the installer finds the network by its name. Rename or remove the other network; a network shared with the environment by someone else: ask the platform team. |
+| `FlavorNotFound` | The environment has no flavor of the name the cluster asks for (its control plane or worker flavor, or the installation's default): choose a flavor the environment offers. |
 | `WaitingForPlatformAccess` | The platform is connecting to the network; the cluster waits. |
 | `ServiceNotOffered`, `CircuitNotDeployed`, `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. |
 

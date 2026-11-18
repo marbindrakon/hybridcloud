@@ -508,7 +508,25 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertFalse([t for t in tr if "patch" in t])
         # the only OpenStack call is the read of the network's name (Review R2 M3)
         self.assertEqual(H.os_calls(tr), [{"action": "network-name-check", "project_id": "proj-1", "name": "shc-n1",
-                                           "network_id": "net-1"}])
+                                           "network_id": "net-1", "flavors": []}])
+
+    def test_flavors_checked_with_the_network_name(self):
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.xlarge", oso_worker_flavor="example.large",
+                                  oso_worker_count="3")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr)[0]["flavors"], ["example.xlarge", "example.large"])
+        # no workers: the workers' flavor is not asked for
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.xlarge", oso_worker_flavor="example.large",
+                                  oso_worker_count="0")
+        self.assertEqual(H.os_calls(tr)[0]["flavors"], ["example.xlarge"])
+
+    def test_a_missing_flavor_is_refused_before_anything(self):
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.missing"])}
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                  fake_os=missing)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the environment has no flavor example.missing", out)
+        self.assertEqual([t for t in tr if "create" in t], [])
 
     def test_external_default(self):
         rc, tr, out = self.run_op(k8s(extra={f"CloudInfrastructure/{PLAT}/site1": SITE, f"TenantProfile/{NS}/shc": TPROFILE}),

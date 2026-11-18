@@ -136,6 +136,7 @@ REASONS = {
     "NotForManagedClusters": _r("T", FAILED, "An address of this cluster lies in a range the platform's management network routes. Use another network or address."),
     "NetworkChoiceRequired": _r("T", FAILED, "This site has no default external network. Choose a network."),
     "ExternalNetworkNotListed": _r("T", FAILED, "The named network is not an external network of this site."),
+    "FlavorNotFound": _r("T", FAILED, "A flavor this cluster asks for does not exist in its environment; the message names it. Choose another flavor."),
     "NetworkNameNotUnique": _r("T", FAILED, "Your environment sees another network with the name of the cluster's network. Rename or remove the other network."),
     # an OpenShift cluster's installation that stopped (Ready and Stalled)
     "QuotaExceeded": _r("T", FAILED, "The environment's quota is too small for this cluster. Make the cluster smaller or have the quota raised, then retry."),

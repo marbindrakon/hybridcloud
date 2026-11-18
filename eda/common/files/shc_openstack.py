@@ -68,6 +68,7 @@ Actions (request["action"]):
                 the environment's project): the networks of a name as Neutron lists them to that project, each with
                 router:external as the project sees it; unique when only the expected network id is among them (the
                 installer takes the external network by name), external when the project may use it as one.
+                With flavors (names): flavors_missing lists those the project does not see.
   router-advertisement  the site's router advertisement service (an optional site component that switches the `nat`
                 token of an EVPN router port, so the site advertises floating IPs on a placed network): state
                 present asks it to hold `nat` on the router's IPv4 interface port on the network, absent to drop
@@ -908,9 +909,16 @@ def network_name_check(req):
                         "external": bool(getattr(n, "is_router_external", False))})
     ids = [v["id"] for v in visible]
     mine = [v for v in visible if want and v["id"] == want]
-    return {"name": name, "project_id": scoped, "visible": visible,
-            "unique": len(ids) == 1 and (not want or ids[0] == want),
-            "external": bool(mine) and mine[0]["external"]}
+    out = {"name": name, "project_id": scoped, "visible": visible,
+           "unique": len(ids) == 1 and (not want or ids[0] == want),
+           "external": bool(mine) and mine[0]["external"]}
+    # the flavors the cluster asks for, as the project sees them (the installer finds a flavor by name with the same
+    # credential and, without it, skips its own checks and fails much later)
+    flavors = [f for f in (req.get("flavors") or []) if isinstance(f, str) and f]
+    if flavors:
+        out["flavors_missing"] = [f for f in dict.fromkeys(flavors)
+                                  if conn.compute.find_flavor(f, ignore_missing=True) is None]
+    return out
 
 
 RA_KEY = "placement.routerAdvertisementBySite"

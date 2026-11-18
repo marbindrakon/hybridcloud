@@ -230,6 +230,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `FabricMismatch` | The network and the site belong to different fabrics. | You (the tenant) |
 | `Failed` | Could not be completed; see the reason. | The platform team |
 | `FamilyUnavailable` | This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it. | You (the tenant) |
+| `FlavorNotFound` | A flavor this cluster asks for does not exist in its environment; the message names it. Choose another flavor. | You (the tenant) |
 | `GrantRefused` | The site refused a role for an access group. The platform team is looking at it. | The platform team |
 | `GroupDomainNotFound` | The site has no domain of the declared group domain. The platform team is looking at it. | The platform team |
 | `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
