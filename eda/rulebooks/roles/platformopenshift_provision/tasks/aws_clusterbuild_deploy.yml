@@ -87,6 +87,13 @@
     mode: "0600"
   no_log: true
 
+# a stopped installation is removed only when someone asked for a new one (remove_stopped_build.yml); never a build
+# that is installing or installed
+- name: Remove a stopped installation before a new one
+  ansible.builtin.include_tasks: remove_stopped_build.yml
+  vars:
+    rsb_status: "{{ platformopenshift_cr.resources[0].status | default({}, true) }}"
+
 - name: Check existing Helm release
   ansible.builtin.command:
     argv: [helm, status, "{{ cb_app_name }}", --namespace, "{{ cb_cluster_name }}", --output, json,
@@ -135,6 +142,17 @@
 
 # the install starts with the Helm release below: from here on a refused prefix never withdraws the cluster's subnet
 # (cloud_internal_reach.yml)
+- name: Read the cluster's installation as it stands now
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _po_now
+
 - name: Record that the install starts
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -145,6 +163,7 @@
     cr_status_partial: true
     cr_status_body:
       installStarted: true
+      install: "{{ (_po_now.resources | default([{}], true) | first).status | default({}, true) | hybridsovereign.shc.shc_install_starting }}"
 
 # the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
 - name: Wake the network now the install starts
@@ -154,6 +173,10 @@
   when: >-
     (cb_network | default(aws_network | default(''))) | length > 0
     and (cb_publish | default(aws_publish | default('External'))) == 'Internal'
+
+# the object may have been deleted, replaced or given a newer request since the job's last status write
+- name: Check right before the release that the object is still this job's
+  ansible.builtin.include_tasks: install_same_object.yml
 
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:

@@ -1,0 +1,78 @@
+---
+# Watch the installation of the cluster's build on the hub (all three providers): every observeIntervalSeconds the
+# module hybridsovereign.shc.install_observe reads the cluster object, the ClusterDeployment and its current
+# ClusterProvision, writes status.install and the Ready (and on a stop Stalled) condition when something changed, and
+# says whether the job ends. Endings:
+#   gone, replaced, deleting, superseded  the object is not this job's any more: the job ends without a write
+#   installed                             the job goes on (post-install steps, then Ready)
+#   stopped, overdue                      the stop is written (Failed, Stalled); the job fails without another write
+#   window                                "still installing" is written; the job ends, the next run watches on
+# Inputs: cb_cluster_name (the build), platform_type, io_tenant_values ({controlPlane, compute, image}: what the
+# tenant set), io_network_path (the cluster is on a hybrid network).
+- name: Require the installation watch settings
+  ansible.builtin.assert:
+    that:
+      - (platformopenshift_install[item] | default('', true) | string | length) > 0
+    fail_msg: "Set platformopenshift_defaults.install.{{ item }} (the installation watch setting is missing)."
+  loop: [observeIntervalSeconds, watchWindowMinutes, deadlineMinutes, checkWriteMinutes]
+
+- name: Watch the installation
+  hybridsovereign.shc.install_observe:
+    mode: observe
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    hub_host: "{{ central_api_host | trim }}"
+    hub_api_key: "{{ central_bearer_token | trim }}"
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    build: "{{ cb_cluster_name }}"
+    uid: "{{ po_uid | default('', true) }}"
+    event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+    job_started_at: "{{ po_job_started_at }}"
+    settings:
+      windowMinutes: "{{ platformopenshift_install.watchWindowMinutes | int }}"
+      deadlineMinutes: "{{ platformopenshift_install.deadlineMinutes | int }}"
+      writeEveryMinutes: "{{ platformopenshift_install.checkWriteMinutes | int }}"
+      provider: "{{ platform_type }}"
+      networkPath: "{{ io_network_path | default(false) | bool }}"
+      tenantValues: "{{ io_tenant_values | default({}, true) }}"
+    job:
+      name: platformopenshift-reconciling
+      jobId: "{{ tower_job_id | default(awx_job_id | default('')) | string }}"
+      url: >-
+        {{ (aap_ui_url | default('') | regex_replace('/$', '')) ~ '/execution/jobs/playbook/'
+           ~ (tower_job_id | default(awx_job_id | default('')) | string) ~ '/output' }}
+  register: io_obs
+  until: io_obs.end | default(false) | bool
+  retries: >-
+    {{ ((platformopenshift_install.watchWindowMinutes | int) * 60
+        / (platformopenshift_install.observeIntervalSeconds | int)) | int + 10 }}
+  delay: "{{ platformopenshift_install.observeIntervalSeconds | int }}"
+  failed_when: false
+
+- name: Say how the watch ended
+  ansible.builtin.debug:
+    msg: "Installation of {{ cb_cluster_name }}: {{ io_obs.outcome | default('', true) or 'no ending' }} ({{ io_obs.why | default('') }})"
+
+- name: End the job, the object is not this job's any more (nothing is written)
+  ansible.builtin.meta: end_play
+  when: (io_obs.outcome | default('')) in ['gone', 'replaced', 'deleting', 'superseded']
+
+- name: End the job, the next run watches on
+  ansible.builtin.meta: end_play
+  when: (io_obs.outcome | default('')) == 'window' or not (io_obs.end | default(false) | bool)
+
+# the stop and its cause are written; the job fails so that the platform team sees it, and its rescue writes nothing
+- name: Keep the written stop
+  ansible.builtin.set_fact:
+    po_install_outcome_written: true
+  when: (io_obs.outcome | default('')) in ['stopped', 'overdue']
+
+- name: Fail the job, the installation stopped
+  ansible.builtin.fail:
+    msg: >-
+      The installation of {{ cb_cluster_name }} {{ 'did not finish in the time allowed' if io_obs.outcome == 'overdue'
+      else 'stopped' }}: {{ (io_obs.install.lastFailure | default({}, true)).reason | default(io_obs.outcome, true) }}
+      (status.install of the cluster object; the hub's provisions of the build hold the installer's log).
+  when: (io_obs.outcome | default('')) in ['stopped', 'overdue']

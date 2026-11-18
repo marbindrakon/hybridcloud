@@ -397,6 +397,50 @@ class Removal(unittest.TestCase):
                     self.assertFalse(I.may_remove_build(obj, self.STOPPED_CD, True)[0])
 
 
+class Recheck(unittest.TestCase):
+    """The fresh read right before the first delete (the run recorded CleaningUp after its decision)."""
+
+    def test_recheck(self):
+        stopped_cd = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
+        cleaning = po(dict(STOPPED, stage="CleaningUp", run=2), generation=3)
+        self.assertTrue(I.may_remove_build(cleaning, stopped_cd, True, recheck=True)[0])
+        self.assertFalse(I.may_remove_build(cleaning, stopped_cd, True)[0], "CleaningUp alone never decides")
+        self.assertFalse(I.may_remove_build(cleaning, cd(installed=True, provisioned=True), True, recheck=True)[0])
+        self.assertFalse(I.may_remove_build(cleaning, stopped_cd, False, recheck=True)[0])
+        self.assertFalse(I.may_remove_build(cleaning, cd(provisioned=False), True, recheck=True)[0])
+        installed = po(dict(STOPPED, stage="CleaningUp"), clusterInstalled=True)
+        self.assertFalse(I.may_remove_build(installed, stopped_cd, True, recheck=True)[0])
+        running = po(dict(STOPPED, stage="Installing"))
+        self.assertFalse(I.may_remove_build(running, stopped_cd, True, recheck=True)[0])
+
+
+class NetworkPath(unittest.TestCase):
+    """"Could not reach the cluster" only for that cause, and only on a hybrid network."""
+
+    def test_api_unreachable_on_a_network(self):
+        got = I.classify("openstack", "KubeAPIWaitTimeout", "level=fatal msg=x", network_path=True)
+        self.assertIn("could not reach the cluster's API", got["text"])
+        self.assertEqual(got["reason"], "InstallFailed")
+
+    def test_other_causes_on_a_network_are_not_called_unreachable(self):
+        quota = I.classify("openstack", "UnknownError", QUOTA_LOG, network_path=True)
+        self.assertEqual(quota["reason"], "QuotaExceeded")
+        self.assertNotIn("reach", quota["text"])
+        other = I.classify("openstack", "BootstrapFailed", "level=fatal msg=x", network_path=True)
+        self.assertNotIn("reach", other["text"])
+
+    def test_not_on_a_network(self):
+        got = I.classify("openstack", "KubeAPIWaitTimeout", "level=fatal msg=x", network_path=False)
+        self.assertEqual(got["text"], "the installer reported KubeAPIWaitTimeout")
+
+    def test_through_the_observation(self):
+        res = observe(po(RUNNING), cd(provisioned=False, stopped=True, failed="KubeAPIWaitTimeout", restarts=3),
+                      prov(attempt=2, stage="failed", reason="KubeAPIWaitTimeout",
+                           log="level=fatal msg=waiting for Kubernetes API: context deadline exceeded"),
+                      settings=dict(SETTINGS, networkPath=True))
+        self.assertIn("could not reach the cluster's API", stalled(res)["message"])
+
+
 class InstallBlocks(unittest.TestCase):
     def test_preparing_only_for_a_new_cluster(self):
         self.assertEqual(I.install_preparing({}, NOW), {"stage": "Preparing", "run": 1})
@@ -405,7 +449,7 @@ class InstallBlocks(unittest.TestCase):
         self.assertIsNone(I.install_preparing({"installStarted": True}, NOW))
 
     def test_starting_keeps_a_running_installation(self):
-        for stage in ("Installing", "Finishing", "Installed"):
+        for stage in ("Installing", "Finishing", "Installed", "Stopped"):
             self.assertIsNone(I.install_starting({"install": {"stage": stage, "startedAt": t(30)}}, NOW))
         self.assertIsNone(I.install_starting({"clusterInstalled": True}, NOW))
         got = I.install_starting({"install": {"stage": "CleaningUp", "run": 2}}, NOW)
@@ -420,7 +464,8 @@ class InstallBlocks(unittest.TestCase):
 
     def test_installed(self):
         got = I.install_installed({"install": {"stage": "Finishing", "run": 2, "endedAt": None}}, NOW)
-        self.assertEqual((got["stage"], got["run"], got["endedAt"]), ("Installed", 2, I.fmt_time(NOW)))
+        self.assertEqual((got["stage"], got["endedAt"]), ("Installed", I.fmt_time(NOW)))
+        self.assertNotIn("run", got)
 
 
 class Fresh(unittest.TestCase):
@@ -436,3 +481,75 @@ class Fresh(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class CapturedQuotaStop(unittest.TestCase):
+    """A quota-stopped OpenStack installation as the hub showed it (tests/fixtures/install-causes/openstack-quota-stop:
+    the ClusterDeployment and its provisions at each change, names replaced by example names). On that Hive the
+    failure condition's message is the whole install log, attempts count from 0, and the stop comes minutes after the
+    third failure, with the provision reference cleared."""
+
+    QUOTA = ("the site reports too little quota: Cores (180 needed, limit 128), RAM (MB) (491520 needed, limit "
+             "262144)")
+
+    def steps(self):
+        import json
+        with open(os.path.join(ROOT, "tests", "fixtures", "install-causes", "openstack-quota-stop", "steps.json")) as fh:
+            return json.load(fh)
+
+    def replay(self, steps):
+        install, conditions, out = dict(RUNNING, startedAt=t(5)), [], []
+        install.pop("attempt")
+        for i, step in enumerate(steps):
+            cd_ = step["clusterDeployment"]
+            provs = step["provisions"]
+            ref = (((cd_ or {}).get("status") or {}).get("provisionRef") or {}).get("name")
+            current = next((p for p in provs if p["metadata"]["name"] == ref), None)
+            when = NOW + datetime.timedelta(minutes=i)
+            res = I.observe(po(install, conditions=conditions), JOB, cd_, current, when, SETTINGS, provisions=provs)
+            install, conditions = res["install"], res["conditions"]
+            out.append(res)
+        return out
+
+    def test_the_sequence(self):
+        got = self.replay(self.steps())
+        reasons = [ready(r)["reason"] for r in got]
+        attempts = [r["install"].get("attempt") for r in got]
+        self.assertEqual(reasons[0], "Installing")
+        self.assertEqual(reasons[-1], "QuotaExceeded")
+        self.assertIn("InstallRetrying", reasons)
+        self.assertEqual(attempts[-1], 3)
+        self.assertEqual([r["outcome"] for r in got[:-1]], [None] * (len(got) - 1))
+        self.assertEqual(got[-1]["outcome"], "stopped")
+        self.assertEqual(stalled(got[-1])["message"],
+                         "Attempt 3 of 3 failed: %s. The installer stopped after 3 attempts." % self.QUOTA)
+        # the first failure is on the page while the installer tries again
+        first = next(r for r in got if ready(r)["reason"] == "InstallRetrying")
+        self.assertEqual(first["install"]["lastFailure"]["message"], "Attempt 1 of 3 failed: %s." % self.QUOTA)
+        self.assertTrue(ready(first)["message"].endswith("The installer is trying again."))
+
+    def test_all_attempts_failed_not_yet_stopped(self):
+        steps = self.steps()
+        between = steps[-2]   # the third attempt failed, Hive has not stopped yet
+        self.assertEqual([p["spec"]["stage"] for p in between["provisions"]], ["failed"] * 3)
+        got = self.replay(steps)[-2]
+        self.assertIsNone(got["outcome"])
+        self.assertEqual(ready(got)["reason"], "InstallRetrying")
+        self.assertEqual(got["install"]["attempt"], 3)
+        self.assertEqual(got["install"]["lastFailure"]["attempt"], 3)
+        self.assertIn("No attempts are left", ready(got)["message"])
+        self.assertIsNone(stalled(got))
+
+    def test_a_job_that_first_looks_after_the_stop(self):
+        last = self.steps()[-1]
+        res = I.observe(po(dict(RUNNING)), JOB, last["clusterDeployment"], None, NOW, SETTINGS,
+                        provisions=last["provisions"])
+        self.assertEqual(res["outcome"], "stopped")
+        self.assertEqual(stalled(res)["reason"], "QuotaExceeded")
+        self.assertIn("Cores (180 needed, limit 128)", stalled(res)["message"])
+
+    def test_no_log_text_in_any_written_field(self):
+        for res in self.replay(self.steps()):
+            text = repr(res["install"]) + repr(res["conditions"])
+            for word in ("level=", "msg=", "quay.io", "clouds.yaml", "sha256", "MissingQuota"):
+                self.assertNotIn(word, text)

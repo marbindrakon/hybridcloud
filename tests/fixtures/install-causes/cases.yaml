@@ -1,6 +1,7 @@
 # Failed installation attempts and the cause the platform must conclude (tests/unit/test_install_causes.py).
 # Add a captured ClusterProvision as a new entry: provider, the provision's ClusterProvisionFailed reason (hive),
-# its spec.installLog (log; may be a path relative to this directory in logFile), the values the tenant set
+# its spec.installLog (log; may be a path relative to this directory in logFile), the failure condition's message
+# (hiveMessage, a second source), the values the tenant set
 # (tenant), and what the platform must say (reason, and message: the exact sentence, or contains: parts of it).
 # Example names and documentation ranges only.
 - name: openstack quota, limit form (several resources)
@@ -137,3 +138,19 @@
   log: "level=error msg=x"
   reason: InstallFailed
   message: "the cause is not one the platform recognizes"
+- name: openstack quota as the hub showed it (one line, two resources)
+  provider: openstack
+  hive: UnknownError
+  log: |
+    level=info msg=Consuming Worker Ignition Config from target directory
+    level=fatal msg=failed to fetch Cluster: failed to fetch dependency of "Cluster": failed to generate asset "Platform Quota Check": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144
+  reason: QuotaExceeded
+  message: "the site reports too little quota: Cores (180 needed, limit 128), RAM (MB) (491520 needed, limit 262144)"
+- name: the provision's log is missing, Hive's condition message carries it
+  provider: openstack
+  hive: UnknownError
+  log: null
+  hiveMessage: |
+    level=fatal msg=failed to generate asset "Platform Quota Check": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128
+  reason: QuotaExceeded
+  message: "the site reports too little quota: Cores (180 needed, limit 128)"

@@ -91,6 +91,13 @@ def _true(obj, ctype):
     return c is not None and str(c.get("status", "")).lower() == "true"
 
 
+def _bool(value):
+    """A setting's truth as a job passes it (a bool, or the text a template made of one)."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "yes", "1")
+
+
 def _int(value, default=None):
     try:
         return int(value)
@@ -194,6 +201,9 @@ CREDENTIAL_TEXT = re.compile(
     r"AuthFailure: AWS was not able to validate the provided access credentials|"
     r"oauth2: cannot fetch token|invalid_grant|failed to create a network client: Authentication failed)")
 
+API_UNREACHABLE_CODES = ("KubeAPIWaitTimeout", "KubeAPIWaitFailed")
+API_UNREACHABLE_TEXT = re.compile(r"waiting for Kubernetes API: context deadline exceeded|Failed waiting for Kubernetes API")
+
 POOL_WORDS = {"openstack": "flavor", "aws": "instance type", "gcp": "machine type"}
 
 
@@ -252,7 +262,8 @@ def _quota_sentence(items):
     return "the site reports too little quota"
 
 
-def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_started=False, log_read=True):
+def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_started=False, log_read=True,
+             network_path=False, second=""):
     """The cause of one failed attempt: {"cause", "reason", "text"}. text is a fixed sentence of the platform (no
     final full stop) with values that match a strict pattern only.
 
@@ -263,14 +274,22 @@ def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_sta
                    one of them)
     pod_not_started  Hive says the install pod could not be started (InstallLaunchError, InstallPodStuck)
     log_read       False when the attempt's log was not available to read (an empty log then says nothing)
+    network_path   the cluster is on a hybrid network: an installer that could not reach the cluster's API is named
+                   with what the platform needs on a network
+    second         Hive's condition message for the attempt (untrusted: on some Hive versions the whole log), read
+                   with the same patterns after the log
     """
     code = str(hive_reason or "")
     if not HIVE_CODE.match(code):
         code = ""
-    log = install_log if isinstance(install_log, str) else ""
-    if len(log) > LOG_SCAN_LIMIT:
-        log = log[-LOG_SCAN_LIMIT:]
-    tv = tenant_values or {}
+    own = install_log if isinstance(install_log, str) else ""
+    if len(own) > LOG_SCAN_LIMIT:
+        own = own[-LOG_SCAN_LIMIT:]
+    extra = second if isinstance(second, str) else ""
+    if len(extra) > LOG_SCAN_LIMIT:
+        extra = extra[-LOG_SCAN_LIMIT:]
+    log = own + ("\n" + extra if extra else "")
+    tv = tenant_values if isinstance(tenant_values, dict) else {}
 
     def out(cause, text):
         return {"cause": cause, "reason": CAUSE_REASONS[cause], "text": text}
@@ -313,9 +332,13 @@ def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_sta
     # 4. could not start, or ended without a log
     if pod_not_started:
         return out(NOT_STARTED, "the installation could not be started on the platform")
-    if log_read and not log.strip():
+    if log_read and not own.strip():
         return out(NOT_STARTED, "the attempt ended before the installer wrote a log")
-    # 5. anything else: Hive's specific code, never log text
+    # 5. the installer could not reach the cluster's API (on a hybrid network most likely a network cause)
+    if network_path and (code in API_UNREACHABLE_CODES or (log and API_UNREACHABLE_TEXT.search(log))):
+        return out(OTHER, "the installer could not reach the cluster's API; a cluster on a network needs the "
+                          "platform's connection to the network and a site that advertises floating IPs")
+    # 6. anything else: Hive's specific code, never log text
     if code in HIVE_SHOWN:
         return out(OTHER, "the installer reported %s" % code)
     return out(OTHER, "the cause is not one the platform recognizes")
@@ -340,6 +363,21 @@ def _provision_failure(provision):
     c = _cond(provision, "ClusterProvisionFailed")
     failed = stage == "failed" or (c is not None and str(c.get("status", "")).lower() == "true")
     return (str((c or {}).get("reason") or ""), failed)
+
+
+def _attempt_of(provision):
+    return _int(((provision or {}).get("spec") or {}).get("attempt"), -1)
+
+
+def _latest(provisions):
+    items = [p for p in provisions or [] if isinstance(p, dict)]
+    return max(items, key=_attempt_of) if items else None
+
+
+def _latest_failed(provisions, current):
+    """The failed provision of the highest attempt among the list and the current one, or None."""
+    items = [p for p in list(provisions or []) + [current] if isinstance(p, dict) and _provision_failure(p)[1]]
+    return max(items, key=_attempt_of) if items else None
 
 
 def _ready(reason, message):
@@ -368,7 +406,7 @@ def _strip(install):
     return {k: v for k, v in (install or {}).items() if k != "observedAt"}
 
 
-def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=False):
+def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=False, provisions=None):
     """One observation of an installation. Returns a dict:
 
     end        the job must end now
@@ -384,7 +422,9 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
     obj        the cluster object as read now (None: it does not exist)
     job        {uid, eventId, startedAt}: the job's object identity, its event and when the job started
     cd         the hub's ClusterDeployment (None: none exists yet)
-    provision  the ClusterProvision named by its status.provisionRef (None: none)
+    provision  the ClusterProvision named by its status.provisionRef (None: none, or Hive cleared the reference)
+    provisions every ClusterProvision of the build (Hive keeps the last ones); the latest is used when provision is
+               None, and the latest failed one gives the last failure
     now        aware datetime
     settings   {windowMinutes, deadlineMinutes, writeEveryMinutes, provider, tenantValues}
     obj_error  the object could not be read (unknown: go on, write nothing)
@@ -398,6 +438,7 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
     deadline = float(settings["deadlineMinutes"])
     write_every = float(settings["writeEveryMinutes"])
     provider = str(settings.get("provider") or "")
+    net = _bool(settings.get("networkPath"))
     job_minutes = _minutes_since(job.get("startedAt"), now)
     window_reached = job_minutes is not None and job_minutes >= window
 
@@ -444,6 +485,8 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
         conditions.append(_ready("Installing", "The installation is starting."))
         res["log"] = "no build on the hub yet"
     else:
+        if provision is None and provisions:
+            provision = _latest(provisions)
         limit = _int((cd.get("spec") or {}).get("installAttemptsLimit"))
         restarts = _int((cd.get("status") or {}).get("installRestarts"), 0) or 0
         prov_attempt = _int((provision or {}).get("spec", {}).get("attempt")) if isinstance(provision, dict) else None
@@ -453,29 +496,33 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
             attempt = min(attempt, max(limit, 1))
         install["attempt"] = attempt
         install.setdefault("startedAt", nowt)
-        hive_reason, prov_failed = _provision_failure(provision)
         cd_failed = _cond(cd, "ProvisionFailed")
         not_started = _true(cd, "InstallLaunchError") or _true(provision, "InstallPodStuck") or \
             _true(cd, "InstallImagesNotResolved")
         cd_failed_true = cd_failed is not None and str(cd_failed.get("status", "")).lower() == "true"
         prev = cur.get("lastFailure") or {}
-        if prov_failed:
-            # the current provision failed: its own log says why
-            failed_attempt = attempt
-            log = (provision.get("spec") or {}).get("installLog")
-            cause = classify(provider, hive_reason or str((cd_failed or {}).get("reason") or ""), log,
-                             settings.get("tenantValues"), pod_not_started=not_started)
-            if _int(prev.get("attempt")) == failed_attempt and prev.get("reason") == cause["reason"]:
+        failed_prov = _latest_failed(provisions, provision)
+        if failed_prov is not None:
+            # the latest failed attempt: its own log says why (Hive's condition message is a second source for the
+            # same patterns: on some Hive versions it is the whole log)
+            failed_attempt = (_int((failed_prov.get("spec") or {}).get("attempt"), 0) or 0) + 1
+            fcond = _cond(failed_prov, "ClusterProvisionFailed") or {}
+            reason = str(fcond.get("reason") or (cd_failed or {}).get("reason") or "")
+            second = str(fcond.get("message") or (cd_failed or {}).get("message") or "")
+            if _int(prev.get("attempt")) == failed_attempt and prev.get("message"):
                 install["lastFailure"] = prev
             else:
+                cause = classify(provider, reason, (failed_prov.get("spec") or {}).get("installLog"),
+                                 settings.get("tenantValues"), pod_not_started=not_started, network_path=net,
+                                 second=second)
                 install["lastFailure"] = {"attempt": failed_attempt, "reason": cause["reason"],
                                           "message": _failure_message(failed_attempt, limit, cause["text"]),
                                           "time": nowt}
         elif cd_failed_true and not prev:
-            # an earlier attempt failed and its provision was not seen: Hive's code only (its log is not read)
+            # an earlier attempt failed and no provision of it is left: Hive's code and its condition message
             failed_attempt = max(attempt - 1, 1) if provision is not None else max(restarts, 1)
             cause = classify(provider, str(cd_failed.get("reason") or ""), None, settings.get("tenantValues"),
-                             log_read=False)
+                             log_read=False, network_path=net, second=str(cd_failed.get("message") or ""))
             install["lastFailure"] = {"attempt": failed_attempt, "reason": cause["reason"],
                                       "message": _failure_message(failed_attempt, limit, cause["text"]),
                                       "time": nowt}
@@ -492,7 +539,8 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
             lf = install.get("lastFailure")
             if not lf:
                 cause = classify(provider, str((cd_failed or {}).get("reason") or ""), None,
-                                 settings.get("tenantValues"), pod_not_started=not_started, log_read=False)
+                                 settings.get("tenantValues"), pod_not_started=not_started, log_read=False,
+                                 network_path=net)
                 lf = {"attempt": attempt, "reason": cause["reason"],
                       "message": _failure_message(attempt, limit, cause["text"]), "time": nowt}
                 install["lastFailure"] = lf
@@ -511,6 +559,10 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
                 conditions.append(_ready("InstallNotStarted",
                                          "%s could not be started on the platform yet; the platform keeps checking."
                                          % _attempt_text(attempt, limit)))
+            elif lf and limit and _int(lf.get("attempt"), 0) >= limit:
+                # every attempt failed and Hive has not stopped yet: no new attempt comes
+                conditions.append(_ready("InstallRetrying", lf["message"] + " No attempts are left; the installation "
+                                                                          "stops shortly."))
             elif lf:
                 conditions.append(_ready("InstallRetrying", lf["message"] + " The installer is trying again."))
             else:
@@ -579,7 +631,8 @@ def install_starting(status, now):
     already running or done (then None: no change)."""
     status = status or {}
     cur = dict(status.get("install") or {})
-    if cur.get("stage") in ("Installing", "Finishing", "Installed"):
+    if cur.get("stage") in ("Installing", "Finishing", "Installed", "Stopped"):
+        # running, done, or stopped (a new installation starts only after the removal recorded CleaningUp)
         return None
     if not cur and status.get("clusterInstalled") is True:
         return None
@@ -599,12 +652,13 @@ def install_cleaning(status, now):
 def install_installed(status, now):
     """status.install once the cluster is installed and connected."""
     cur = dict((status or {}).get("install") or {})
-    return {"stage": "Installed", "run": _int(cur.get("run"), 1) or 1, "endedAt": cur.get("endedAt") or fmt_time(now),
+    # run is left as it stands (a merge keeps it), so a status read before a removal in the same job is good enough
+    return {"stage": "Installed", "endedAt": cur.get("endedAt") or fmt_time(now),
             "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None, "observedAt": fmt_time(now)}
 
 
 # ---- the guarded removal of a stopped build ----------------------------------------------------------------------
-def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None):
+def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, recheck=False):
     """Whether the build of a stopped installation may be removed before a new one: (allowed, why).
 
     All of these must hold, read fresh in the same run:
@@ -614,6 +668,8 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None):
     4. someone asked since the stop: a newer generation, or a Retry request other than the one handled at the stop
        (event: {reason, publishedAt} of the job's request, a Retry request published after the stop also counts).
     The hub not readable, or the object not readable, means no removal (unknown is treated as installed).
+    recheck: the same run decided before and recorded stage CleaningUp; this is the fresh read right before the
+    first delete (conditions 1 to 3 again; 4 was established by that decision).
     """
     if not hub_read_ok:
         return False, "the hub could not be read; nothing is removed (an unknown build counts as installed)"
@@ -632,6 +688,10 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None):
             return False, "there is no stopped build on the hub"
     elif not hub_stopped(cd):
         return False, "the hub's build has not stopped (Hive may still be trying); nothing is removed"
+    if recheck:
+        if install.get("stage") not in ("Stopped", "CleaningUp"):
+            return False, "the cluster object records no stopped installation; nothing is removed"
+        return True, "the stopped build is removed for a new installation"
     if install.get("stage") != "Stopped":
         return False, "the cluster object records no stopped installation; nothing is removed"
     generation = _int((obj.get("metadata") or {}).get("generation"), 0)
@@ -643,6 +703,9 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None):
     if "stoppedRequest" in install and handled != str(install.get("stoppedRequest") or ""):
         asked = True
     ev = event or {}
+    if not ev:
+        delivery = status.get("delivery") or {}
+        ev = {"reason": delivery.get("reason"), "publishedAt": delivery.get("publishedAt")}
     ended = parse_time(install.get("endedAt"))
     published = parse_time(ev.get("publishedAt"))
     if str(ev.get("reason") or "").endswith("ReconcileRequested") and ended and published and published > ended:

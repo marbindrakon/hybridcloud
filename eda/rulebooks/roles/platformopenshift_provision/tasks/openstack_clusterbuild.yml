@@ -78,8 +78,12 @@
 - name: The cluster's recorded build and addresses
   ansible.builtin.include_tasks: openstack_cluster_addresses.yml
 
-- name: Clean up failed or stale Hive cluster build before reprovisioning
-  ansible.builtin.include_tasks: cleanup_stale_clusterbuild.yml
+# a stopped installation is removed only when someone asked for a new one (remove_stopped_build.yml); never a build
+# that is installing or installed
+- name: Remove a stopped installation before a new one
+  ansible.builtin.include_tasks: remove_stopped_build.yml
+  vars:
+    rsb_status: "{{ po_cr_current.resources[0].status | default({}, true) }}"
 
 - name: Create Route53 records for the cluster
   when: not (use_designate_dns | default(false) | bool)
@@ -196,6 +200,17 @@
     vault_kv_write_data:
       install-config.yaml: "{{ cb_install_config }}"
 
+- name: Read the cluster's installation as it stands now
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _po_now
+
 # shc (§11.6 phase C): record the DNS records and Vault paths as soon as they exist, so a build
 # that fails later still tears down cleanly (and the orphan check doesn't flag a running install).
 - name: Record DNS records and Vault paths on the status
@@ -208,9 +223,11 @@
     cr_status_body:
       status: reconciling
       ready: false
-      message: "OpenStack cluster build {{ cb_cluster_name }} in progress"
+      reason: Installing
+      message: The installation is starting.
       # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
       installStarted: true
+      install: "{{ _po_now.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_starting }}"
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
         accountVaultPath: null
@@ -316,6 +333,10 @@
          (cb_helm_release_failed | bool) or
          (values_diff_result.stdout | default('true') | trim == 'true') }}
 
+# the object may have been deleted, replaced or given a newer request since the job's last status write
+- name: Check right before the release that the object is still this job's
+  ansible.builtin.include_tasks: install_same_object.yml
+
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
     argv:
@@ -353,28 +374,18 @@
     - "/tmp/{{ cb_app_name }}-registry.json"
   changed_when: false
 
-- name: Monitor cluster deployment and push secrets
+# the watch ends the job unless the cluster is installed (install_observe.yml)
+- name: Watch the installation
+  ansible.builtin.include_tasks: install_observe.yml
+  vars:
+    io_network_path: "{{ cb_platform_path | bool }}"
+    io_tenant_values:
+      controlPlane: "{{ cb_controller_flavor }}"
+      compute: "{{ cb_worker_flavor }}"
+      image: "{{ cb_glance_image | default('', true) }}"
+
+- name: Read the installed cluster and push its secrets
   ansible.builtin.include_tasks: openstack_clusterbuild_monitor.yml
-
-# DESIGN cnet §4.5: on a hybrid network an install the hub never sees complete is most likely a network cause; say so
-- name: Name the network causes of an install the platform could not follow
-  ansible.builtin.set_fact:
-    po_fail_reason: EDAFailed
-  when:
-    - cb_platform_path | bool
-    - not (cb_hive_complete | default(false) | bool)
-    - cd_info is failed
-
-- name: Fail the build of a cluster on a hybrid network that did not install
-  ansible.builtin.fail:
-    msg: >-
-      The platform could not reach the cluster at {{ cb_api_vip }}. Clusters on a network need the platform's
-      connection to the network and a site that advertises floating IPs; the platform team can check both
-      (documentation: Platform access).
-  when:
-    - cb_platform_path | bool
-    - not (cb_hive_complete | default(false) | bool)
-    - cd_info is failed
 
 - name: The cluster router's gateway address joins the cluster's prefixes
   ansible.builtin.include_tasks: router_gateway.yml

@@ -1,4 +1,6 @@
 ---
+# Reads the hub's build once: after the installation watch said installed (install_observe.yml), or for an installed,
+# healthy cluster (openstack.yml's fast path). A missing ClusterDeployment reads as not installed.
 - name: Check ClusterDeployment installation status
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -9,23 +11,15 @@
     name: "{{ cb_cluster_name }}"
     namespace: "{{ cb_cluster_name }}"
   register: cd_info
-  until: >-
-    cd_info.resources | default([]) | length > 0
-    and (
-      cd_info.resources[0].spec.installed | default(false) | bool
-      or (
-        cd_info.resources[0].status.conditions | default([])
-        | selectattr('type', 'equalto', 'Provisioned')
-        | map(attribute='status') | first | default('') | trim == 'True'
-      )
-    )
-  retries: "{{ platformopenshift_hive_poll_retries | default(120) }}"
-  delay: "{{ platformopenshift_hive_poll_delay_seconds | default(60) }}"
-  ignore_errors: true
 
 - name: Set cluster installed flag
   ansible.builtin.set_fact:
-    cb_cluster_installed: "{{ cd_info.resources | default([]) | length > 0 and (cd_info.resources[0].spec.installed | default(false) | bool) }}"
+    # installed as the installation watch reads it: spec.installed, or the Provisioned condition True
+    cb_cluster_installed: >-
+      {{ cd_info.resources | default([]) | length > 0
+         and (cd_info.resources[0].spec.installed | default(false) | bool
+              or (cd_info.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Provisioned')
+                  | map(attribute='status') | first | default('') | string | trim) == 'True') }}
     cb_admin_kubeconfig_secret: "{{ (cd_info.resources[0].spec.clusterMetadata.adminKubeconfigSecretRef.name | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
     cb_admin_password_secret: "{{ (cd_info.resources[0].spec.clusterMetadata.adminPasswordSecretRef.name | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
     cb_console_url: "{{ (cd_info.resources[0].status.webConsoleURL | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"

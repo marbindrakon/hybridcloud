@@ -1,0 +1,24 @@
+---
+# Right before the job makes the cluster's release on the hub: the object must still exist, be the job's object (same
+# uid), not be deleted, and still carry the job's request. Otherwise the job ends here without a write, so a delete
+# that came after the job's last status write never meets a new release. Input: po_uid.
+- name: Read the object once more
+  hybridsovereign.shc.install_observe:
+    mode: check
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    uid: "{{ po_uid | default('', true) }}"
+    event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+  register: iso_check
+
+- name: Say why the job ends before the release
+  ansible.builtin.debug:
+    msg: "No release for {{ ansible_operator_meta.name }}: {{ iso_check.why }}"
+  when: not (iso_check.ok | default(true) | bool)
+
+- name: End the job before the release
+  ansible.builtin.meta: end_play
+  when: not (iso_check.ok | default(true) | bool)

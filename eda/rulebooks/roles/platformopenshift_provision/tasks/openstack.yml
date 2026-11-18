@@ -205,6 +205,14 @@
       eventTime: "{{ event_time }}"
   ignore_errors: true
 
+# only an installed cluster is ever written Ready (the installation watch ended the job otherwise)
+- name: Never write Ready for a cluster that is not installed
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the hub's build {{ cb_app_name }} is not installed; the
+      cluster is not marked ready.
+  when: not (cb_cluster_installed | default(false) | bool)
+
 - name: Update PlatformOpenshift status
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -241,6 +249,7 @@
       provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
       acmAvailable: "{{ cb_acm_available | default('Unknown') }}"
       clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
+      install: "{{ (_po_now | default(po_cr_current)).resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_installed }}"
       # shc (§11.6 phase C): what provision created, for teardown
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"

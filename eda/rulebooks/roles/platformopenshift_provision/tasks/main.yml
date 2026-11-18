@@ -8,6 +8,8 @@
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"
+        # the installation watch (install_observe.yml) ends this job's watch a window after this time
+        po_job_started_at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -93,6 +95,21 @@
         platform_type: "{{ platformopenshift_cr.resources[0].spec.type | default('') }}"
         platform_spec: "{{ platformopenshift_cr.resources[0].spec }}"
 
+    # the first check of a new cluster: its installation is being prepared (checks, addresses, names)
+    - name: Record that the installation is being prepared
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ platformopenshift_cr_name }}"
+        cr_namespace: "{{ platformopenshift_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          install: "{{ platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_preparing }}"
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_preparing) | length > 0
+
     - name: Dispatch to AWS handler
       ansible.builtin.include_tasks: aws.yml
       when: platform_type == "aws"
@@ -130,7 +147,10 @@
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
           conditions: "{{ [po_preflight_condition] if (po_preflight_condition | default({}, true)) else [] }}"
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
+      # a stopped installation was written by the watch (install_observe.yml) with its cause: nothing replaces it
+      when:
+        - services_api_host is defined and services_bearer_token is defined
+        - not (po_install_outcome_written | default(false) | bool)
 
     - name: Re-raise provisioning failure
       ansible.builtin.fail:

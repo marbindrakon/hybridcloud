@@ -56,7 +56,7 @@ class FixtureCases(unittest.TestCase):
         self.assertGreater(len(cases), 10)
         for c in cases:
             with self.subTest(c["name"]):
-                got = I.classify(c["provider"], c.get("hive"), c.get("log"), c.get("tenant"))
+                got = I.classify(c["provider"], c.get("hive"), c.get("log"), c.get("tenant"), second=c.get("hiveMessage") or "")
                 self.assertEqual(got["reason"], c["reason"])
                 if "message" in c:
                     self.assertEqual(got["text"], c["message"])

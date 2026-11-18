@@ -1,0 +1,2257 @@
+[
+ {
+  "time": "15:26:36",
+  "clusterDeployment": null,
+  "provisions": []
+ },
+ {
+  "time": "15:26:57",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": null,
+    "conditions": [
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ProvisionFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Provisioned",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ]
+   }
+  },
+  "provisions": []
+ },
+ {
+  "time": "15:27:18",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": null,
+    "conditions": [
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster provision initializing"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ProvisionFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "initializing"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:27:38",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": null,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster is provisioning"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:28:39",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 1,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster provision initializing"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "initializing"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:29:20",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 1,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster is provisioning"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "provisioning"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:29:40",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 1,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster is provisioning"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:31:42",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 2,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster provision initializing"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    },
+    "spec": {
+     "attempt": 2,
+     "stage": "initializing"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:32:02",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 2,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster is provisioning"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    },
+    "spec": {
+     "attempt": 2,
+     "stage": "provisioning"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:32:23",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 2,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "Provisioning",
+      "message": "Cluster is provisioning"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "False",
+      "reason": "ProvisionNotStopped",
+      "message": "Provision is not stopped"
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ],
+    "provisionRef": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    }
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    },
+    "spec": {
+     "attempt": 2,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   }
+  ]
+ },
+ {
+  "time": "15:36:06",
+  "clusterDeployment": {
+   "metadata": {
+    "name": "shc-oso-example-demo-0a1b2c3d",
+    "namespace": "shc-oso-example-demo-0a1b2c3d"
+   },
+   "spec": {
+    "installed": false,
+    "installAttemptsLimit": 3
+   },
+   "status": {
+    "installRestarts": 3,
+    "conditions": [
+     {
+      "type": "ProvisionFailed",
+      "status": "True",
+      "reason": "UnknownError",
+      "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+     },
+     {
+      "type": "ProvisionStopped",
+      "status": "True",
+      "reason": "InstallAttemptsLimitReached",
+      "message": "Install attempts limit reached"
+     },
+     {
+      "type": "Provisioned",
+      "status": "False",
+      "reason": "ProvisionStopped",
+      "message": "Provisioning failed terminally (see the ProvisionStopped condition for details)"
+     },
+     {
+      "type": "AuthenticationFailure",
+      "status": "False",
+      "reason": "PlatformAuthSuccess",
+      "message": "Platform credentials passed authentication check"
+     },
+     {
+      "type": "InstallImagesNotResolved",
+      "status": "False",
+      "reason": "ImagesResolved",
+      "message": "Images required for cluster deployment installations are resolved"
+     },
+     {
+      "type": "InstallLaunchError",
+      "status": "False",
+      "reason": "InstallLaunchSuccessful",
+      "message": "Successfully launched install pod"
+     },
+     {
+      "type": "InstallerImageResolutionFailed",
+      "status": "False",
+      "reason": "InstallerImageResolved",
+      "message": "InstallerImage is resolved."
+     },
+     {
+      "type": "RelocationFailed",
+      "status": "False",
+      "reason": "NoMatchingRelocates",
+      "message": "no ClusterRelocates match"
+     },
+     {
+      "type": "RequirementsMet",
+      "status": "True",
+      "reason": "AllRequirementsMet",
+      "message": "All pre-provision requirements met"
+     },
+     {
+      "type": "AWSPrivateLinkFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "AWSPrivateLinkReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ActiveAPIURLOverride",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallCompleted",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallRequirementsMet",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ClusterInstallStopped",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "ControlPlaneCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DNSNotReady",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "DeprovisionLaunchError",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Hibernating",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "IngressCertificateNotFound",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Ready",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "SyncSetFailed",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     },
+     {
+      "type": "Unreachable",
+      "status": "Unknown",
+      "reason": "Initialized",
+      "message": "Condition Initialized"
+     }
+    ]
+   }
+  },
+  "provisions": [
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-0-fnvpr"
+    },
+    "spec": {
+     "attempt": 0,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:27:21Z 2026-11-18T15:27:21Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-1-kdt5r"
+    },
+    "spec": {
+     "attempt": 1,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:29:06Z 2026-11-18T15:29:06Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   },
+   {
+    "metadata": {
+     "name": "shc-oso-example-demo-0a1b2c3d-2-wbhc5"
+    },
+    "spec": {
+     "attempt": 2,
+     "stage": "failed",
+     "installLog": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+    },
+    "status": {
+     "conditions": [
+      {
+       "type": "ClusterProvisionJobCreated",
+       "status": "True",
+       "reason": "JobCreated",
+       "message": "Install job has been created"
+      },
+      {
+       "type": "ClusterProvisionInitialized",
+       "status": "True",
+       "reason": "InitializationComplete",
+       "message": "Install job has completed its initialization. Provisioning started."
+      },
+      {
+       "type": "ClusterProvisionFailed",
+       "status": "True",
+       "reason": "UnknownError",
+       "message": "level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown\nlevel=info msg=Credentials loaded from file \"/etc/openstack/clouds.yaml\"\nlevel=info msg=Consuming Install Config from target directory\nlevel=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:31:51Z 2026-11-18T15:31:51Z\nlevel=info msg=Adding clusters...\nlevel=info msg=Manifests created in: cluster-api, manifests and openshift\nlevel=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised\nlevel=info msg=Consuming Worker Machines from target directory\nlevel=info msg=Consuming Openshift Manifests from target directory\nlevel=info msg=Consuming OpenShift Install (Manifests) from target directory\nlevel=info msg=Consuming Common Manifests from target directory\nlevel=info msg=Consuming Master Machines from target directory\nlevel=info msg=Ignition-Configs created in: . and auth\nlevel=info msg=Consuming Master Ignition Config from target directory\nlevel=info msg=Consuming Bootstrap Ignition Config from target directory\nlevel=info msg=Consuming Worker Ignition Config from target directory\nlevel=fatal msg=failed to fetch Cluster: failed to fetch dependency of \"Cluster\": failed to generate asset \"Platform Quota Check\": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128, RAM is not available because the required number of resources (491520) is more than the limit of 262144\n"
+      }
+     ]
+    }
+   }
+  ]
+ }
+]

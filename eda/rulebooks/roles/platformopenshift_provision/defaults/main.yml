@@ -62,3 +62,19 @@ platformopenshift_networking: >-
 # service routing domain before it reports WaitingForPlatformAccess (and re-checks on the reconcile period).
 platformopenshift_service_wait_retries: 30
 platformopenshift_service_wait_delay: 20
+
+# The watch of a cluster's installation (platformopenshift_defaults key install; each number has its place here):
+# observeIntervalSeconds  how often the job looks at the installation on the hub
+# watchWindowMinutes      how long one job watches; then it writes "still installing" and the next run watches on
+#                         (below the provision template's time limit, aap-config/controller/job_templates.yml)
+# deadlineMinutes         an installation neither finished nor stopped after this long is failed (InstallOverdue)
+# checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing
+#                         changes; the operator's in-flight check reads it (operator/roles/_common/tasks/
+#                         skip_if_event_in_flight.yml)
+platformopenshift_install_defaults:
+  observeIntervalSeconds: 30
+  watchWindowMinutes: 120
+  deadlineMinutes: 360
+  checkWriteMinutes: 5
+platformopenshift_install: >-
+  {{ platformopenshift_install_defaults | combine(platformopenshift_defaults.install | default({}, true)) }}

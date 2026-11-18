@@ -35,7 +35,8 @@ SCOPE = [
     "eda/rulebooks/roles/platformopenshift_provision/tasks/openstack*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/tasks/designate_dns.yml",
     "eda/rulebooks/roles/platformopenshift_provision/tasks/keycloak_*.yml",
-    "eda/rulebooks/roles/platformopenshift_provision/tasks/cleanup_stale_clusterbuild.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/tasks/remove_stopped_build.yml",
+    "eda/rulebooks/roles/platformopenshift_provision/tasks/install_*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/templates/*openstack*.j2",
     "eda/rulebooks/roles/platformopenshift_provision/templates/build-values.yaml.j2",
 ]

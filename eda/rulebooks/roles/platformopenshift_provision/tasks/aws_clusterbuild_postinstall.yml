@@ -1,6 +1,16 @@
 ---
 # shc (design/P8-PLAN.md §12): Hive's outcome; the admin kubeconfig and password to Vault (PushSecrets in the build's
 # namespace). The cluster's DNS records live in the environment's zone, written and removed by the installer.
+# the watch ends the job unless the cluster is installed (install_observe.yml)
+- name: Watch the installation
+  ansible.builtin.include_tasks: install_observe.yml
+  vars:
+    io_network_path: >-
+      {{ (cb_network | default(aws_network | default(gcp_network | default('', true), true), true)) | length > 0 }}
+    io_tenant_values:
+      controlPlane: "{{ cb_controller_flavor | default('', true) }}"
+      compute: "{{ cb_worker_flavor | default('', true) }}"
+
 - name: Check ClusterDeployment installation status
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -11,19 +21,6 @@
     name: "{{ cb_cluster_name }}"
     namespace: "{{ cb_cluster_name }}"
   register: cd_info
-  until: >-
-    cd_info.resources | default([]) | length > 0
-    and (
-      cd_info.resources[0].spec.installed | default(false) | bool
-      or (
-        cd_info.resources[0].status.conditions | default([])
-        | selectattr('type', 'equalto', 'Provisioned')
-        | map(attribute='status') | first | default('') | trim == 'True'
-      )
-    )
-  retries: "{{ platformopenshift_hive_poll_retries | default(120) }}"
-  delay: "{{ platformopenshift_hive_poll_delay_seconds | default(60) }}"
-  ignore_errors: true
 
 - name: The cluster's published names (Internal)
   ansible.builtin.async_status:
@@ -42,7 +39,12 @@
 
 - name: Set cluster installed flag
   ansible.builtin.set_fact:
-    cb_cluster_installed: "{{ cd_info.resources | default([]) | length > 0 and (cd_info.resources[0].spec.installed | default(false) | bool) }}"
+    # installed as the installation watch reads it: spec.installed, or the Provisioned condition True
+    cb_cluster_installed: >-
+      {{ cd_info.resources | default([]) | length > 0
+         and (cd_info.resources[0].spec.installed | default(false) | bool
+              or (cd_info.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Provisioned')
+                  | map(attribute='status') | first | default('') | string | trim) == 'True') }}
     cb_admin_kubeconfig_secret: "{{ (cd_info.resources[0].spec.clusterMetadata.adminKubeconfigSecretRef.name | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
     cb_admin_password_secret: "{{ (cd_info.resources[0].spec.clusterMetadata.adminPasswordSecretRef.name | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
     cb_console_url: "{{ (cd_info.resources[0].status.webConsoleURL | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
