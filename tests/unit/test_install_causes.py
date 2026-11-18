@@ -103,6 +103,7 @@ class Hostile(unittest.TestCase):
         "compute[0].platform.openstack.type: Not found: \"{h}\"",
         "controlPlane.platform.aws.type: Invalid value: \"{h}\": instance type {h} not found",
         "platform.openstack.clusterOSImage: Not found: \"{h}\"",
+        "level=warning msg=Unable to find flavor with name {h}",
         "failed to create a network client: Authentication failed at {h}",
         "level=fatal msg={h}",
         "{h}",

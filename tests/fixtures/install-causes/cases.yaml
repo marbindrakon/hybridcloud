@@ -154,3 +154,25 @@
     level=fatal msg=failed to generate asset "Platform Quota Check": error(MissingQuota): Cores is not available because the required number of resources (180) is more than the limit of 128
   reason: QuotaExceeded
   message: "the site reports too little quota: Cores (180 needed, limit 128)"
+- name: openstack flavor not found, as the hub showed it (a warning decides the later failure)
+  provider: openstack
+  hive: UnknownError
+  tenant: {controlPlane: example.missing, compute: example.large}
+  logFile: openstack-flavor-not-found.log
+  reason: InstallSettingRefused
+  message: "the site refused the control plane flavor \"example.missing\": it does not exist"
+- name: a flavor not found that the cluster did not ask for is not named
+  provider: openstack
+  hive: UnknownError
+  tenant: {controlPlane: example.xlarge, compute: example.large}
+  logFile: openstack-flavor-not-found.log
+  reason: InstallFailed
+  message: "the cause is not one the platform recognizes"
+- name: the same machines-not-ready failure without the flavor warning
+  provider: openstack
+  hive: UnknownError
+  tenant: {controlPlane: example.xlarge, compute: example.large}
+  log: |
+    level=error msg=failed to fetch Cluster: failed to generate asset "Cluster": failed to create cluster: failed to provision control-plane machines: machines are not ready: client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline
+  reason: InstallFailed
+  message: "the cause is not one the platform recognizes"

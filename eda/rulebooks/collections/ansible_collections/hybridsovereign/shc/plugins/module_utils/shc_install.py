@@ -195,6 +195,9 @@ TargetGroupNotFound UserInitiatedShutdown
 SETTING_FIELD = re.compile(
     r"(controlPlane|compute\[\d{1,2}\])\.platform\.(openstack|aws|gcp)\.type: (Not found|Invalid value): "
     r"\\?\"([^\"\\]{1,100})\\?\"(?::\s*(Flavor did not meet|instance type \S{1,100} not found))?")
+# the installer could not find a flavor while it gathered the site's details (a warning; it then skips its own checks
+# and fails much later): a refused setting only when the flavor is one the cluster asked for
+FLAVOR_NOT_FOUND = re.compile(r"Unable to find flavor with name ([A-Za-z0-9][A-Za-z0-9._:-]{0,99})(?![A-Za-z0-9._:-])")
 IMAGE_FIELD = re.compile(r"platform\.openstack\.clusterOSImage: (Not found|Invalid value): \\?\"([^\"\\]{1,200})\\?\"")
 CREDENTIAL_TEXT = re.compile(
     r"(Authentication failed|The request you have made requires authentication|InvalidClientTokenId|"
@@ -318,6 +321,12 @@ def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_sta
             if shown:
                 return out(SETTING, "the site refused the %s \"%s\": %s" % (label, shown, why))
             return out(SETTING, "the site refused the %s: %s" % (label, why))
+        for m in FLAVOR_NOT_FOUND.finditer(log):
+            name = m.group(1)
+            pools = [pool for pool in ("controlPlane", "compute") if _tenant_value(name, tv, pool)]
+            if pools:
+                label = _pool_label(pools[0], provider) if len(pools) == 1 else "flavor of the nodes"
+                return out(SETTING, "the site refused the %s \"%s\": it does not exist" % (label, name))
         m = IMAGE_FIELD.search(log)
         if m:
             shown = _tenant_value(m.group(2), tv, "image")
