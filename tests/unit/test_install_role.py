@@ -169,7 +169,7 @@ def base_vars(api, provider="openstack", **kw):
          "cb_cluster_name": BUILD, "cb_app_name": BUILD,
          # the role's defaults with a one-second interval (a task list run here does not load the role's defaults)
          "platformopenshift_install": {"observeIntervalSeconds": 1, "watchWindowMinutes": 120, "deadlineMinutes": 360,
-                                       "checkWriteMinutes": 5},
+                                       "checkWriteMinutes": 5, "pendingReleaseMinutes": 10},
          # the removal's waits: a few one-second rounds (extra vars win over the include's values)
          "rsw_retries": 3, "rsw_delay": 1, "platformopenshift_generation": 1}
     v.update(kw)
@@ -398,6 +398,8 @@ class Removal(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertEqual(kinds_deleted(tr), [])
         self.assertFalse(after_reached(tr), "a stopped cluster that may not be removed is never built")
+        # the change of the settings still asks at the next run: nothing of the record is renewed
+        self.assertNotIn("install", H.patches(tr)[0]["body"])
 
     def test_nothing_left_on_the_hub_starts_fresh(self):
         """A stopped installation someone asked to start again whose build is gone from the hub: no delete is needed,
@@ -469,7 +471,12 @@ class RemovalTakeover(unittest.TestCase):
         finally:
             api.close()
         self.assertEqual(rc, 0, out)
-        self.assertEqual(H.patches(tr), [], "the removal under way is continued as recorded")
+        # no second CleaningUp (no run counted twice); the removal says again that it goes on (not an earlier
+        # run's failure)
+        bodies = [p["body"] for p in H.patches(tr)]
+        self.assertEqual(len(bodies), 1)
+        self.assertNotIn("install", bodies[0])
+        self.assertEqual(bodies[0]["conditions"][0]["reason"], "InstallCleanup")
         self.assertEqual(kinds_deleted(tr), ["ManagedCluster", "ClusterDeployment"])
         self.assertEqual(creates(tr), ["/api/v1/namespaces/" + BUILD])
         self.assertTrue(after_reached(tr))
@@ -588,9 +595,10 @@ class StoppedRuns(unittest.TestCase):
                      "Decide whether a stopped installation is asked to start again",
                      "A stopped installation nobody asked to start again")
 
-    def stopped_run(self, hub, asked, **kw):
-        """One run of main.yml's first steps on a recorded stop; asked: a Retry is open."""
-        obj = po(dict(STOPPED), generation=1, buildName=BUILD,
+    def stopped_run(self, hub, asked, settings=False, **kw):
+        """One run of main.yml's first steps on a recorded stop; asked: a Retry is open; settings: the installation
+        settings changed since the stop (no Retry)."""
+        obj = po(dict(STOPPED), generation=2 if settings else 1, buildName=BUILD, spec=SMALLER if settings else None,
                  lastHandledReconcileRequest="2026-11-18T12:00:00Z" if asked else "",
                  conditions=[{"type": "Stalled", "status": "True", "reason": "QuotaExceeded", "message": "m."}])
         api = FakeApi(obj, hub)
@@ -599,6 +607,25 @@ class StoppedRuns(unittest.TestCase):
         finally:
             api.close()
         return api, rc, tr, out
+
+    def test_a_kept_stop_keeps_a_settings_change_asking(self):
+        """A settings change saved on a stopped cluster, then a run that keeps the stop (the hub's build is being
+        deleted, or the hub cannot be read): nothing of the record is renewed, so the change still asks at the next
+        run (the operator publishes again: the generation is above stoppedGeneration)."""
+        deleting = cd(stopped=True)
+        deleting["metadata"]["deletionTimestamp"] = ago(1)
+        for hub, kw in ((deleting, {}), (cd(stopped=True), {"central_api_host": "http://127.0.0.1:9"})):
+            api, rc, tr, out = self.stopped_run(hub, False, settings=True, **kw)
+            self.assertEqual(rc, 0, out)
+            body = H.patches(tr)[0]["body"]
+            self.assertEqual(body["status"], "failed")
+            self.assertNotIn("install", body)
+            self.assertNotIn("observedGeneration", body)
+            after = copy.deepcopy(api.obj)
+            self.assertTrue(I.asked_since_stop(after)[0], "the change still asks")
+        # the keep of "nobody asked" renews (the operator waits again)
+        api, rc, tr, out = self.stopped_run(cd(stopped=True), False)
+        self.assertEqual(H.patches(tr)[0]["body"]["install"]["stoppedSpecVersion"], I.DIGEST_VERSION)
 
     def test_a_recorded_stop_against_each_hub_state(self):
         """The record's table: one outcome per hub state, asked or not; no dead end, nothing removed here."""
@@ -862,6 +889,60 @@ class DefaultFlavors(unittest.TestCase):
         for line in text.splitlines():
             if line.startswith(("default_control_plane_flavor", "default_worker_flavor")):
                 self.assertIn("default('', true)", line)
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class AdoptedBuild(unittest.TestCase):
+    """A build adopted by a resume (or any installation that runs) keeps its release: settings changed while the
+    record said Stopped stay in the spec and are used only by a later installation."""
+
+    def flag(self, stage, adopted=False, exists=True, failed=False, diff="true"):
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "openstack_clusterbuild.yml")) as fh:
+            task = next(t for t in yaml.safe_load(fh) if t.get("name") == "Set values changed flag")
+        v = {"cb_helm_release_exists": exists, "cb_helm_release_failed": failed,
+             "values_diff_result": {"stdout": diff},
+             "_po_now": {"resources": [{"status": {"install": {"stage": stage}}}]}}
+        if adopted:
+            v["po_adopted"] = True
+        rc, tr, out = H.run("platformopenshift_provision", "main.yml", v, tasks=[task],
+                            result="cb_values_changed | bool")
+        self.assertEqual(rc, 0, out)
+        return tr[-1]["result"]
+
+    def test_no_release_change_while_an_installation_runs(self):
+        for stage in ("Installing", "Finishing"):
+            self.assertFalse(self.flag(stage), stage)
+            self.assertFalse(self.flag(stage, failed=True), stage)
+        self.assertFalse(self.flag("Stopped", adopted=True), "a build the run adopted")
+        self.assertTrue(self.flag("Installing", exists=False), "no release at all: it is made")
+        for stage in ("Installed", "CleaningUp", "Preparing", ""):
+            self.assertTrue(self.flag(stage), stage)
+        self.assertFalse(self.flag("Installed", diff="false"))
+
+    def test_the_resume_marks_the_build_adopted(self):
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "install_resume.yml")) as fh:
+            tasks = yaml.safe_load(fh)
+        self.assertTrue(any(t.get("ansible.builtin.set_fact", {}).get("po_adopted") is True for t in tasks))
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "aws_clusterbuild_deploy.yml")) as fh:
+            aws = next(t for t in yaml.safe_load(fh) if t.get("name") == "Set values changed flag")
+        self.assertIn("po_adopted", aws["vars"]["_cb_running"])
+
+    def test_the_removal_passes_the_release_state(self):
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "remove_stopped_build.yml")) as fh:
+            tasks = yaml.safe_load(fh)
+        decide = next(t for t in tasks if t.get("name") == "Decide whether the stopped build may be removed")
+        args = decide["hybridsovereign.shc.install_observe"]
+        self.assertIn("pendingReleaseMinutes", args["pending_minutes"])
+        self.assertIn("last_deployed", args["release_deployed_at"])
+        starting = next(t for t in tasks if t.get("name") == "The hub's release of the build is still being made")
+        self.assertIn("starting", starting["when"])
 
 
 class ServicesAnswerNotInStatus(unittest.TestCase):

@@ -159,17 +159,24 @@ def synthesize_ready(body, old_conditions):
 
 # stages of status.install in which an installation runs (an OpenShift cluster; other kinds have no status.install)
 _INSTALL_RUNNING = ("CleaningUp", "Installing", "Finishing")
+# the Ready reasons the running installation itself writes (anything else is an earlier run's state)
+_INSTALL_REASONS = ("Installing", "InstallRetrying", "InstallFinishing", "InstallCleanup", "InstallNotStarted",
+                    "InstallOverdue")
 
 
 def keeps_installation(obj, body, new_conditions=None):
     """True when a "reconciling" write must not replace what a running installation shows: the object's
     status.install says an installation runs (also one past its deadline, shown failed), and the write carries no
-    Ready condition and no status.install of its own (a job's start and acknowledgement writes). Its Ready reason,
-    message, legacy status and phase stay; the job's message goes on the Reconciling condition."""
+    Ready condition and no status.install of its own (a job's start and acknowledgement writes), and the Ready
+    condition shown is the installation's own (an earlier run's failure is not kept). Its Ready reason, message,
+    legacy status and phase stay; the job's message goes on the Reconciling condition."""
     if find_condition(new_conditions, "Ready") is not None or "install" in (body or {}):
         return False
-    install = ((obj or {}).get("status") or {}).get("install")
-    return isinstance(install, dict) and install.get("stage") in _INSTALL_RUNNING
+    status = (obj or {}).get("status") or {}
+    install = status.get("install")
+    ready = find_condition(status.get("conditions") or [], "Ready") or {}
+    return (isinstance(install, dict) and install.get("stage") in _INSTALL_RUNNING
+            and ready.get("reason") in _INSTALL_REASONS)
 
 
 def keeps_ready(obj, new_conditions=None):

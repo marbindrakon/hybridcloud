@@ -530,6 +530,19 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertIn("the environment has no flavor example.missing", out)
         self.assertEqual([t for t in tr if "create" in t], [])
 
+    def test_a_build_that_runs_is_not_refused_for_settings_it_was_not_made_with(self):
+        """A flavor changed while the record said Stopped, on a build the hub shows running or installed (adopted):
+        the preflight does not refuse it; the setting is used only by a later installation."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.missing"])}
+        spec = {"type": "openstack", "openstack": {"environment": "env1", "controlPlaneFlavor": "example.missing"}}
+        for extra in ({"po_cr_current": {"resources": [{"status": {"install": {"stage": "Installing"}}}]}},
+                      {"po_cr_current": {"resources": [{"status": {"clusterInstalled": True}}]}},
+                      {"po_adopted": True}):
+            rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                      fake_os=missing, platform_spec=spec, **extra)
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn("has no flavor", out)
+
     def test_a_missing_default_flavor_names_no_flavor(self):
         """The installation's default flavor missing on the site: refused with the platform team's reason and a
         sentence that names no flavor (the default is the platform's, not the tenant's)."""

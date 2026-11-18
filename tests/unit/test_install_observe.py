@@ -665,9 +665,37 @@ class HubWins(unittest.TestCase):
     def test_the_hubs_state_replaces_the_record(self):
         got = I.install_resumed({})
         self.assertEqual(got["stage"], "Installing")
-        for k in ("endedAt", "stoppedGeneration", "stoppedRequest", "stoppedSpec", "stoppedSpecVersion"):
+        for k in ("endedAt", "attempt", "lastFailure", "stoppedGeneration", "stoppedRequest", "stoppedSpec",
+                  "stoppedSpecVersion"):
+            self.assertIn(k, got, k)
             self.assertIsNone(got[k], k)
         self.assertNotIn("run", got, "no new run is counted")
+
+    def test_a_resumed_attempt_does_not_read_as_failed(self):
+        """After a resume the stop's last failure is gone: a running attempt reads "Installing", not "failed ...
+        trying again"."""
+        lf = {"attempt": None, "reason": "InstallNotStarted", "message": "The installation could not be started: x.",
+              "time": t(9)}
+        stopped = dict(STOPPED, lastFailure=lf)
+        resumed = dict(stopped)
+        resumed.update(I.install_resumed({}))
+        resumed = {k: v for k, v in resumed.items() if v is not None}   # the merge patch removes the nulls
+        res = observe(po(resumed), cd(provisioned=False), prov(attempt=0))
+        self.assertEqual(ready(res), cond("Ready", "False", "Installing", "Installing, attempt 1 of 3."))
+        self.assertNotIn("lastFailure", res["install"])
+
+    def test_a_young_pending_release_is_left_alone(self):
+        """A Retry removes a release without a ClusterDeployment only when it failed, or has been pending longer than
+        the installation allows; a younger pending one is an older job's release being made."""
+        asked = po(STOPPED, generation=3, spec=SMALLER, lastHandledReconcileRequest="2026-11-18T11:59:00Z")
+        self.assertTrue(I.release_young("pending-install", t(3), NOW, 10))
+        self.assertTrue(I.release_young("pending-upgrade", "", NOW, 10), "unknown age: left alone")
+        self.assertFalse(I.release_young("pending-install", t(11), NOW, 10))
+        self.assertFalse(I.release_young("failed", t(1), NOW, 10))
+        self.assertFalse(I.release_young("deployed", t(1), NOW, 10))
+        self.assertFalse(I.may_remove_build(asked, None, True, release_exists=True, release_young=True)[0])
+        self.assertTrue(I.may_remove_build(asked, None, True, release_exists=True, release_young=False)[0])
+        self.assertTrue(I.release_young("pending-install", "2026-11-18T11:58:00.123456789Z", NOW, 10))
 
 
 class NotStartedTexts(unittest.TestCase):
@@ -692,6 +720,23 @@ class NotStartedTexts(unittest.TestCase):
                                                            "release of the build on the hub failed."))
         self.assertNotIn("Attempt", stalled(res)["message"])
         self.assertIn("Retry it once", stalled(res)["message"])
+
+
+class DigestVersion(unittest.TestCase):
+    """The version covers the listed fields with their API defaults: adding a default to a listed field (or a field to
+    the list) fails this test until DIGEST_VERSION (and the operator's copy) is updated."""
+
+    def test_the_version_is_derived_from_the_crd_base(self):
+        import hashlib
+        import json
+        import yaml
+        with open(os.path.join(ROOT, "operator", "config", "crd", "bases", "crd-platformopenshift.yaml")) as fh:
+            props = yaml.safe_load(fh)["spec"]["versions"][0]["schema"]["openAPIV3Schema"]["properties"]["spec"][
+                "properties"]
+        listed = {p: {f: props[p]["properties"][f].get("default") for f in fields}
+                  for p, fields in I.DIGEST_FIELDS.items()}
+        text = json.dumps(listed, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+        self.assertEqual(I.DIGEST_VERSION, hashlib.sha256(text.encode("ascii")).hexdigest()[:16])
 
 
 class Digest(unittest.TestCase):

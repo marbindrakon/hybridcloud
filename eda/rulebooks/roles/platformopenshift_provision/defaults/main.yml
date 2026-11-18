@@ -71,6 +71,8 @@ platformopenshift_service_wait_delay: 20
 #                         (below the provision template's time limit, aap-config/controller/job_templates.yml)
 # deadlineMinutes         an installation neither finished nor stopped after this long is shown failed
 #                         (InstallOverdue); each periodic run then checks it once
+# pendingReleaseMinutes   a pending release of a build with no ClusterDeployment younger than this is an older job's
+#                         release being made: a Retry leaves it alone (older: removed like a failed one)
 # checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing
 #                         changes; the operator's in-flight check reads it (operator/roles/_common/tasks/
 #                         skip_if_event_in_flight.yml)
@@ -79,5 +81,6 @@ platformopenshift_install_defaults:
   watchWindowMinutes: 120
   deadlineMinutes: 360
   checkWriteMinutes: 5
+  pendingReleaseMinutes: 10
 platformopenshift_install: >-
   {{ platformopenshift_install_defaults | combine(platformopenshift_defaults.install | default({}, true)) }}

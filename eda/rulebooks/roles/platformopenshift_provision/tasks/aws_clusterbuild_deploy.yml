@@ -133,12 +133,19 @@
   changed_when: false
   when: cb_helm_release_exists | bool
 
+# while an installation runs (or a build this run adopted) the release is not changed: the running build is the one
+# that was installed; settings changed meanwhile are used only by a later installation
 - name: Set values changed flag
+  vars:
+    _cb_running: >-
+      {{ (po_adopted | default(false) | bool)
+         or ((((platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true)).install
+              | default({}, true)).stage | default('')) in ['Installing', 'Finishing'] }}
   ansible.builtin.set_fact:
     cb_values_changed: >-
       {{ not (cb_helm_release_exists | bool) or
-         (cb_helm_release_failed | bool) or
-         (values_diff_result.stdout | default('true') | trim == 'true') }}
+         (not (_cb_running | bool) and
+          ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true'))) }}
 
 # the install starts with the Helm release below: from here on a refused prefix never withdraws the cluster's subnet
 # (cloud_internal_reach.yml)

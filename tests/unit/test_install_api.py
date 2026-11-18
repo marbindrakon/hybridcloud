@@ -231,7 +231,8 @@ class Template(unittest.TestCase):
         # the watch window, the removal of a stopped build (up to about an hour of waits) and the work around it fit
         self.assertLess(defaults["watchWindowMinutes"] * 60, tpl["timeout"])
         self.assertEqual(set(defaults), {"observeIntervalSeconds", "watchWindowMinutes", "deadlineMinutes",
-                                         "checkWriteMinutes"})
+                                         "checkWriteMinutes", "pendingReleaseMinutes"})
+        self.assertEqual(defaults["pendingReleaseMinutes"], 10)
         self.assertEqual((defaults["watchWindowMinutes"], defaults["deadlineMinutes"]), (120, 360))
 
 
@@ -344,6 +345,7 @@ class OperatorRun(unittest.TestCase):
     def test_the_operators_field_list_is_the_modules(self):
         decide = self.decide_task("Decide whether a stopped installation waits for a request")
         self.assertEqual(decide["vars"]["platformopenshift_install_fields"], I.DIGEST_FIELDS)
+        self.assertEqual(decide["vars"]["platformopenshift_install_fields_version"], I.DIGEST_VERSION)
 
     def test_a_new_schema_default_or_list_entry_starts_nothing(self):
         """After a product update: a field the schema now fills in (not listed) gives the same digest; a digest

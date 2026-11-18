@@ -286,6 +286,17 @@ class RunningInstallationKeepsItsState(unittest.TestCase):
             ready = S.find_condition(patch["status"]["conditions"], "Ready")
             self.assertEqual((ready["reason"], info["phase"]), ("InstallRetrying", "Creating"), stage)
 
+    def test_an_earlier_runs_failure_is_not_kept(self):
+        """A new run works in CleaningUp, Installing or Finishing while the Ready condition still shows an earlier
+        run's failure (a removal that could not finish in time, a refused step): the job's start write replaces it."""
+        for stage in ("CleaningUp", "Installing", "Finishing"):
+            for reason in ("ProvisionFailed", "QuotaExceeded", "Failed"):
+                o = self.cluster(stage, reason, "failed", "Failed")
+                patch, info = self.ack(o)
+                ready = S.find_condition(patch["status"]["conditions"], "Ready")
+                self.assertEqual(ready["reason"], "InProgress", (stage, reason))
+                self.assertNotEqual(info["phase"], "Failed", (stage, reason))
+
     def test_writes_that_carry_the_installation_or_another_kind_are_unchanged(self):
         o = self.cluster("Installing", "Installing", "reconciling", "Creating")
         patch, _ = self.ack(o, {"status": "reconciling", "reason": "InstallCleanup", "message": "x",

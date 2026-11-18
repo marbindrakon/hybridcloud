@@ -168,6 +168,7 @@
           ansible.builtin.include_tasks: install_stopped_keep.yml
           vars:
             isk_obj: "{{ platformopenshift_cr.resources[0] }}"
+            isk_renew: true
 
         - name: End the job, nothing to install
           ansible.builtin.meta: end_play

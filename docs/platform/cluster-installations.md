@@ -39,12 +39,18 @@ A recorded stop is checked against the hub at every run of the cluster; the hub 
 
 | The hub holds | Nobody asked | A Retry, or the installation settings changed |
 |---|---|---|
-| no ClusterDeployment (a failed, pending or deployed release, or none) | the stop stays | the release is removed, a new installation starts |
+| no ClusterDeployment (a failed or deployed release, one pending for longer than `pendingReleaseMinutes`, or none) | the stop stays | the release is removed, a new installation starts |
+| no ClusterDeployment, a release pending for less than `pendingReleaseMinutes` | the stop stays | the release is left alone; the cluster reads "The installation is starting." and the next run watches it |
 | a stopped ClusterDeployment | the stop stays | the build is removed, a new installation starts |
-| a ClusterDeployment that runs | the record takes the hub's state; the watch goes on | the same; nothing is removed |
+| a ClusterDeployment that runs | the record takes the hub's state (without the stop's last failure); the watch goes on | the same; nothing is removed |
 | an installed ClusterDeployment | the record takes the hub's state; Ready as for any installed cluster | the same |
-| a ClusterDeployment being deleted | the stop stays | the stop stays; the next pass tries again once it is gone |
-| nothing readable | the stop stays | the stop stays; the next pass tries again |
+| a ClusterDeployment being deleted | the stop stays | the stop stays and nothing of the record is renewed: the Retry or the changed settings still ask, and the operator's next pass runs again |
+| nothing readable | the stop stays | the same |
+
+A build the hub shows running or installed under a recorded stop is adopted as it is: settings changed while the
+record said Stopped stay in the spec and are used only by a later installation, if any. While an installation runs
+the release is not changed (only made when it is missing), and the OpenStack preflight does not refuse a recorded
+build for a flavor it was not made with.
 - After `watchWindowMinutes` it writes that the installation is still running, completes its request and ends; the
   next periodic run of the cluster watches on.
 - Only an installed cluster is written Ready.
@@ -65,6 +71,7 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 | `watchWindowMinutes` | 120 | How long one job watches; keep it below the job template's time limit. |
 | `deadlineMinutes` | 360 | An installation neither finished nor stopped after this long is shown failed (`InstallOverdue`) and checked once per periodic run. |
 | `checkWriteMinutes` | 5 | How often the check time is written while nothing changes; keep it well below 15. |
+| `pendingReleaseMinutes` | 10 | A pending release of a build with no ClusterDeployment younger than this is left alone by a Retry (an older job is still making it). |
 
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).

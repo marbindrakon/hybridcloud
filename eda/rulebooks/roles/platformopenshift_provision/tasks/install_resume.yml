@@ -2,7 +2,10 @@
 # A recorded stop that the hub contradicts: the hub's build runs or is installed (a stop written while an older
 # release was still being made, for example). The hub wins: the record takes the hub's state (stage Installing, the
 # stop's bookkeeping gone, Stalled cleared), nothing is removed and no new run is counted; the job goes on to the
-# provider's steps, whose watch writes what the hub says (Installing, or Finishing and then Ready). Input: ir_hub.
+# provider's steps, whose watch writes what the hub says (Installing, or Finishing and then Ready). The running build
+# is adopted as it is: settings changed while the record said Stopped stay in the spec and are used only by a later
+# installation (no release changes while an installation runs; the preflight's flavor check is left out for a
+# recorded build). Inputs: ir_hub, ir_message (default: the installation is running on the hub).
 - name: Take the hub's state over the recorded stop
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -14,17 +17,21 @@
       status: reconciling
       ready: false
       reason: Installing
-      message: The installation is running on the hub; the platform watches it again.
+      message: "{{ ir_message | default('The installation is running on the hub; the platform watches it again.', true) }}"
       install: "{{ {} | hybridsovereign.shc.shc_install_resumed }}"
       conditions:
         - type: Ready
           status: "False"
           reason: Installing
-          message: The installation is running on the hub; the platform watches it again.
+          message: "{{ ir_message | default('The installation is running on the hub; the platform watches it again.', true) }}"
         - type: Stalled
           status: "False"
           reason: AsExpected
           message: ""
+
+- name: The run adopts the build as it is
+  ansible.builtin.set_fact:
+    po_adopted: true
 
 - name: Say that the hub's build replaces the recorded stop
   ansible.builtin.debug:

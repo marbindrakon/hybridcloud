@@ -351,12 +351,19 @@
   changed_when: false
   when: cb_helm_release_exists | bool
 
+# while an installation runs (or a build this run adopted) the release is not changed: the running build is the one
+# that was installed; settings changed meanwhile are used only by a later installation
 - name: Set values changed flag
+  vars:
+    _cb_running: >-
+      {{ (po_adopted | default(false) | bool)
+         or ((((_po_now.resources | default([{}], true) | first).status | default({}, true)).install
+              | default({}, true)).stage | default('')) in ['Installing', 'Finishing'] }}
   ansible.builtin.set_fact:
     cb_values_changed: >-
       {{ not (cb_helm_release_exists | bool) or
-         (cb_helm_release_failed | bool) or
-         (values_diff_result.stdout | default('true') | trim == 'true') }}
+         (not (_cb_running | bool) and
+          ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true'))) }}
 
 # the object may have been deleted, replaced or given a newer request since the job's last status write
 - name: Check right before the release that the object is still this job's

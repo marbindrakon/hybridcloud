@@ -54,7 +54,8 @@
     # Nothing reinstalls by itself: the job removes and installs only on a request or a change of those settings.
     - name: Decide whether a stopped installation waits for a request
       vars:
-        # module_utils shc_install.DIGEST_FIELDS (a unit test keeps the two the same)
+        # module_utils shc_install.DIGEST_VERSION and DIGEST_FIELDS (a unit test keeps them the same)
+        platformopenshift_install_fields_version: "de042de6a02d21db"
         platformopenshift_install_fields:
           aws: [clusterType, controlPlaneCount, controllerFlavor, publish, workerCount, workerFlavor]
           gcp: [controlPlaneCount, controllerFlavor, publish, workerCount, workerFlavor]
@@ -77,8 +78,7 @@
           {%- endfor -%}
           {%- set digest = {'type': ptype, 'fields': values}
                            | to_json(sort_keys=true, separators=[',', ':'], ensure_ascii=true) | hash('sha256') -%}
-          {%- set version = (platformopenshift_install_fields
-                             | to_json(sort_keys=true, separators=[',', ':'], ensure_ascii=true) | hash('sha256'))[:16] -%}
+          {%- set version = platformopenshift_install_fields_version | string -%}
           {%- set spec_changed = (inst.stoppedSpec | default('', true) | string | length > 0)
                                  and (inst.stoppedSpecVersion | default('', true) | string) == version
                                  and digest != (inst.stoppedSpec | string) -%}

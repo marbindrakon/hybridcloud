@@ -75,8 +75,11 @@ def _sha(value):
 # installation is made with); a schema default added to another field, or a field added to a block, changes nothing
 DIGEST_FIELDS = {p: sorted(set(INSTALL_TIME_FIELDS[p]) | set(INSTALLED_CHANGEABLE_FIELDS[p]))
                  for p in INSTALL_TIME_FIELDS}
-# the version of that list: a digest recorded under another version (an older or newer product) is not compared
-DIGEST_VERSION = _sha(DIGEST_FIELDS)[:16]
+# The version of that list together with the API's defaults of its fields (a default added later to a listed field
+# changes what a stored digest means): the first 16 hex digits of the sha256 of {provider: {field: default or null}}.
+# A digest recorded under another version (an older or newer product) is not compared. A test derives it from the
+# CRD base: change it (and the operator's copy) when the list or a default of a listed field changes.
+DIGEST_VERSION = "de042de6a02d21db"
 
 
 def spec_digest(spec):
@@ -810,12 +813,22 @@ def install_stopped_seen(obj):
 
 def install_resumed(status, stage="Installing"):
     """status.install when a run finds that the hub's build of a recorded stop runs or is installed: the hub wins. The
-    stage is the hub's, the stop's bookkeeping goes, the run is not counted again (the watch then writes the rest)."""
-    return {"stage": stage, "endedAt": None, "stoppedGeneration": None, "stoppedRequest": None, "stoppedSpec": None,
-            "stoppedSpecVersion": None}
+    stage is the hub's, the stop's bookkeeping and its last failure go (the running installation's own attempt and
+    failures are the watch's to write), the run is not counted again."""
+    return {"stage": stage, "endedAt": None, "attempt": None, "lastFailure": None, "stoppedGeneration": None,
+            "stoppedRequest": None, "stoppedSpec": None, "stoppedSpecVersion": None}
 
 
 HUB_STATES = ("unreadable", "none", "deleting", "installed", "stopped", "running")
+
+
+def release_young(release_status, last_deployed, now, pending_minutes):
+    """True when the hub's release of a build without a ClusterDeployment is pending (an older job is still making it)
+    and younger than pending_minutes: it is left alone (the installation is starting)."""
+    if not str(release_status or "").startswith("pending"):
+        return False
+    started = _minutes_since(last_deployed, now)
+    return started is None or started < float(pending_minutes)
 
 
 def hub_state(cd, hub_read_ok):
@@ -871,7 +884,8 @@ def asked_since_stop(obj, event=None):
     return False, "nobody asked for a new installation since the stop"
 
 
-def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, recheck=False, release_exists=None):
+def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, recheck=False, release_exists=None,
+                     release_young=False):
     """Whether the build of a stopped installation may be removed before a new one: (allowed, why).
 
     All of these must hold, read fresh in the same run:
@@ -902,7 +916,10 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, rec
     if stage not in ("Stopped", "CleaningUp"):
         return False, "the cluster object records no stopped installation; nothing is removed"
     if cd is None:
-        pass   # a release of the build without a ClusterDeployment (failed, pending or deployed) is no live build
+        # a release of the build without a ClusterDeployment (failed, deployed, or pending for longer than the
+        # installation allows) is no live build; a younger pending one is an older job's release being made
+        if _bool(release_young):
+            return False, "the hub's release of the build is still being made; the installation is starting"
     elif not (hub_stopped(cd) or _being_removed(cd)):
         return False, "the hub's build has not stopped (Hive may still be trying); nothing is removed"
     if stage == "CleaningUp":

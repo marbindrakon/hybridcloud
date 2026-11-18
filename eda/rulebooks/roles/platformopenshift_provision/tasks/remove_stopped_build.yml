@@ -13,6 +13,12 @@
 # namespace is claimed again. Hive deprovisions what the stopped attempt built when its ClusterDeployment goes; the
 # cluster keeps its name, addresses, DNS names, credential and Vault paths.
 # Inputs: cb_cluster_name / cb_app_name (the build), po_uid, rsb_obj (the object as read in this run).
+- name: Require the removal's setting
+  ansible.builtin.assert:
+    that:
+      - (platformopenshift_install.pendingReleaseMinutes | default('', true) | string | length) > 0
+    fail_msg: "Set platformopenshift_defaults.install.pendingReleaseMinutes (the installation setting is missing)."
+
 - name: Set Vault root token from job credential
   ansible.builtin.set_fact:
     vault_root_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
@@ -44,6 +50,8 @@
          (cleanup_helm_status.stdout | from_json).info.status | default('') == 'failed' }}
 
 - name: Decide whether the stopped build may be removed
+  vars:
+    _rsb_release: "{{ (cleanup_helm_status.stdout | from_json).info | default({}, true) if cleanup_helm_status.rc == 0 else {} }}"
   hybridsovereign.shc.install_observe:
     mode: removal
     host: "{{ services_api_host | trim }}"
@@ -58,6 +66,9 @@
     event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
     release_failed: "{{ cb_cleanup_helm_failed | bool }}"
     release_exists: "{{ cleanup_helm_status.rc == 0 }}"
+    release_status: "{{ _rsb_release.status | default('', true) }}"
+    release_deployed_at: "{{ _rsb_release.last_deployed | default('', true) }}"
+    pending_minutes: "{{ platformopenshift_install.pendingReleaseMinutes | int }}"
   register: rsb_decision
 
 - name: Say why the build is kept or removed
@@ -67,6 +78,23 @@
 - name: End the job, the object is not this job's any more
   ansible.builtin.meta: end_play
   when: rsb_decision.end | default(false) | bool
+
+# an older job's release of the build is still being made (pending, younger than pendingReleaseMinutes, no
+# ClusterDeployment yet): it is left alone; the installation is starting, and the next run watches it
+- name: The hub's release of the build is still being made
+  when: rsb_decision.hub | default('') == 'starting'
+  block:
+    - name: Say that the installation is starting
+      ansible.builtin.include_tasks: install_resume.yml
+      vars:
+        ir_hub: starting
+        ir_message: The installation is starting.
+      when: rsb_decision.stage | default('') in ['Stopped', 'CleaningUp']
+
+    - name: Hand over to the next run
+      ansible.builtin.include_tasks: install_handover.yml
+      vars:
+        ih_why: "{{ rsb_decision.why }}"
 
 # a recorded stop or removal whose build runs or is installed on the hub (it changed since the run's first look): the
 # hub wins, nothing is removed and the job goes on to watch it
@@ -86,6 +114,8 @@
   ansible.builtin.include_tasks: install_stopped_keep.yml
   vars:
     isk_obj: "{{ rsb_obj }}"
+    # the record is renewed only when nobody asked; an open request survives to the next run
+    isk_renew: "{{ not (rsb_decision.asked | default(false) | bool) }}"
   when:
     - not (rsb_decision.ok | default(false) | bool)
     - rsb_decision.stage | default('') == 'Stopped'
@@ -136,6 +166,30 @@
               reason: AsExpected
               message: ""
       when: rsb_decision.stage == 'Stopped'
+
+    # a removal under way that a later run continues says so again (not an earlier run's failure)
+    - name: Record that the removal goes on
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_body:
+          status: reconciling
+          ready: false
+          reason: InstallCleanup
+          message: The stopped installation is being removed before the new one starts.
+          conditions:
+            - type: Ready
+              status: "False"
+              reason: InstallCleanup
+              message: The stopped installation is being removed before the new one starts.
+            - type: Stalled
+              status: "False"
+              reason: AsExpected
+              message: ""
+      when: rsb_decision.stage == 'CleaningUp'
 
     # the hub's build read again right before the first delete: installed or unreadable now means nothing is removed
     - name: Read the hub's build again before the first delete
