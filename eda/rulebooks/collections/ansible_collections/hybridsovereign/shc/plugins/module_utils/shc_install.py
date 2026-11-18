@@ -34,6 +34,9 @@ QUOTA, SETTING, CREDENTIALS, NOT_STARTED, OTHER = "quota", "setting", "credentia
 CAUSE_REASONS = {QUOTA: "QuotaExceeded", SETTING: "InstallSettingRefused", CREDENTIALS: "InstallCredentialsRefused",
                  NOT_STARTED: "InstallNotStarted", OTHER: "InstallFailed"}
 OVERDUE_REASON = "InstallOverdue"
+# what a tenant can do about an installation that could not start, once it stopped (the message knows the state; the
+# reason's summary is true while the platform still tries as well)
+NOT_STARTED_ADVICE = " Retry it once the platform team has fixed the cause, or delete the cluster."
 
 # ---- install-time fields ------------------------------------------------------------------------------------------
 # Each field of a provider block is one of three kinds; a test checks every field of the CRD's blocks against these
@@ -60,13 +63,31 @@ IMMUTABLE_TOP_FIELDS = ("type",)
 INSTALLER_SPEC_KEYS = ("type", "openstack", "aws", "gcp")
 
 
+def _canonical(value):
+    return json.dumps(value, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
+
+
+def _sha(value):
+    return hashlib.sha256(_canonical(value).encode("ascii")).hexdigest()
+
+
+# the fields whose values the digest covers, per provider (install-time, and applied-to-installed: both are what an
+# installation is made with); a schema default added to another field, or a field added to a block, changes nothing
+DIGEST_FIELDS = {p: sorted(set(INSTALL_TIME_FIELDS[p]) | set(INSTALLED_CHANGEABLE_FIELDS[p]))
+                 for p in INSTALL_TIME_FIELDS}
+# the version of that list: a digest recorded under another version (an older or newer product) is not compared
+DIGEST_VERSION = _sha(DIGEST_FIELDS)[:16]
+
+
 def spec_digest(spec):
-    """sha256 of the installer's part of a spec (spec.type and the provider blocks), as canonical JSON (sorted keys,
-    no spaces, ASCII). The operator computes the same digest in Jinja (to_json with the same options | hash)."""
+    """sha256 of the installer's settings in a spec: spec.type and the values of DIGEST_FIELDS of its provider (a field
+    not set is null), as canonical JSON (sorted keys, no spaces, ASCII). The operator computes the same digest in Jinja
+    (to_json with the same options | hash) from the same list."""
     spec = spec if isinstance(spec, dict) else {}
-    part = {k: spec[k] for k in INSTALLER_SPEC_KEYS if k in spec}
-    text = json.dumps(part, sort_keys=True, separators=(",", ":"), ensure_ascii=True)
-    return hashlib.sha256(text.encode("ascii")).hexdigest()
+    ptype = spec.get("type")
+    block = spec.get(ptype) if isinstance(ptype, str) and isinstance(spec.get(ptype), dict) else {}
+    fields = DIGEST_FIELDS.get(ptype, []) if isinstance(ptype, str) else []
+    return _sha({"type": ptype, "fields": {f: block.get(f) for f in fields}})
 
 
 # ---- time -----------------------------------------------------------------------------------------------------------
@@ -535,15 +556,13 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
     if cd is None and release_failed:
         # the release of the build failed and Hive has no build: the installation could not start; it waits for a
         # retry like any stop
-        attempt = _int(cur.get("attempt"), 1) or 1
-        limit = _int(cur.get("attemptsLimit"))
-        cause = classify(provider, "", None, settings.get("tenantValues"), pod_not_started=True, log_read=False)
-        lf = {"attempt": attempt, "reason": cause["reason"],
-              "message": _failure_message(attempt, limit, cause["text"]), "time": nowt}
-        install.update(stage="Stopped", attempt=attempt, lastFailure=lf)
+        lf = {"attempt": None, "reason": CAUSE_REASONS[NOT_STARTED],
+              "message": "The installation could not be started: the platform's release of the build on the hub "
+                         "failed.", "time": nowt}
+        install.update(stage="Stopped", lastFailure=lf)
         install.setdefault("startedAt", nowt)
         install["endedAt"] = cur.get("endedAt") or nowt
-        message = lf["message"] + " The installer did not start."
+        message = lf["message"] + NOT_STARTED_ADVICE
         _record_stop(install, obj, status, job)
         conditions = [_ready(lf["reason"], message), _stalled("True", lf["reason"], message)]
         res.update(end=True, outcome="stopped", write=True, action="failed", status="failed",
@@ -625,6 +644,8 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
                                            else " The installer stopped after 1 attempt.")
             else:
                 message = lf["message"] + " The installer stopped."
+            if lf.get("reason") == CAUSE_REASONS[NOT_STARTED]:
+                message += NOT_STARTED_ADVICE
             _record_stop(install, obj, status, job)
             conditions.append(_ready(lf.get("reason") or CAUSE_REASONS[OTHER], message))
             conditions.append(_stalled("True", lf.get("reason") or CAUSE_REASONS[OTHER], message))
@@ -693,6 +714,7 @@ def _record_stop(install, obj, status, job):
     meta = obj.get("metadata") or {}
     install["stoppedGeneration"] = _int(meta.get("generation"), 0)
     install["stoppedSpec"] = spec_digest(obj.get("spec"))
+    install["stoppedSpecVersion"] = DIGEST_VERSION
     handled = str(status.get("lastHandledReconcileRequest") or "")
     delivery = status.get("delivery") or {}
     published = parse_time(delivery.get("publishedAt"))
@@ -762,7 +784,7 @@ def install_cleaning(status, now):
     cur = dict((status or {}).get("install") or {})
     return {"stage": "CleaningUp", "run": (_int(cur.get("run"), 1) or 1) + 1, "startedAt": None, "endedAt": None,
             "attempt": None, "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None,
-            "stoppedSpec": None, "observedAt": fmt_time(now)}
+            "stoppedSpec": None, "stoppedSpecVersion": None, "observedAt": fmt_time(now)}
 
 
 def install_installed(status, now):
@@ -772,14 +794,43 @@ def install_installed(status, now):
     # run is left as it stands (a merge keeps it), so a status read before a removal in the same job is good enough
     return {"stage": "Installed", "endedAt": cur.get("endedAt") or None,
             "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None, "stoppedSpec": None,
+            "stoppedSpecVersion": None,
             "observedAt": fmt_time(now)}
 
 
 def install_stopped_seen(obj):
-    """status.install of a stopped installation after a run that nobody asked to start again (a change outside the
-    installer's part of the spec): the generation is recorded as seen, so the operator waits again."""
-    meta = (obj or {}).get("metadata") or {}
-    return {"stoppedGeneration": _int(meta.get("generation"), 0)}
+    """status.install of a stopped installation after a run that starts nothing: the generation is recorded as seen
+    (the operator waits again), and the digest of the installer's settings is renewed under this code's version (a
+    digest recorded by another version of the product is replaced, never compared)."""
+    obj = obj or {}
+    meta = obj.get("metadata") or {}
+    return {"stoppedGeneration": _int(meta.get("generation"), 0), "stoppedSpec": spec_digest(obj.get("spec")),
+            "stoppedSpecVersion": DIGEST_VERSION}
+
+
+def install_resumed(status, stage="Installing"):
+    """status.install when a run finds that the hub's build of a recorded stop runs or is installed: the hub wins. The
+    stage is the hub's, the stop's bookkeeping goes, the run is not counted again (the watch then writes the rest)."""
+    return {"stage": stage, "endedAt": None, "stoppedGeneration": None, "stoppedRequest": None, "stoppedSpec": None,
+            "stoppedSpecVersion": None}
+
+
+HUB_STATES = ("unreadable", "none", "deleting", "installed", "stopped", "running")
+
+
+def hub_state(cd, hub_read_ok):
+    """What the hub holds of a build: unreadable, none (no ClusterDeployment), deleting, installed, stopped, running."""
+    if not hub_read_ok:
+        return "unreadable"
+    if not isinstance(cd, dict):
+        return "none"
+    if _being_removed(cd):
+        return "deleting"
+    if hub_installed(cd):
+        return "installed"
+    if hub_stopped(cd):
+        return "stopped"
+    return "running"
 
 
 # ---- the guarded removal of a stopped build ----------------------------------------------------------------------
@@ -805,6 +856,10 @@ def asked_since_stop(obj, event=None):
     if str(ev.get("reason") or "").endswith("ReconcileRequested") and ended and published and published > ended:
         return True, "a Retry request since the stop"
     if install.get("stoppedSpec"):
+        if str(install.get("stoppedSpecVersion") or "") != DIGEST_VERSION:
+            # recorded by another version of the product: only a Retry asks (the next run renews the record)
+            return False, "nobody asked for a new installation since the stop (no Retry; the recorded settings are " \
+                          "of another version and are renewed)"
         if spec_digest((obj or {}).get("spec")) != str(install.get("stoppedSpec")):
             return True, "a change of the cluster's installation settings since the stop"
         return False, "nobody asked for a new installation since the stop (no Retry, no change of the installation " \
@@ -847,8 +902,7 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, rec
     if stage not in ("Stopped", "CleaningUp"):
         return False, "the cluster object records no stopped installation; nothing is removed"
     if cd is None:
-        if stage == "Stopped" and _bool(release_exists) and not _bool(release_failed):
-            return False, "the hub holds a release of the build without a stopped installation; nothing is removed"
+        pass   # a release of the build without a ClusterDeployment (failed, pending or deployed) is no live build
     elif not (hub_stopped(cd) or _being_removed(cd)):
         return False, "the hub's build has not stopped (Hive may still be trying); nothing is removed"
     if stage == "CleaningUp":

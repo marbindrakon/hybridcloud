@@ -50,6 +50,10 @@ def shc_install_stopped_seen(obj):
     return I.install_stopped_seen(obj if isinstance(obj, dict) else {})
 
 
+def shc_install_resumed(_unused=None):
+    return I.install_resumed({})
+
+
 def shc_install_spec_digest(spec):
     return I.spec_digest(spec)
 
@@ -60,4 +64,4 @@ class FilterModule(object):
                 "shc_install_cleaning": shc_install_cleaning, "shc_install_installed": shc_install_installed,
                 "shc_install_asked": shc_install_asked, "shc_install_overdue": shc_install_overdue,
                 "shc_install_stopped_seen": shc_install_stopped_seen,
-                "shc_install_spec_digest": shc_install_spec_digest}
+                "shc_install_spec_digest": shc_install_spec_digest, "shc_install_resumed": shc_install_resumed}

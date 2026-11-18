@@ -247,7 +247,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `IdentityProviderNotFound` | The site has no identity provider of the declared name. The platform team is looking at it. | The platform team |
 | `InstallCredentialsRefused` | The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster. | The platform team |
 | `InstallFailed` | The installation failed and was stopped. You can retry it; the platform team can see why it failed. | The platform team |
-| `InstallNotStarted` | The installation could not be started on the platform. Retry it once the platform team has fixed the cause, or delete the cluster. | The platform team |
+| `InstallNotStarted` | The installation could not be started on the platform. The message says what happens next. | The platform team |
 | `InstallOverdue` | The installation has not finished in the time allowed. The platform keeps checking it. | The platform team |
 | `InstallSettingRefused` | The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |

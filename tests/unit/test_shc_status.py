@@ -249,6 +249,57 @@ class Patch(unittest.TestCase):
         self.assertIsNone(S.phase_backfill_patch(o, NOW))
 
 
+class RunningInstallationKeepsItsState(unittest.TestCase):
+    """A job's start and acknowledgement writes ("Applying the change.", "AAP job started": reconciling, no Ready
+    condition of their own) keep what a running or overdue installation shows; other kinds are unchanged."""
+
+    def cluster(self, stage, ready_reason, legacy, phase):
+        st = {"status": legacy, "phase": phase, "phaseSince": EARLY, "summary": "s",
+              "install": {"stage": stage, "run": 1},
+              "conditions": [{"type": "Ready", "status": "False", "reason": ready_reason, "message": "m",
+                              "lastTransitionTime": EARLY}]}
+        o = obj(st)
+        o["kind"] = "PlatformOpenshift"
+        return o
+
+    def ack(self, o, body=None):
+        return S.compute_status_patch(o, body or {"status": "reconciling", "ready": False,
+                                                  "message": "Applying the change."},
+                                      {"action": "reconciling", "event_id": "e2"}, NOW)
+
+    def test_an_overdue_installation_stays_failed(self):
+        o = self.cluster("Installing", "InstallOverdue", "failed", "Failed")
+        patch, info = self.ack(o)
+        self.assertEqual(info["phase"], "Failed")
+        self.assertEqual(patch["status"]["phaseSince"], EARLY)
+        ready = S.find_condition(patch["status"]["conditions"], "Ready")
+        self.assertEqual((ready["reason"], ready["message"]), ("InstallOverdue", "m"))
+        self.assertNotIn("status", patch["status"])
+        self.assertEqual(patch["status"]["delivery"]["acknowledgedEventId"], "e2")
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Reconciling")["message"],
+                         "Applying the change.")
+
+    def test_a_running_installation_keeps_its_ready_reason(self):
+        for stage in ("CleaningUp", "Installing", "Finishing"):
+            o = self.cluster(stage, "InstallRetrying", "reconciling", "Creating")
+            patch, info = self.ack(o, {"status": "reconciling", "ready": False, "message": "AAP job started"})
+            ready = S.find_condition(patch["status"]["conditions"], "Ready")
+            self.assertEqual((ready["reason"], info["phase"]), ("InstallRetrying", "Creating"), stage)
+
+    def test_writes_that_carry_the_installation_or_another_kind_are_unchanged(self):
+        o = self.cluster("Installing", "Installing", "reconciling", "Creating")
+        patch, _ = self.ack(o, {"status": "reconciling", "reason": "InstallCleanup", "message": "x",
+                                "install": {"stage": "CleaningUp"}})
+        # a write with its own status.install is the job's own state: not kept (the legacy reconciling synthesizes)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Ready")["reason"], "InProgress")
+        for stage in ("Stopped", "Installed", "Preparing"):
+            patch, _ = self.ack(self.cluster(stage, "QuotaExceeded", "failed", "Failed"))
+            self.assertEqual(S.find_condition(patch["status"]["conditions"], "Ready")["reason"], "InProgress", stage)
+        other = obj({"status": "failed", "conditions": [{"type": "Ready", "status": "False", "reason": "Failed"}]})
+        patch, _ = self.ack(other)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Ready")["reason"], "InProgress")
+
+
 class RescueKeepsConditions(unittest.TestCase):
     """Review R2 L8 (not a defect): the PlatformOpenshift rescue writes conditions: [] after a failure that is not a
     preflight refusal; conditions merge by type, so an empty list removes nothing (Available and Preflight stay)."""

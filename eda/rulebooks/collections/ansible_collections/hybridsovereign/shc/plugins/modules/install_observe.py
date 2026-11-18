@@ -23,9 +23,13 @@ description:
   - C(mode=wait) is one round of a wait of the removal: it reads the cluster object (ends the job like the watch when
     it is gone, another object, being deleted or has a newer request) and the hub object named by C(wait_for), and
     says whether that is gone (or, for the uninstall job, finished).
+  - C(mode=hub) reads the object and the hub's ClusterDeployment and says what the hub holds of the build (unreadable,
+    none, deleting, installed, stopped, running): a recorded stop is checked against it.
+  - C(mode=handover) completes the job's event without changing what the object shows (a run that ends with nothing
+    to write: the operator publishes again at its next pass), unless the object is not the job's any more.
   - Never copies text of the hub, the installer's log or the site into the status or its result messages.
 options:
-  mode: {description: observe, check, removal or wait., type: str, default: observe, choices: [observe, check, removal, wait]}
+  mode: {description: observe, check, removal, wait, hub or handover., type: str, default: observe, choices: [observe, check, removal, wait, hub, handover]}
   host: {description: Services cluster API URL., type: str, required: true}
   api_key: {description: Services cluster bearer token., type: str, required: true, no_log: true}
   validate_certs: {description: Verify the services API certificate., type: bool, default: true}
@@ -55,6 +59,7 @@ outcome: {description: gone, replaced, deleting, superseded, installed, stopped,
 ok: {description: check - the job may go on; removal - the build may be removed., type: bool, returned: check, removal}
 stage: {description: removal - status.install.stage of the object as read., type: str, returned: removal}
 done: {description: wait - the hub object is gone (the uninstall job finished)., type: bool, returned: wait}
+hub: {description: hub and removal - what the hub holds of the build., type: str, returned: hub, removal}
 why: {description: A sentence on the decision (no hub or installer text)., type: str, returned: always}
 install: {description: status.install as decided., type: dict, returned: observe}
 written: {description: A status write was made., type: bool, returned: observe}
@@ -104,7 +109,7 @@ def _int_or0(value):
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            mode=dict(type="str", default="observe", choices=["observe", "check", "removal", "wait"]),
+            mode=dict(type="str", default="observe", choices=["observe", "check", "removal", "wait", "hub", "handover"]),
             host=dict(type="str", required=True),
             api_key=dict(type="str", required=True, no_log=True),
             validate_certs=dict(type="bool", default=True),
@@ -165,11 +170,42 @@ def main():
         ok, why = I.same_object(obj, p["uid"], p["event_id"].strip(), p["generation"] or None)
         module.exit_json(changed=False, ok=ok, end=not ok, outcome="" if ok else "ended", why=why)
 
+    def write(body, action):
+        """A status write through the status library (superseded and gone end it); True when written."""
+        cur, err = obj, obj_error
+        for attempt in range(5):
+            if attempt or err:
+                cur, err = read_obj()
+            if cur is None or err:
+                return False, "the cluster object could not be read"
+            entry = dict(p["job"], name="platformopenshift-%s" % action) if p["job"] else None
+            patch, info = compute_status_patch(cur, body, {"action": action, "event_id": p["event_id"].strip(),
+                                                           "partial": False, "job": entry})
+            if info.get("superseded"):
+                return False, "a newer request for the cluster replaced this job's"
+            code, _ = _get(obj_url + "/status", p["api_key"], p["validate_certs"], p["timeout"], method="PATCH",
+                           data=json.dumps(patch), content_type="application/merge-patch+json")
+            if code in (200, 201):
+                return True, ""
+            if code == 404:
+                return False, "the cluster object no longer exists"
+            if code != 409:
+                return False, "the status write failed (%s)" % code
+        return False, "the status write conflicted five times"
+
+    if p["mode"] == "handover":
+        ok = not obj_error and obj is not None and I.same_object(obj, p["uid"], p["event_id"].strip())[0]
+        written, why = write({}, "installing") if ok else (False, "the object is not this job's or cannot be read")
+        # a write that could not be made fails the task: the job then fails as the operator expects of a dead run
+        if not written and ok:
+            module.fail_json(msg="install_observe: the hand-over could not be written: %s" % why)
+        module.exit_json(changed=written, written=written, end=True, outcome="handover", why=why or "handed over")
+
     for key in ("hub_host", "hub_api_key", "build"):
         if not p[key]:
             module.fail_json(msg="install_observe: %s is required in mode %s" % (key, p["mode"]))
 
-    if p["mode"] in ("removal", "wait") and not obj_error:
+    if p["mode"] in ("removal", "wait", "hub") and not obj_error:
         # the removal looks at its object like the watch: gone, another object, deleted or a newer request ends it
         ok, why = I.same_object(obj, p["uid"], p["event_id"].strip())
         if not ok:
@@ -180,7 +216,13 @@ def main():
         ok, why = I.may_remove_build(None if obj_error else obj, cd, not hub_error, p["release_failed"],
                                      recheck=p["recheck"], release_exists=p["release_exists"])
         stage = str((((obj or {}).get("status") or {}).get("install") or {}).get("stage") or "")
-        module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why, stage=stage)
+        module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why, stage=stage,
+                         hub=I.hub_state(cd, not hub_error))
+
+    if p["mode"] == "hub":
+        cd, hub_error = read_hub("clusterdeployments/%s" % p["build"])
+        state = I.hub_state(cd, not hub_error and not obj_error)
+        module.exit_json(changed=False, end=False, outcome="", hub=state, why="the hub's build: %s" % state)
 
     if p["mode"] == "wait":
         build = p["build"]

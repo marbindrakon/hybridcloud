@@ -154,7 +154,7 @@ REASONS = {
     "CredentialsMissing": _r("P", FAILED, "The site credentials are missing. The platform team is looking at it."),
     "CredentialsInvalid": _r("P", FAILED, "The site credentials were refused. The platform team is looking at it."),
     "InstallFailed": _r("P", FAILED, "The installation failed and was stopped. You can retry it; the platform team can see why it failed."),
-    "InstallNotStarted": _r("P", FAILED, "The installation could not be started on the platform. Retry it once the platform team has fixed the cause, or delete the cluster."),
+    "InstallNotStarted": _r("P", FAILED, "The installation could not be started on the platform. The message says what happens next."),
     "InstallCredentialsRefused": _r("P", FAILED, "The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster."),
     "InstallOverdue": _r("P", FAILED, "The installation has not finished in the time allowed. The platform keeps checking it."),
     "DefaultFlavorNotFound": _r("P", FAILED, "The environment lacks the platform's default flavor for cluster nodes. Name a flavor it offers, or ask the platform team."),

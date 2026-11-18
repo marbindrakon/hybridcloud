@@ -157,6 +157,21 @@ def synthesize_ready(body, old_conditions):
             "message": str(body.get("message") or "")}
 
 
+# stages of status.install in which an installation runs (an OpenShift cluster; other kinds have no status.install)
+_INSTALL_RUNNING = ("CleaningUp", "Installing", "Finishing")
+
+
+def keeps_installation(obj, body, new_conditions=None):
+    """True when a "reconciling" write must not replace what a running installation shows: the object's
+    status.install says an installation runs (also one past its deadline, shown failed), and the write carries no
+    Ready condition and no status.install of its own (a job's start and acknowledgement writes). Its Ready reason,
+    message, legacy status and phase stay; the job's message goes on the Reconciling condition."""
+    if find_condition(new_conditions, "Ready") is not None or "install" in (body or {}):
+        return False
+    install = ((obj or {}).get("status") or {}).get("install")
+    return isinstance(install, dict) and install.get("stage") in _INSTALL_RUNNING
+
+
 def keeps_ready(obj, new_conditions=None):
     """True when a "reconciling" write must not flip the object out of Ready: it is Ready (Ready condition
     True) and its spec was handled (status.observedGeneration >= metadata.generation), and the write carries no
@@ -370,7 +385,7 @@ def compute_status_patch(obj, body, opts=None, now=None):
     old_conds = cur_status.get("conditions") or []
     new_conds = [c for c in (body.pop("conditions", None) or []) if isinstance(c, dict)]
     running_message = "Applying the change."
-    if action == "reconciling" and keeps_ready(obj, new_conds):
+    if action == "reconciling" and (keeps_ready(obj, new_conds) or keeps_installation(obj, body, new_conds)):
         # A re-run of a Ready object: the legacy fields keep saying ready as well (status.ready readers such as
         # parent and dependency checks see no flip). The job's message goes on the Reconciling condition.
         running_message = str(body.get("message") or "") or running_message

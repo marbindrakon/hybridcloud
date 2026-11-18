@@ -430,7 +430,7 @@ class SameObject(unittest.TestCase):
 
 
 STOPPED = {"stage": "Stopped", "run": 1, "startedAt": t(60), "endedAt": t(30), "stoppedGeneration": 2,
-           "stoppedRequest": "2026-11-18T09:00:00Z", "stoppedSpec": I.spec_digest(SPEC), "attempt": 3,
+           "stoppedRequest": "2026-11-18T09:00:00Z", "stoppedSpec": I.spec_digest(SPEC), "stoppedSpecVersion": I.DIGEST_VERSION, "attempt": 3,
            "attemptsLimit": 3}
 SMALLER = {"type": "openstack", "openstack": dict(SPEC["openstack"], workerCount=0)}
 
@@ -493,11 +493,11 @@ class Removal(unittest.TestCase):
             self.assertFalse(I.may_remove_build(self.asked(), hub, True)[0])
 
     def test_no_deployment_left(self):
-        """No ClusterDeployment: a failed release or nothing at all goes on (a fresh installation); a release that
-        did not fail without a ClusterDeployment is kept."""
+        """No ClusterDeployment: whatever release of the build is left (failed, pending, deployed, none) is no live
+        build; a Retry removes it and installs (a fresh installation)."""
         self.assertTrue(I.may_remove_build(self.asked(), None, True, release_failed=True, release_exists=True)[0])
         self.assertTrue(I.may_remove_build(self.asked(), None, True, release_exists=False)[0])
-        self.assertFalse(I.may_remove_build(self.asked(), None, True, release_failed=False, release_exists=True)[0])
+        self.assertTrue(I.may_remove_build(self.asked(), None, True, release_failed=False, release_exists=True)[0])
 
     def test_object_without_a_recorded_stop(self):
         obj = po({"stage": "Installing", "run": 1}, generation=3)
@@ -637,10 +637,93 @@ class InstallBlocks(unittest.TestCase):
         self.assertIsNone(I.install_installed({"clusterInstalled": True}, NOW)["endedAt"])
 
     def test_stopped_seen(self):
-        self.assertEqual(I.install_stopped_seen(po(STOPPED, generation=5)), {"stoppedGeneration": 5})
+        self.assertEqual(I.install_stopped_seen(po(STOPPED, generation=5)),
+                         {"stoppedGeneration": 5, "stoppedSpec": I.spec_digest(SPEC),
+                          "stoppedSpecVersion": I.DIGEST_VERSION})
+
+
+class HubWins(unittest.TestCase):
+    """A recorded stop against what the hub holds: one outcome per hub state (the role's table)."""
+
+    def test_hub_states(self):
+        deleting = cd(provisioned=False, stopped=True)
+        deleting["metadata"]["deletionTimestamp"] = t(1)
+        cases = [(None, False, "unreadable"), (None, True, "none"), (deleting, True, "deleting"),
+                 (cd(installed=True, provisioned=True), True, "installed"),
+                 (cd(provisioned=True), True, "installed"),
+                 (cd(provisioned=False, stopped=True, failed="UnknownError"), True, "stopped"),
+                 (cd(provisioned=False, failed="UnknownError", restarts=1), True, "running"), (cd(), True, "running")]
+        for hub, ok, want in cases:
+            self.assertEqual(I.hub_state(hub, ok), want, want)
+        self.assertEqual(set(I.HUB_STATES), {w for _, _, w in cases})
+
+    def test_a_running_or_installed_build_is_never_removed_from_a_recorded_stop(self):
+        asked = po(STOPPED, generation=3, spec=SMALLER, lastHandledReconcileRequest="2026-11-18T11:59:00Z")
+        for hub in (cd(provisioned=False), cd(installed=True, provisioned=True)):
+            self.assertFalse(I.may_remove_build(asked, hub, True)[0])
+
+    def test_the_hubs_state_replaces_the_record(self):
+        got = I.install_resumed({})
+        self.assertEqual(got["stage"], "Installing")
+        for k in ("endedAt", "stoppedGeneration", "stoppedRequest", "stoppedSpec", "stoppedSpecVersion"):
+            self.assertIsNone(got[k], k)
+        self.assertNotIn("run", got, "no new run is counted")
+
+
+class NotStartedTexts(unittest.TestCase):
+    def test_the_message_says_what_to_do_once_stopped(self):
+        hub = cd(provisioned=False, stopped=True, launch_error=True)
+        res = observe(po(RUNNING), hub, None)
+        self.assertEqual(ready(res)["reason"], "InstallNotStarted")
+        self.assertTrue(ready(res)["message"].endswith(I.NOT_STARTED_ADVICE.strip()), ready(res)["message"])
+        # while Hive still tries: the platform keeps checking, no retry advice
+        res = observe(po(RUNNING), cd(provisioned=False, launch_error=True), prov(attempt=0, stuck=True))
+        self.assertIn("keeps checking", ready(res)["message"])
+        self.assertNotIn("Retry", ready(res)["message"])
+        # the summary is true in both states
+        import shc_status_reasons as R
+        self.assertNotIn("Retry", R.REASONS["InstallNotStarted"]["summary"])
+        self.assertNotIn("looking at it", R.REASONS["InstallNotStarted"]["summary"])
+
+    def test_a_failed_release_is_not_called_an_attempt(self):
+        res = observe(po({"stage": "Installing", "run": 2, "startedAt": t(3)}), None, None,
+                      settings=dict(SETTINGS, releaseFailed=True))
+        self.assertTrue(stalled(res)["message"].startswith("The installation could not be started: the platform's "
+                                                           "release of the build on the hub failed."))
+        self.assertNotIn("Attempt", stalled(res)["message"])
+        self.assertIn("Retry it once", stalled(res)["message"])
 
 
 class Digest(unittest.TestCase):
+    def test_a_new_schema_default_or_an_unlisted_field_changes_nothing(self):
+        """The digest covers the listed fields' values only: a field a later schema adds (with a default) to a block
+        gives the same digest, so no stopped cluster reinstalls after a product update."""
+        base = I.spec_digest(SPEC)
+        more = {"type": "openstack", "openstack": dict(SPEC["openstack"], someNewField="default-value")}
+        self.assertEqual(I.spec_digest(more), base)
+        stopped = po(dict(STOPPED), generation=3, spec=more, lastHandledReconcileRequest="2026-11-18T09:00:00Z")
+        self.assertFalse(I.asked_since_stop(stopped)[0])
+
+    def test_a_digest_of_another_list_version_is_not_compared(self):
+        """A product update that adds a field to the list: the recorded digest's version differs; a spec difference
+        then does not ask (only a Retry), and the next run renews the record."""
+        old = dict(STOPPED, stoppedSpecVersion="0" * 16, stoppedSpec="f" * 64)
+        obj = po(old, generation=2, spec=SMALLER, lastHandledReconcileRequest="2026-11-18T09:00:00Z")
+        asked, why = I.asked_since_stop(obj)
+        self.assertFalse(asked)
+        self.assertIn("another version", why)
+        renewed = I.install_stopped_seen(obj)
+        self.assertEqual((renewed["stoppedSpec"], renewed["stoppedSpecVersion"]),
+                         (I.spec_digest(SMALLER), I.DIGEST_VERSION))
+        # a Retry still asks
+        obj["status"]["lastHandledReconcileRequest"] = "2026-11-18T11:59:00Z"
+        self.assertTrue(I.asked_since_stop(obj)[0])
+        # a new entry in the list gives another version
+        import copy as _c
+        fields = _c.deepcopy(I.DIGEST_FIELDS)
+        fields["openstack"] = sorted(fields["openstack"] + ["someNewField"])
+        self.assertNotEqual(I._sha(fields)[:16], I.DIGEST_VERSION)
+
     def test_the_installers_part_only(self):
         base = I.spec_digest(SPEC)
         self.assertEqual(base, I.spec_digest(dict(SPEC, toolRbac={"clusterAdminRbac": ["a"]}, deletionProtection=True,

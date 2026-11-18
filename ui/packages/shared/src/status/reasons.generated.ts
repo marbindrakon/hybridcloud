@@ -73,7 +73,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "InstallCredentialsRefused": { actor: "P", class: "failed", summary: "The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster." },
   "InstallFailed": { actor: "P", class: "failed", summary: "The installation failed and was stopped. You can retry it; the platform team can see why it failed." },
   "InstallFinishing": { actor: "A", class: "progress", summary: "The cluster is installed; the platform is connecting it." },
-  "InstallNotStarted": { actor: "P", class: "failed", summary: "The installation could not be started on the platform. Retry it once the platform team has fixed the cause, or delete the cluster." },
+  "InstallNotStarted": { actor: "P", class: "failed", summary: "The installation could not be started on the platform. The message says what happens next." },
   "InstallOverdue": { actor: "P", class: "failed", summary: "The installation has not finished in the time allowed. The platform keeps checking it." },
   "InstallRetrying": { actor: "A", class: "progress", summary: "An installation attempt failed; the installer is trying again. The message says what failed." },
   "InstallSettingRefused": { actor: "T", class: "failed", summary: "The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again." },
