@@ -83,7 +83,7 @@
 - name: Remove a stopped installation before a new one
   ansible.builtin.include_tasks: remove_stopped_build.yml
   vars:
-    rsb_status: "{{ po_cr_current.resources[0].status | default({}, true) }}"
+    rsb_obj: "{{ po_cr_current.resources[0] }}"
 
 - name: Create Route53 records for the cluster
   when: not (use_designate_dns | default(false) | bool)
@@ -213,6 +213,8 @@
 
 # shc (§11.6 phase C): record the DNS records and Vault paths as soon as they exist, so a build
 # that fails later still tears down cleanly (and the orphan check doesn't flag a running install).
+# A new installation is announced ("The installation is starting."); a run on an installation that already runs or is
+# done records only these fields (a partial write: the watch's last message stays).
 - name: Record DNS records and Vault paths on the status
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -220,20 +222,22 @@
     cr_plural: platformopenshifts
     cr_name: "{{ ansible_operator_meta.name }}"
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
-    cr_status_body:
-      status: reconciling
-      ready: false
-      reason: Installing
-      message: The installation is starting.
-      # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
-      installStarted: true
-      install: "{{ _po_now.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_starting }}"
+    _po_install_start: "{{ _po_now.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_starting }}"
+    _po_status_fields:
+      install: "{{ _po_install_start }}"
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
         accountVaultPath: null
         projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
         records: "{{ cb_dns_records | default([]) }}"
       vaultPaths: null
+    cr_status_partial: "{{ (_po_install_start | length) == 0 }}"
+    # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
+    cr_status_body: >-
+      {{ _po_status_fields | combine({'installStarted': true})
+         | combine({'status': 'reconciling', 'ready': false, 'reason': 'Installing',
+                                      'message': 'The installation is starting.'}
+                                     if (_po_install_start | length) > 0 else {}) }}
 
 # the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
 - name: Wake the network now the install starts
@@ -336,6 +340,9 @@
 # the object may have been deleted, replaced or given a newer request since the job's last status write
 - name: Check right before the release that the object is still this job's
   ansible.builtin.include_tasks: install_same_object.yml
+  vars:
+    # the spec this job read is the one it installs
+    iso_generation: "{{ platformopenshift_generation }}"
 
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
@@ -364,6 +371,11 @@
   register: helm_deploy_result
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
+  failed_when: false
+
+- name: A failed release of the build
+  ansible.builtin.include_tasks: install_release_failed.yml
+  when: (helm_deploy_result.rc | default(0) | int) != 0
 
 - name: Clean up temp values and registry files
   ansible.builtin.file:

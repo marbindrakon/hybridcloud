@@ -92,7 +92,7 @@
 - name: Remove a stopped installation before a new one
   ansible.builtin.include_tasks: remove_stopped_build.yml
   vars:
-    rsb_status: "{{ platformopenshift_cr.resources[0].status | default({}, true) }}"
+    rsb_obj: "{{ platformopenshift_cr.resources[0] }}"
 
 - name: Check existing Helm release
   ansible.builtin.command:
@@ -177,6 +177,9 @@
 # the object may have been deleted, replaced or given a newer request since the job's last status write
 - name: Check right before the release that the object is still this job's
   ansible.builtin.include_tasks: install_same_object.yml
+  vars:
+    # the spec this job read is the one it installs
+    iso_generation: "{{ platformopenshift_generation }}"
 
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
@@ -205,6 +208,11 @@
   register: helm_deploy_result
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
+  failed_when: false
+
+- name: A failed release of the build
+  ansible.builtin.include_tasks: install_release_failed.yml
+  when: (helm_deploy_result.rc | default(0) | int) != 0
 
 # Internal: the installer writes only a private zone; the platform (Hive's installer on central, ACM) and the network
 # resolve the cluster through public aliases of its internal load balancers, published as soon as they exist

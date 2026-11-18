@@ -521,12 +521,40 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(H.os_calls(tr)[0]["flavors"], ["example.xlarge"])
 
     def test_a_missing_flavor_is_refused_before_anything(self):
+        """A flavor the cluster's spec names is named to the tenant (FlavorNotFound)."""
         missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.missing"])}
         rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
-                                  fake_os=missing)
+                                  fake_os=missing, platform_spec={"type": "openstack", "openstack": {
+                                      "environment": "env1", "controlPlaneFlavor": "example.missing"}})
         self.assertNotEqual(rc, 0)
         self.assertIn("the environment has no flavor example.missing", out)
         self.assertEqual([t for t in tr if "create" in t], [])
+
+    def test_a_missing_default_flavor_names_no_flavor(self):
+        """The installation's default flavor missing on the site: refused with the platform team's reason and a
+        sentence that names no flavor (the default is the platform's, not the tenant's)."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.default"])}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(oso_control_plane_flavor="example.default", oso_worker_count="0",
+                                              fake_os=missing),
+                            k8s=k8s(), result="po_fail_reason | default('')", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("does not offer the flavor the platform uses for cluster nodes by default", out)
+        self.assertNotIn("example.default", out.split("does not offer")[1][:300])
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "DefaultFlavorNotFound")
+        self.assertEqual([t for t in tr if "create" in t], [])
+        # a spec-named flavor missing beside the default: the spec's is named
+        both = {"network-name-check": dict(NAME_OK["network-name-check"],
+                                           flavors_missing=["example.default", "example.mine"])}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(oso_control_plane_flavor="example.default", oso_worker_flavor="example.mine",
+                                              oso_worker_count="2", fake_os=both,
+                                              platform_spec={"type": "openstack", "openstack": {
+                                                  "environment": "env1", "workerFlavor": "example.mine"}}),
+                            k8s=k8s(), result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the environment has no flavor example.mine;", out)
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "FlavorNotFound")
 
     def test_external_default(self):
         rc, tr, out = self.run_op(k8s(extra={f"CloudInfrastructure/{PLAT}/site1": SITE, f"TenantProfile/{NS}/shc": TPROFILE}),

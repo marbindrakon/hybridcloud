@@ -1,7 +1,11 @@
 ---
-# Right before the job makes the cluster's release on the hub: the object must still exist, be the job's object (same
-# uid), not be deleted, and still carry the job's request. Otherwise the job ends here without a write, so a delete
-# that came after the job's last status write never meets a new release. Input: po_uid.
+# Right before the job makes the cluster's release on the hub (and in the removal of a stopped build, before its
+# release goes and before its namespace is claimed again): the object must still exist, be the job's object (same uid),
+# not be deleted, and still carry the job's request. Otherwise the job ends here without a write, so a delete that came
+# after the job's last status write never meets a new release. With iso_generation (the generation the job read its
+# spec at; the release passes it) the spec must also be the one the job read: a job installs with that spec or not at
+# all. A changed spec ends the job and asks the operator for a new run at once (its event is still in flight, so it
+# would not publish by itself), which reads the new spec. Inputs: po_uid, iso_generation (0: not compared).
 - name: Read the object once more
   hybridsovereign.shc.install_observe:
     mode: check
@@ -12,13 +16,22 @@
     namespace: "{{ ansible_operator_meta.namespace }}"
     uid: "{{ po_uid | default('', true) }}"
     event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+    generation: "{{ iso_generation | default(0, true) | int }}"
   register: iso_check
 
 - name: Say why the job ends before the release
   ansible.builtin.debug:
     msg: "No release for {{ ansible_operator_meta.name }}: {{ iso_check.why }}"
-  when: not (iso_check.ok | default(true) | bool)
+  when: not (iso_check.ok | default(false) | bool)
+
+- name: Ask for a run with the new spec
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/nudge_cr.yml"
+  vars:
+    nudge_crs: [{kind: PlatformOpenshift, namespace: "{{ ansible_operator_meta.namespace }}", name: "{{ ansible_operator_meta.name }}"}]
+  when:
+    - not (iso_check.ok | default(false) | bool)
+    - "'spec changed' in (iso_check.why | default(''))"
 
 - name: End the job before the release
   ansible.builtin.meta: end_play
-  when: not (iso_check.ok | default(true) | bool)
+  when: not (iso_check.ok | default(false) | bool)

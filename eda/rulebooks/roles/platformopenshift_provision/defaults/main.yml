@@ -31,8 +31,10 @@ platformopenshift_allowed_pull_secret_properties: "{{ platformopenshift_defaults
 default_ocp_image_set: "{{ platformopenshift_defaults.ocpImageSet | default('img4.21.9-x86-64-appsub') }}"
 default_control_plane_count: "{{ platformopenshift_defaults.controlPlaneCount | default(3) }}"
 default_worker_count: "{{ platformopenshift_defaults.workerCount | default(3) }}"
-default_control_plane_flavor: "{{ platformopenshift_defaults.controlPlaneFlavor | default('b1.xlarge') }}"
-default_worker_flavor: "{{ platformopenshift_defaults.workerFlavor | default('b1.large') }}"
+# the flavors of an OpenStack cluster's nodes when its spec names none: no fallback (a site's flavor names are its own);
+# a cluster that needs one that is not set fails with the setting's name (openstack.yml)
+default_control_plane_flavor: "{{ platformopenshift_defaults.controlPlaneFlavor | default('', true) }}"
+default_worker_flavor: "{{ platformopenshift_defaults.workerFlavor | default('', true) }}"
 # Empty: the installer uploads the release's own RHCOS image into the project.
 default_glance_image_override: "{{ platformopenshift_defaults.glanceImage | default('') }}"
 
@@ -67,7 +69,8 @@ platformopenshift_service_wait_delay: 20
 # observeIntervalSeconds  how often the job looks at the installation on the hub
 # watchWindowMinutes      how long one job watches; then it writes "still installing" and the next run watches on
 #                         (below the provision template's time limit, aap-config/controller/job_templates.yml)
-# deadlineMinutes         an installation neither finished nor stopped after this long is failed (InstallOverdue)
+# deadlineMinutes         an installation neither finished nor stopped after this long is shown failed
+#                         (InstallOverdue); each periodic run then checks it once
 # checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing
 #                         changes; the operator's in-flight check reads it (operator/roles/_common/tasks/
 #                         skip_if_event_in_flight.yml)

@@ -166,10 +166,16 @@
     pnn_hybrid: "{{ cb_platform_path | bool }}"
     # the installer's credential: the cluster's own (openstack_cluster_credential.yml)
     pnn_credential: "{{ cb_provider_creds_vault }}"
-    # the flavors the installer will ask for (the workers' only when there are workers)
+    # the flavors the installer will ask for (the workers' only when there are workers), and those the cluster's spec
+    # names (only those are named to the tenant when missing)
     pnn_flavors: >-
       {{ ([oso_control_plane_flavor | default('', true)]
           + ([oso_worker_flavor | default('', true)] if (oso_worker_count | default(0, true) | int) > 0 else []))
+         | select | list }}
+    pnn_spec_flavors: >-
+      {{ ([(platform_spec.openstack | default({}, true)).controlPlaneFlavor | default('', true)]
+          + ([(platform_spec.openstack | default({}, true)).workerFlavor | default('', true)]
+             if (oso_worker_count | default(0, true) | int) > 0 else []))
          | select | list }}
 
 - name: Wait (nothing refused the cluster)

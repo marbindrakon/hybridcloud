@@ -8,8 +8,9 @@
 # must be exactly the chosen one, and it must be external for the project. The site account only lends the site's CA
 # bundle. Inputs: pnn_name, pnn_id (the placed network, or the global external network in effect), pnn_hybrid (true:
 # a placed network, whose policy for the project may still be on its way), pnn_credential (the Vault path of the
-# cluster's credential), pnn_flavors (the flavors the cluster asks for; one the project does not see is refused,
-# FlavorNotFound). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
+# cluster's credential), pnn_flavors (the flavors the cluster asks for; one the project does not see is refused:
+# FlavorNotFound naming it when the cluster's spec names it, pnn_spec_flavors; DefaultFlavorNotFound, naming no flavor,
+# when it is the installation's default). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
 # ("" = the name leads to the network alone) and stops through preflight_stop.yml (a wait goes to po_deferred_wait
 # instead when pnn_defer_wait is true and no earlier wait is kept: the caller stops with it later): refuses NetworkNameNotUnique (another network of the name is
 # visible: the tenant renames or removes its own, or the platform team the share), waits WaitingForPlacement (a placed
@@ -89,14 +90,21 @@
                         ~ (' yet' if pnn_hybrid | bool else '')))) }}
 
 # a flavor the cluster asks for that the project does not see: the installer would skip its own checks and fail after
-# its whole run (about 50 minutes over three attempts); refused here, before anything is created
+# its whole run (about 50 minutes over three attempts); refused here, before anything is created. A flavor is named to
+# the tenant only when the cluster's spec names it; the installation's default is the platform's (named in no text)
 - name: Refuse a flavor the environment does not have
   ansible.builtin.include_tasks: preflight_stop.yml
   vars:
-    ps_reason: FlavorNotFound
+    _pnn_named_missing: >-
+      {{ os_result.flavors_missing | default([], true) | select('in', pnn_spec_flavors | default([], true)) | list }}
+    ps_reason: "{{ 'FlavorNotFound' if _pnn_named_missing | length > 0 else 'DefaultFlavorNotFound' }}"
     ps_message: >-
-      PlatformOpenshift {{ ansible_operator_meta.name }}: the environment has no flavor
-      {{ os_result.flavors_missing | join(', ') }}; choose a flavor the environment offers
+      {{ ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': the environment has no flavor '
+          ~ (_pnn_named_missing | join(', ')) ~ '; choose a flavor the environment offers')
+         if _pnn_named_missing | length > 0 else
+         ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': the environment does not offer the flavor the '
+          ~ 'platform uses for cluster nodes by default; name a flavor the environment offers, or ask the platform '
+          ~ 'team') }}
   when:
     - pnn_reason | trim | length == 0 or pnn_reason | trim == 'WaitingForPlacement'
     - (os_result.flavors_missing | default([], true)) | length > 0

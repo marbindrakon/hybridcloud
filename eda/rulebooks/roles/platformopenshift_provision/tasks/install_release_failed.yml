@@ -1,0 +1,28 @@
+---
+# After the release of the cluster's build on the hub failed (helm upgrade --install): with no ClusterDeployment on the
+# hub the installation could not start, and that is written as a stop (InstallNotStarted, Stalled) by the installation
+# watch, so its fields can be changed and Retry installation starts again; a failed release beside an existing build
+# (an upgrade of a running or installed build) fails the job as before. Inputs: cb_cluster_name, helm_deploy_result.
+- name: Read the hub's build after the failed release
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    name: "{{ cb_cluster_name }}"
+    namespace: "{{ cb_cluster_name }}"
+  register: irf_cd
+
+- name: Record that the installation could not start
+  ansible.builtin.include_tasks: install_observe.yml
+  vars:
+    io_release_failed: true
+    io_once: true
+  when: irf_cd.resources | default([], true) | length == 0
+
+- name: Fail the job, the release of the build failed
+  ansible.builtin.fail:
+    msg: >-
+      The release of the cluster's build {{ cb_cluster_name }} on the hub failed (exit {{ helm_deploy_result.rc }});
+      the job's log has the release tool's output.

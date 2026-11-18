@@ -1,0 +1,27 @@
+---
+# A run on a stopped installation that starts nothing: the stop stays as the watch wrote it. The Ready condition is
+# written again from the Stalled condition (the job's start had marked the object as running), the generation is
+# recorded as seen (so the operator waits again until someone asks), and the event is completed (so a request that is
+# still open is published again at the operator's next pass). Input: isk_obj (the object as read in this run).
+- name: Keep the stop as written
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    _isk_stalled: >-
+      {{ ((isk_obj.status | default({}, true)).conditions | default([], true)
+          | selectattr('type', 'equalto', 'Stalled') | list + [{}]) | first }}
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: failed
+      ready: false
+      reason: "{{ _isk_stalled.reason | default('InstallFailed', true) }}"
+      message: "{{ _isk_stalled.message | default('', true) }}"
+      observedGeneration: "{{ (isk_obj.metadata | default({}, true)).generation | default(0, true) | int }}"
+      install: "{{ isk_obj | hybridsovereign.shc.shc_install_stopped_seen }}"
+      conditions:
+        - type: Ready
+          status: "False"
+          reason: "{{ _isk_stalled.reason | default('InstallFailed', true) }}"
+          message: "{{ _isk_stalled.message | default('', true) }}"

@@ -5,10 +5,14 @@
 # says whether the job ends. Endings:
 #   gone, replaced, deleting, superseded  the object is not this job's any more: the job ends without a write
 #   installed                             the job goes on (post-install steps, then Ready)
-#   stopped, overdue                      the stop is written (Failed, Stalled); the job fails without another write
+#   stopped                               the stop is written (Failed, Stalled); the job fails without another write
+#   overdue                               past the deadline: written as failed (InstallOverdue, no Stalled); the job
+#                                         ends and the operator's periodic runs check it again, one observation each
 #   window                                "still installing" is written; the job ends, the next run watches on
+#   error                                 what was read could not be decided: the job fails (the platform team sees it)
 # Inputs: cb_cluster_name (the build), platform_type, io_tenant_values ({controlPlane, compute, image}: what the
-# tenant set), io_network_path (the cluster is on a hybrid network).
+# tenant set), io_network_path (the cluster is on a hybrid network), io_once (one observation, then the job ends unless
+# the build is installed), io_release_failed (the job's release of the build failed).
 - name: Require the installation watch settings
   ansible.builtin.assert:
     that:
@@ -36,6 +40,7 @@
       writeEveryMinutes: "{{ platformopenshift_install.checkWriteMinutes | int }}"
       provider: "{{ platform_type }}"
       networkPath: "{{ io_network_path | default(false) | bool }}"
+      releaseFailed: "{{ io_release_failed | default(false) | bool }}"
       tenantValues: "{{ io_tenant_values | default({}, true) }}"
     # the job's entry in status.edaJobs (as patch_cr_status.yml records it), when the job runs in the controller
     job: >-
@@ -46,7 +51,8 @@
                'url': (aap_ui_url | regex_replace('/$', '')) ~ '/execution/jobs/playbook/'
                       ~ (tower_job_id | default(awx_job_id | default('')) | string | trim) ~ '/output'} }}
   register: io_obs
-  until: io_obs.end | default(false) | bool
+  # a module failure (no result of the module) is not retried: what it read fails it again
+  until: (io_obs.end | default(false) | bool) or (io_once | default(false) | bool) or io_obs.end is not defined
   retries: >-
     {{ ((platformopenshift_install.watchWindowMinutes | int) * 60
         / (platformopenshift_install.observeIntervalSeconds | int)) | int + 10 }}
@@ -57,24 +63,34 @@
   ansible.builtin.debug:
     msg: "Installation of {{ cb_cluster_name }}: {{ io_obs.outcome | default('', true) or 'no ending' }} ({{ io_obs.why | default('') }})"
 
+# a module that failed, or data it could not decide on, ends the job as failed, not as a quiet success
+- name: Fail the job, the installation could not be watched
+  ansible.builtin.fail:
+    msg: >-
+      The installation of {{ cb_cluster_name }} could not be watched: the platform's check of it failed. The platform
+      team can see why in this job.
+  when: io_obs.end is not defined or (io_obs.outcome | default('')) == 'error'
+
 - name: End the job, the object is not this job's any more (nothing is written)
   ansible.builtin.meta: end_play
   when: (io_obs.outcome | default('')) in ['gone', 'replaced', 'deleting', 'superseded']
 
+# overdue: written as failed; the operator publishes again at its next pass (the event is completed), and that run
+# checks once more
 - name: End the job, the next run watches on
   ansible.builtin.meta: end_play
-  when: (io_obs.outcome | default('')) == 'window' or not (io_obs.end | default(false) | bool)
+  when: (io_obs.outcome | default('')) in ['window', 'overdue'] or not (io_obs.end | default(false) | bool)
 
 # the stop and its cause are written; the job fails so that the platform team sees it, and its rescue writes nothing
 - name: Keep the written stop
   ansible.builtin.set_fact:
     po_install_outcome_written: true
-  when: (io_obs.outcome | default('')) in ['stopped', 'overdue']
+  when: (io_obs.outcome | default('')) == 'stopped'
 
 - name: Fail the job, the installation stopped
   ansible.builtin.fail:
     msg: >-
-      The installation of {{ cb_cluster_name }} {{ 'did not finish in the time allowed' if io_obs.outcome == 'overdue'
-      else 'stopped' }}: {{ (io_obs.install.lastFailure | default({}, true)).reason | default(io_obs.outcome, true) }}
+      The installation of {{ cb_cluster_name }} stopped:
+      {{ (io_obs.install.lastFailure | default({}, true)).reason | default(io_obs.outcome, true) }}
       (status.install of the cluster object; the hub's provisions of the build hold the installer's log).
-  when: (io_obs.outcome | default('')) in ['stopped', 'overdue']
+  when: (io_obs.outcome | default('')) == 'stopped'
