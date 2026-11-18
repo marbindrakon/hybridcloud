@@ -95,6 +95,61 @@
         platform_type: "{{ platformopenshift_cr.resources[0].spec.type | default('') }}"
         platform_spec: "{{ platformopenshift_cr.resources[0].spec }}"
 
+    # A cluster recorded as installed (clusterInstalled, or stage Finishing or Installed) whose build the hub does not
+    # hold: no release is made and no installation started under its name, whoever asked (a new installation could
+    # take the addresses and DNS names of a cluster that may still run on the site). The failure is written for the
+    # platform team, without Stalled; every later run (a Retry too) checks the same and does the same nothing. Only
+    # the object's deletion leads to a new installation.
+    - name: Read what the hub holds of an installed cluster's build
+      hybridsovereign.shc.install_observe:
+        mode: hub
+        host: "{{ services_api_host | trim }}"
+        api_key: "{{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        hub_host: "{{ central_api_host | trim }}"
+        hub_api_key: "{{ central_bearer_token | trim }}"
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        build: "{{ (platformopenshift_cr.resources[0].status | default({}, true)).buildName }}"
+        uid: "{{ po_uid | default('', true) }}"
+        event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+      register: po_installed_hub
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+        - >-
+          (platformopenshift_cr.resources[0].status | default({}, true)).clusterInstalled | default(false) | bool
+          or (((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage
+              | default('')) in ['Finishing', 'Installed']
+
+    - name: An installed cluster whose build the hub does not hold
+      when: po_installed_hub.record_missing | default(false) | bool
+      block:
+        - name: Record that the platform's record of the build is missing
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: platformopenshifts
+            cr_name: "{{ platformopenshift_cr_name }}"
+            cr_namespace: "{{ platformopenshift_cr_namespace }}"
+            cr_status_body:
+              status: failed
+              ready: false
+              reason: BuildRecordMissing
+              message: >-
+                The hub holds no record of this cluster's build. Nothing was changed: no installation was started and
+                your cluster was not touched. The platform team has to restore the record.
+              conditions:
+                - type: Ready
+                  status: "False"
+                  reason: BuildRecordMissing
+                  message: >-
+                    The hub holds no record of this cluster's build. Nothing was changed: no installation was started
+                    and your cluster was not touched. The platform team has to restore the record.
+
+        - name: End the job, nothing is installed over an installed cluster
+          ansible.builtin.meta: end_play
+
     # A recorded stop is a claim about the hub, and the hub wins: every run of a stopped cluster first reads what the
     # hub holds of its build. Running or installed: the record takes the hub's state and the run goes on to the
     # provider's steps (the watch, or the installed path); nothing is removed. Being deleted or unreadable: the stop

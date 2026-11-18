@@ -73,6 +73,8 @@ platformopenshift_service_wait_delay: 20
 #                         (InstallOverdue); each periodic run then checks it once
 # pendingReleaseMinutes   a pending release of a build with no ClusterDeployment younger than this is an older job's
 #                         release being made: a Retry leaves it alone (older: removed like a failed one)
+# removalLimitMinutes     a removal of a stopped installation that waits this long (from its start) beside a build Hive
+#                         does not finish deleting is written as failed (InstallRemovalFailed) for the platform team
 # checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing
 #                         changes; the operator's in-flight check reads it (operator/roles/_common/tasks/
 #                         skip_if_event_in_flight.yml)
@@ -82,5 +84,6 @@ platformopenshift_install_defaults:
   deadlineMinutes: 360
   checkWriteMinutes: 5
   pendingReleaseMinutes: 10
+  removalLimitMinutes: 60
 platformopenshift_install: >-
   {{ platformopenshift_install_defaults | combine(platformopenshift_defaults.install | default({}, true)) }}

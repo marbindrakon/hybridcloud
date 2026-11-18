@@ -136,6 +136,14 @@
 - name: Whether the hub holds the build
   ansible.builtin.include_tasks: install_build_exists.yml
 
+- name: Whether the installation started before installations were recorded
+  vars:
+    _cb_rec: "{{ (platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true) }}"
+  ansible.builtin.set_fact:
+    po_legacy_started: >-
+      {{ (_cb_rec.install | default({}, true)) | length == 0 and (_cb_rec.installStarted | default(false) | bool)
+         and not (_cb_rec.clusterInstalled | default(false) | bool) }}
+
 # while an installation runs on the hub (a ClusterDeployment exists, recorded Installing or Finishing, or adopted by
 # this run) the release is not changed: the running build is the one that was installed; settings changed meanwhile
 # are used only by a later installation. Without a ClusterDeployment the release is made again (a failed or
@@ -144,26 +152,71 @@
 # cannot be read (the watch then waits for it)
 - name: Set values changed flag
   vars:
+    _cb_st: "{{ (platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true) }}"
+    # an installation recorded as running: stage Installing or Finishing, or a cluster from before installations were
+    # recorded whose installation started and did not end (po_legacy_started)
     _cb_running: >-
       {{ (po_cd_exists | bool) and ((po_adopted | default(false) | bool)
-         or ((((platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true)).install
-              | default({}, true)).stage | default('')) in ['Installing', 'Finishing']) }}
+         or ((_cb_st.install | default({}, true)).stage | default('')) in ['Installing', 'Finishing']
+         or (po_legacy_started | default(false) | bool)) }}
+    # a cluster recorded as installed whose build the hub does not hold: never a release under its name
+    _cb_record_missing: >-
+      {{ not (po_cd_exists | bool) and not (po_hub_unreadable | default(false) | bool)
+         and ((_cb_st.clusterInstalled | default(false) | bool)
+              or ((_cb_st.install | default({}, true)).stage | default('')) in ['Finishing', 'Installed']) }}
   ansible.builtin.set_fact:
+    cb_record_missing: "{{ _cb_record_missing | bool }}"
     cb_values_changed: >-
-      {{ not (po_hub_unreadable | default(false) | bool) and
+      {{ not (po_hub_unreadable | default(false) | bool) and not (_cb_record_missing | bool) and
          (not (cb_helm_release_exists | bool) or not (po_cd_exists | bool) or
           (not (_cb_running | bool) and
            ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true')))) }}
     cb_release_young: >-
-      {{ not (po_cd_exists | bool) and (cb_helm_release_exists | bool)
+      {{ not (po_cd_exists | bool) and (cb_helm_release_exists | bool) and not (_cb_record_missing | bool)
          and ((helm_release_status.stdout | default('{}', true) | from_json).info | default({}, true)
               | hybridsovereign.shc.shc_install_release_young(platformopenshift_install.pendingReleaseMinutes | int)) }}
+
+- name: Fail when an installed cluster's build is missing on the hub
+  ansible.builtin.fail:
+    msg: >-
+      The hub holds no record of the build of installed cluster {{ ansible_operator_meta.name }}; nothing was released.
+      The platform team has to restore the record.
+  when: cb_record_missing | bool
+
+# the hub could not be read (after a few tries): the run ends and completes its event; the next period goes on
+- name: Hand over when the hub cannot be read
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub could not be read; the next run makes the release
+  when: po_hub_unreadable | default(false) | bool
 
 - name: An older job is still making the release
   ansible.builtin.include_tasks: install_handover.yml
   vars:
     ih_why: the hub's release of the build is still being made; the installation is starting
   when: cb_release_young | bool
+
+# an installation recorded as running whose release is made again (no ClusterDeployment): it starts anew, and its
+# time (the deadline included) counts from now
+- name: Record the new start of an installation made again
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      install:
+        startedAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        attempt: null
+        lastFailure: null
+  when:
+    - cb_values_changed | bool
+    - not (po_cd_exists | bool)
+    - >-
+      ((((platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true)).install
+        | default({}, true)).stage | default('')) == 'Installing'
 
 # the install starts with the Helm release below: from here on a refused prefix never withdraws the cluster's subnet
 # (cloud_internal_reach.yml)

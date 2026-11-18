@@ -231,7 +231,8 @@ class Template(unittest.TestCase):
         # the watch window, the removal of a stopped build (up to about an hour of waits) and the work around it fit
         self.assertLess(defaults["watchWindowMinutes"] * 60, tpl["timeout"])
         self.assertEqual(set(defaults), {"observeIntervalSeconds", "watchWindowMinutes", "deadlineMinutes",
-                                         "checkWriteMinutes", "pendingReleaseMinutes"})
+                                         "checkWriteMinutes", "pendingReleaseMinutes", "removalLimitMinutes"})
+        self.assertEqual(defaults["removalLimitMinutes"], 60)
         self.assertEqual(defaults["pendingReleaseMinutes"], 10)
         self.assertEqual((defaults["watchWindowMinutes"], defaults["deadlineMinutes"]), (120, 360))
 

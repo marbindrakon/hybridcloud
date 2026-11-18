@@ -535,11 +535,16 @@ class OpenstackPreflightFile(unittest.TestCase):
         the preflight does not refuse it; the setting is used only by a later installation."""
         missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.missing"])}
         spec = {"type": "openstack", "openstack": {"environment": "env1", "controlPlaneFlavor": "example.missing"}}
-        for extra in ({"po_cd_exists": True}, {"po_adopted": True}):
+        for extra in ({"po_cd_live": True}, {"po_adopted": True}):
             rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
                                       fake_os=missing, platform_spec=spec, **extra)
             self.assertEqual(rc, 0, out)
             self.assertNotIn("has no flavor", out)
+        # a stopped ClusterDeployment a Retry is about to replace: the retry is a new installation, it is checked
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                  fake_os=missing, platform_spec=spec, po_cd_exists=True, po_cd_live=False)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("has no flavor example.missing", out)
         # a record that says Installing with no build on the hub is a new installation: it is checked
         rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
                                   fake_os=missing, platform_spec=spec, po_cd_exists=False,

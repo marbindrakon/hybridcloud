@@ -627,8 +627,10 @@ class InstallBlocks(unittest.TestCase):
     def test_cleaning_starts_the_next_run(self):
         got = I.install_cleaning({"install": dict(STOPPED)}, NOW)
         self.assertEqual((got["stage"], got["run"]), ("CleaningUp", 2))
-        for k in ("lastFailure", "endedAt", "stoppedGeneration", "stoppedRequest", "startedAt"):
+        for k in ("lastFailure", "endedAt", "stoppedGeneration", "stoppedRequest"):
             self.assertIsNone(got[k])
+        # the new run starts with the removal: its time bound counts from here
+        self.assertEqual(got["startedAt"], I.fmt_time(NOW))
 
     def test_installed(self):
         got = I.install_installed({"install": {"stage": "Finishing", "run": 2, "endedAt": t(4)}}, NOW)

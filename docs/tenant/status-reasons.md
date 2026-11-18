@@ -218,6 +218,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `AttachmentNotSupported` | This attachment is not supported on the chosen site. | You (the tenant) |
 | `BearerNotFound` | The provider edge has no bearer of that name. Ask the platform team for the bearer names. | You (the tenant) |
 | `BuildOwnerMismatch` | The cluster's build on the platform is marked for another copy of this cluster (a restored copy). The platform team checks it. | The platform team |
+| `BuildRecordMissing` | The platform's record of this cluster's build is missing. Your cluster was not touched; the platform team has to restore the record. | The platform team |
 | `CeKindNotAccepted` | The bearer does not accept this kind of router. Choose another bearer or ask the platform team. | You (the tenant) |
 | `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ClaimMissing` | Members of the granted access groups cannot sign in yet. The platform team is looking at it. | The platform team |
@@ -249,6 +250,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `InstallFailed` | The installation failed and was stopped. You can retry it; the platform team can see why it failed. | The platform team |
 | `InstallNotStarted` | The installation could not be started on the platform. The message says what happens next. | The platform team |
 | `InstallOverdue` | The installation has not finished in the time allowed. The platform keeps checking it. | The platform team |
+| `InstallRemovalFailed` | The stopped installation could not be removed from the site. The platform team has to look at it. | The platform team |
 | `InstallSettingRefused` | The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |

@@ -48,6 +48,7 @@ options:
   release_status: {description: removal - the release's status word (failed, deployed, pending-install, ...)., type: str, default: ""}
   release_deployed_at: {description: removal - when the release was last deployed (RFC 3339)., type: str, default: ""}
   pending_minutes: {description: removal - a pending release younger than this is left alone., type: int, default: 10}
+  removal_minutes: {description: removal - a removal waiting beside a build being deleted fails after this long (0 - no bound)., type: int, default: 0}
   generation: {description: check - the generation the job read the spec at (0 - not compared)., type: int, default: 0}
   wait_for: {description: wait - managedcluster, clusterdeployment, uninstall or namespace., type: str, default: ""}
   recheck: {description: removal - the fresh read right before the first delete of a removal this run decided., type: bool, default: false}
@@ -64,6 +65,8 @@ stage: {description: removal - status.install.stage of the object as read., type
 done: {description: wait - the hub object is gone (the uninstall job finished)., type: bool, returned: wait}
 hub: {description: hub and removal - what the hub holds of the build., type: str, returned: hub, removal}
 asked: {description: removal - someone asked for a new installation since a recorded stop., type: bool, returned: removal}
+removal_overdue: {description: removal - a removal under way passed removal_minutes., type: bool, returned: removal}
+record_missing: {description: hub - the object records an installed cluster and the hub holds no ClusterDeployment., type: bool, returned: hub}
 why: {description: A sentence on the decision (no hub or installer text)., type: str, returned: always}
 install: {description: status.install as decided., type: dict, returned: observe}
 written: {description: A status write was made., type: bool, returned: observe}
@@ -132,6 +135,7 @@ def main():
             release_status=dict(type="str", default=""),
             release_deployed_at=dict(type="str", default=""),
             pending_minutes=dict(type="int", default=10),
+            removal_minutes=dict(type="int", default=0),
             generation=dict(type="int", default=0),
             wait_for=dict(type="str", default=""),
             recheck=dict(type="bool", default=False),
@@ -229,12 +233,17 @@ def main():
         if hub == "none" and young:
             hub = "starting"
         asked = bool(obj) and not obj_error and I.asked_since_stop(obj)[0]
-        module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why, stage=stage, hub=hub, asked=asked)
+        overdue = bool(obj) and not obj_error and I.removal_overdue(
+            obj.get("status"), datetime.datetime.now(datetime.timezone.utc), p["removal_minutes"])
+        module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why, stage=stage, hub=hub, asked=asked,
+                         removal_overdue=overdue)
 
     if p["mode"] == "hub":
         cd, hub_error = read_hub("clusterdeployments/%s" % p["build"])
         state = I.hub_state(cd, not hub_error and not obj_error)
-        module.exit_json(changed=False, end=False, outcome="", hub=state, why="the hub's build: %s" % state)
+        missing = bool(obj) and I.build_record_missing((obj or {}).get("status"), cd, not hub_error and not obj_error)
+        module.exit_json(changed=False, end=False, outcome="", hub=state, record_missing=missing,
+                         why="the hub's build: %s" % state)
 
     if p["mode"] == "wait":
         build = p["build"]

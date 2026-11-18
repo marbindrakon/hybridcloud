@@ -785,7 +785,8 @@ def install_starting(status, now):
 def install_cleaning(status, now):
     """status.install when a stopped installation is removed for a new one: the next run."""
     cur = dict((status or {}).get("install") or {})
-    return {"stage": "CleaningUp", "run": (_int(cur.get("run"), 1) or 1) + 1, "startedAt": None, "endedAt": None,
+    # startedAt: the new run starts with the removal (its time bound counts from here; Installing sets it again)
+    return {"stage": "CleaningUp", "run": (_int(cur.get("run"), 1) or 1) + 1, "startedAt": fmt_time(now), "endedAt": None,
             "attempt": None, "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None,
             "stoppedSpec": None, "stoppedSpecVersion": None, "observedAt": fmt_time(now)}
 
@@ -820,6 +821,30 @@ def install_resumed(status, stage="Installing"):
 
 
 HUB_STATES = ("unreadable", "none", "deleting", "installed", "stopped", "running")
+
+
+def recorded_installed(status):
+    """The object records an installed cluster: status.clusterInstalled true, or stage Finishing or Installed."""
+    status = status or {}
+    stage = (status.get("install") or {}).get("stage")
+    return _bool(status.get("clusterInstalled")) or stage in ("Finishing", "Installed")
+
+
+def build_record_missing(status, cd, hub_read_ok):
+    """True when the object records an installed cluster and the hub, read without error, holds no
+    ClusterDeployment of its build: no release is made and no installation started for it (a new installation under
+    its name could take the addresses and names of a cluster that may still run); only its deletion leads to a new
+    one."""
+    return bool(hub_read_ok) and cd is None and recorded_installed(status)
+
+
+def removal_overdue(status, now, limit_minutes):
+    """True when a removal recorded as CleaningUp started limit_minutes ago or more (status.install.startedAt)."""
+    install = (status or {}).get("install") or {}
+    if install.get("stage") != "CleaningUp" or not _int(limit_minutes, 0):
+        return False
+    started = _minutes_since(install.get("startedAt"), now)
+    return started is not None and started >= float(limit_minutes)
 
 
 def release_young(release_status, last_deployed, now, pending_minutes):

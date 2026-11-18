@@ -16,8 +16,9 @@
 - name: Require the removal's setting
   ansible.builtin.assert:
     that:
-      - (platformopenshift_install.pendingReleaseMinutes | default('', true) | string | length) > 0
-    fail_msg: "Set platformopenshift_defaults.install.pendingReleaseMinutes (the installation setting is missing)."
+      - (platformopenshift_install[item] | default('', true) | string | length) > 0
+    fail_msg: "Set platformopenshift_defaults.install.{{ item }} (the installation setting is missing)."
+  loop: [pendingReleaseMinutes, removalLimitMinutes]
 
 - name: Set Vault root token from job credential
   ansible.builtin.set_fact:
@@ -69,6 +70,7 @@
     release_status: "{{ _rsb_release.status | default('', true) }}"
     release_deployed_at: "{{ _rsb_release.last_deployed | default('', true) }}"
     pending_minutes: "{{ platformopenshift_install.pendingReleaseMinutes | int }}"
+    removal_minutes: "{{ platformopenshift_install.removalLimitMinutes | int }}"
   register: rsb_decision
 
 - name: Say why the build is kept or removed
@@ -127,6 +129,40 @@
     - not (rsb_decision.ok | default(false) | bool)
     - rsb_decision.stage | default('') == 'Stopped'
     - rsb_decision.hub | default('') not in ['running', 'installed']
+
+# a removal that has waited removalLimitMinutes beside a build Hive does not finish deleting: written as a failure
+# for the platform team (no more hand-overs without end); nothing is removed or installed
+- name: A removal that could not finish in time
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') == 'CleaningUp'
+    - rsb_decision.hub | default('') == 'deleting'
+    - rsb_decision.removal_overdue | default(false) | bool
+  block:
+    - name: Record that the stopped installation could not be removed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_body:
+          status: failed
+          ready: false
+          reason: InstallRemovalFailed
+          message: >-
+            The stopped installation could not be removed from the site in the time allowed; nothing new was
+            installed. The platform team has to look at it.
+          conditions:
+            - type: Ready
+              status: "False"
+              reason: InstallRemovalFailed
+              message: >-
+                The stopped installation could not be removed from the site in the time allowed; nothing new was
+                installed. The platform team has to look at it.
+
+    - name: End the job, the removal could not finish
+      ansible.builtin.meta: end_play
 
 # a removal under way that cannot go on now (the hub unreadable, a build that runs): nothing is removed; the event is
 # completed so the next pass of the operator tries again

@@ -157,6 +157,8 @@ REASONS = {
     "InstallNotStarted": _r("P", FAILED, "The installation could not be started on the platform. The message says what happens next."),
     "InstallCredentialsRefused": _r("P", FAILED, "The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster."),
     "InstallOverdue": _r("P", FAILED, "The installation has not finished in the time allowed. The platform keeps checking it."),
+    "BuildRecordMissing": _r("P", FAILED, "The platform's record of this cluster's build is missing. Your cluster was not touched; the platform team has to restore the record."),
+    "InstallRemovalFailed": _r("P", FAILED, "The stopped installation could not be removed from the site. The platform team has to look at it."),
     "DefaultFlavorNotFound": _r("P", FAILED, "The environment lacks the platform's default flavor for cluster nodes. Name a flavor it offers, or ask the platform team."),
     "InvalidSecret": _r("P", FAILED, "A required credential is not valid. The platform team is looking at it."),
     "CredentialSecretMissing": _r("P", FAILED, "The cluster's credential secret is missing from the platform's secret store. Nothing was changed. The platform team acts."),

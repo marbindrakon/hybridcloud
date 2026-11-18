@@ -53,9 +53,19 @@ on the hub (a ClusterDeployment exists) the release is not changed, and the Open
 build for a flavor it was not made with. An installation recorded as running whose ClusterDeployment does not exist
 (its release failed, was left pending by a job that ended, or never made one) gets its release made again at the next
 run, unless an older job is still making it (pending, younger than `pendingReleaseMinutes`; a release whose time
-cannot be read counts as older); a release that keeps failing is written as a stop. Nothing is released against a hub
-that cannot be read. A removal under way waits while Hive deprovisions the build (the event is completed; the run
-after it is gone continues). The test module `tests/unit/test_install_states.py` holds the table of every recorded
+cannot be read counts as older); a release that keeps failing is written as a stop, and a release made again starts
+the installation's time anew. The hub is read a few times; while it cannot be read nothing is released and the run
+ends with its event completed (the next periodic run goes on). A removal under way waits while Hive deprovisions the
+build (the event is completed; the run after it is gone continues), for at most `removalLimitMinutes` from the
+removal's start; after that the cluster is written Failed (`InstallRemovalFailed`) for the platform team. The flavor
+checks of the OpenStack preflight are left out only for a ClusterDeployment that runs or is installed (a stopped one a
+Retry replaces is a new installation and is checked).
+
+A cluster recorded as installed (`status.clusterInstalled`, or stage `Finishing` or `Installed`) whose
+ClusterDeployment the hub does not hold never gets a release or an installation, whoever asks: a new installation
+under its name could take the addresses and DNS names of a cluster that may still run on the site. Every run writes
+it Failed with reason `BuildRecordMissing` (no `Stalled`; a Retry checks the same and does the same nothing) until the
+platform team restores the build's record on the hub; only the object's deletion leads to a new installation. The test module `tests/unit/test_install_states.py` holds the table of every recorded
 state against every hub state and kind of request.
 - After `watchWindowMinutes` it writes that the installation is still running, completes its request and ends; the
   next periodic run of the cluster watches on.
@@ -78,6 +88,7 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 | `deadlineMinutes` | 360 | An installation neither finished nor stopped after this long is shown failed (`InstallOverdue`) and checked once per periodic run. |
 | `checkWriteMinutes` | 5 | How often the check time is written while nothing changes; keep it well below 15. |
 | `pendingReleaseMinutes` | 10 | A pending release of a build with no ClusterDeployment younger than this is left alone by a Retry (an older job is still making it). |
+| `removalLimitMinutes` | 60 | A removal of a stopped installation that waits this long beside a build Hive does not finish deleting is written as failed (`InstallRemovalFailed`). |
 
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).

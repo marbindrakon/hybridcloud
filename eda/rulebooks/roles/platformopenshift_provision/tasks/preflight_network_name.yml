@@ -111,7 +111,7 @@
     # a build the hub holds (it runs or is installed, or this run adopted it) is not refused for settings it was not
     # made with (they are used only by a later installation); a new installation is always checked
     - not (po_adopted | default(false) | bool)
-    - not (po_cd_exists | default(false) | bool)
+    - not (po_cd_live | default(false) | bool)
 
 - name: Keep the wait for the caller
   ansible.builtin.set_fact:

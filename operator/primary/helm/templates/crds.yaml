@@ -7937,7 +7937,9 @@ spec:
                     startedAt:
                       type: string
                       format: date-time
-                      description: When the current installation started (RFC 3339).
+                      description: >-
+                        When the current installation started (RFC 3339): while a stopped one is removed for it
+                        (CleaningUp), when that removal started.
                     endedAt:
                       type: string
                       format: date-time

@@ -169,7 +169,8 @@ def base_vars(api, provider="openstack", **kw):
          "cb_cluster_name": BUILD, "cb_app_name": BUILD,
          # the role's defaults with a one-second interval (a task list run here does not load the role's defaults)
          "platformopenshift_install": {"observeIntervalSeconds": 1, "watchWindowMinutes": 120, "deadlineMinutes": 360,
-                                       "checkWriteMinutes": 5, "pendingReleaseMinutes": 10},
+                                       "checkWriteMinutes": 5, "pendingReleaseMinutes": 10,
+                                       "removalLimitMinutes": 60},
          # the removal's waits: a few one-second rounds (extra vars win over the include's values)
          "rsw_retries": 3, "rsw_delay": 1, "platformopenshift_generation": 1}
     v.update(kw)
@@ -871,7 +872,7 @@ class DefaultFlavors(unittest.TestCase):
     whose flavor neither the spec nor the installation's defaults name fails the job with the setting's name; an
     installed or installing cluster and a cluster without workers never fail on it."""
 
-    def run_facts(self, spec, defaults, cd_exists=False, adopted=False):
+    def run_facts(self, spec, defaults, cd_live=False, adopted=False):
         import yaml
         tdir = os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks")
         with open(os.path.join(tdir, "openstack.yml")) as fh:
@@ -883,7 +884,7 @@ class DefaultFlavors(unittest.TestCase):
         self.assertEqual((len(facts), len(check)), (1, 1))
         v = {k: role_defaults[k] for k in ("default_control_plane_flavor", "default_worker_flavor",
                                            "default_control_plane_count", "default_worker_count")}
-        v.update(platform_spec=spec, platformopenshift_defaults=defaults, po_cd_exists=cd_exists, po_adopted=adopted,
+        v.update(platform_spec=spec, platformopenshift_defaults=defaults, po_cd_live=cd_live, po_adopted=adopted,
                  ansible_operator_meta={"name": "demo", "namespace": NS})
         return H.run("platformopenshift_provision", "main.yml", v, tasks=facts + check + [AFTER])
 
@@ -901,8 +902,8 @@ class DefaultFlavors(unittest.TestCase):
 
     def test_only_where_an_installation_starts_and_a_role_has_nodes(self):
         none = {"type": "openstack", "openstack": {"environment": "env"}}
-        # a build on the hub (running, installed, or adopted): no installation starts, no check
-        for kw in ({"cd_exists": True}, {"adopted": True}):
+        # a build on the hub that runs or is installed, or adopted: no installation starts, no check
+        for kw in ({"cd_live": True}, {"adopted": True}):
             rc, tr, out = self.run_facts(none, {}, **kw)
             self.assertEqual((rc, after_reached(tr)), (0, True), kw)
         # no workers: the worker default is not needed
@@ -946,9 +947,13 @@ class AdoptedBuild(unittest.TestCase):
         self.assertFalse(self.flag("Stopped", adopted=True), "a build the run adopted")
         self.assertTrue(self.flag("Installing", exists=False), "no release at all: it is made")
         # no ClusterDeployment behind the record: the release is made again (a failed or abandoned one is repaired)
-        for stage in ("Installing", "Finishing", "CleaningUp", "Preparing"):
+        for stage in ("Installing", "CleaningUp", "Preparing"):
             self.assertTrue(self.flag(stage, failed=True, cd_exists=False), stage)
             self.assertTrue(self.flag(stage, diff="false", cd_exists=False), stage)
+        # recorded installed (Finishing, Installed) without its build: never a release
+        for stage in ("Finishing", "Installed"):
+            self.assertFalse(self.flag(stage, failed=True, cd_exists=False), stage)
+            self.assertFalse(self.flag(stage, exists=False, cd_exists=False), stage)
         self.assertTrue(self.flag("Stopped", adopted=True, cd_exists=False))
         for stage in ("Installed", "CleaningUp", "Preparing", ""):
             self.assertTrue(self.flag(stage), stage)
@@ -976,6 +981,175 @@ class AdoptedBuild(unittest.TestCase):
         self.assertIn("last_deployed", args["release_deployed_at"])
         starting = next(t for t in tasks if t.get("name") == "The hub's release of the build is still being made")
         self.assertIn("starting", starting["when"])
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class FifthPass(unittest.TestCase):
+    """An installed cluster without its build; a removal beside a build Hive does not finish deleting; the hub
+    unreadable at the release; a release made again; the two young-pending hand-overs; the hub's build as read."""
+
+    def main_tasks(self, *names):
+        return StoppedRuns.main_tasks(*names)
+
+    GUARD = ("Read what the hub holds of an installed cluster's build",
+             "An installed cluster whose build the hub does not hold")
+
+    def guard(self, status, hub, asked=False):
+        install = status.pop("install", None)
+        obj = po(install, generation=2, buildName=BUILD, lastHandledReconcileRequest="req-2" if asked else "",
+                 **status)
+        api = FakeApi(obj, hub)
+        try:
+            rc, tr, out = run_tasks(api, self.main_tasks(*self.GUARD) + [AFTER],
+                                    platformopenshift_cr={"resources": [obj]}, platformopenshift_cr_name="demo",
+                                    platformopenshift_cr_namespace=NS, platform_spec=obj["spec"])
+        finally:
+            api.close()
+        return rc, tr, out
+
+    def test_an_installed_cluster_without_its_build_gets_nothing(self):
+        """Recorded installed (clusterInstalled, Finishing, Installed), the hub holds no ClusterDeployment: the
+        failure is written for the platform team, the run ends; a Retry does the same; nothing is released."""
+        for status in ({"clusterInstalled": True, "installStarted": True},
+                       {"install": {"stage": "Finishing", "run": 1}},
+                       {"install": {"stage": "Installed", "run": 1}, "clusterInstalled": True}):
+            for asked in (False, True):
+                rc, tr, out = self.guard(copy.deepcopy(status), None, asked)
+                self.assertEqual(rc, 0, out)
+                self.assertFalse(after_reached(tr), (status, asked))
+                body = H.patches(tr)[0]["body"]
+                self.assertEqual((body["status"], body["reason"]), ("failed", "BuildRecordMissing"))
+                self.assertNotIn("Stalled", json.dumps(body["conditions"]))
+        # with its build on the hub the run goes on
+        rc, tr, out = self.guard({"clusterInstalled": True}, cd(installed=True))
+        self.assertEqual((rc, H.patches(tr), after_reached(tr)), (0, [], True), out)
+
+    def test_a_removal_beside_a_build_hive_does_not_finish_deleting_fails_after_the_limit(self):
+        deleting = cd(stopped=True, failed="UnknownError", restarts=3)
+        deleting["metadata"]["deletionTimestamp"] = ago(65)
+        obj = po({"stage": "CleaningUp", "run": 2, "startedAt": ago(70), "observedAt": ago(70)}, generation=2)
+        api = FakeApi(obj, deleting)
+        try:
+            rc, tr, out = run_tasks(api, [{"ansible.builtin.include_tasks":
+                                           "{{ role_path }}/tasks/remove_stopped_build.yml"}, AFTER], rsb_obj=obj)
+        finally:
+            api.close()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((kinds_deleted(tr), after_reached(tr)), ([], False))
+        body = H.patches(tr)[0]["body"]
+        self.assertEqual((body["status"], body["reason"]), ("failed", "InstallRemovalFailed"))
+
+    def flag_tasks(self, f, **v):
+        tasks = [t for t in StoppedRuns.main_tasks() if False]
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks", f)) as fh:
+            all_tasks = yaml.safe_load(fh)
+        names = ("Set values changed flag", "Fail when an installed cluster's build is missing on the hub",
+                 "Hand over when the hub cannot be read", "An older job is still making the release",
+                 "Record the new start of an installation made again")
+        for t in all_tasks:
+            if t.get("name") in names:
+                t = dict(t)
+                inc = t.get("ansible.builtin.include_tasks")
+                if inc and "/" not in inc:
+                    t["ansible.builtin.include_tasks"] = "{{ role_path }}/tasks/" + inc
+                tasks.append(t)
+        self.assertEqual(len(tasks), len(names), f)
+        return tasks
+
+    def release_step(self, f, stage, release, cd_exists, unreadable=False):
+        st = {"resources": [{"status": {"install": {"stage": stage}}}]}
+        obj = po({"stage": stage, "run": 1, "startedAt": ago(400)})
+        api = FakeApi(obj)
+        try:
+            rc, tr, out = run_tasks(api, self.flag_tasks(f) + [AFTER], _po_now=st, platformopenshift_cr=st,
+                                    po_cd_exists=cd_exists, po_hub_unreadable=unreadable,
+                                    cb_helm_release_exists=release is not None,
+                                    cb_helm_release_failed=(release or {}).get("status") == "failed",
+                                    values_diff_result={"stdout": "false"},
+                                    helm_release_status={"stdout": json.dumps({"info": release}) if release else ""})
+        finally:
+            api.close()
+        return api, rc, tr, out
+
+    FILES = ("openstack_clusterbuild.yml", "aws_clusterbuild_deploy.yml")
+
+    def test_an_older_jobs_young_release_hands_over(self):
+        for f in self.FILES:
+            api, rc, tr, out = self.release_step(f, "Installing", {"status": "pending-install",
+                                                                  "last_deployed": ago(2)}, False)
+            self.assertEqual((rc, after_reached(tr)), (0, False), f)
+            self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1", f)
+
+    def test_the_hub_unreadable_at_the_release_hands_over(self):
+        for f in self.FILES:
+            api, rc, tr, out = self.release_step(f, "Preparing", None, True, unreadable=True)
+            self.assertEqual((rc, after_reached(tr)), (0, False), f)
+            self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1", f)
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "install_build_exists.yml")) as fh:
+            read = yaml.safe_load(fh)[0]
+        self.assertGreaterEqual(int(read["retries"]), 2, "the hub is read a few times")
+
+    def test_a_release_made_again_starts_anew(self):
+        for f in self.FILES:
+            api, rc, tr, out = self.release_step(f, "Installing", {"status": "failed", "last_deployed": ago(60)},
+                                                 False)
+            self.assertEqual((rc, after_reached(tr)), (0, True), f)
+            body = H.patches(tr)[0]["body"]
+            self.assertTrue(body["install"]["startedAt"] > ago(2), f)
+            self.assertIsNone(body["install"]["lastFailure"])
+            # beside a ClusterDeployment nothing is written
+            api, rc, tr, out = self.release_step(f, "Installing", {"status": "deployed", "last_deployed": ago(60)},
+                                                 True)
+            self.assertEqual((rc, H.patches(tr), after_reached(tr)), (0, [], True), f)
+
+    def test_an_installed_record_without_a_build_fails_at_the_release_too(self):
+        for f in self.FILES:
+            api, rc, tr, out = self.release_step(f, "Installed", {"status": "deployed", "last_deployed": ago(60)},
+                                                 False)
+            self.assertNotEqual(rc, 0, f)
+            self.assertIn("nothing was released", out)
+            self.assertFalse(after_reached(tr))
+
+    def test_the_removals_young_release_says_starting_and_hands_over(self):
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "remove_stopped_build.yml")) as fh:
+            block = dict(next(t for t in yaml.safe_load(fh)
+                              if t.get("name") == "The hub's release of the build is still being made"))
+        block["block"] = [dict(t, **{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/"
+                                     + t["ansible.builtin.include_tasks"]}) for t in block["block"]]
+        obj = po(dict(STOPPED), generation=2)
+        api = FakeApi(obj)
+        try:
+            rc, tr, out = run_tasks(api, [block, AFTER], rsb_decision={"hub": "starting", "stage": "Stopped",
+                                                                       "why": "w"})
+        finally:
+            api.close()
+        self.assertEqual((rc, after_reached(tr)), (0, False), out)
+        body = H.patches(tr)[0]["body"]
+        self.assertEqual(body["message"], "The installation is starting.")
+        self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
+
+    def test_the_hubs_build_as_read(self):
+        """po_cd_live: a ClusterDeployment that runs or is installed (a stopped or deleting one is not)."""
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "install_build_exists.yml")) as fh:
+            tasks = yaml.safe_load(fh)
+        deleting = cd(stopped=True)
+        deleting["metadata"]["deletionTimestamp"] = ago(1)
+        for hub, want in ((cd(), (True, True)), (cd(installed=True), (True, True)), (cd(stopped=True), (True, False)),
+                          (deleting, (True, False)), (None, (False, False))):
+            rc, tr, out = H.run("platformopenshift_provision", "main.yml", {"cb_cluster_name": BUILD,
+                                                                            "central_api_host": "hub.example.org",
+                                                                            "central_bearer_token": "token-not-in-data"},
+                                k8s={"ClusterDeployment/%s/%s" % (BUILD, BUILD): [hub] if hub else []},
+                                tasks=tasks, result="[po_cd_exists | bool, po_cd_live | bool]")
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(tuple(tr[-1]["result"]), want, hub)
 
 
 class ServicesAnswerNotInStatus(unittest.TestCase):
