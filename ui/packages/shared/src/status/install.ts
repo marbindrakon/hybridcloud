@@ -10,7 +10,7 @@
  * Pure module: type-only imports besides the phase and duration modules, so it can be bundled for
  * node tests.
  */
-import { detailOf, phaseOf, reasonOf, type PhaseSubject } from './phase';
+import { condStatus, detailOf, findCondition, phaseOf, reasonOf, type PhaseSubject } from './phase';
 import { CLUSTER_INSTALL_MINUTES } from './durations';
 
 export const INSTALL_STAGES = ['Preparing', 'CleaningUp', 'Installing', 'Finishing', 'Installed', 'Stopped'] as const;
@@ -200,10 +200,22 @@ export function installProgress(t: T, item: PhaseSubject | null | undefined, now
   return out;
 }
 
-/** What the callout says when the installation stopped (phase Failed, stage Stopped); null otherwise. */
+/**
+ * What the failed callout says about the installation; null when the failure is not the installation's.
+ * Stage Stopped: the installation ended without a cluster and Retry installation starts a new one.
+ * Automatic retries stopped (Stalled=True, e.g. the time allowed has passed) while the stage still says the
+ * installer runs: the installer may still be working, so the cluster can be deleted now and retried once
+ * the installer has stopped.
+ */
 export function installStoppedCallout(t: T, item: PhaseSubject | null | undefined): { title: string; retryLine: string } | null {
-  if (phaseOf(item) !== 'Failed' || !isInstallStopped(item)) return null;
-  return { title: t('install.stoppedTitle'), retryLine: t('install.retryUses') };
+  if (phaseOf(item) !== 'Failed') return null;
+  const stage = installStage(item);
+  if (stage === 'Stopped') return { title: t('install.stoppedTitle'), retryLine: t('install.retryUses') };
+  const stalled = findCondition(item, 'Stalled');
+  if (stage && INSTALL_RUNNING_STAGES.has(stage) && stalled && condStatus(stalled.status) === 'True') {
+    return { title: t('install.unfinishedTitle'), retryLine: t('install.unfinishedLine') };
+  }
+  return null;
 }
 
 /** The label key of the retry button: Retry installation on a stopped installation, else Retry now. */
@@ -239,7 +251,7 @@ export function retryConfirmation(t: T, spec: unknown): { title: string; body: s
 /**
  * Whether the install-time fields of a cluster may change, as the API decides it:
  * open (the installation has not started) and stopped accept a change; installing and installed
- * refuse it. An object without status.install (or still preparing) counts as installing once
+ * refuse it. status.clusterInstalled true is installed whatever the stage. An object without status.install (or still preparing) counts as installing once
  * status.installStarted is true and as installed once status.clusterInstalled is true.
  */
 export type InstallEditState = 'open' | 'stopped' | 'installing' | 'installed';
@@ -247,10 +259,11 @@ export type InstallEditState = 'open' | 'stopped' | 'installing' | 'installed';
 export function installEditState(item: PhaseSubject | null | undefined): InstallEditState {
   const status = rec(item?.status) ?? {};
   const stage = installStage(item);
+  // a cluster recorded as installed is never reinstalled from an edit, whatever the stage says
+  if (status.clusterInstalled === true) return 'installed';
   if (stage === 'Stopped') return 'stopped';
   if (stage === 'Installed') return 'installed';
   if (stage === 'CleaningUp' || stage === 'Installing' || stage === 'Finishing') return 'installing';
-  if (status.clusterInstalled === true) return 'installed';
   if (status.installStarted === true) return 'installing';
   return 'open';
 }

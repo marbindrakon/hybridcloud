@@ -190,6 +190,42 @@ test('a stopped installation: title and the line about Retry installation', () =
   assert.equal(ins.installStoppedCallout(t, { ...stopped, metadata: { ...stopped.metadata, deletionTimestamp: ago(1) } }), null);
 });
 
+test('past the time allowed while the installer may still run: say so, no Retry installation', () => {
+  const overdue = cluster({
+    phase: 'Failed',
+    reason: 'InstallOverdue',
+    summary: 'The installation did not finish in the time allowed. You can retry it or delete the cluster.',
+    install: installing({ attempt: 2, startedAt: ago(6 * 3600 + 60) }),
+  });
+  overdue.status.conditions.push({ type: 'Stalled', status: 'True', reason: 'InstallOverdue' });
+  assert.deepEqual(ins.installStoppedCallout(t, overdue), {
+    title: 'Installation did not finish',
+    retryLine: 'The installer may still be running. You can delete this cluster now; Retry installation is offered once the installer has stopped.',
+  });
+  assert.equal(t(ins.retryLabelKey(overdue)), 'Retry now');
+  assert.equal(ins.installEditState(overdue), 'installing');
+  assert.equal(ins.installProgress(t, overdue, NOW), null, 'no running-installation lines on a Failed cluster');
+  // any reason that stops automatic retries works the same (the condition decides, not the reason's name)
+  overdue.status.conditions[1].reason = 'SomeLaterReason';
+  assert.equal(ins.installStoppedCallout(t, overdue).title, 'Installation did not finish');
+  // a failed preflight (stage Preparing, no Stalled) keeps the general failed callout
+  const flavor = cluster({ phase: 'Failed', reason: 'FlavorNotFound', install: { stage: 'Preparing', run: 1 } });
+  assert.equal(ins.installStoppedCallout(t, flavor), null);
+  assert.equal(t(ins.retryLabelKey(flavor)), 'Retry now');
+  assert.equal(ins.installEditState(flavor), 'open');
+});
+
+test('the retrying message is shown as the platform wrote it, whichever ending it has', () => {
+  for (const ending of ['The next attempt starts shortly.', 'No attempts are left; the installer is about to stop.']) {
+    const msg = `Attempt 3 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64). ${ending}`;
+    const o = cluster({ install: installing({ attempt: 3 }), reason: 'InstallRetrying', message: msg,
+      summary: 'An installation attempt failed; the installer is trying again. The message says what failed.' });
+    const r = ins.installProgress(t, o, NOW);
+    assert.equal(r.failure, msg);
+    assert.equal(r.variant, 'warning');
+  }
+});
+
 test('the button reads Retry installation on a stopped installation, Retry now otherwise', () => {
   const label = (o) => t(ins.retryLabelKey(o));
   assert.equal(label(cluster({ phase: 'Failed', install: { stage: 'Stopped' } })), 'Retry installation');
@@ -226,6 +262,13 @@ test('install-time fields: open before the installation and when stopped, read-o
   assert.equal(st({ stage: 'Preparing', run: 1 }), 'open', 'a check refused the cluster: the tenant corrects it');
   assert.equal(st({ stage: 'Stopped' }), 'stopped');
   assert.equal(st({ stage: 'Stopped' }, { installStarted: true }), 'stopped');
+  // a cluster recorded as installed is installed whatever the stage says (the API refuses the change)
+  assert.equal(st({ stage: 'Stopped' }, { clusterInstalled: true }), 'installed');
+  assert.equal(st({ stage: 'Preparing' }, { clusterInstalled: true }), 'installed');
+  // a check refused a flavor before anything was built: Failed at stage Preparing, an ordinary change
+  assert.equal(st({ stage: 'Preparing', run: 1 }, { installStarted: false }), 'open');
+  // past the time allowed: automatic retries stopped, the installer may still run; the API refuses the change
+  assert.equal(st({ stage: 'Installing', attempt: 2, attemptsLimit: 3 }), 'installing');
   for (const stage of ['CleaningUp', 'Installing', 'Finishing']) assert.equal(st({ stage }), 'installing', stage);
   assert.equal(st({ stage: 'Preparing' }, { installStarted: true }), 'installing');
   assert.equal(st({ stage: 'Installed' }), 'installed');

@@ -1226,6 +1226,8 @@
     "longerFinishing": "Cela prend plus de temps que d'habitude.",
     "stoppedTitle": "Installation arrêtée",
     "retryUses": "Relancer l'installation utilise les paramètres de l'onglet Configuration. Pour changer le réseau ou les plages d'adresses, supprimez ce cluster et créez-le de nouveau.",
+    "unfinishedTitle": "L'installation ne s'est pas terminée",
+    "unfinishedLine": "L'installateur tourne peut-être encore. Vous pouvez supprimer ce cluster dès maintenant ; Relancer l'installation est proposé une fois l'installateur arrêté.",
     "retryInstallation": "Relancer l'installation",
     "confirmTitle": "Relancer l'installation ?",
     "confirmBody": "Ce que l'installation arrêtée a laissé sur le site est d'abord supprimé. Le cluster garde son nom, ses adresses et ses noms DNS.",

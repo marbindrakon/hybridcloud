@@ -1226,6 +1226,8 @@
     "longerFinishing": "This is taking longer than usual.",
     "stoppedTitle": "Installation stopped",
     "retryUses": "Retry installation uses the settings on the Configuration tab. To change the network or the address ranges, delete this cluster and create it again.",
+    "unfinishedTitle": "Installation did not finish",
+    "unfinishedLine": "The installer may still be running. You can delete this cluster now; Retry installation is offered once the installer has stopped.",
     "retryInstallation": "Retry installation",
     "confirmTitle": "Start the installation again?",
     "confirmBody": "What the stopped installation left on the site is removed first. The cluster keeps its name, addresses and DNS names.",

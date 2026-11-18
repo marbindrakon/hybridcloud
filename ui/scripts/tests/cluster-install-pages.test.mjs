@@ -124,6 +124,23 @@ test('callout when the installation stopped; other failures keep the general tit
   assert.ok(!other.includes(I.retryUses), other);
 });
 
+test('callout past the time allowed: the condition decides, the installer may still run', () => {
+  const o = cluster({
+    phase: 'Failed', reason: 'InstallOverdue',
+    summary: 'The installation did not finish in the time allowed. You can retry it or delete the cluster.',
+    install: { stage: 'Installing', attempt: 2, attemptsLimit: 3, run: 1, startedAt: ago(6 * 3600 + 60), observedAt: ago(20) },
+  });
+  o.status.conditions.push({ type: 'Stalled', status: 'True', reason: 'InstallOverdue' });
+  const html = pages.callout('PlatformOpenshift', o);
+  const s = text(html);
+  assert.ok(html.includes('pf-m-danger'));
+  assert.ok(s.startsWith(`Danger alert: ${I.unfinishedTitle} `), s);
+  assert.ok(s.includes(I.unfinishedLine), s);
+  assert.ok(!s.includes(I.retryUses), s);
+  // the install-time fields stay read-only (the API refuses them)
+  assert.equal(input(pages.editor(o), 'PlatformOpenshift-openstack.workerCount').disabled, true);
+});
+
 test('an installed cluster and other kinds show nothing new', () => {
   const ready = cluster({ phase: 'Ready', reason: 'AsExpected', summary: 'Ready.', install: { stage: 'Installed', attempt: 1, attemptsLimit: 3, run: 1 } });
   assert.equal(pages.callout('PlatformOpenshift', ready), '');
