@@ -106,8 +106,8 @@ class StatusSchema(unittest.TestCase):
         st = schema()["properties"]["status"]["properties"]
         self.assertIn("Stalled is True when the platform has", st["conditions"]["description"])
         self.assertIn("See status.install", st["provisionStatus"]["description"])
-        self.assertIn("a new request starts the installation again",
-                      " ".join(st["lastHandledReconcileRequest"]["description"].split()))
+        self.assertIn("a new Retry now request (status.lastHandledReconcileRequest) or a changed spec starts the "
+                      "installation again", " ".join(st["install"]["description"].split()))
 
 
 class Operator(unittest.TestCase):

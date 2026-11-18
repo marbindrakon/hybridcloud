@@ -436,7 +436,8 @@ spec:
                   type: object
                   description: >-
                     The installation of the cluster, written by the platform. Present from the first check of a
-                    new cluster; kept after the installation ends.
+                    new cluster; kept after the installation ends. When the installation stopped, a new Retry now
+                    request (status.lastHandledReconcileRequest) or a changed spec starts the installation again.
                   properties:
                     stage:
                       type: string
@@ -693,8 +694,7 @@ spec:
                   description: >-
                     The Retry now request the platform last handled: the value of the
                     ansible.sdk.operatorframework.io/reconcileNow annotation at that time. A request
-                    is open while the annotation differs from this value. On a cluster whose installation
-                    stopped, a new request starts the installation again.
+                    is open while the annotation differs from this value.
                 delivery:
                   type: object
                   description: >-
