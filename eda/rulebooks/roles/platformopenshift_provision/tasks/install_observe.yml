@@ -75,6 +75,16 @@
   ansible.builtin.meta: end_play
   when: (io_obs.outcome | default('')) in ['gone', 'replaced', 'deleting', 'superseded']
 
+# an ending with nothing written (the hub or the object could not be read at the last check): the event is completed
+# all the same, so the operator's next pass runs again
+- name: Hand over to the next run
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: "{{ io_obs.why | default('') }}"
+  when:
+    - (io_obs.outcome | default('')) in ['window', 'overdue'] or not (io_obs.end | default(false) | bool)
+    - not (io_obs.written | default(false) | bool)
+
 # overdue: written as failed; the operator publishes again at its next pass (the event is completed), and that run
 # checks once more
 - name: End the job, the next run watches on

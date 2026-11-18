@@ -13,17 +13,6 @@
     oso_control_plane_flavor: "{{ platform_spec.openstack.controlPlaneFlavor | default(default_control_plane_flavor, true) }}"
     oso_worker_flavor: "{{ platform_spec.openstack.workerFlavor | default(default_worker_flavor, true) }}"
 
-- name: Fail without the installation's default flavors
-  ansible.builtin.assert:
-    that:
-      - oso_control_plane_flavor | length > 0
-      - oso_worker_flavor | length > 0
-    fail_msg: >-
-      Set platformopenshift_defaults.{{ 'controlPlaneFlavor' if oso_control_plane_flavor | length == 0
-      else 'workerFlavor' }} (the installation's default flavor for an OpenShift cluster's
-      {{ 'control plane' if oso_control_plane_flavor | length == 0 else 'worker' }} nodes, used when the cluster's spec
-      names none).
-
 - name: Read CloudOSO CR
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"

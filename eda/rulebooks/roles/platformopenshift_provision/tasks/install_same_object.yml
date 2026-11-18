@@ -32,6 +32,15 @@
     - not (iso_check.ok | default(false) | bool)
     - "'spec changed' in (iso_check.why | default(''))"
 
+# an object that could not be read is no ending to keep quiet about: the job fails (its rescue writes the failure when
+# the object can be read again, which completes the event)
+- name: Fail the job, the object could not be read
+  ansible.builtin.fail:
+    msg: "The cluster object {{ ansible_operator_meta.name }} could not be read; nothing was released or removed."
+  when:
+    - not (iso_check.ok | default(false) | bool)
+    - "'could not be read' in (iso_check.why | default(''))"
+
 - name: End the job before the release
   ansible.builtin.meta: end_play
   when: not (iso_check.ok | default(false) | bool)

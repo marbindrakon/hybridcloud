@@ -68,8 +68,19 @@
   ansible.builtin.meta: end_play
   when: rsb_decision.end | default(false) | bool
 
-# a stopped cluster whose build may not be removed now (the hub unreadable, nobody asked, a build that did not stop):
-# the stop stays as written (the event is completed, so the operator publishes again while a request is open) and
+# a recorded stop or removal whose build runs or is installed on the hub (it changed since the run's first look): the
+# hub wins, nothing is removed and the job goes on to watch it
+- name: The hub's build runs or is installed
+  ansible.builtin.include_tasks: install_resume.yml
+  vars:
+    ir_hub: "{{ rsb_decision.hub }}"
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') in ['Stopped', 'CleaningUp']
+    - rsb_decision.hub | default('') in ['running', 'installed']
+
+# a stopped cluster whose build may not be removed now (the hub unreadable, nobody asked, a build being deleted): the
+# stop stays as written (the event is completed, so the operator publishes again while a request is open) and
 # nothing is built
 - name: Keep the stop as written
   ansible.builtin.include_tasks: install_stopped_keep.yml
@@ -78,12 +89,25 @@
   when:
     - not (rsb_decision.ok | default(false) | bool)
     - rsb_decision.stage | default('') == 'Stopped'
+    - rsb_decision.hub | default('') not in ['running', 'installed']
 
 - name: End the job, the stopped installation stays as it is
   ansible.builtin.meta: end_play
   when:
     - not (rsb_decision.ok | default(false) | bool)
-    - rsb_decision.stage | default('') in ['Stopped', 'CleaningUp']
+    - rsb_decision.stage | default('') == 'Stopped'
+    - rsb_decision.hub | default('') not in ['running', 'installed']
+
+# a removal under way that cannot go on now (the hub unreadable, a build that runs): nothing is removed; the event is
+# completed so the next pass of the operator tries again
+- name: Hand a removal under way over to the next run
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: "{{ rsb_decision.why }}"
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') == 'CleaningUp'
+    - rsb_decision.hub | default('') not in ['running', 'installed']
 
 - name: Remove the stopped build before a new installation
   when: rsb_decision.ok | default(false) | bool

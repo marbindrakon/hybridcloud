@@ -155,7 +155,8 @@ sys.path.insert(0, os.path.join(H.EDA, "rulebooks", "collections", "ansible_coll
 import shc_install as I  # noqa: E402
 
 STOPPED = {"stage": "Stopped", "run": 1, "startedAt": ago(30), "endedAt": ago(20), "stoppedGeneration": 1,
-           "stoppedRequest": "", "stoppedSpec": I.spec_digest(SPEC), "attempt": 3, "attemptsLimit": 3,
+           "stoppedRequest": "", "stoppedSpec": I.spec_digest(SPEC), "stoppedSpecVersion": I.DIGEST_VERSION,
+           "attempt": 3, "attemptsLimit": 3,
            "lastFailure": {"attempt": 3, "reason": "QuotaExceeded", "message": "m", "time": ago(20)}}
 
 
@@ -341,10 +342,12 @@ class Removal(unittest.TestCase):
         for provider in PROVIDER_SPECS:
             with self.subTest(provider):
                 stop, smaller = stopped_for(provider)
-                # the hub says installed (even with a stop recorded and a change asked for): kept, nothing built
+                # the hub says installed (even with a stop recorded and a change asked for): nothing removed, the hub
+                # wins (the record takes its state) and the job goes on to the installed path
                 api, rc, tr, out, deletes = self.remove(po(stop, generation=2, spec=smaller),
                                                         cd(installed=True, stopped=True), provider)
-                self.assertEqual((rc, deletes, after_reached(tr)), (0, [], False), out)
+                self.assertEqual((rc, deletes, after_reached(tr)), (0, [], True), out)
+                self.assertEqual(H.patches(tr)[0]["body"]["install"]["stage"], "Installing")
                 # the object says installed
                 api, rc, tr, out, deletes = self.remove(po(stop, generation=2, spec=smaller, clusterInstalled=True),
                                                         cd(stopped=True), provider)
@@ -361,7 +364,8 @@ class Removal(unittest.TestCase):
         self.assertEqual((rc, deletes, after_reached(tr)), (0, [], False), out)
         body = H.patches(tr)[0]["body"]
         self.assertEqual(body["status"], "failed", "the stop is kept (Ready again from Stalled), the event completed")
-        self.assertEqual(body["install"], {"stoppedGeneration": 2})
+        self.assertEqual(body["install"], {"stoppedGeneration": 2, "stoppedSpec": I.spec_digest(SPEC),
+                                           "stoppedSpecVersion": I.DIGEST_VERSION})
 
     def test_stopped_and_asked_is_removed_per_provider(self):
         for provider in PROVIDER_SPECS:
@@ -490,7 +494,11 @@ class RemovalTakeover(unittest.TestCase):
         self.assertEqual(api.obj["status"]["install"]["stage"], "CleaningUp")
         self.assertNotIn("stoppedRequest", api.obj["status"]["install"])
         self.assertFalse(after_reached(tr))
-        self.assertEqual((rc2, api2.patches, after_reached(tr2)), (0, [], False), out2)
+        # the window ends with nothing concluded: only the hand-over (the event completed, nothing else written)
+        self.assertEqual((rc2, after_reached(tr2)), (0, False), out2)
+        self.assertEqual([sorted(set(p["status"]) - {"delivery", "edaJobs", "conditions", "phase", "phaseSince",
+                                                      "summary"}) for p in api2.patches], [[]])
+        self.assertEqual(api2.obj["status"]["delivery"]["completedEventId"], "ev-1")
         self.assertEqual(api2.obj["status"]["install"]["stage"], "Installing")
 
     def test_a_delete_during_the_removal_ends_the_job(self):
@@ -508,6 +516,21 @@ class RemovalTakeover(unittest.TestCase):
         self.assertEqual(creates(tr), [])
         self.assertFalse(after_reached(tr))
         self.assertEqual(kinds_deleted(tr), ["ManagedCluster"], "the job ended in the first wait")
+
+    def test_a_removal_under_way_with_an_unreadable_hub_hands_over(self):
+        """One failed hub read in the decision of a job that continues a removal: nothing is removed, and the event
+        is completed (the operator's next pass runs again; no 150 minutes in flight)."""
+        obj = self.cleaning()
+        api = FakeApi(obj, self.deleting_cd())
+        try:
+            v = base_vars(api, central_api_host="http://127.0.0.1:9", rsb_obj=obj)
+            rc, tr, out = H.run("platformopenshift_provision", "main.yml", v, tasks=[self.REMOVE, AFTER])
+        finally:
+            api.close()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((kinds_deleted(tr), after_reached(tr)), ([], False))
+        self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
+        self.assertEqual(api.obj["status"]["install"]["stage"], "CleaningUp")
 
     def test_a_newer_request_during_the_removal_ends_the_job(self):
         stop, smaller = stopped_for("openstack")
@@ -558,8 +581,57 @@ class StoppedRuns(unittest.TestCase):
         return run_tasks(api, tasks, platformopenshift_cr={"resources": [obj]}, platformopenshift_cr_name="demo",
                          platform_spec=obj["spec"], **kw)
 
-    STOPPED_STEPS = ("Decide whether a stopped installation is asked to start again",
+    STOPPED_STEPS = ("Read what the hub holds of a stopped installation's build",
+                     "End the job, the object is not this job's any more",
+                     "The hub's build runs or is installed",
+                     "The hub's build is being removed or cannot be read",
+                     "Decide whether a stopped installation is asked to start again",
                      "A stopped installation nobody asked to start again")
+
+    def stopped_run(self, hub, asked, **kw):
+        """One run of main.yml's first steps on a recorded stop; asked: a Retry is open."""
+        obj = po(dict(STOPPED), generation=1, buildName=BUILD,
+                 lastHandledReconcileRequest="2026-11-18T12:00:00Z" if asked else "",
+                 conditions=[{"type": "Stalled", "status": "True", "reason": "QuotaExceeded", "message": "m."}])
+        api = FakeApi(obj, hub)
+        try:
+            rc, tr, out = self.run_main(api, obj, self.STOPPED_STEPS, **kw)
+        finally:
+            api.close()
+        return api, rc, tr, out
+
+    def test_a_recorded_stop_against_each_hub_state(self):
+        """The record's table: one outcome per hub state, asked or not; no dead end, nothing removed here."""
+        deleting = cd(stopped=True)
+        deleting["metadata"]["deletionTimestamp"] = ago(1)
+        rows = [  # hub, unreadable, (outcome not asked, outcome asked)
+            (None, False, ("keep", "go")),                 # no ClusterDeployment: a Retry goes on to install fresh
+            (cd(stopped=True), False, ("keep", "go")),     # stopped: a Retry goes on to remove and install
+            (cd(), False, ("resume", "resume")),           # running: the hub wins, the watch goes on
+            (cd(installed=True), False, ("resume", "resume")),   # installed: the installed path, then Ready
+            (deleting, False, ("keep", "keep")),           # being deleted: the event completed, the next pass tries
+            (cd(stopped=True), True, ("keep", "keep")),    # unreadable: the same
+        ]
+        for hub, unreadable, outcomes in rows:
+            for asked, want in zip((False, True), outcomes):
+                with self.subTest(hub=I.hub_state(hub, not unreadable), asked=asked):
+                    kw = {"central_api_host": "http://127.0.0.1:9"} if unreadable else {}
+                    api, rc, tr, out = self.stopped_run(hub, asked, **kw)
+                    self.assertEqual(rc, 0, out)
+                    self.assertEqual(kinds_deleted(tr), [])
+                    bodies = [p["body"] for p in H.patches(tr)]
+                    if want == "go":
+                        self.assertEqual((bodies, after_reached(tr)), ([], True))
+                    elif want == "resume":
+                        self.assertTrue(after_reached(tr), "the provider's steps go on")
+                        self.assertEqual(bodies[0]["install"]["stage"], "Installing")
+                        self.assertIsNone(bodies[0]["install"]["stoppedSpec"])
+                        self.assertNotIn("run", bodies[0]["install"])
+                        self.assertEqual([c for c in bodies[0]["conditions"] if c["type"] == "Stalled"][0]["status"],
+                                         "False")
+                    else:
+                        self.assertFalse(after_reached(tr))
+                        self.assertEqual(bodies[0]["status"], "failed", "the stop kept, the event completed")
 
     def test_an_access_group_change_on_a_stopped_cluster_starts_nothing(self):
         for extra in ({"toolRbac": {"clusterAdminRbac": ["admins"]}}, {"clusterViewerRbac": ["readers"]},
@@ -579,7 +651,8 @@ class StoppedRuns(unittest.TestCase):
                 body = H.patches(tr)[0]["body"]
                 self.assertEqual((body["status"], body["reason"]), ("failed", "QuotaExceeded"))
                 self.assertEqual(body["conditions"][0]["message"], "Attempt 3 of 3 failed: m.")
-                self.assertEqual(body["install"], {"stoppedGeneration": 2})
+                self.assertEqual(body["install"], {"stoppedGeneration": 2, "stoppedSpec": I.spec_digest(obj["spec"]),
+                                                   "stoppedSpecVersion": I.DIGEST_VERSION})
 
     def test_a_retry_or_a_change_of_the_installation_settings_goes_on(self):
         for obj in (po(STOPPED, generation=2, spec=SMALLER),
@@ -618,6 +691,19 @@ class StoppedRuns(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertTrue(after_reached(tr))
         self.assertEqual(api.obj["status"]["install"]["stage"], "Finishing")
+
+    def test_overdue_with_an_unreadable_hub_hands_over(self):
+        """The single check of an overdue cluster that cannot read the hub completes its event all the same."""
+        obj = po(dict(RUNNING, startedAt=ago(400)), buildName=BUILD)
+        api = FakeApi(obj, cd())
+        try:
+            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP, central_api_host="http://127.0.0.1:9")
+        finally:
+            api.close()
+        self.assertEqual(rc, 0, out)
+        self.assertFalse(after_reached(tr))
+        self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
+        self.assertEqual(api.obj["status"]["install"], obj["status"]["install"], "what the page shows is unchanged")
 
     def test_overdue_stopped_is_a_stop(self):
         api, rc, tr, out = self.overdue(cd(stopped=True, failed="UnknownError", restarts=3), [failed_provision(2)])
@@ -661,13 +747,16 @@ class ReleaseAndRescue(unittest.TestCase):
         self.assertEqual([t for t in tr if "nudge" in t], [])
 
     def test_an_object_that_cannot_be_read_gets_no_release(self):
+        """No release on an unknown object, and no quiet ending: the job fails (its rescue writes once the object can
+        be read, which completes the event)."""
         api = FakeApi(po())
         try:
             rc, tr, out = run_tasks(api, [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/install_same_object.yml"},
                                           AFTER], services_api_host="http://127.0.0.1:9")
         finally:
             api.close()
-        self.assertEqual(rc, 0, out)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("could not be read; nothing was released or removed", out)
         self.assertFalse(after_reached(tr))
 
     def test_a_failed_release_without_a_build_is_a_stop(self):
@@ -723,23 +812,26 @@ class ReleaseAndRescue(unittest.TestCase):
 
 @unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
 class DefaultFlavors(unittest.TestCase):
-    """No site's flavor name is a fallback: a cluster that needs the installation's default flavor fails with the
-    setting's name when it is not set."""
+    """No site's flavor name is a fallback: where an installation is about to start, a role that will have nodes and
+    whose flavor neither the spec nor the installation's defaults name fails the job with the setting's name; an
+    installed or installing cluster and a cluster without workers never fail on it."""
 
-    def run_facts(self, spec, defaults):
+    def run_facts(self, spec, defaults, status=None):
         import yaml
-        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks", "openstack.yml")) as fh:
-            tasks = yaml.safe_load(fh)
+        tdir = os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks")
+        with open(os.path.join(tdir, "openstack.yml")) as fh:
+            facts = [t for t in yaml.safe_load(fh) if t.get("name") == "Set OpenStack spec facts"]
+        with open(os.path.join(tdir, "openstack_clusterbuild.yml")) as fh:
+            check = [t for t in yaml.safe_load(fh) if t.get("name") == "Fail without the installation's default flavors"]
         with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "defaults", "main.yml")) as fh:
             role_defaults = yaml.safe_load(fh)
-        steps = [t for t in tasks if t.get("name") in ("Set OpenStack spec facts",
-                                                       "Fail without the installation's default flavors")]
-        self.assertEqual(len(steps), 2)
+        self.assertEqual((len(facts), len(check)), (1, 1))
         v = {k: role_defaults[k] for k in ("default_control_plane_flavor", "default_worker_flavor",
                                            "default_control_plane_count", "default_worker_count")}
         v.update(platform_spec=spec, platformopenshift_defaults=defaults,
+                 po_cr_current={"resources": [{"status": status or {}}]},
                  ansible_operator_meta={"name": "demo", "namespace": NS})
-        return H.run("platformopenshift_provision", "main.yml", v, tasks=steps + [AFTER])
+        return H.run("platformopenshift_provision", "main.yml", v, tasks=facts + check + [AFTER])
 
     def test_no_fallback(self):
         rc, tr, out = self.run_facts({"type": "openstack", "openstack": {"environment": "env"}}, {})
@@ -753,12 +845,40 @@ class DefaultFlavors(unittest.TestCase):
                                      {"controlPlaneFlavor": "example.xlarge", "workerFlavor": "example.large"})
         self.assertEqual((rc, after_reached(tr)), (0, True), out)
 
+    def test_only_where_an_installation_starts_and_a_role_has_nodes(self):
+        none = {"type": "openstack", "openstack": {"environment": "env"}}
+        for status in ({"clusterInstalled": True}, {"install": {"stage": "Installed"}},
+                       {"install": {"stage": "Installing"}}, {"install": {"stage": "Finishing"}}):
+            rc, tr, out = self.run_facts(none, {}, status)
+            self.assertEqual((rc, after_reached(tr)), (0, True), status)
+        # no workers: the worker default is not needed
+        rc, tr, out = self.run_facts({"type": "openstack", "openstack": {"environment": "env", "workerCount": 0}},
+                                     {"controlPlaneFlavor": "example.xlarge"})
+        self.assertEqual((rc, after_reached(tr)), (0, True), out)
+
     def test_the_defaults_name_no_flavor(self):
         with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "defaults", "main.yml")) as fh:
             text = fh.read()
         for line in text.splitlines():
             if line.startswith(("default_control_plane_flavor", "default_worker_flavor")):
                 self.assertIn("default('', true)", line)
+
+
+class ServicesAnswerNotInStatus(unittest.TestCase):
+    """The failures of reading the AWS and Google Cloud environments carry a fixed sentence; what the services API
+    answered goes to the job's log only."""
+
+    def test_fail_texts(self):
+        import yaml
+        for f, raw in (("aws.yml", "cloudaws_raw"), ("gcp.yml", "cloudgcp_raw")):
+            with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks", f)) as fh:
+                tasks = yaml.safe_load(fh)
+            fails = [t for t in tasks if "ansible.builtin.fail" in t and raw in json.dumps(t)]
+            self.assertEqual(len(fails), 1, f)
+            msg = fails[0]["ansible.builtin.fail"]["msg"]
+            self.assertNotIn(".msg", msg, f)
+            self.assertNotIn(".json", msg, f)
+            self.assertNotIn("message", msg, f)
 
 
 class Wiring(unittest.TestCase):

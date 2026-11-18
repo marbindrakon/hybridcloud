@@ -18,8 +18,10 @@ creates Hive's `ClusterDeployment`) and then watches it:
   spec it read or not at all (a newer spec ends the job, which asks the operator for a new run at once).
 - When Hive stops the installation (`ProvisionStopped`), the job writes the stop (`Stalled=True` and `Ready=False` with
   the cause's reason) and fails. The operator then publishes no event for the cluster until the tenant asks: a Retry
-  request, or a change of `spec.type` or the provider's block (compared by a digest recorded at the stop,
-  `status.install.stoppedSpec`). Any other spec change is published once: the job applies what needs no installation
+  request, or a change of `spec.type` or of the installation settings of the provider's block (compared by a digest of
+  their values recorded at the stop, `status.install.stoppedSpec`, with the version of the list of settings it covers,
+  `stoppedSpecVersion`: a digest of another version, as after a product update, is never compared; only a Retry asks
+  then, and the next run renews it). Any other spec change is published once: the job applies what needs no installation
   (the viewer access), records the generation and ends without removing or installing anything. A Retry request that no
   job acted on, or an event published after the stop that no job completed, is published again.
 - When the installation has not finished `deadlineMinutes` after it started (`InstallOverdue`), the job writes it as
@@ -28,6 +30,21 @@ creates Hive's `ClusterDeployment`) and then watches it:
   ends.
 - A ClusterDeployment that is being deleted (a removal for a new installation, or the cluster's delete) is never read
   as a stop: the watch concludes nothing from it.
+- A run that ends with nothing to write (the hub could not be read at its last check, a removal under way that cannot
+  go on now) completes its event, so the operator's next pass runs again; the status shown stays as it is.
+- A job's start and acknowledgement writes keep what a running installation shows (its Ready reason and message, and
+  the Failed phase of an installation past its deadline).
+
+A recorded stop is checked against the hub at every run of the cluster; the hub wins:
+
+| The hub holds | Nobody asked | A Retry, or the installation settings changed |
+|---|---|---|
+| no ClusterDeployment (a failed, pending or deployed release, or none) | the stop stays | the release is removed, a new installation starts |
+| a stopped ClusterDeployment | the stop stays | the build is removed, a new installation starts |
+| a ClusterDeployment that runs | the record takes the hub's state; the watch goes on | the same; nothing is removed |
+| an installed ClusterDeployment | the record takes the hub's state; Ready as for any installed cluster | the same |
+| a ClusterDeployment being deleted | the stop stays | the stop stays; the next pass tries again once it is gone |
+| nothing readable | the stop stays | the stop stays; the next pass tries again |
 - After `watchWindowMinutes` it writes that the installation is still running, completes its request and ends; the
   next periodic run of the cluster watches on.
 - Only an installed cluster is written Ready.
@@ -66,8 +83,9 @@ log, of Hive's messages or of the site reaches the cluster object.
 On OpenStack the preflight refuses a flavor the environment does not offer before anything is created: named to the
 tenant (`FlavorNotFound`) when the cluster's spec names it; when it is the installation's default
 (`platformopenshift_defaults` keys `controlPlaneFlavor`, `workerFlavor`), the reason is `DefaultFlavorNotFound` and the
-message names no flavor. These two defaults have no fallback: a cluster that needs one that is not set fails with the
-setting's name.
+message names no flavor. These two defaults have no fallback: where an installation is about to start, a cluster
+that needs one that is not set (the worker flavor only with workers) fails with the setting's name; an installed or
+installing cluster never does.
 
 To read the whole log of a stopped installation, use the build name from the cluster's `status.buildName`:
 
@@ -86,8 +104,9 @@ the provider's block). The job records `CleaningUp` (the next `run`), reads the 
 and installs again. Every wait of the removal reads the cluster object too and ends the job when it is deleted,
 replaced or given a newer request; a later job that finds `CleaningUp` continues the removal through the same checks.
 The cluster keeps its floating IPs, DNS records, credential and secret store paths. A failed attempt Hive is still
-retrying is never removed; nothing reinstalls by itself. A release of the build that fails while no `ClusterDeployment`
-exists is written as a stop (`InstallNotStarted`), so the tenant can change the settings and retry.
+retrying is never removed; nothing reinstalls by itself. A release of the build is tried twice; one that still fails
+while no `ClusterDeployment` exists is written as a stop (`InstallNotStarted`), so the tenant can change the settings
+and retry.
 
 The API refuses a change of a cluster's installation settings (node counts, flavors or instance types, release, image
 and the rest the installer reads once) while the installation is cleaning up, installing or finishing, and once the

@@ -95,6 +95,52 @@
         platform_type: "{{ platformopenshift_cr.resources[0].spec.type | default('') }}"
         platform_spec: "{{ platformopenshift_cr.resources[0].spec }}"
 
+    # A recorded stop is a claim about the hub, and the hub wins: every run of a stopped cluster first reads what the
+    # hub holds of its build. Running or installed: the record takes the hub's state and the run goes on to the
+    # provider's steps (the watch, or the installed path); nothing is removed. Being deleted or unreadable: the stop
+    # stays as written and the event is completed (a Retry still open is published again at the operator's next pass).
+    # No ClusterDeployment, or a stopped one: as below.
+    - name: Read what the hub holds of a stopped installation's build
+      hybridsovereign.shc.install_observe:
+        mode: hub
+        host: "{{ services_api_host | trim }}"
+        api_key: "{{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        hub_host: "{{ central_api_host | trim }}"
+        hub_api_key: "{{ central_bearer_token | trim }}"
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        build: "{{ (platformopenshift_cr.resources[0].status | default({}, true)).buildName }}"
+        uid: "{{ po_uid | default('', true) }}"
+        event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+      register: po_stopped_hub
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - ((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage | default('') == 'Stopped'
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+
+    - name: End the job, the object is not this job's any more
+      ansible.builtin.meta: end_play
+      when: po_stopped_hub.end | default(false) | bool
+
+    - name: The hub's build runs or is installed
+      ansible.builtin.include_tasks: install_resume.yml
+      vars:
+        ir_hub: "{{ po_stopped_hub.hub }}"
+        cb_cluster_name: "{{ platformopenshift_cr.resources[0].status.buildName }}"
+      when: (po_stopped_hub.hub | default('')) in ['running', 'installed']
+
+    - name: The hub's build is being removed or cannot be read
+      when: (po_stopped_hub.hub | default('')) in ['deleting', 'unreadable']
+      block:
+        - name: Keep the stop as written
+          ansible.builtin.include_tasks: install_stopped_keep.yml
+          vars:
+            isk_obj: "{{ platformopenshift_cr.resources[0] }}"
+
+        - name: "End the job, the hub's build is {{ po_stopped_hub.hub }}"
+          ansible.builtin.meta: end_play
+
     # A stopped installation that nobody asked to start again (no Retry, no change of the installation settings: a
     # change of access groups, viewers or deletion protection): what needs no installation is applied, the stop stays
     # as written, nothing is built or removed.
@@ -104,6 +150,7 @@
       when:
         - platform_type in ['openstack', 'aws', 'gcp']
         - ((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage | default('') == 'Stopped'
+        - (po_stopped_hub.hub | default('')) not in ['running', 'installed']
 
     - name: A stopped installation nobody asked to start again
       when:

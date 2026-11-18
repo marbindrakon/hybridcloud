@@ -34,11 +34,16 @@
   no_log: true
   failed_when: false
 
+# the API's answer goes to the job's log only; the status gets a fixed sentence
+- name: Say what the services API answered
+  ansible.builtin.debug:
+    msg: "{{ (cloudaws_raw.json | default({}, true)).message | default(cloudaws_raw.msg | default(''), true) }}"
+  when: (cloudaws_raw.status | default(-1)) != 200
+
 - name: Fail when the CloudAWS could not be read
   ansible.builtin.fail:
     msg: >-
-      Reading CloudAWS '{{ aws_env_name }}' failed (HTTP {{ cloudaws_raw.status | default('?') }}):
-      {{ (cloudaws_raw.json | default({}, true)).message | default(cloudaws_raw.msg | default(''), true) }}
+      The AWS environment '{{ aws_env_name }}' could not be read (HTTP {{ cloudaws_raw.status | default('?') }}).
   when: (cloudaws_raw.status | default(-1)) != 200
 
 - name: Fail if CloudAWS not ready

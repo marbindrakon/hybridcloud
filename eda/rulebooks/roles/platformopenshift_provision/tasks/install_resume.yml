@@ -1,0 +1,31 @@
+---
+# A recorded stop that the hub contradicts: the hub's build runs or is installed (a stop written while an older
+# release was still being made, for example). The hub wins: the record takes the hub's state (stage Installing, the
+# stop's bookkeeping gone, Stalled cleared), nothing is removed and no new run is counted; the job goes on to the
+# provider's steps, whose watch writes what the hub says (Installing, or Finishing and then Ready). Input: ir_hub.
+- name: Take the hub's state over the recorded stop
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: reconciling
+      ready: false
+      reason: Installing
+      message: The installation is running on the hub; the platform watches it again.
+      install: "{{ {} | hybridsovereign.shc.shc_install_resumed }}"
+      conditions:
+        - type: Ready
+          status: "False"
+          reason: Installing
+          message: The installation is running on the hub; the platform watches it again.
+        - type: Stalled
+          status: "False"
+          reason: AsExpected
+          message: ""
+
+- name: Say that the hub's build replaces the recorded stop
+  ansible.builtin.debug:
+    msg: "Build {{ cb_cluster_name }} is {{ ir_hub }} on the hub: the recorded stop is replaced, nothing is removed."

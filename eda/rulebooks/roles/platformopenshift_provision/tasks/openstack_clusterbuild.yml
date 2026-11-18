@@ -25,13 +25,34 @@
     msg: "Ignored (chosen by the platform): {{ cb_ignored_spec_fields | join(', ') }}"
   when: cb_ignored_spec_fields | length > 0
 
+# where an installation is about to start (not for an installed cluster or one whose installation runs), each role
+# that will have nodes needs a flavor: the spec's, else the installation's default, which has no fallback
+- name: Fail without the installation's default flavors
+  vars:
+    _ocb_st: "{{ (po_cr_current.resources | default([{}], true) | first).status | default({}, true) }}"
+    _ocb_missing: >-
+      {{ (['controlPlaneFlavor'] if (oso_control_plane_flavor | default('', true) | length) == 0 else [])
+         + (['workerFlavor'] if (oso_worker_flavor | default('', true) | length) == 0
+                                and (oso_worker_count | default(0, true) | int) > 0 else []) }}
+  ansible.builtin.fail:
+    msg: >-
+      Set platformopenshift_defaults.{{ _ocb_missing | first }} (the installation's default flavor for an OpenShift
+      cluster's {{ 'control plane' if (_ocb_missing | first) == 'controlPlaneFlavor' else 'worker' }} nodes, used when
+      the cluster's spec names none).
+  when:
+    - _ocb_missing | length > 0
+    - not (_ocb_st.clusterInstalled | default(false) | bool)
+    - (_ocb_st.install | default({}, true)).stage | default('') not in ['Installing', 'Finishing', 'Installed']
+
 - name: Derive cluster identifiers
   vars:
     _os: "{{ platform_spec.openstack | default({}, true) }}"
   ansible.builtin.set_fact:
     cb_image_set: "{{ platform_spec.openstack.ocpImageSet | default(default_ocp_image_set, true) }}"
     cb_controller_flavor: "{{ oso_control_plane_flavor }}"
-    cb_worker_flavor: "{{ oso_worker_flavor }}"
+    # a cluster without workers whose spec and defaults name no worker flavor: its (empty) worker pool takes the
+    # control plane's flavor, which the installer accepts for a pool of no machines
+    cb_worker_flavor: "{{ oso_worker_flavor if (oso_worker_flavor | default('', true) | length) > 0 else oso_control_plane_flavor }}"
     cb_control_plane_count: "{{ oso_control_plane_count }}"
     cb_worker_count: "{{ oso_worker_count }}"
     cb_pull_secret_vault: >-
@@ -372,6 +393,10 @@
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
   failed_when: false
+  # one more try after a passing failure (a hub admission timeout, another release operation finishing)
+  until: (helm_deploy_result.rc | default(0) | int) == 0
+  retries: 1
+  delay: 30
 
 - name: A failed release of the build
   ansible.builtin.include_tasks: install_release_failed.yml

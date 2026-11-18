@@ -209,6 +209,10 @@
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
   failed_when: false
+  # one more try after a passing failure (a hub admission timeout, another release operation finishing)
+  until: (helm_deploy_result.rc | default(0) | int) == 0
+  retries: 1
+  delay: 30
 
 - name: A failed release of the build
   ansible.builtin.include_tasks: install_release_failed.yml
