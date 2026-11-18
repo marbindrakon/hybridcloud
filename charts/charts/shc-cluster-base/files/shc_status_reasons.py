@@ -57,6 +57,11 @@ REASONS = {
     "InProgress": _r("A", PROGRESS, "Applying the change."),
     "ClusterBuildCreated": _r("A", PROGRESS, "The cluster build has started."),
     "ClusterBuildProvisioned": _r("A", PROGRESS, "The cluster is being installed."),
+    # an OpenShift cluster's installation (Ready while it installs; Ready and Stalled when it stopped)
+    "Installing": _r("A", PROGRESS, "The cluster is being installed."),
+    "InstallRetrying": _r("A", PROGRESS, "An installation attempt failed; the installer is trying again. The message says what failed."),
+    "InstallFinishing": _r("A", PROGRESS, "The cluster is installed; the platform is connecting it."),
+    "InstallCleanup": _r("A", PROGRESS, "A stopped installation is being removed before the new one starts."),
     "Deleting": _r("A", PROGRESS, "Being deleted."),
     "DeletionRequested": _r("A", PROGRESS, "Being deleted."),
     "Deleted": _r("A", PROGRESS, "Deleted; being removed."),
@@ -132,6 +137,9 @@ REASONS = {
     "NetworkChoiceRequired": _r("T", FAILED, "This site has no default external network. Choose a network."),
     "ExternalNetworkNotListed": _r("T", FAILED, "The named network is not an external network of this site."),
     "NetworkNameNotUnique": _r("T", FAILED, "Your environment sees another network with the name of the cluster's network. Rename or remove the other network."),
+    # an OpenShift cluster's installation that stopped (Ready and Stalled)
+    "QuotaExceeded": _r("T", FAILED, "The environment's quota is too small for this cluster. Make the cluster smaller or have the quota raised, then retry."),
+    "InstallSettingRefused": _r("T", FAILED, "The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again."),
     # edge connections (AttachmentCircuit): the bearer and the kind of router at the other end
     "BearerNotFound": _r("T", FAILED, "The provider edge has no bearer of that name. Ask the platform team for the bearer names."),
     "CeKindNotAccepted": _r("T", FAILED, "The bearer does not accept this kind of router. Choose another bearer or ask the platform team."),
@@ -144,6 +152,9 @@ REASONS = {
     "TeardownFailed": _r("P", FAILED, "Deleting did not complete. The platform team is looking at it."),
     "CredentialsMissing": _r("P", FAILED, "The site credentials are missing. The platform team is looking at it."),
     "CredentialsInvalid": _r("P", FAILED, "The site credentials were refused. The platform team is looking at it."),
+    "InstallFailed": _r("P", FAILED, "The installation failed and was stopped. You can retry it; the platform team can see why it failed."),
+    "InstallNotStarted": _r("P", FAILED, "The installation could not be started on the platform. The platform team is looking at it."),
+    "InstallOverdue": _r("P", FAILED, "The installation did not finish in the time allowed. You can retry it or delete the cluster."),
     "InvalidSecret": _r("P", FAILED, "A required credential is not valid. The platform team is looking at it."),
     "CredentialSecretMissing": _r("P", FAILED, "The cluster's credential secret is missing from the platform's secret store. Nothing was changed. The platform team acts."),
     "GrantRefused": _r("P", FAILED, "The site refused a role for an access group. The platform team is looking at it."),

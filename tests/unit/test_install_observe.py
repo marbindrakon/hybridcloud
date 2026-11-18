@@ -1,0 +1,438 @@
+"""The observation of a cluster installation and the decisions around it (module_utils/shc_install): what one look at
+the cluster object, the hub's ClusterDeployment and its current ClusterProvision concludes; every ending of the
+watching job; the check before the release; the guarded removal of a stopped build (an installed cluster is never
+removed, per provider); the in-flight freshness; the status.install blocks the role writes.
+
+Documentation ranges and example names only.
+"""
+import datetime
+import os
+import sys
+import unittest
+
+ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
+LIB = os.path.join(ROOT, "eda", "rulebooks", "collections", "ansible_collections", "hybridsovereign", "shc",
+                   "plugins", "module_utils")
+sys.path.insert(0, LIB)
+
+import shc_install as I  # noqa: E402
+import shc_status as S  # noqa: E402
+
+UTC = datetime.timezone.utc
+NOW = datetime.datetime(2026, 11, 18, 12, 0, 0, tzinfo=UTC)
+QUOTA_LOG = ("level=error msg=error(MissingQuota): Cores is not available because the required number of resources "
+             "(72) is more than the limit of 64")
+SETTINGS = {"windowMinutes": 120, "deadlineMinutes": 360, "writeEveryMinutes": 5, "provider": "openstack",
+            "tenantValues": {"controlPlane": "example.xlarge", "compute": "example.large"}}
+
+
+def t(minutes_ago):
+    return I.fmt_time(NOW - datetime.timedelta(minutes=minutes_ago))
+
+
+def po(install=None, uid="uid-1", event="ev-1", generation=1, deleting=False, conditions=None, **status):
+    st = dict(status)
+    st["delivery"] = {"eventId": event, "acknowledgedEventId": event, "jobStartedAt": t(10)}
+    if install is not None:
+        st["install"] = install
+    if conditions is not None:
+        st["conditions"] = conditions
+    meta = {"name": "demo", "namespace": "entity-example", "uid": uid, "generation": generation,
+            "resourceVersion": "7"}
+    if deleting:
+        meta["deletionTimestamp"] = t(1)
+    return {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift", "metadata": meta,
+            "status": st}
+
+
+def cond(ctype, status, reason="", message=""):
+    return {"type": ctype, "status": status, "reason": reason, "message": message}
+
+
+def cd(installed=False, provisioned=None, stopped=False, failed=None, restarts=0, limit=3, launch_error=False):
+    conds = []
+    if provisioned is not None:
+        conds.append(cond("Provisioned", "True" if provisioned else "False",
+                          "Provisioned" if provisioned else ("ProvisionStopped" if stopped else "Provisioning")))
+    if stopped:
+        conds.append(cond("ProvisionStopped", "True", "InstallAttemptsLimitReached", "Install attempts limit reached"))
+    if failed:
+        conds.append(cond("ProvisionFailed", "True", failed, "Cluster install failed but no known errors found in logs"))
+    if launch_error:
+        conds.append(cond("InstallLaunchError", "True", "PodFailedToStart", "x"))
+    return {"apiVersion": "hive.openshift.io/v1", "kind": "ClusterDeployment",
+            "metadata": {"name": "shc-oso-example-demo-abc12", "namespace": "shc-oso-example-demo-abc12"},
+            "spec": {"installed": installed, "installAttemptsLimit": limit},
+            "status": {"installRestarts": restarts, "conditions": conds,
+                       "provisionRef": {"name": "shc-oso-example-demo-abc12-0-x"}}}
+
+
+def prov(attempt=0, stage="provisioning", reason=None, log=None, stuck=False):
+    conds = []
+    if reason is not None:
+        conds.append(cond("ClusterProvisionFailed", "True", reason, "Cluster install failed but no known errors found"))
+    if stuck:
+        conds.append(cond("InstallPodStuck", "True", "PodInPendingPhase", "x"))
+    spec = {"attempt": attempt, "stage": stage}
+    if log is not None:
+        spec["installLog"] = log
+    return {"kind": "ClusterProvision", "spec": spec, "status": {"conditions": conds}}
+
+
+JOB = {"uid": "uid-1", "eventId": "ev-1", "startedAt": t(10)}
+RUNNING = {"stage": "Installing", "run": 1, "startedAt": t(8), "attempt": 1, "attemptsLimit": 3,
+           "observedAt": t(1)}
+
+
+def observe(obj, cd_=None, prov_=None, job=JOB, settings=SETTINGS, **kw):
+    return I.observe(obj, job, cd_, prov_, NOW, settings, **kw)
+
+
+def ready(res):
+    return [c for c in res["conditions"] if c["type"] == "Ready"][0]
+
+
+def stalled(res):
+    found = [c for c in res["conditions"] if c["type"] == "Stalled"]
+    return found[0] if found else None
+
+
+class Endings(unittest.TestCase):
+    """Every way the watching job ends, and that only "installed" leads on to a Ready write."""
+
+    def test_object_gone(self):
+        res = observe(None, cd(), prov())
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "gone", False))
+
+    def test_another_uid(self):
+        res = observe(po(uid="uid-2"), cd(), prov())
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "replaced", False))
+
+    def test_being_deleted(self):
+        res = observe(po(RUNNING, deleting=True), cd(), prov())
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "deleting", False))
+
+    def test_newer_event(self):
+        res = observe(po(RUNNING, event="ev-2"), cd(), prov())
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "superseded", False))
+
+    def test_installed(self):
+        res = observe(po(RUNNING), cd(installed=True, provisioned=True), prov(stage="complete"))
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "installed", True))
+        self.assertEqual(res["install"]["stage"], "Finishing")
+        self.assertEqual(ready(res)["status"], "False")
+        self.assertEqual(ready(res)["reason"], "InstallFinishing")
+
+    def test_installed_by_provisioned_condition_only(self):
+        res = observe(po(RUNNING), cd(provisioned=True), prov(stage="complete"))
+        self.assertEqual(res["outcome"], "installed")
+
+    def test_stopped(self):
+        res = observe(po(RUNNING, lastHandledReconcileRequest="2026-11-18T10:00:00Z", generation=4),
+                      cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3),
+                      prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        self.assertEqual((res["end"], res["outcome"], res["write"], res["action"]), (True, "stopped", True, "failed"))
+        self.assertEqual(res["install"]["stage"], "Stopped")
+        self.assertEqual(res["install"]["endedAt"], I.fmt_time(NOW))
+        self.assertEqual(res["install"]["stoppedGeneration"], 4)
+        self.assertEqual(res["install"]["stoppedRequest"], "2026-11-18T10:00:00Z")
+        msg = ("Attempt 3 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64). "
+               "The installer stopped after 3 attempts.")
+        self.assertEqual(ready(res), cond("Ready", "False", "QuotaExceeded", msg))
+        self.assertEqual(stalled(res), cond("Stalled", "True", "QuotaExceeded", msg))
+
+    def test_overdue(self):
+        res = observe(po(dict(RUNNING, startedAt=t(400))), cd(provisioned=False), prov(attempt=1))
+        self.assertEqual((res["end"], res["outcome"], res["action"]), (True, "overdue", "failed"))
+        self.assertEqual(ready(res)["reason"], "InstallOverdue")
+        self.assertEqual(stalled(res)["reason"], "InstallOverdue")
+        self.assertEqual(res["install"]["stage"], "Installing", "Hive may still be trying: the stage stays")
+
+    def test_window_reached(self):
+        res = observe(po(RUNNING), cd(provisioned=False), prov(), job=dict(JOB, startedAt=t(121)))
+        self.assertEqual((res["end"], res["outcome"], res["write"], res["action"]),
+                         (True, "window", True, "installing"))
+        self.assertEqual(ready(res)["reason"], "Installing")
+
+    def test_go_on(self):
+        res = observe(po(RUNNING), cd(provisioned=False), prov())
+        self.assertEqual((res["end"], res["outcome"]), (False, None))
+
+    def test_unknown_object_or_hub_goes_on_without_a_write(self):
+        for kw in ({"obj_error": True}, {"hub_error": True}):
+            res = observe(po(RUNNING), None, None, **kw)
+            self.assertEqual((res["end"], res["write"]), (False, False), kw)
+            res = observe(po(RUNNING), None, None, job=dict(JOB, startedAt=t(200)), **kw)
+            self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "window", False), kw)
+
+    def test_hub_error_never_stops_or_fails(self):
+        res = observe(po(dict(RUNNING, startedAt=t(500))), None, None, hub_error=True)
+        self.assertNotIn(res["outcome"], ("stopped", "overdue"))
+
+    def test_no_ending_but_installed_writes_ready_true(self):
+        cases = [observe(None), observe(po(uid="x")), observe(po(RUNNING, deleting=True)),
+                 observe(po(RUNNING, event="ev-9")),
+                 observe(po(RUNNING), cd(provisioned=False, stopped=True, failed="UnknownError"), None),
+                 observe(po(dict(RUNNING, startedAt=t(400))), cd(), prov()),
+                 observe(po(RUNNING), cd(), prov(), job=dict(JOB, startedAt=t(500))),
+                 observe(po(RUNNING), cd(installed=True), prov(stage="complete"))]
+        for res in cases:
+            for c in res["conditions"]:
+                self.assertFalse(c["type"] == "Ready" and c["status"] == "True", res)
+
+
+class Stages(unittest.TestCase):
+    def test_no_build_yet(self):
+        res = observe(po({"stage": "Preparing", "run": 1}), None, None)
+        self.assertEqual(res["install"]["stage"], "Installing")
+        self.assertFalse(res["end"])
+
+    def test_attempt_1_running(self):
+        res = observe(po(RUNNING), cd(provisioned=False), prov(attempt=0))
+        self.assertEqual((res["install"]["attempt"], res["install"]["attemptsLimit"]), (1, 3))
+        self.assertEqual(ready(res), cond("Ready", "False", "Installing", "Installing, attempt 1 of 3."))
+        self.assertNotIn("lastFailure", res["install"])
+
+    def test_attempt_1_failed_quota_attempt_2_not_started(self):
+        res = observe(po(RUNNING), cd(provisioned=False, failed="UnknownError", restarts=1),
+                      prov(attempt=0, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        lf = res["install"]["lastFailure"]
+        self.assertEqual((lf["attempt"], lf["reason"]), (1, "QuotaExceeded"))
+        self.assertEqual(lf["message"], "Attempt 1 of 3 failed: the site reports too little quota: Cores (72 needed, "
+                                        "limit 64).")
+        self.assertEqual(ready(res)["reason"], "InstallRetrying")
+        self.assertFalse(res["end"])
+        self.assertIsNone(stalled(res))
+
+    def test_last_failure_kept_while_the_next_attempt_runs(self):
+        lf = {"attempt": 1, "reason": "QuotaExceeded", "message": "Attempt 1 of 3 failed: x.", "time": t(3)}
+        res = observe(po(dict(RUNNING, lastFailure=lf)), cd(provisioned=False, failed="UnknownError", restarts=1),
+                      prov(attempt=1))
+        self.assertEqual(res["install"]["attempt"], 2)
+        self.assertEqual(res["install"]["lastFailure"], lf)
+        self.assertEqual(ready(res)["reason"], "InstallRetrying")
+
+    def test_failure_seen_only_on_the_deployment(self):
+        res = observe(po(RUNNING), cd(provisioned=False, failed="AWSVPCLimitExceeded", restarts=1), prov(attempt=1),
+                      settings=dict(SETTINGS, provider="aws"))
+        self.assertEqual(res["install"]["lastFailure"]["attempt"], 1)
+        self.assertEqual(res["install"]["lastFailure"]["reason"], "QuotaExceeded")
+
+    def test_unknown_failure_on_the_deployment_only_is_not_called_no_log(self):
+        res = observe(po(RUNNING), cd(provisioned=False, failed="UnknownError", restarts=1), prov(attempt=1))
+        self.assertEqual(res["install"]["lastFailure"]["reason"], "InstallFailed")
+
+    def test_stopped_on_unknown_cause(self):
+        res = observe(po(RUNNING), cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3),
+                      prov(attempt=2, stage="failed", reason="UnknownError", log="level=fatal msg=odd thing at 192.0.2.4"))
+        self.assertEqual(ready(res)["reason"], "InstallFailed")
+        self.assertNotIn("192.0.2", ready(res)["message"])
+
+    def test_stopped_on_refused_setting(self):
+        log = 'compute[0].platform.openstack.type: Not found: "example.large"'
+        res = observe(po(RUNNING), cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3),
+                      prov(attempt=2, stage="failed", reason="UnknownError", log=log))
+        self.assertEqual(ready(res)["reason"], "InstallSettingRefused")
+        self.assertIn('worker flavor "example.large"', ready(res)["message"])
+
+    def test_stopped_on_aws_and_gcp_quota_codes(self):
+        for provider, code in (("aws", "AWSEC2QuotaExceeded"), ("gcp", "GCPComputeQuotaExceeded")):
+            res = observe(po(RUNNING), cd(provisioned=False, stopped=True, failed=code, restarts=3),
+                          prov(attempt=2, stage="failed", reason=code, log="level=error msg=x"),
+                          settings=dict(SETTINGS, provider=provider))
+            self.assertEqual(stalled(res)["reason"], "QuotaExceeded", provider)
+
+    def test_pod_not_starting(self):
+        res = observe(po(RUNNING), cd(provisioned=False, launch_error=True), prov(attempt=0, stuck=True))
+        self.assertEqual(ready(res)["reason"], "InstallNotStarted")
+        self.assertFalse(res["end"])
+        self.assertIsNone(stalled(res), "the platform keeps checking: not stalled")
+
+    def test_installed_clears_stalled_and_last_failure(self):
+        lf = {"attempt": 1, "reason": "QuotaExceeded", "message": "m", "time": t(3)}
+        res = observe(po(dict(RUNNING, lastFailure=lf), conditions=[cond("Stalled", "True", "QuotaExceeded")]),
+                      cd(installed=True, provisioned=True), prov(stage="complete", attempt=1))
+        self.assertNotIn("lastFailure", res["install"])
+        self.assertEqual(stalled(res)["status"], "False")
+
+
+class Writes(unittest.TestCase):
+    def test_no_write_when_nothing_changed_and_the_check_time_is_recent(self):
+        first = observe(po(RUNNING), cd(provisioned=False), prov())
+        obj = po(first["install"], conditions=first["conditions"])
+        again = I.observe(obj, JOB, cd(provisioned=False), prov(), NOW + datetime.timedelta(seconds=30), SETTINGS)
+        self.assertFalse(again["write"])
+
+    def test_check_time_written_every_five_minutes(self):
+        first = observe(po(RUNNING), cd(provisioned=False), prov())
+        obj = po(first["install"], conditions=first["conditions"])
+        later = I.observe(obj, JOB, cd(provisioned=False), prov(), NOW + datetime.timedelta(minutes=5), SETTINGS)
+        self.assertTrue(later["write"])
+
+    def test_a_change_is_written_at_once(self):
+        first = observe(po(RUNNING), cd(provisioned=False), prov())
+        obj = po(first["install"], conditions=first["conditions"])
+        res = I.observe(obj, JOB, cd(provisioned=False, failed="UnknownError", restarts=1),
+                        prov(stage="failed", reason="UnknownError", log=QUOTA_LOG),
+                        NOW + datetime.timedelta(seconds=30), SETTINGS)
+        self.assertTrue(res["write"])
+
+    def test_the_status_library_reads_the_stop_as_failed(self):
+        res = observe(po(RUNNING), cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3),
+                      prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        obj = po(RUNNING)
+        patch, info = S.compute_status_patch(obj, {"status": res["status"], "install": res["install"],
+                                                   "conditions": res["conditions"]},
+                                             {"action": res["action"], "event_id": "ev-1"})
+        self.assertEqual(info["phase"], "Failed")
+        self.assertEqual(patch["status"]["summary"], "The environment's quota is too small for this cluster. Make the "
+                                                     "cluster smaller or have the quota raised, then retry.")
+        self.assertEqual(patch["status"]["delivery"]["completedEventId"], "ev-1")
+
+    def test_the_still_installing_write_completes_the_event_and_keeps_the_phase(self):
+        res = observe(po(RUNNING), cd(provisioned=False), prov(), job=dict(JOB, startedAt=t(121)))
+        obj = po(RUNNING, conditions=[cond("Ready", "False", "Installing", "Installing, attempt 1 of 3."),
+                                      cond("Reconciling", "True", "JobRunning")], phase="Creating", phaseSince=t(9))
+        patch, info = S.compute_status_patch(obj, {"status": res["status"], "install": res["install"],
+                                                   "conditions": res["conditions"]},
+                                             {"action": res["action"], "event_id": "ev-1"})
+        self.assertEqual(info["phase"], "Creating")
+        self.assertEqual(patch["status"]["phaseSince"], t(9))
+        self.assertEqual(patch["status"]["delivery"]["completedEventId"], "ev-1")
+        self.assertEqual(patch["status"]["summary"], "The cluster is being installed.")
+
+
+class SameObject(unittest.TestCase):
+    """The check right before the release."""
+
+    def test_cases(self):
+        self.assertEqual(I.same_object(po(), "uid-1", "ev-1"), (True, ""))
+        self.assertFalse(I.same_object(None, "uid-1", "ev-1")[0])
+        self.assertFalse(I.same_object(po(uid="uid-2"), "uid-1", "ev-1")[0])
+        self.assertFalse(I.same_object(po(deleting=True), "uid-1", "ev-1")[0])
+        self.assertFalse(I.same_object(po(event="ev-2"), "uid-1", "ev-1")[0])
+
+
+STOPPED = {"stage": "Stopped", "run": 1, "startedAt": t(60), "endedAt": t(30), "stoppedGeneration": 2,
+           "stoppedRequest": "2026-11-18T09:00:00Z", "attempt": 3, "attemptsLimit": 3}
+
+
+class Removal(unittest.TestCase):
+    """The guarded removal of a stopped build: all four conditions, read fresh; unknown counts as installed."""
+
+    STOPPED_CD = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
+
+    def asked(self, **kw):
+        return po(STOPPED, generation=3, lastHandledReconcileRequest="2026-11-18T09:00:00Z", **kw)
+
+    def test_allowed_on_a_newer_generation(self):
+        self.assertTrue(I.may_remove_build(self.asked(), self.STOPPED_CD, True)[0])
+
+    def test_allowed_on_a_newer_retry_request(self):
+        obj = po(STOPPED, generation=2, lastHandledReconcileRequest="2026-11-18T11:59:00Z")
+        self.assertTrue(I.may_remove_build(obj, self.STOPPED_CD, True)[0])
+
+    def test_allowed_on_a_retry_event_published_after_the_stop(self):
+        obj = po(STOPPED, generation=2, lastHandledReconcileRequest="2026-11-18T09:00:00Z")
+        ev = {"reason": "PlatformOpenshiftReconcileRequested", "publishedAt": t(1)}
+        self.assertTrue(I.may_remove_build(obj, self.STOPPED_CD, True, event=ev)[0])
+        ev_old = {"reason": "PlatformOpenshiftReconcileRequested", "publishedAt": t(40)}
+        self.assertFalse(I.may_remove_build(obj, self.STOPPED_CD, True, event=ev_old)[0])
+
+    def test_nobody_asked(self):
+        obj = po(STOPPED, generation=2, lastHandledReconcileRequest="2026-11-18T09:00:00Z")
+        ok, why = I.may_remove_build(obj, self.STOPPED_CD, True)
+        self.assertFalse(ok)
+        self.assertIn("nobody asked", why)
+
+    def test_hub_unreadable_means_no_removal(self):
+        self.assertFalse(I.may_remove_build(self.asked(), None, False)[0])
+        self.assertFalse(I.may_remove_build(self.asked(), self.STOPPED_CD, False)[0])
+
+    def test_object_unreadable_means_no_removal(self):
+        self.assertFalse(I.may_remove_build(None, self.STOPPED_CD, True)[0])
+
+    def test_hive_still_trying_is_never_removed(self):
+        for hub in (cd(provisioned=False, failed="UnknownError", restarts=1), cd(provisioned=False)):
+            self.assertFalse(I.may_remove_build(self.asked(), hub, True)[0])
+
+    def test_failed_release_without_a_deployment(self):
+        self.assertTrue(I.may_remove_build(self.asked(), None, True, release_failed=True)[0])
+        self.assertFalse(I.may_remove_build(self.asked(), None, True, release_failed=False)[0])
+
+    def test_object_without_a_recorded_stop(self):
+        obj = po({"stage": "Installing", "run": 1}, generation=3)
+        self.assertFalse(I.may_remove_build(obj, self.STOPPED_CD, True)[0])
+        self.assertFalse(I.may_remove_build(po(None, generation=3), self.STOPPED_CD, True)[0])
+
+    def test_every_combination(self):
+        """All 2^4 combinations of the four conditions (plus unreadable hub): only all four true removes."""
+        for hub_installed in (False, True):
+            for hub_stopped in (False, True):
+                for obj_installed in (False, True):
+                    for asked in (False, True):
+                        for readable in (False, True):
+                            hub = cd(installed=hub_installed, provisioned=hub_installed or None, stopped=hub_stopped,
+                                     failed="UnknownError")
+                            install = dict(STOPPED)
+                            extra = {}
+                            if obj_installed:
+                                extra["clusterInstalled"] = True
+                            obj = po(install, generation=3 if asked else 2,
+                                     lastHandledReconcileRequest="2026-11-18T09:00:00Z", **extra)
+                            ok = I.may_remove_build(obj, hub, readable)[0]
+                            want = readable and not hub_installed and hub_stopped and not obj_installed and asked
+                            self.assertEqual(ok, want, (hub_installed, hub_stopped, obj_installed, asked, readable))
+
+    def test_installed_anywhere_is_never_removed_per_provider(self):
+        for provider in ("openstack", "aws", "gcp"):
+            with self.subTest(provider):
+                # the hub says installed
+                hub = cd(installed=True, provisioned=True, stopped=True)
+                self.assertFalse(I.may_remove_build(self.asked(), hub, True)[0])
+                # the object says installed
+                self.assertFalse(I.may_remove_build(self.asked(clusterInstalled=True), self.STOPPED_CD, True)[0])
+                for stage in ("Finishing", "Installed"):
+                    obj = po(dict(STOPPED, stage=stage), generation=3)
+                    self.assertFalse(I.may_remove_build(obj, self.STOPPED_CD, True)[0])
+
+
+class InstallBlocks(unittest.TestCase):
+    def test_preparing_only_for_a_new_cluster(self):
+        self.assertEqual(I.install_preparing({}, NOW), {"stage": "Preparing", "run": 1})
+        self.assertIsNone(I.install_preparing({"install": {"stage": "Installing"}}, NOW))
+        self.assertIsNone(I.install_preparing({"clusterInstalled": True}, NOW))
+        self.assertIsNone(I.install_preparing({"installStarted": True}, NOW))
+
+    def test_starting_keeps_a_running_installation(self):
+        for stage in ("Installing", "Finishing", "Installed"):
+            self.assertIsNone(I.install_starting({"install": {"stage": stage, "startedAt": t(30)}}, NOW))
+        self.assertIsNone(I.install_starting({"clusterInstalled": True}, NOW))
+        got = I.install_starting({"install": {"stage": "CleaningUp", "run": 2}}, NOW)
+        self.assertEqual((got["stage"], got["run"], got["startedAt"]), ("Installing", 2, I.fmt_time(NOW)))
+        self.assertEqual(I.install_starting({}, NOW)["run"], 1)
+
+    def test_cleaning_starts_the_next_run(self):
+        got = I.install_cleaning({"install": dict(STOPPED)}, NOW)
+        self.assertEqual((got["stage"], got["run"]), ("CleaningUp", 2))
+        for k in ("lastFailure", "endedAt", "stoppedGeneration", "stoppedRequest", "startedAt"):
+            self.assertIsNone(got[k])
+
+    def test_installed(self):
+        got = I.install_installed({"install": {"stage": "Finishing", "run": 2, "endedAt": None}}, NOW)
+        self.assertEqual((got["stage"], got["run"], got["endedAt"]), ("Installed", 2, I.fmt_time(NOW)))
+
+
+class Fresh(unittest.TestCase):
+    def test_observation_freshness(self):
+        st = {"delivery": {"jobStartedAt": t(30)}, "install": {"observedAt": t(5)}}
+        self.assertTrue(I.observation_fresh(st, NOW, 15))
+        st["install"]["observedAt"] = t(20)
+        self.assertFalse(I.observation_fresh(st, NOW, 15))
+        st["install"]["observedAt"] = t(40)   # an earlier job's observation
+        self.assertIsNone(I.observation_fresh(st, NOW, 15))
+        self.assertIsNone(I.observation_fresh({"delivery": {"jobStartedAt": t(3)}}, NOW, 15))
+
+
+if __name__ == "__main__":
+    unittest.main()

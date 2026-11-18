@@ -1,0 +1,139 @@
+# Failed installation attempts and the cause the platform must conclude (tests/unit/test_install_causes.py).
+# Add a captured ClusterProvision as a new entry: provider, the provision's ClusterProvisionFailed reason (hive),
+# its spec.installLog (log; may be a path relative to this directory in logFile), the values the tenant set
+# (tenant), and what the platform must say (reason, and message: the exact sentence, or contains: parts of it).
+# Example names and documentation ranges only.
+- name: openstack quota, limit form (several resources)
+  provider: openstack
+  hive: UnknownError
+  log: |
+    level=info msg=Consuming Install Config from target directory
+    level=error msg=failed to fetch Cluster: failed to fetch dependency of "Cluster": failed to generate asset "Platform Quota Check": error(MissingQuota): Cores is not available because the required number of resources (72) is more than the limit of 64, RAM is not available because the required number of resources (294912) is more than the limit of 262144
+  reason: QuotaExceeded
+  message: "the site reports too little quota: Cores (72 needed, limit 64), RAM (MB) (294912 needed, limit 262144)"
+- name: openstack quota, remaining form
+  provider: openstack
+  hive: UnknownError
+  log: |
+    level=fatal msg=failed to fetch Cluster: failed to generate asset \"Platform Quota Check\": error(MissingQuota): Instances is not available because the required number of resources (6) is more than remaining quota of 2
+  reason: QuotaExceeded
+  message: "the site reports too little quota: Instances (6 needed, 2 left)"
+- name: openstack quota, an unknown resource name is not shown
+  provider: openstack
+  hive: UnknownError
+  log: |
+    level=error msg=error(MissingQuota): VolumeBackupsOfProjectX is not available because the required number of resources (3) is more than the limit of 1
+  reason: QuotaExceeded
+  message: "the site reports too little quota"
+- name: aws quota through the installer sentence
+  provider: aws
+  hive: AWSEC2QuotaExceeded
+  log: |
+    level=error msg=failed to fetch Cluster: failed to generate asset "Platform Quota Check": error(MissingQuota): ec2/L-1216C47A is not available in us-east-2 because the required number of resources (40) is more than the limit of 32
+  reason: QuotaExceeded
+  message: "the site reports too little quota: Standard instance vCPUs (40 needed, limit 32)"
+- name: aws quota through Hive's code only
+  provider: aws
+  hive: AWSVPCLimitExceeded
+  log: "level=error msg=Error: creating EC2 VPC: VpcLimitExceeded: The maximum number of VPCs has been reached."
+  reason: QuotaExceeded
+  message: "the site reports too little quota: VPCs"
+- name: gcp quota, family CPUs
+  provider: gcp
+  hive: GCPComputeQuotaExceeded
+  log: |
+    level=error msg=error(MissingQuota): compute.googleapis.com/n2_cpus is not available in us-central1 because the required number of resources (24) is more than remaining quota of 8
+  reason: QuotaExceeded
+  message: "the site reports too little quota: N2 CPUs (24 needed, 8 left)"
+- name: openstack flavor that does not exist, the tenant's value
+  provider: openstack
+  hive: UnknownError
+  tenant: {controlPlane: b1.medium, compute: example.huge}
+  log: |
+    level=fatal msg=failed to fetch Master Machines: failed to load asset "Install Config": failed to create install config: compute[0].platform.openstack.type: Not found: "example.huge"
+  reason: InstallSettingRefused
+  message: "the site refused the worker flavor \"example.huge\": it does not exist"
+- name: openstack flavor too small
+  provider: openstack
+  hive: UnknownError
+  tenant: {controlPlane: example.small, compute: example.large}
+  log: |
+    level=fatal msg=failed to fetch Metadata: failed to load asset "Install Config": failed to create install config: controlPlane.platform.openstack.type: Invalid value: "example.small": Flavor did not meet the following minimum requirements: Must have minimum of 16384 MB RAM, had 8192 MB
+  reason: InstallSettingRefused
+  message: "the site refused the control plane flavor \"example.small\": it is smaller than the installer requires"
+- name: a flavor the tenant did not set is not named
+  provider: openstack
+  hive: UnknownError
+  tenant: {controlPlane: example.small, compute: example.large}
+  log: |
+    level=fatal msg=failed to create install config: compute[0].platform.openstack.type: Not found: "platform-internal-flavor"
+  reason: InstallSettingRefused
+  message: "the site refused the worker flavor: it does not exist"
+- name: aws instance type not found
+  provider: aws
+  hive: UnknownError
+  tenant: {controlPlane: m5.xlarge, compute: m9.example}
+  log: |
+    level=fatal msg=failed to fetch Metadata: failed to load asset "Install Config": failed to create install config: compute[0].platform.aws.type: Invalid value: "m9.example": instance type m9.example not found
+  reason: InstallSettingRefused
+  message: "the site refused the worker instance type \"m9.example\": it does not exist"
+- name: gcp machine type through Hive's code
+  provider: gcp
+  hive: GCPInstanceTypeNotFound
+  log: "level=fatal msg=something else entirely"
+  reason: InstallSettingRefused
+  message: "the site refused the instance or machine type of the nodes"
+- name: openstack image override not found
+  provider: openstack
+  hive: UnknownError
+  tenant: {image: rhcos-example}
+  log: |
+    level=fatal msg=failed to create install config: platform.openstack.clusterOSImage: Not found: "rhcos-example"
+  reason: InstallSettingRefused
+  message: "the site refused the image \"rhcos-example\""
+- name: openstack credentials refused
+  provider: openstack
+  hive: UnknownError
+  log: |
+    level=fatal msg=failed to fetch Cluster: failed to create a network client: Authentication failed
+  reason: CredentialsInvalid
+  message: "the site refused the credentials the installer uses"
+- name: aws credentials through Hive's code
+  provider: aws
+  hive: InvalidCredentials
+  log: "level=error msg=InvalidClientTokenId: The security token included in the request is invalid."
+  reason: CredentialsInvalid
+  message: "the site refused the credentials the installer uses"
+- name: empty log
+  provider: openstack
+  hive: UnknownError
+  log: ""
+  reason: InstallNotStarted
+  message: "the attempt ended before the installer wrote a log"
+- name: no log at all
+  provider: gcp
+  hive: UnknownError
+  log: null
+  reason: InstallNotStarted
+  message: "the attempt ended before the installer wrote a log"
+- name: Hive's specific code for something else
+  provider: openstack
+  hive: KubeAPIWaitTimeout
+  log: |
+    level=error msg=Attempted to gather debug logs after installation failure: must provide bootstrap host address
+    level=fatal msg=waiting for Kubernetes API: context deadline exceeded
+  reason: InstallFailed
+  message: "the installer reported KubeAPIWaitTimeout"
+- name: unknown cause, no code shown
+  provider: openstack
+  hive: UnknownError
+  log: |
+    level=error msg=Error: something the platform has never seen at https://192.0.2.10:13000/v3 for project example-project
+  reason: InstallFailed
+  message: "the cause is not one the platform recognizes"
+- name: a Hive code that is not a plain word is not shown
+  provider: openstack
+  hive: "Bad code: with text"
+  log: "level=error msg=x"
+  reason: InstallFailed
+  message: "the cause is not one the platform recognizes"

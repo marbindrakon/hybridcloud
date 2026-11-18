@@ -105,6 +105,10 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `Deleting` | Being deleted. | Nobody: it continues by itself |
 | `DeletionRequested` | Being deleted. | Nobody: it continues by itself |
 | `InProgress` | Applying the change. | Nobody: it continues by itself |
+| `InstallCleanup` | A stopped installation is being removed before the new one starts. | Nobody: it continues by itself |
+| `InstallFinishing` | The cluster is installed; the platform is connecting it. | Nobody: it continues by itself |
+| `InstallRetrying` | An installation attempt failed; the installer is trying again. The message says what failed. | Nobody: it continues by itself |
+| `Installing` | The cluster is being installed. | Nobody: it continues by itself |
 | `JobRunning` | Applying the change. | Nobody: it continues by itself |
 | `NotReady` | Not ready yet. | Nobody: it continues by itself |
 | `Published` | Queued; the change starts shortly. | Nobody: it continues by itself |
@@ -190,6 +194,10 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `IdentityProviderNotFound` | The site has no identity provider of the declared name. The platform team is looking at it. | The platform team |
+| `InstallFailed` | The installation failed and was stopped. You can retry it; the platform team can see why it failed. | The platform team |
+| `InstallNotStarted` | The installation could not be started on the platform. The platform team is looking at it. | The platform team |
+| `InstallOverdue` | The installation did not finish in the time allowed. You can retry it or delete the cluster. | The platform team |
+| `InstallSettingRefused` | The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
@@ -223,6 +231,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ProjectDomainNotFound` | The referenced project or domain does not exist. | You (the tenant) |
 | `ProvisionFailed` | Creating or updating did not complete. The platform team is looking at it. | The platform team |
 | `PublishFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
+| `QuotaExceeded` | The environment's quota is too small for this cluster. Make the cluster smaller or have the quota raised, then retry. | You (the tenant) |
 | `RegionNotSupported` | This region is not supported. | You (the tenant) |
 | `RoleRefused` | The site refused a role for the cluster's user. The platform team is looking at it. | The platform team |
 | `RouterAdvertisementFailed` | The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this. | The platform team |
