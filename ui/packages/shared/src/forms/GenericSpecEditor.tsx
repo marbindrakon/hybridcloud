@@ -15,7 +15,9 @@ import { RbacMultiSelect } from '../components/RbacMultiSelect';
 import { AllowedSitesSelect } from '../components/AllowedSitesSelect';
 import { selfSubjectAccessReview } from '../access/ssar';
 import { errorText } from '../access/errorText';
-import { causeLines, fieldErrorsFrom } from './apiErrors';
+import { causeLines, fieldErrorsFrom, objectRuleMessages } from './apiErrors';
+import { installEditState, isInstallTimeField } from '../status/install';
+import { RetryInstallationModal } from '../components/RetryInstallationModal';
 import { useServerCheckWith } from './useServerCheck';
 import { HybridSovereignKind, K8sResource, KIND_PLURALS } from '../types';
 import { useTranslation } from '../i18n';
@@ -218,6 +220,8 @@ export function GenericSpecEditor({
   const [error, setError] = useState<string | null>(null);
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
+  /** Save on a stopped cluster starts a new installation: it asks first. */
+  const [confirmInstall, setConfirmInstall] = useState(false);
   const original = useMemo(() => (item.spec as Record<string, unknown>) ?? {}, [item]);
   const [draft, setDraft] = useState<Record<string, unknown>>(() => ({ ...original }));
   /** JSON fields keep the raw text while typing; parsed on every change, the error stays on the field. */
@@ -284,8 +288,14 @@ export function GenericSpecEditor({
     const n = Number(getAtPath(st, field.lockedWhileStatus.path));
     return Number.isFinite(n) && n > 0;
   };
+  // A cluster's install-time fields (sizes, flavors, release, image) change only before its installation starts
+  // and after it stopped; the API refuses them while it installs and once it is installed.
+  const installState = kind === 'PlatformOpenshift' ? installEditState(item) : 'open';
+  const installLocked = (field: SpecFieldMeta): boolean =>
+    kind === 'PlatformOpenshift' && isInstallTimeField(field.path) && (installState === 'installing' || installState === 'installed');
   const isLocked = (field: SpecFieldMeta): boolean => {
     if (readOnly || field.immutable) return true;
+    if (installLocked(field)) return true;
     if (accessLocked(field)) return true;
     if (statusLocked(field)) return true;
     if (field.immutableWhenSet) {
@@ -335,6 +345,9 @@ export function GenericSpecEditor({
   const fieldMap = Object.fromEntries(fields.map((f) => [`spec.${f.path}`, f.path]));
   const fieldErrors = fieldErrorsFrom(check.error, fieldMap);
   const checkText = check.error ? errorText(check.error, t, { action: 'action' }) : null;
+  // a cluster's refusal by the API's rule on install-time changes: the API's own sentence
+  const ruleText = (err: unknown): string => (kind === 'PlatformOpenshift' ? objectRuleMessages(err).join(' ') : '');
+  const checkRule = check.error ? ruleText(check.error) : '';
 
   const save = async () => {
     if (!check.passed) return;
@@ -347,10 +360,14 @@ export function GenericSpecEditor({
       onSaved();
     } catch (err) {
       const txt = errorText(err, t, { action: 'action' });
-      setError([txt.title, txt.body].filter(Boolean).join(' '));
+      setError(ruleText(err) || [txt.title, txt.body].filter(Boolean).join(' '));
     } finally {
       setSaving(false);
     }
+  };
+  const onSave = () => {
+    if (installState === 'stopped') setConfirmInstall(true);
+    else void save();
   };
 
   const reset = () => {
@@ -372,6 +389,12 @@ export function GenericSpecEditor({
           {t('form.readOnlyView')}
         </p>
       )}
+      {!readOnly && installState === 'stopped' && (
+        <Alert variant="warning" isInline isPlain className="sc-mb" title={t('install.noteStopped')} />
+      )}
+      {!readOnly && installState === 'installing' && (
+        <Alert variant="info" isInline isPlain className="sc-mb" title={t('install.noteInstalling')} />
+      )}
       {fields.map((field) => {
         const id = `${kind}-${field.path}`;
         const label = t(field.labelKey);
@@ -379,7 +402,9 @@ export function GenericSpecEditor({
         const locked = isLocked(field);
         const base = field.helpKey ? t(field.helpKey) : undefined;
         const help =
-          field.lockedWhileStatus && !readOnly && statusLocked(field)
+          installState === 'installed' && installLocked(field) && !readOnly
+            ? t('install.setAtInstallation')
+            : field.lockedWhileStatus && !readOnly && statusLocked(field)
             ? t(field.lockedWhileStatus.hintKey)
             : field.immutable && !readOnly
             ? t('form.immutableHint')
@@ -618,7 +643,7 @@ export function GenericSpecEditor({
       })}
       {checkText && (
         <Alert variant="danger" isInline isPlain className="sc-mb" title={t('form.serverRefused')}>
-          {[checkText.body || checkText.title, ...causeLines(fieldErrors.other)].filter(Boolean).join(' ')}
+          {checkRule || [checkText.body || checkText.title, ...causeLines(fieldErrors.other)].filter(Boolean).join(' ')}
         </Alert>
       )}
       {check.warnings.length > 0 && (
@@ -637,7 +662,7 @@ export function GenericSpecEditor({
             variant="primary"
             isAriaDisabled={saving || !editable || hasInvalid || hasJsonErrors || !dirty || !check.passed}
             isLoading={saving || (dirty && check.checking)}
-            onClick={() => void save()}
+            onClick={onSave}
           >
             {saving ? t('form.saving') : t('common.save')}
           </Button>
@@ -647,6 +672,16 @@ export function GenericSpecEditor({
           {dirty && check.checking && <span className="sc-text-muted">{t('form.checking')}</span>}
         </div>
       )}
+      <RetryInstallationModal
+        isOpen={confirmInstall}
+        spec={specToSend()}
+        busy={saving}
+        onConfirm={() => {
+          setConfirmInstall(false);
+          void save();
+        }}
+        onCancel={() => setConfirmInstall(false)}
+      />
     </Form>
   );
 }

@@ -28,3 +28,32 @@ test('the longest registered prefix claims a cause; the rest stay in the summary
   assert.deepEqual(ae.causeLines(r.other), ['spec.other: unknown']);
   assert.deepEqual(ae.fieldErrorsFrom(new Error('plain'), { spec: 'x' }), { byField: {}, other: [] });
 });
+
+// The API's rule on a cluster's install-time fields refuses the change with its own sentence; the page shows it
+// without the API's lead-in.
+const RULE = 'The cluster is being installed or is installed. Sizes, flavors, release and image can be changed before the installation starts or after it has stopped.';
+
+test('objectRuleMessages: the sentence of a rule on the whole object, from the causes', () => {
+  for (const field of [undefined, '', '<nil>', 'spec', '.spec']) {
+    const err = new K8sApiError(422, `PlatformOpenshift.hybridsovereign.redhat "demo" is invalid: <nil>: Invalid value: "object": ${RULE}`, {
+      reason: 'Invalid',
+      causes: [{ reason: 'FieldValueInvalid', field, message: `Invalid value: "object": ${RULE}` }],
+    });
+    assert.deepEqual(ae.objectRuleMessages(err), [RULE], String(field));
+  }
+  const forbidden = new K8sApiError(422, 'x is invalid', { causes: [{ field: 'spec', message: `Forbidden: ${RULE}` }] });
+  assert.deepEqual(ae.objectRuleMessages(forbidden), [RULE]);
+});
+
+test('objectRuleMessages: from the message when the answer has no causes', () => {
+  const err = new K8sApiError(422, `PlatformOpenshift.hybridsovereign.redhat "demo" is invalid: <nil>: Invalid value: "object": ${RULE}`, { reason: 'Invalid' });
+  assert.deepEqual(ae.objectRuleMessages(err), [RULE]);
+});
+
+test('objectRuleMessages: nothing for refusals of a field, other errors or plain errors', () => {
+  const field = new K8sApiError(422, 'x is invalid', { causes: [{ field: 'spec.openstack.workerCount', message: 'Invalid value: -1: should be greater than or equal to 0' }] });
+  assert.deepEqual(ae.objectRuleMessages(field), []);
+  assert.deepEqual(ae.objectRuleMessages(new K8sApiError(409, 'conflict', {})), []);
+  assert.deepEqual(ae.objectRuleMessages(new Error(RULE)), []);
+  assert.deepEqual(ae.objectRuleMessages(undefined), []);
+});
