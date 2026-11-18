@@ -133,19 +133,37 @@
   changed_when: false
   when: cb_helm_release_exists | bool
 
-# while an installation runs (or a build this run adopted) the release is not changed: the running build is the one
-# that was installed; settings changed meanwhile are used only by a later installation
+- name: Whether the hub holds the build
+  ansible.builtin.include_tasks: install_build_exists.yml
+
+# while an installation runs on the hub (a ClusterDeployment exists, recorded Installing or Finishing, or adopted by
+# this run) the release is not changed: the running build is the one that was installed; settings changed meanwhile
+# are used only by a later installation. Without a ClusterDeployment the release is made again (a failed or
+# abandoned release is repaired; one that keeps failing is written as a stop), unless an older job is still making it
+# (pending, younger than pendingReleaseMinutes): then the run hands over. Nothing is released against a hub that
+# cannot be read (the watch then waits for it)
 - name: Set values changed flag
   vars:
     _cb_running: >-
-      {{ (po_adopted | default(false) | bool)
+      {{ (po_cd_exists | bool) and ((po_adopted | default(false) | bool)
          or ((((platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true)).install
-              | default({}, true)).stage | default('')) in ['Installing', 'Finishing'] }}
+              | default({}, true)).stage | default('')) in ['Installing', 'Finishing']) }}
   ansible.builtin.set_fact:
     cb_values_changed: >-
-      {{ not (cb_helm_release_exists | bool) or
-         (not (_cb_running | bool) and
-          ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true'))) }}
+      {{ not (po_hub_unreadable | default(false) | bool) and
+         (not (cb_helm_release_exists | bool) or not (po_cd_exists | bool) or
+          (not (_cb_running | bool) and
+           ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true')))) }}
+    cb_release_young: >-
+      {{ not (po_cd_exists | bool) and (cb_helm_release_exists | bool)
+         and ((helm_release_status.stdout | default('{}', true) | from_json).info | default({}, true)
+              | hybridsovereign.shc.shc_install_release_young(platformopenshift_install.pendingReleaseMinutes | int)) }}
+
+- name: An older job is still making the release
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub's release of the build is still being made; the installation is starting
+  when: cb_release_young | bool
 
 # the install starts with the Helm release below: from here on a refused prefix never withdraws the cluster's subnet
 # (cloud_internal_reach.yml)

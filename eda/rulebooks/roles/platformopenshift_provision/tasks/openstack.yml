@@ -149,6 +149,15 @@
     - cb_ingress_vip | length > 0
     - (_rg.status | default('') | string) != 'True' or (_st.platformPrefixes | default([], true) | length) < 3
 
+# whether the hub already holds a build of this cluster: the checks a new installation needs are left out only then
+- name: Whether the hub holds the build
+  ansible.builtin.include_tasks: install_build_exists.yml
+  when: >-
+    not (
+      po_cr_current.resources[0].status.clusterInstalled | default(false) | bool and
+      po_cr_current.resources[0].status.clusterHealth | default('') == 'Healthy'
+    )
+
 - name: Check the cluster before anything is created
   ansible.builtin.include_tasks: openstack_preflight.yml
   when: >-

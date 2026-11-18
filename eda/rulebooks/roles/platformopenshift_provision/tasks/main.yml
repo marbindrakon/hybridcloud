@@ -176,6 +176,17 @@
     # An installation past the deadline is shown failed (InstallOverdue) and checked at each periodic run with one
     # observation: it goes on to the provider's steps only when it is installed (they connect it and write Ready); a
     # stop is written with its cause; otherwise the run ends.
+    # (only when the hub holds a ClusterDeployment: without one the provider's steps make the release again first)
+    - name: Whether the hub holds an overdue installation's build
+      ansible.builtin.include_tasks: install_build_exists.yml
+      vars:
+        cb_cluster_name: "{{ platformopenshift_cr.resources[0].status.buildName }}"
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+        - platformopenshift_cr.resources[0].status | default({}, true)
+          | hybridsovereign.shc.shc_install_overdue(platformopenshift_install.deadlineMinutes | default(0, true) | int)
+
     - name: Check an installation past the deadline once
       ansible.builtin.include_tasks: install_observe.yml
       vars:
@@ -186,6 +197,7 @@
         - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
         - platformopenshift_cr.resources[0].status | default({}, true)
           | hybridsovereign.shc.shc_install_overdue(platformopenshift_install.deadlineMinutes | default(0, true) | int)
+        - po_cd_exists | default(false) | bool
 
     # the first check of a new cluster: its installation is being prepared (checks, addresses, names)
     - name: Record that the installation is being prepared

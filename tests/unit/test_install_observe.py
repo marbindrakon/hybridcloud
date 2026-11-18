@@ -569,10 +569,14 @@ class Recheck(unittest.TestCase):
         cleaning = po({"stage": "CleaningUp", "run": 2, "observedAt": t(2)}, generation=3)
         deleting = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
         deleting["metadata"]["deletionTimestamp"] = t(1)
-        for hub in (self.STOPPED_CD, deleting, None):
+        for hub in (self.STOPPED_CD, None):
             ok, why = I.may_remove_build(cleaning, hub, True, release_exists=True)
             self.assertTrue(ok, hub)
             self.assertIn("goes on", why)
+        # a build Hive is deprovisioning: nothing more is removed now; the run after it is gone continues
+        ok, why = I.may_remove_build(cleaning, deleting, True, release_exists=True)
+        self.assertFalse(ok)
+        self.assertIn("next run continues", why)
         self.assertFalse(I.may_remove_build(cleaning, cd(provisioned=False), True)[0])
         self.assertFalse(I.may_remove_build(cleaning, cd(installed=True, provisioned=True), True)[0])
         self.assertFalse(I.may_remove_build(cleaning, self.STOPPED_CD, False)[0])
@@ -689,7 +693,8 @@ class HubWins(unittest.TestCase):
         the installation allows; a younger pending one is an older job's release being made."""
         asked = po(STOPPED, generation=3, spec=SMALLER, lastHandledReconcileRequest="2026-11-18T11:59:00Z")
         self.assertTrue(I.release_young("pending-install", t(3), NOW, 10))
-        self.assertTrue(I.release_young("pending-upgrade", "", NOW, 10), "unknown age: left alone")
+        self.assertFalse(I.release_young("pending-upgrade", "", NOW, 10), "an age that cannot be read counts as old")
+        self.assertFalse(I.release_young("pending-upgrade", "not a time", NOW, 10))
         self.assertFalse(I.release_young("pending-install", t(11), NOW, 10))
         self.assertFalse(I.release_young("failed", t(1), NOW, 10))
         self.assertFalse(I.release_young("deployed", t(1), NOW, 10))

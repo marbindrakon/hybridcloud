@@ -49,8 +49,14 @@ A recorded stop is checked against the hub at every run of the cluster; the hub 
 
 A build the hub shows running or installed under a recorded stop is adopted as it is: settings changed while the
 record said Stopped stay in the spec and are used only by a later installation, if any. While an installation runs
-the release is not changed (only made when it is missing), and the OpenStack preflight does not refuse a recorded
-build for a flavor it was not made with.
+on the hub (a ClusterDeployment exists) the release is not changed, and the OpenStack preflight does not refuse that
+build for a flavor it was not made with. An installation recorded as running whose ClusterDeployment does not exist
+(its release failed, was left pending by a job that ended, or never made one) gets its release made again at the next
+run, unless an older job is still making it (pending, younger than `pendingReleaseMinutes`; a release whose time
+cannot be read counts as older); a release that keeps failing is written as a stop. Nothing is released against a hub
+that cannot be read. A removal under way waits while Hive deprovisions the build (the event is completed; the run
+after it is gone continues). The test module `tests/unit/test_install_states.py` holds the table of every recorded
+state against every hub state and kind of request.
 - After `watchWindowMinutes` it writes that the installation is still running, completes its request and ends; the
   next periodic run of the cluster watches on.
 - Only an installed cluster is written Ready.

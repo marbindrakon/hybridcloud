@@ -108,14 +108,10 @@
   when:
     - pnn_reason | trim | length == 0 or pnn_reason | trim == 'WaitingForPlacement'
     - (os_result.flavors_missing | default([], true)) | length > 0
-    # a build that runs or is installed is not refused for settings it was not made with (they are used only by a
-    # later installation)
+    # a build the hub holds (it runs or is installed, or this run adopted it) is not refused for settings it was not
+    # made with (they are used only by a later installation); a new installation is always checked
     - not (po_adopted | default(false) | bool)
-    - >-
-      ((((po_cr_current.resources | default([{}], true) | first).status | default({}, true)).install
-        | default({}, true)).stage | default('')) not in ['Installing', 'Finishing', 'Installed']
-    - not (((po_cr_current.resources | default([{}], true) | first).status | default({}, true)).clusterInstalled
-           | default(false) | bool)
+    - not (po_cd_exists | default(false) | bool)
 
 - name: Keep the wait for the caller
   ansible.builtin.set_fact:

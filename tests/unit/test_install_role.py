@@ -462,10 +462,10 @@ class RemovalTakeover(unittest.TestCase):
         return hub
 
     def test_second_job_continues_the_removal(self):
-        """Job 2 (a second Retry, or the operator's event) finds CleaningUp and the ClusterDeployment being deleted:
-        it continues the removal (no second CleaningUp write, no run counted twice), then installs."""
+        """Job 2 (a second Retry, or the operator's event; job 1 ended) finds CleaningUp and the stopped
+        ClusterDeployment: it continues the removal (no second CleaningUp write, no run counted twice), then installs."""
         obj = self.cleaning()
-        api = FakeApi(obj, self.deleting_cd(), [failed_provision(2)], cd_reads=3)
+        api = FakeApi(obj, cd(stopped=True, failed="UnknownError", restarts=3), [failed_provision(2)], cd_reads=2)
         try:
             rc, tr, out = run_tasks(api, [self.REMOVE, AFTER], rsb_obj=obj)
         finally:
@@ -481,9 +481,23 @@ class RemovalTakeover(unittest.TestCase):
         self.assertEqual(creates(tr), ["/api/v1/namespaces/" + BUILD])
         self.assertTrue(after_reached(tr))
 
+    def test_a_removal_beside_a_build_being_deleted_hands_over(self):
+        """CleaningUp while Hive deprovisions the build (an earlier job's delete): nothing more is removed now, the
+        event is completed; the run after the build is gone continues the removal."""
+        obj = self.cleaning()
+        api = FakeApi(obj, self.deleting_cd())
+        try:
+            rc, tr, out = run_tasks(api, [self.REMOVE, AFTER], rsb_obj=obj)
+        finally:
+            api.close()
+        self.assertEqual(rc, 0, out)
+        self.assertEqual((kinds_deleted(tr), after_reached(tr)), ([], False))
+        self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
+
     def test_the_watch_never_concludes_a_stop_from_a_deleting_build(self):
         """The reviewer's sequence: removal step and watch on a build that is being deleted (it stays there past the
-        removal's waits): the job fails before it builds and nothing writes Stopped or records the request."""
+        removal's waits): the removal hands over before it deletes or builds, and nothing writes Stopped or records the
+        request."""
         obj = self.cleaning()
         api = FakeApi(obj, self.deleting_cd(), [failed_provision(2)])
         try:
@@ -497,7 +511,8 @@ class RemovalTakeover(unittest.TestCase):
                 api2.close()
         finally:
             api.close()
-        self.assertNotEqual(rc, 0)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(kinds_deleted(tr), [])
         self.assertEqual(api.obj["status"]["install"]["stage"], "CleaningUp")
         self.assertNotIn("stoppedRequest", api.obj["status"]["install"])
         self.assertFalse(after_reached(tr))
@@ -697,7 +712,7 @@ class StoppedRuns(unittest.TestCase):
         obj = po(dict(RUNNING, startedAt=ago(400)), buildName=BUILD)
         api = FakeApi(obj, hub, provisions)
         try:
-            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP)
+            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP, po_cd_exists=True)
         finally:
             api.close()
         return api, rc, tr, out
@@ -724,13 +739,26 @@ class StoppedRuns(unittest.TestCase):
         obj = po(dict(RUNNING, startedAt=ago(400)), buildName=BUILD)
         api = FakeApi(obj, cd())
         try:
-            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP, central_api_host="http://127.0.0.1:9")
+            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP, central_api_host="http://127.0.0.1:9",
+                                        po_cd_exists=True)
         finally:
             api.close()
         self.assertEqual(rc, 0, out)
         self.assertFalse(after_reached(tr))
         self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
         self.assertEqual(api.obj["status"]["install"], obj["status"]["install"], "what the page shows is unchanged")
+
+    def test_overdue_without_a_build_goes_on_to_repair_the_release(self):
+        """Past the deadline with no ClusterDeployment on the hub: no single check; the provider's steps make the
+        release again (else the overdue check would repeat for ever with nothing to watch)."""
+        obj = po(dict(RUNNING, startedAt=ago(400)), buildName=BUILD)
+        api = FakeApi(obj, None)
+        try:
+            rc, tr, out = self.run_main(api, obj, ("Whether the hub holds an overdue installation's build",)
+                                        + self.OVERDUE_STEP)
+        finally:
+            api.close()
+        self.assertEqual((rc, api.patches, after_reached(tr)), (0, [], True), out)
 
     def test_overdue_stopped_is_a_stop(self):
         api, rc, tr, out = self.overdue(cd(stopped=True, failed="UnknownError", restarts=3), [failed_provision(2)])
@@ -743,7 +771,7 @@ class StoppedRuns(unittest.TestCase):
         obj = po(RUNNING, buildName=BUILD)
         api = FakeApi(obj, cd())
         try:
-            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP)
+            rc, tr, out = self.run_main(api, obj, self.OVERDUE_STEP, po_cd_exists=True)
         finally:
             api.close()
         self.assertEqual((rc, api.patches, after_reached(tr)), (0, [], True), out)
@@ -843,7 +871,7 @@ class DefaultFlavors(unittest.TestCase):
     whose flavor neither the spec nor the installation's defaults name fails the job with the setting's name; an
     installed or installing cluster and a cluster without workers never fail on it."""
 
-    def run_facts(self, spec, defaults, status=None):
+    def run_facts(self, spec, defaults, cd_exists=False, adopted=False):
         import yaml
         tdir = os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks")
         with open(os.path.join(tdir, "openstack.yml")) as fh:
@@ -855,8 +883,7 @@ class DefaultFlavors(unittest.TestCase):
         self.assertEqual((len(facts), len(check)), (1, 1))
         v = {k: role_defaults[k] for k in ("default_control_plane_flavor", "default_worker_flavor",
                                            "default_control_plane_count", "default_worker_count")}
-        v.update(platform_spec=spec, platformopenshift_defaults=defaults,
-                 po_cr_current={"resources": [{"status": status or {}}]},
+        v.update(platform_spec=spec, platformopenshift_defaults=defaults, po_cd_exists=cd_exists, po_adopted=adopted,
                  ansible_operator_meta={"name": "demo", "namespace": NS})
         return H.run("platformopenshift_provision", "main.yml", v, tasks=facts + check + [AFTER])
 
@@ -874,10 +901,10 @@ class DefaultFlavors(unittest.TestCase):
 
     def test_only_where_an_installation_starts_and_a_role_has_nodes(self):
         none = {"type": "openstack", "openstack": {"environment": "env"}}
-        for status in ({"clusterInstalled": True}, {"install": {"stage": "Installed"}},
-                       {"install": {"stage": "Installing"}}, {"install": {"stage": "Finishing"}}):
-            rc, tr, out = self.run_facts(none, {}, status)
-            self.assertEqual((rc, after_reached(tr)), (0, True), status)
+        # a build on the hub (running, installed, or adopted): no installation starts, no check
+        for kw in ({"cd_exists": True}, {"adopted": True}):
+            rc, tr, out = self.run_facts(none, {}, **kw)
+            self.assertEqual((rc, after_reached(tr)), (0, True), kw)
         # no workers: the worker default is not needed
         rc, tr, out = self.run_facts({"type": "openstack", "openstack": {"environment": "env", "workerCount": 0}},
                                      {"controlPlaneFlavor": "example.xlarge"})
@@ -896,13 +923,14 @@ class AdoptedBuild(unittest.TestCase):
     """A build adopted by a resume (or any installation that runs) keeps its release: settings changed while the
     record said Stopped stay in the spec and are used only by a later installation."""
 
-    def flag(self, stage, adopted=False, exists=True, failed=False, diff="true"):
+    def flag(self, stage, adopted=False, exists=True, failed=False, diff="true", cd_exists=True):
         import yaml
         with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
                                "openstack_clusterbuild.yml")) as fh:
             task = next(t for t in yaml.safe_load(fh) if t.get("name") == "Set values changed flag")
         v = {"cb_helm_release_exists": exists, "cb_helm_release_failed": failed,
-             "values_diff_result": {"stdout": diff},
+             "values_diff_result": {"stdout": diff}, "po_cd_exists": cd_exists,
+             "helm_release_status": {"stdout": ""}, "platformopenshift_install": {"pendingReleaseMinutes": 10},
              "_po_now": {"resources": [{"status": {"install": {"stage": stage}}}]}}
         if adopted:
             v["po_adopted"] = True
@@ -917,6 +945,11 @@ class AdoptedBuild(unittest.TestCase):
             self.assertFalse(self.flag(stage, failed=True), stage)
         self.assertFalse(self.flag("Stopped", adopted=True), "a build the run adopted")
         self.assertTrue(self.flag("Installing", exists=False), "no release at all: it is made")
+        # no ClusterDeployment behind the record: the release is made again (a failed or abandoned one is repaired)
+        for stage in ("Installing", "Finishing", "CleaningUp", "Preparing"):
+            self.assertTrue(self.flag(stage, failed=True, cd_exists=False), stage)
+            self.assertTrue(self.flag(stage, diff="false", cd_exists=False), stage)
+        self.assertTrue(self.flag("Stopped", adopted=True, cd_exists=False))
         for stage in ("Installed", "CleaningUp", "Preparing", ""):
             self.assertTrue(self.flag(stage), stage)
         self.assertFalse(self.flag("Installed", diff="false"))

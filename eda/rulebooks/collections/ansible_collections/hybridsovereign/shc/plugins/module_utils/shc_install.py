@@ -824,11 +824,12 @@ HUB_STATES = ("unreadable", "none", "deleting", "installed", "stopped", "running
 
 def release_young(release_status, last_deployed, now, pending_minutes):
     """True when the hub's release of a build without a ClusterDeployment is pending (an older job is still making it)
-    and younger than pending_minutes: it is left alone (the installation is starting)."""
+    and younger than pending_minutes: it is left alone (the installation is starting). An unreadable time is old."""
     if not str(release_status or "").startswith("pending"):
         return False
     started = _minutes_since(last_deployed, now)
-    return started is None or started < float(pending_minutes)
+    # a time that cannot be read counts as old: the release is repaired, never waited for without end
+    return started is not None and started < float(pending_minutes)
 
 
 def hub_state(cd, hub_read_ok):
@@ -920,7 +921,11 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, rec
         # installation allows) is no live build; a younger pending one is an older job's release being made
         if _bool(release_young):
             return False, "the hub's release of the build is still being made; the installation is starting"
-    elif not (hub_stopped(cd) or _being_removed(cd)):
+    elif _being_removed(cd):
+        # Hive is deprovisioning it (an earlier job's delete): nothing more is removed now; the run after it is gone
+        # continues the removal
+        return False, "the hub's build is being removed; the next run continues the removal once it is gone"
+    elif not hub_stopped(cd):
         return False, "the hub's build has not stopped (Hive may still be trying); nothing is removed"
     if stage == "CleaningUp":
         return True, "the removal of the stopped build recorded on the cluster goes on"

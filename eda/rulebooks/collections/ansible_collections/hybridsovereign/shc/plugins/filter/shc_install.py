@@ -50,6 +50,12 @@ def shc_install_stopped_seen(obj):
     return I.install_stopped_seen(obj if isinstance(obj, dict) else {})
 
 
+def shc_install_release_young(info, pending_minutes):
+    """Whether a release (helm status's info: status, last_deployed) is pending and younger than pending_minutes."""
+    info = info if isinstance(info, dict) else {}
+    return I.release_young(info.get("status"), info.get("last_deployed"), _now(), pending_minutes)
+
+
 def shc_install_resumed(_unused=None):
     return I.install_resumed({})
 
@@ -64,4 +70,5 @@ class FilterModule(object):
                 "shc_install_cleaning": shc_install_cleaning, "shc_install_installed": shc_install_installed,
                 "shc_install_asked": shc_install_asked, "shc_install_overdue": shc_install_overdue,
                 "shc_install_stopped_seen": shc_install_stopped_seen,
-                "shc_install_spec_digest": shc_install_spec_digest, "shc_install_resumed": shc_install_resumed}
+                "shc_install_spec_digest": shc_install_spec_digest, "shc_install_resumed": shc_install_resumed,
+                "shc_install_release_young": shc_install_release_young}
