@@ -6,10 +6,11 @@
 #   published and not completed, and either
 #     - not acknowledged yet, for at most in_flight_ack_minutes (a lost event is published again), or
 #     - acknowledged, and its job started less than the kind's job timeout ago (a stalled job is replaced), or, for a
-#       kind whose job records when it last observed its work (PlatformOpenshift: status.install.observedAt, written
-#       at least every few minutes while the job watches an installation), that time is younger than
-#       in_flight_observed_stale_minutes (a job that died while it watched is replaced after about that time plus
-#       one reconcile period, not after the job timeout).
+#       kind whose job records when it last observed its work while it watches (PlatformOpenshift:
+#       status.install.observedAt, written at least every few minutes while the stage is Installing), that time is
+#       younger than in_flight_observed_stale_minutes (a job that died while it watched is replaced after about that
+#       time plus one reconcile period, not after the job timeout). In the other stages (a removal of a stopped
+#       installation, the steps after the install) the job writes no check time while it works: the job time applies.
 # A forced reconcile (reconcileNow) always publishes. Delete events have their own guard (publish_operator_event).
 # Vars: in_flight_kind (required), in_flight_api_version, in_flight_force (the role's reconcile_now),
 #       in_flight_ack_minutes (10), in_flight_job_timeout_minutes ({kind: minutes}; default 30),
@@ -39,6 +40,7 @@
         {%- set st = ((_in_flight_cr.resources | default([]) | first | default({})).get('status') or {}) -%}
         {%- set observed = ((st.get('install') or {}).get('observedAt') or '') | string -%}
         {%- if in_flight_kind in (in_flight_observed_kinds | default(['PlatformOpenshift']))
+               and ((st.get('install') or {}).get('stage') or '') == 'Installing'
                and observed is match('^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$')
                and observed >= (d.jobStartedAt | string) -%}
           {{ ((now(utc=true) - (observed | to_datetime(fmt))).total_seconds() / 60)

@@ -32,18 +32,52 @@
       ansible.builtin.meta: end_host
       when: platformopenshift_skip_reconcile | bool
 
-    # A stopped installation (Stalled=True) stays Failed until someone asks: no periodic event at the generation it
-    # stopped at. A Retry request or a spec change publishes; nothing reinstalls by itself.
+    # A running installation (removal of a stopped one, installer, connecting) keeps the state its job writes while
+    # a run is queued: the acknowledgement records only Reconciling=True/Queued (as for a Ready object), so the
+    # installation's stage, attempt and last failure stay on the page between two runs.
+    - name: Keep a running installation's state while a run is queued
+      ansible.builtin.set_fact:
+        reconcile_keeps_ready: true
+      when: >-
+        ((_hybridsovereign_redhat_platformopenshift.status | default({}, true)).install | default({}, true)).stage
+        | default('') in ['CleaningUp', 'Installing', 'Finishing']
+
+    # A stopped installation (Stalled=True, stage Stopped) stays Failed until someone asks: no periodic event while
+    # nothing changed since the stop. These publish: a Retry request (new, or one handled by the operator that no job
+    # acted on yet: status.lastHandledReconcileRequest differs from status.install.stoppedRequest), a change of the
+    # installer's part of the spec (spec.type and the provider blocks: its digest differs from
+    # status.install.stoppedSpec, the same digest as module_utils shc_install.spec_digest), any other spec change once
+    # (a generation above status.install.stoppedGeneration: the job applies what needs no installation and records the
+    # generation), and an event published after the stop that no job completed (a lost event is published again).
+    # Nothing reinstalls by itself: the job removes and installs only on a request or a change of those settings.
     - name: Decide whether a stopped installation waits for a request
       ansible.builtin.set_fact:
         platformopenshift_stalled_waits: >-
           {%- set st = _hybridsovereign_redhat_platformopenshift.status | default({}, true) -%}
+          {%- set inst = st.install | default({}, true) -%}
           {%- set stalled = st.conditions | default([], true) | selectattr('type', 'equalto', 'Stalled')
                             | selectattr('status', 'equalto', 'True') | list -%}
-          {%- set stopped_gen = (st.install | default({}, true)).stoppedGeneration
+          {%- set stopped_gen = inst.stoppedGeneration
                                 | default(st.observedGeneration | default(0, true), true) | int -%}
-          {{ (stalled | length > 0) and not (reconcile_now | bool)
-             and (platformopenshift_generation | int) <= stopped_gen }}
+          {%- set spec = _hybridsovereign_redhat_platformopenshift.spec | default({}, true) -%}
+          {%- set part = {} -%}
+          {%- for k in ['type', 'openstack', 'aws', 'gcp'] if k in spec -%}
+            {%- set _ = part.update({k: spec[k]}) -%}
+          {%- endfor -%}
+          {%- set digest = part | to_json(sort_keys=true, separators=[',', ':'], ensure_ascii=true) | hash('sha256') -%}
+          {%- set spec_changed = (inst.stoppedSpec | default('', true) | string | length > 0)
+                                 and digest != (inst.stoppedSpec | string) -%}
+          {%- set request_open = ('stoppedRequest' in inst)
+                                 and (st.lastHandledReconcileRequest | default('', true) | string)
+                                     != (inst.stoppedRequest | default('', true) | string) -%}
+          {%- set d = st.delivery | default({}, true) -%}
+          {%- set event_open = (d.eventId | default('', true) | string | length > 0)
+                               and (d.completedEventId | default('', true) | string) != (d.eventId | string)
+                               and (d.publishedAt | default('', true) | string)
+                                   > (inst.endedAt | default('', true) | string) -%}
+          {{ (stalled | length > 0) and (inst.stage | default('')) == 'Stopped' and not (reconcile_now | bool)
+             and (platformopenshift_generation | int) <= stopped_gen
+             and not spec_changed and not request_open and not event_open }}
 
     - name: Skip a stopped installation nobody asked to start again
       ansible.builtin.meta: end_host
