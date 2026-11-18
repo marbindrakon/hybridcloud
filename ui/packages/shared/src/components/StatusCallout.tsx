@@ -13,7 +13,8 @@ import {
   summaryOf,
   type PhaseSubject,
 } from '../status/phase';
-import { usualDuration } from '../status/durations';
+import { usualDuration, usualText } from '../status/durations';
+import { installProgress, installStoppedCallout } from '../status/install';
 import { formatRelativeTime } from '../list/listColumns';
 import { displayText, objectLabel } from '../i18n/vocabulary';
 
@@ -22,6 +23,9 @@ import { displayText, objectLabel } from '../i18n/vocabulary';
  * UX-056): in progress (with the usual duration), failed (summary, the
  * deciding condition's own message, reason and who acts), degraded, or
  * deleting (since when and what it waits for).
+ * An OpenShift cluster whose installation runs adds the installation's stage, attempt, start and
+ * last check (a warning while a failed attempt is retried); a stopped installation says how to
+ * retry it.
  * Ready objects show nothing. A refused edit (Accepted=False) adds a chip.
  */
 export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject }): React.ReactElement | null {
@@ -37,6 +41,8 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
   // the deciding condition's own message: which network, range or field (the summary is the reason's general line)
   const detail = detailOf(item);
   const detailLine = detail ? <p className="sc-status-callout__detail">{displayText(t, detail)}</p> : null;
+  const install = kind === 'PlatformOpenshift' ? installProgress(t, item) : null;
+  const stopped = kind === 'PlatformOpenshift' ? installStoppedCallout(t, item) : null;
 
   const sinceText = rel ? <span title={rel.title}>{t('callout.since', { time: rel.label })}</span> : null;
   const refusedChip = refused ? (
@@ -71,7 +77,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
             </ul>
           </>
         )}
-        {usual && <p className="sc-text-muted">{t(usual.key, { defaultValue: usual.defaultValue })}</p>}
+        {usual && <p className="sc-text-muted">{usualText(t, usual)}</p>}
       </Alert>
     );
   }
@@ -82,7 +88,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
         variant={phase === 'Failed' ? 'danger' : 'warning'}
         isInline
         className="sc-mb sc-status-callout"
-        title={phase === 'Failed' ? t('callout.failed') : t('callout.degraded')}
+        title={stopped ? stopped.title : phase === 'Failed' ? t('callout.failed') : t('callout.degraded')}
       >
         <p>
           {displayText(t, summary)} {sinceText}
@@ -94,6 +100,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
             {actorText ? ` · ${actorText}` : ''}
           </p>
         )}
+        {stopped && <p>{stopped.retryLine}</p>}
         {refusedChip}
       </Alert>
     );
@@ -102,7 +109,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
   // Waiting, Creating, Updating
   return (
     <Alert
-      variant="info"
+      variant={install?.variant ?? 'info'}
       isInline
       className="sc-mb sc-status-callout"
       title={t(`callout.${phase.toLowerCase()}`, { defaultValue: phase })}
@@ -111,7 +118,12 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
         {displayText(t, summary)} {sinceText}
       </p>
       {phase === 'Waiting' && detailLine}
-      {usual && <p className="sc-text-muted">{t(usual.key, { defaultValue: usual.defaultValue })}</p>}
+      {install?.stage && <p>{install.stage}</p>}
+      {install?.failure && <p className="sc-status-callout__detail">{displayText(t, install.failure)}</p>}
+      {install?.times && <p className="sc-text-muted">{install.times}</p>}
+      {install?.stale && <p>{install.stale}</p>}
+      {install?.longer && <p>{install.longer}</p>}
+      {usual && (install?.showEstimate ?? true) && <p className="sc-text-muted">{usualText(t, usual)}</p>}
       {phase === 'Waiting' && actorText && <p className="sc-text-muted">{actorText}</p>}
       {refusedChip}
     </Alert>
