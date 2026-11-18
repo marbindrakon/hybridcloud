@@ -132,3 +132,72 @@ test('transformBody: watch events are filtered by the object kind', () => {
   const virt = { type: 'ADDED', object: { kind: 'CloudVirt', status: { someVaultPath: 'x' } } };
   assert.deepEqual(m.transformBody('/apis/other/v1/things?watch=1', virt, {}), virt);
 });
+
+// p-osoui: what the environment card, the placement page and the cluster page read, and what tenants no longer see
+test('CloudOSO: status.access and the new endpoints keys pass; appCredentialId does not', () => {
+  const obj = cloudoso();
+  obj.status.access = {
+    signInClient: 'openstack-site-a',
+    groupDomain: 'tenants',
+    groups: [
+      { rbac: 'developers', group: 't1.developers', access: 'Edit', role: 'member', state: 'Granted' },
+      { rbac: 'auditors', group: 't1.auditors', access: 'View', role: 'reader', state: 'Waiting', message: 'The access group has no group in the sign-in directory yet.' },
+    ],
+    futureSecret: 'x',
+  };
+  obj.status.endpoints = {
+    console: 'https://identity.example/v3/auth/OS-FEDERATION/identity_providers/p/protocols/openid/websso?origin=https://dashboard.example/auth/websso/',
+    signIn: { method: 'TenantSSO', idpName: 'Example Platform', start: 'IdentityProvider' },
+    signInGroups: ['t1.developers'],
+    api: 'https://identity.example', project: 't1_env1', projectId: 'p1', domain: 'dom', domainId: 'd1',
+    region: 'RegionOne', location: 'Frankfurt',
+    apiCredentials: { state: 'Offered', validMinutesAfterSignIn: 1440, source: 'Site' },
+  };
+  const out = m.tenantSafe('CloudOSO', obj);
+  assert.equal('appCredentialId' in out.status, false);
+  assert.deepEqual(out.status.access, { signInClient: 'openstack-site-a', groupDomain: 'tenants', groups: obj.status.access.groups });
+  assert.deepEqual(out.status.endpoints, obj.status.endpoints);
+  assert.deepEqual(secretKeys(out), []);
+  // a malformed access (not an object) carries nothing
+  const odd = cloudoso();
+  odd.status.access = ['x'];
+  assert.equal('access' in m.tenantSafe('CloudOSO', odd).status, false);
+});
+
+test('CloudOSO: a key added later to a group entry or to the endpoints does not reach tenants (R25)', async () => {
+  const obj = cloudoso();
+  obj.status.access = {
+    signInClient: 'openstack-site-a', groupDomain: 'tenants', removing: ['t1.old'],
+    groups: [{ rbac: 'developers', group: 't1.developers', access: 'Edit', role: 'member', state: 'Granted', groupId: 'g-1', note: 'x' }],
+  };
+  obj.status.endpoints = { console: 'https://d.example', internalUrl: 'https://keystone.internal', signIn: { method: 'TenantSSO', mappingId: 'm1' },
+    apiCredentials: { state: 'Offered', validMinutesAfterSignIn: 60, source: 'Site', policy: 'x' } };
+  const out = m.tenantSafe('CloudOSO', obj);
+  assert.deepEqual(out.status.access, { signInClient: 'openstack-site-a', groupDomain: 'tenants', removing: ['t1.old'],
+    groups: [{ rbac: 'developers', group: 't1.developers', access: 'Edit', role: 'member', state: 'Granted' }] });
+  assert.deepEqual(out.status.endpoints, { console: 'https://d.example', signIn: { method: 'TenantSSO' },
+    apiCredentials: { state: 'Offered', validMinutesAfterSignIn: 60, source: 'Site' } });
+  // what the jobs write passes whole (tests/fixtures/osoui-status.json, made by the role tests)
+  const fix = JSON.parse((await import('node:fs')).readFileSync(`${UI}/../tests/fixtures/osoui-status.json`, 'utf8'));
+  for (const [name, st] of Object.entries(fix)) {
+    const [kind] = name.split('/');
+    const o = kind === 'CloudOSO' ? cloudoso() : platform();
+    Object.assign(o.status, st);
+    const safe = m.tenantSafe(kind, o).status;
+    for (const k of Object.keys(st)) assert.deepEqual(safe[k], st[k], `${name} ${k}`);
+  }
+});
+
+test('PlatformOpenshift: status.credential keeps ids and names only', () => {
+  const obj = platform();
+  obj.status.credential = { id: 'ac9d', user: 'shc-c1', userId: 'u1', domain: 'tenants', domainId: 'd1', createdAt: '2026-11-14T10:00:00Z', secret: 's', password: 'p', vaultPath: 'p/c' };
+  const out = m.tenantSafe('PlatformOpenshift', obj);
+  assert.deepEqual(out.status.credential, { id: 'ac9d', user: 'shc-c1', userId: 'u1', domain: 'tenants', domainId: 'd1', createdAt: '2026-11-14T10:00:00Z' });
+  assert.deepEqual(secretKeys(out), []);
+});
+
+test('NetworkPlacement is not filtered: status.siteNetwork reaches the placement page', () => {
+  const np = { kind: 'NetworkPlacement', status: { siteNetwork: { name: 'hn10042', id: 'n1', project: 'hybrid-fabric', subnets: [{ family: 4, prefix: '10.60.1.0/24', gateway: '10.60.1.1', id: 's1' }] } } };
+  assert.equal(m.tenantSafe('NetworkPlacement', np), np);
+  assert.equal(m.transformBody('/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-t1/networkplacements/p1', np, {}), np);
+});

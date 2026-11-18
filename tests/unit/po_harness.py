@@ -9,6 +9,7 @@ so that the roles' "{{ role_path }}/../../../common/..." paths resolve, with the
   openstack_call.yml    records {os: request, as: <the account's vault path>, cacert} and returns fake_os["<action>/<state>"] (or fake_os["<action>"])
   fabric_check.yml      records {fabric: request} and returns fake_fabric[<action>] (default {"errors": []})
   central_create.yml    records {create: <path>/<name>, body} and answers fake_create["<path>/<name>"] (default 201)
+  openstack_cluster_credential.yml  records {credential: <build>} and sets cb_provider_creds_vault
 and a fake kubernetes.core collection (k8s_info returns FAKE_K8S["<Kind>/<namespace>/<name>"], a list query uses
 "<Kind>/<namespace>/"; k8s records {k8s: ...}). No other collection is faked: a task file that needs one the job's
 execution environment lacks fails here too (test_ee_content.py checks the definitions). The trace is a list of JSON
@@ -26,8 +27,12 @@ import yaml
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 EDA = os.path.join(ROOT, "eda")
 HAVE_ANSIBLE = shutil.which("ansible-playbook") is not None
+# where an execution environment image carries its collections (ansible-galaxy collection list in the image)
+SYSTEM_COLLECTIONS = "/usr/share/ansible/collections"
+LAST_OUTPUT = ""
+LAST_VARS = ""   # with dump_vars: every variable of the play at its end (facts and registered results included)
 FAKED = ("patch_cr_status.yml", "nudge_cr.yml", "openstack_account.yml", "openstack_call.yml", "fabric_check.yml",
-         "central_create.yml")
+         "central_create.yml", "openstack_cluster_credential.yml")
 
 TRACE = """- name: trace
   ansible.builtin.shell: cat >> {{ trace_file }}
@@ -55,6 +60,11 @@ FAKE_TASKS = {
     "fabric_check.yml": TRACE % "{'fabric': fab_check}" + """- name: fake result
   ansible.builtin.set_fact:
     fab_check_result: "{{ fake_fabric[fab_check.action] | default({'errors': []}) }}"
+""",
+    # the cluster's own site credential (test_osoui_cluster_credential.py runs the real one): its Vault path
+    "openstack_cluster_credential.yml": TRACE % "{'credential': cb_app_name}" + """- name: fake credential
+  ansible.builtin.set_fact:
+    cb_provider_creds_vault: "cluster/oso/{{ cb_app_name }}/build/provider-creds"
 """,
     "central_create.yml": TRACE % "{'create': cc_path ~ '/' ~ cc_body.metadata.name, 'body': cc_body}" + """- name: fake answer
   ansible.builtin.set_fact:
@@ -106,7 +116,7 @@ def _link(src, dst):
 def build_tree(tmp, real=(), fakes=None):
     roles = os.path.join(tmp, "eda", "rulebooks", "roles")
     for role in ("platformopenshift_provision", "platformopenshift_teardown", "cloudoso_provision", "cloudoso_teardown",
-                 "networkplacement_provision"):
+                 "networkplacement_provision", "cloudinfrastructure_provision"):
         for sub in ("tasks", "files", "templates", "defaults"):
             src = os.path.join(EDA, "rulebooks", "roles", role, sub)
             if os.path.isdir(src):
@@ -138,12 +148,14 @@ def build_tree(tmp, real=(), fakes=None):
     return roles
 
 
-def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=None, real=(), fakes=None):
+def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=None, real=(), fakes=None,
+        dump_vars=False):
     """Run <role>/tasks/<task_file> (role_path = that role); with result (a Jinja expression) the trace ends with
     {"result": <its value>} when the file ran to its end; tasks (a task list) runs in place of the file, with the
     same role_path; real: common task files of FAKED to run unfaked (e.g. fabric_check.yml: the real helper); fakes:
-    {file name: task list text} replacing more common task files (TRACE is the trace task's template).
-    Returns (rc, trace list, output tail)."""
+    {file name: task list text} replacing more common task files (TRACE is the trace task's template); dump_vars:
+    every variable the play holds at its end (also after a failure) goes to LAST_VARS as JSON text, for a test that
+    hunts for secrets in facts and registered results. Returns (rc, trace list, output tail)."""
     tmp = tempfile.mkdtemp(prefix="shc-po-harness-")
     try:
         roles = build_tree(tmp, real, fakes)
@@ -168,18 +180,24 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
             target = os.path.join(tmp, "given_tasks.yml")
             with open(target, "w") as fh:
                 yaml.safe_dump(tasks, fh)
+        dump = os.path.join(tmp, "vars-dump.json")
         with open(os.path.join(tmp, "play.yml"), "w") as fh:
             fh.write(textwrap.dedent(f'''\
                 - hosts: localhost
                   connection: local
                   gather_facts: false
                   tasks:
-                    - ansible.builtin.include_tasks: {target}
+                    - block:
+                        - ansible.builtin.include_tasks: {target}
                 '''))
             if result:
-                fh.write("    - name: trace the result\n      ansible.builtin.shell: cat >> {{ trace_file }}\n"
-                         "      args:\n        stdin: \"{{ {'result': %s} | to_json }}\"\n      changed_when: false\n"
-                         % result.replace('"', '\\"'))
+                fh.write("        - name: trace the result\n          ansible.builtin.shell: cat >> {{ trace_file }}\n"
+                         "          args:\n            stdin: \"{{ {'result': %s} | to_json }}\"\n"
+                         "          changed_when: false\n" % result.replace('"', '\\"'))
+            if dump_vars:
+                fh.write("      always:\n        - name: dump every variable\n          ansible.builtin.copy:\n"
+                         "            content: \"{{ hostvars['localhost'] | to_json }}\"\n"
+                         f"            dest: {dump}\n          no_log: true\n")
         with open(os.path.join(tmp, "ansible.cfg"), "w") as fh:
             fh.write("[defaults]\n")
         base = {"role_path": role_path, "trace_file": trace, "fake_clouds_yaml": clouds, "fake_os": {},
@@ -187,7 +205,9 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
         with open(os.path.join(tmp, "vars.json"), "w") as fh:
             json.dump(dict(base, **extra_vars), fh)
         env = dict(os.environ, ANSIBLE_CONFIG=os.path.join(tmp, "ansible.cfg"),
-                   ANSIBLE_COLLECTIONS_PATH=os.path.join(tmp, "coll") + os.pathsep + os.path.join(EDA, "rulebooks", "collections"),
+                   # the image's own collections last (the fakes and the project's collections win)
+                   ANSIBLE_COLLECTIONS_PATH=os.pathsep.join([os.path.join(tmp, "coll"), os.path.join(EDA, "rulebooks", "collections"),
+                                                             SYSTEM_COLLECTIONS]),
                    ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false",
                    ANSIBLE_REMOTE_TMP=os.path.join(tmp, "remote-tmp"), ANSIBLE_LOCAL_TEMP=os.path.join(tmp, "local-tmp"),
                    ANSIBLE_COLLECTIONS_SCAN_SYS_PATH="false",
@@ -196,6 +216,14 @@ def run(role, task_file, extra_vars, k8s=None, files=None, result=None, tasks=No
                               capture_output=True, text=True, timeout=300, stdin=subprocess.DEVNULL)
         with open(trace) as fh:
             lines = [json.loads(ln) for ln in fh if ln.strip()]
+        global LAST_OUTPUT, LAST_VARS
+        LAST_OUTPUT = proc.stdout + proc.stderr   # the whole job output (a test that hunts for secrets reads it)
+        LAST_VARS = ""
+        if dump_vars:
+            if not os.path.exists(dump):
+                raise AssertionError("the play did not dump its variables: " + LAST_OUTPUT[-3000:])
+            with open(dump) as fh:
+                LAST_VARS = fh.read()
         return proc.returncode, lines, proc.stdout[-4000:] + proc.stderr[-2000:]
     finally:
         shutil.rmtree(tmp, ignore_errors=True)

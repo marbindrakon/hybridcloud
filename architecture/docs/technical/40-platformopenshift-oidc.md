@@ -23,7 +23,7 @@ Located at: `PlatformOpenshift/operator/roles/platformopenshift/tasks/keycloak_o
 | Variable | Default | Description |
 |---|---|---|
 | `KEYCLOAK_INTERNAL_URL` | `http://rhbk-services-service.rhbk.svc:8080` | Internal Keycloak URL |
-| `KEYCLOAK_EXTERNAL_URL` | `https://rhbk-services.apps.services.lab.example.com` | External Keycloak URL for OIDC issuer |
+| `KEYCLOAK_EXTERNAL_URL` | none | Public address of the tenant Keycloak (for example `https://auth.example.com`), used when no Route in `services-rhbk` carries the label `app=keycloak`; without both the job fails and names this setting |
 | `KEYCLOAK_REALM` | `sovereign-tenants` | Keycloak realm |
 
 ### RBAC Requirements
@@ -75,7 +75,7 @@ spec:
           name: [name]
           email: [email]
           groups: [groups]
-        issuer: "https://rhbk-services.apps.services.lab.example.com/realms/sovereign-tenants"
+        issuer: "https://auth.example.com/realms/sovereign-tenants"
 ```
 
 The OIDC client secret is also pushed as a Kubernetes `Secret` named `openid-client-secret-keycloak` in `openshift-config` namespace via the ACM ConfigurationPolicy.

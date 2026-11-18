@@ -153,6 +153,7 @@ export const ACCESS_GROUP_FIELDS: Record<string, { path: string; section: 'toolR
   QuayOrg: ['quayAdminRbac', 'quayCreatorRbac', 'quayMemberRbac'].map((path) => ({ path, section: 'toolRoles' as const })),
   VaultKV: ['vaultAdminRbac', 'vaultOpsRbac', 'vaultDeveloperRbac', 'vaultReaderRbac'].map((path) => ({ path, section: 'toolRoles' as const })),
   CloudVirt: ['toolRbac.editRbac', 'toolRbac.viewRbac'].map((path) => ({ path, section: 'toolRoles' as const })),
+  CloudOSO: ['toolRbac.editRbac', 'toolRbac.viewRbac'].map((path) => ({ path, section: 'toolRoles' as const })),
   PlatformOpenshift: [
     'toolRbac.clusterAdminRbac',
     'toolRbac.clusterOperatorRbac',

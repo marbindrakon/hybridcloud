@@ -81,6 +81,55 @@ async function tenantProfile(namespace: string): Promise<TenantProfile | null> {
   }
 }
 
+interface SelfSubjectRulesReview {
+  status?: { resourceRules?: { verbs?: string[]; apiGroups?: string[]; resources?: string[]; resourceNames?: string[] }[] };
+}
+
+/** Kinds a person may read by name only (a Role with resourceNames): an environment's access groups read it. */
+export const NAMED_READ_KINDS = ['cloudosos'];
+
+/**
+ * Whether a SelfSubjectRulesReview grants `get` on named objects of NAMED_READ_KINDS (an environment's access
+ * groups may read that environment, without any tenant role).
+ */
+export function readsNamedEnvironments(review: SelfSubjectRulesReview | null | undefined): boolean {
+  for (const r of review?.status?.resourceRules ?? []) {
+    const groups = r.apiGroups ?? [];
+    const resources = r.resources ?? [];
+    const verbs = r.verbs ?? [];
+    if (!(groups.includes('hybridsovereign.redhat') || groups.includes('*'))) continue;
+    if (!resources.some((x) => NAMED_READ_KINDS.includes(x) || x === '*')) continue;
+    if (!(verbs.includes('get') || verbs.includes('*'))) continue;
+    if ((r.resourceNames ?? []).length > 0) return true;
+  }
+  return false;
+}
+
+async function namedEnvironmentReader(namespace: string): Promise<boolean> {
+  try {
+    const review = await k8sFetchJson<SelfSubjectRulesReview>(
+      `${rawApiBase()}/apis/authorization.k8s.io/v1/selfsubjectrulesreviews`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          apiVersion: 'authorization.k8s.io/v1',
+          kind: 'SelfSubjectRulesReview',
+          spec: { namespace },
+        }),
+      },
+      { kind: 'SelfSubjectRulesReview', verb: 'create', namespace },
+    );
+    return readsNamedEnvironments(review);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * A tenant is the person's when they may read its profile, or (an environment's access group only) when they may
+ * read some of its environments by name; the profile then stays unread.
+ */
 async function confirmTenant(namespace: string): Promise<{ confirmed: boolean; profileReadable: boolean }> {
   const profileReadable = await selfSubjectAccessReview({
     namespace,
@@ -88,7 +137,8 @@ async function confirmTenant(namespace: string): Promise<{ confirmed: boolean; p
     name: TENANT_PROFILE_NAME,
     verb: 'get',
   });
-  return { confirmed: profileReadable, profileReadable };
+  if (profileReadable) return { confirmed: true, profileReadable };
+  return { confirmed: await namedEnvironmentReader(namespace), profileReadable: false };
 }
 
 function entityNamespace(e: Entity): string {

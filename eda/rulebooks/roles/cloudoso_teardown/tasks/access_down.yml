@@ -1,0 +1,83 @@
+---
+# The environment's access groups go, from the record (status.access: the site client, the group domain, the groups),
+# whatever the site declares now: first this environment leaves the owners of the client roles (a role goes with its
+# last owner; common/tasks/services_signin_groups.yml with nothing wanted), then the groups' roles on the project are
+# revoked and a group is deleted when its client role went and it holds no role elsewhere (files/shc_openstack.py
+# access-groups absent). Uses oso_access, oso_check (the project as the emptiness check found it), oso_project_domain,
+# the loaded site account and cloudoso_cr_namespace / cloudoso_cr_name / cloudoso_entity_for_status.
+- name: Load the realization defaults (tenant sign-in on OpenStack sites)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The sign-in settings
+  vars:
+    _real: "{{ fabric_realization_defaults | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _si_os: "{{ (_real.openstack | default({})).tenantSignIn | default({}) }}"
+    _si_ocp: "{{ (_real.openshift | default({})).tenantSignIn | default({}) }}"
+  ansible.builtin.set_fact:
+    oad_realm: "{{ _si_os.realm | default('', true) or _si_ocp.realm | default('', true) }}"
+    oad_rbac_config: "{{ _si_os.rbacConfig | default('', true) or _si_ocp.rbacConfig | default('', true) }}"
+    oad_roles: "{{ ((_si_os.editRoles | default(['member'], true)) + (_si_os.viewRoles | default(['reader'], true))) | unique | list }}"
+    # the groups of the record and those whose removal an earlier run did not finish
+    oad_groups: >-
+      {{ ((oso_access.groups | default([], true) | map(attribute='group') | list)
+          + (oso_access.removing | default([], true) | list)) | unique | list }}
+
+- name: Whether the directory is asked
+  ansible.builtin.set_fact:
+    oad_ssg: "{{ (oso_access.signInClient | default('', true)) | length > 0 and oad_realm | length > 0 }}"
+
+- name: The site client's roles
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+  vars:
+    ssg_entity: "{{ cloudoso_entity_for_status }}"
+    ssg_owner: "CloudOSO/{{ cloudoso_cr_name }}"
+    ssg_label: "CloudOSO {{ cloudoso_cr_name }}"
+    ssg_wanted: []
+    entity_signin_realm: "{{ oad_realm }}"
+    entity_signin_client: "{{ oso_access.signInClient }}"
+    entity_signin_rbac_config: "{{ oad_rbac_config }}"
+  when: oad_ssg | bool
+
+- name: The groups on the site
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+  vars:
+    _oad_deleted: "{{ ssg_released | default([]) | rejectattr('value.owners') | map(attribute='key') | list }}"
+    os_call_no_log: false
+    os_request:
+      action: access-groups
+      state: absent
+      domain: "{{ oso_project_domain }}"
+      project_id: "{{ oso_check.project_id }}"
+      group_domain: "{{ oso_access.groupDomain | default(oso_project_domain, true) }}"
+      managed_roles: "{{ oad_roles }}"
+      groups: >-
+        {%- set out = [] -%}
+        {%- for g in oad_groups -%}
+          {#- a group is deleted only when the directory was asked and its client role went (or never was) -#}
+          {%- set _ = out.append({'group': g, 'delete': (oad_ssg | bool)
+                                   and (g in _oad_deleted or g not in (ssg_all_role_names | default([g])))}) -%}
+        {%- endfor -%}
+        {{ out }}
+  when: oso_check.project_exists | bool and oad_groups | length > 0
+
+# a group the site could not remove now stops the delete before the project goes (a later run finishes it); a group
+# left on purpose (another project still uses it, or its other roles could not be read) is said in the result
+- name: Stop when a group could not be removed
+  ansible.builtin.fail:
+    msg: >-
+      CloudOSO {{ cloudoso_cr_name }}: access group {{ (_oad_errors | first).group }} could not be removed from the
+      site ({{ (_oad_errors | first).error }}); the delete goes
+      on at the next run.
+  vars:
+    _oad_errors: "{{ (os_result.groups | default([])) | selectattr('error', 'defined') | selectattr('error') | list }}"
+  when:
+    - oso_check.project_exists | bool and oad_groups | length > 0
+    - _oad_errors | length > 0
+
+- name: What is left on the site on purpose
+  ansible.builtin.set_fact:
+    oad_left: >-
+      {{ (os_result.groups | default([])) | selectattr('kept', 'defined') | selectattr('kept')
+         | rejectattr('kept', 'equalto', 'not found') | map(attribute='group') | list
+         if oso_check.project_exists | bool and oad_groups | length > 0 else [] }}

@@ -4,7 +4,10 @@
 # tenant admin (domain `manager`). Everything provision creates is recorded on the CR status so teardown
 # works from ids, not from names it re-derives. shc (DESIGN cnet §4.3): the environment holds no floating IPs (each
 # OpenShift cluster allocates its own) and needs no external network; a pair an older run allocated is released
-# once no PlatformOpenshift names the environment.
+# once no PlatformOpenshift names the environment. The environment holds no credential either: each OpenShift
+# cluster has its own Keystone user and credential (common/tasks/openstack_cluster_credential.yml), people sign
+# in with their platform identity (access.yml). An application credential an earlier release made for the
+# environment (as the site account, Vault oso/projects/<name>/clouds-config) is deleted here.
 - name: Set environmentprep spec facts
   ansible.builtin.set_fact:
     ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
@@ -18,7 +21,10 @@
     ep_designate_project_id: "{{ oso_settings.designateProjectId }}"
     ep_route53_vault_path: "{{ oso_settings.route53VaultPath }}"
     ep_slug: "{{ (cloudoso_cr_name | hash('sha256'))[:5] }}"
-    ep_clouds_config_vault: "oso/projects/{{ cloudoso_cr_name }}/clouds-config"
+    # the legacy record: the application credential an earlier release made as the site account, and its
+    # name-only Vault path (this object holds the name: name_unique.yml)
+    ep_legacy_cred_id: "{{ (cloudoso_cr_lookup.resources[0].status | default({}, true)).appCredentialId | default('', true) }}"
+    ep_legacy_clouds_config_vault: "oso/projects/{{ cloudoso_cr_name }}/clouds-config"
 
 - name: Validate the CloudOSO environment settings
   ansible.builtin.assert:
@@ -50,36 +56,19 @@
     os_account_vault_path: "{{ ep_vault_path }}"
     os_account_tag: "cloudoso-{{ cloudoso_cr_name }}"
 
-- name: Read the existing project credential from Vault
-  ansible.builtin.uri:
-    url: >-
-      {{ lookup('env', 'VAULT_ADDR') | default('http://vault-active.central-vault.svc:8200', true) }}/v1/central/data/{{ ep_clouds_config_vault }}
-    method: GET
-    headers:
-      X-Vault-Token: "{{ lookup('env', 'VAULT_TOKEN') }}"
-    status_code: [200, 404]
-    validate_certs: false
-  register: ep_vault_creds
-  no_log: true
-
-- name: Reuse the recorded application credential only while Vault holds its secret
-  ansible.builtin.set_fact:
-    ep_reuse_app_cred_id: >-
-      {{ (cloudoso_cr_lookup.resources[0].status.appCredentialId | default(''))
-         if (ep_vault_creds.status == 200 and
-             (ep_vault_creds.json.data.data['clouds.yaml'] | default('')) | length > 0) else '' }}
-
-- name: Create or reconcile the project and its application credential
+# the helper returns ids only (no credential is made); the legacy application credential goes by its recorded id
+# and by its name
+- name: Create or reconcile the project
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
   vars:
+    os_call_no_log: false
     os_request:
       action: provision
       domain: "{{ ep_project_domain }}"
       project: "{{ ep_project }}"
       description: "Sovereign Cloud project for {{ entity_name }} (CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }})"
-      app_cred_name: "sovereign-{{ ep_project }}"
-      app_cred_description: "CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
-      reuse_app_cred_id: "{{ ep_reuse_app_cred_id }}"
+      legacy_app_cred_ids: "{{ [ep_legacy_cred_id] | select | list }}"
+      legacy_app_cred_name: "sovereign-{{ ep_project }}"
       region: "{{ ep_region_name }}"
       dns_zone_id: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else '' }}"
       dns_project_id: "{{ ep_designate_project_id }}"
@@ -87,7 +76,13 @@
 - name: Keep the provision result
   ansible.builtin.set_fact:
     ep_os: "{{ os_result }}"
-  no_log: true
+
+# the legacy credential is gone from the site: its secret goes from Vault (only a record that names one wrote it)
+- name: Delete the legacy credential's Vault path
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
+  vars:
+    vault_kv_delete_paths: ["{{ ep_legacy_clouds_config_vault }}"]
+  when: ep_legacy_cred_id | length > 0
 
 # an older run allocated the environment's pair of floating IPs (status apiFloatingIPId / ingressFloatingIPId,
 # apiVIP / ingressVIP, descriptions sovereign-<name>-api / -ingress); it goes once no cluster names the environment.
@@ -204,24 +199,6 @@
     fail_msg: "{{ ep_cluster_domain }} is not inside Designate zone {{ ep_os.dns_zone.name }} (baseDomain {{ ep_base_domain }})"
   when: ep_dns_provider == 'designate'
 
-- name: Write the project's clouds.yaml (new application credential) to Vault
-  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_write.yml"
-  vars:
-    vault_kv_path: "{{ ep_clouds_config_vault }}"
-    vault_kv_write_data:
-      clouds.yaml: |
-        clouds:
-          openstack:
-            auth:
-              auth_url: "{{ ep_os.auth_url }}"
-              application_credential_id: "{{ ep_os.app_cred.id }}"
-              application_credential_secret: "{{ ep_os.app_cred.secret }}"
-            region_name: "{{ ep_os.region }}"
-            interface: "public"
-            identity_api_version: 3
-            auth_type: "v3applicationcredential"
-  when: ep_os.app_cred.created | bool
-
 - name: Read the Route53 credentials
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
   vars:
@@ -262,7 +239,8 @@
     oso_route53_zone_id: "{{ ep_route53_zone_id | default('') }}"
     # the status record: ids only, no account or Vault path (eda/common/tasks/resolve_cloudoso_accounts.yml)
     oso_record:
-      appCredentialId: "{{ ep_os.app_cred.id }}"
+      # migrated (the legacy credential above is gone): null removes the key
+      appCredentialId: null
       # zone: recorded as designate so PlatformOpenshift writes its records into the environment zone
       # (owner = the site's DNS project, account = the site account)
       dnsProvider: "{{ 'designate' if ep_dns_provider == 'zone' else ep_dns_provider }}"

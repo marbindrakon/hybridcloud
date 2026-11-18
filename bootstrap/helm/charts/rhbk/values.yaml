@@ -36,3 +36,32 @@ keycloak:
   tls:
     enabled: false
     secretName: keycloak-tls-secret
+  # The operator's own Ingress for the host name above. OpenShift turns it into a Route that serves the router's
+  # default certificate and carries the label app=keycloak. Set false when the routes below serve the Keycloak.
+  ingress:
+    enabled: true
+  # Routes this chart owns, to the Keycloak's HTTP port (edge TLS, plain HTTP redirected; needs tls.enabled false).
+  # Each entry:
+  #   name         Route name (default <instanceName>-route-<index>)
+  #   host         the public host name (required)
+  #   primary      true: the Route carries the label app=keycloak, by which the platform's automation finds the
+  #                Keycloak's public address. At most one Route may carry it, so primary needs ingress.enabled false
+  #                (the operator's Route carries the label too). Make the primary Route's host the host name above:
+  #                it is the issuer's host.
+  #   certificate  empty: the router's default certificate. Else a cert-manager Certificate for the host, served
+  #                through the Route's externalCertificate (the router gets read access to that one Secret):
+  #     clusterIssuer  name of the ClusterIssuer (required)
+  #     secretName     default <route name>-tls
+  #     privateKey     {algorithm, size}, default ECDSA 256. With Let's Encrypt an ECDSA key is signed under its
+  #                    ECDSA chain and an RSA key under its RSA chain: a client that trusts a pinned CA bundle rather
+  #                    than the system roots (for example a bundle copied from the cluster's ingress certificate)
+  #                    accepts only the chain that bundle holds. Keep the algorithm of the certificate the clients
+  #                    trust today.
+  # A Route for the host name above while ingress.enabled is true is refused when the chart is rendered: the
+  # operator's Route holds that host. Sync waves: the Keycloak 5, the Certificates and the router's read access
+  # certificateSyncWave, the Routes routeSyncWave. A change that turns the operator's Ingress off and adds a Route
+  # for its host reaches the Route once the Keycloak is healthy again (the operator has removed its Ingress), and a
+  # Route is created only once its certificate is issued.
+  routes: []
+  certificateSyncWave: "6"
+  routeSyncWave: "7"

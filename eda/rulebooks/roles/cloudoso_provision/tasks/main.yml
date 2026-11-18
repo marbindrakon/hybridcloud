@@ -80,6 +80,14 @@
     - name: Run OpenStack environment preparation
       ansible.builtin.include_tasks: environmentprep.yml
 
+    # who can use the environment on its site (spec.toolRbac): Keystone groups and the site client's roles
+    - name: The environment's access groups on the site
+      ansible.builtin.include_tasks: access.yml
+
+    # its access groups may read the environment's own object on the services cluster (its page, its dashboard link)
+    - name: The environment's access groups read the environment
+      ansible.builtin.include_tasks: reader_access.yml
+
     - name: Log VRF spec passthrough for future use
       ansible.builtin.include_tasks: vrf_passthrough.yml
 
@@ -107,6 +115,7 @@
             provisioned by EDA in Keystone domain {{ oso_domain_name }}{{ (' on ' ~ oso_cloudinfra_name) if oso_cloudinfra_name | length > 0 else '' }}.
             {{ ('DNS zone ' ~ oso_record.dns.zone ~ ' shared with the project' ~ (', delegated from the global zone' if oso_record.dns.delegated else '') ~ '.') if (oso_record.dns | default({})).zone is defined else '' }}
             {{ oso_settings_note }}
+            {{ ('Note: ' ~ oso_reader_note ~ '.') if oso_reader_note | default('', true) | length > 0 else '' }}
           name: "{{ cloudoso_cr_name }}"
           # shc (P7.1): the site this project lives on ('' = legacy account)
           cloudInfrastructure: "{{ oso_cloudinfra_name }}"
@@ -122,7 +131,10 @@
           # what provision created, for teardown: ids only. Accounts and Vault paths are derived again where they
           # are needed (eda/common/tasks/resolve_cloudoso_accounts.yml); null removes the keys older runs wrote.
           accountVaultPath: null
-          appCredentialId: "{{ oso_record.appCredentialId }}"
+          # no credential belongs to the environment (each cluster has its own; people sign in): null removes the
+          # key an earlier release wrote
+          appCredentialId: null
+          access: "{{ oso_access }}"
           dnsProvider: "{{ oso_record.dnsProvider }}"
           dnsZoneId: "{{ oso_record.dnsZoneId }}"
           dnsZoneName: "{{ oso_record.dnsZoneName }}"
@@ -140,6 +152,13 @@
               message: >-
                 OpenStack project {{ oso_project_name }} ({{ oso_project_id }})
                 provisioned by EDA in Keystone domain {{ oso_domain_name }}.
+            # a warning, not a failure: Ready stays True (clusters can be built without people's access)
+            # no lastTransitionTime: the status writer sets it (now, kept while the status stays), in the same
+            # form as the other conditions
+            - type: AccessReady
+              status: "{{ oso_access_condition.status }}"
+              reason: "{{ oso_access_condition.reason | trim }}"
+              message: "{{ oso_access_condition.message | trim }}"
 
     # a ready environment wakes the placements waiting for it (GA2-F4)
     - name: Wake the placements waiting for this environment

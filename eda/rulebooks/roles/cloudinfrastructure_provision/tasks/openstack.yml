@@ -13,6 +13,8 @@
     # tenant DNS (design/TENANT-DNS.md): native = environment zones in this site's Designate, owned by dns.project
     ci_dns: "{{ ci_cr_spec.dns | default({}, true) }}"
     ci_dns_native: "{{ ((ci_cr_spec.dns | default({}, true)).mode | default('platform', true)) == 'native' }}"
+    # sign-in with the platform's tenant identities, as the site's operator set it up (openstack_signin.yml)
+    ci_signin: "{{ (ci_cr_spec.openstack | default({}, true)).signIn | default({}, true) }}"
 
 - name: Load the site's cloud-admin account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -38,6 +40,13 @@
                 'create': ci_dns.createProject | default(false) | bool, 'zone_quota': ci_dns.zoneQuota | default(1000) | int,
                 'description': 'Tenant DNS of the sovereign cloud platform: the parent zone and environment zones (CloudInfrastructure ' ~ cloudinfrastructure_cr_name ~ ')'}
                if (ci_dns_native | bool) else {} }}
+          # read only: the declared identity provider, its protocol and mapping, the group domain, the account's roles
+          sign_in: >-
+            {{ {'identity_provider': ci_signin.identityProvider, 'protocol': ci_signin.protocol | default('', true),
+                'group_domain': ci_signin.groupDomain | default(ci_os.projectDomain | default('', true), true),
+                'start': ci_signin.start | default('Dashboard', true),
+                'dashboard_url': (ci_os.dashboard | default({}, true)).url | default('', true)}
+               if (ci_signin.identityProvider | default('', true)) | length > 0 else {} }}
   rescue:
     - name: Set the probe failure reason
       ansible.builtin.set_fact:
@@ -175,6 +184,12 @@
     ci_notes: "{{ ci_notes + (ci_probe.notes | default([], true) | select('search', '^external networks') | list) }}"
   when: not (ci_external_networks.listed | bool)
 
+# an account that may not read the volume types (a domain manager): the recorded list stands, the message says why
+- name: Note a volume type list the probe could not read
+  ansible.builtin.set_fact:
+    ci_notes: "{{ ci_notes + (ci_probe.notes | default([], true) | select('search', '^volume types') | list) }}"
+  when: ci_probe.volume_types is not defined
+
 - name: Set openstack result facts
   ansible.builtin.set_fact:
     ci_credentials_message: "Keystone token issued for project {{ ci_probe.project_id }} (roles {{ ci_probe.roles | join(', ') }})."
@@ -191,7 +206,6 @@
       region: "{{ ci_probe.region }}"
       services: "{{ ci_probe.services }}"
       networkExtensions: "{{ ci_probe.network_extensions }}"
-      volumeTypes: "{{ ci_probe.volume_types | default([]) }}"
       externalNetworkId: "{{ (ci_probe.external_network | default({})).id | default('') }}"
       projectDomainId: "{{ (ci_probe.project_domain | default({})).id | default('') }}"
       dns: >-
@@ -203,6 +217,16 @@
       Keystone ok, services {{ ci_probe.services | join(',') }}; tenant domain
       {{ ci_os.projectDomain | default('-', true) }}, external network {{ ci_os.externalNetwork | default('-', true) }},
       DNS {{ ('native in project ' ~ ci_dns.project) if (ci_dns_native | bool) else (ci_dns.mode | default('platform', true)) }}.
+
+# the declared sign-in and what the probe confirmed: status.site.dashboard / signIn, SignInConfigured, the capabilities
+# consoleSignIn / apiCredentials (never fails the probe)
+- name: The site's sign-in for people
+  ansible.builtin.include_tasks: openstack_signin.yml
+
+- name: Publish the volume types
+  ansible.builtin.set_fact:
+    ci_site_out: "{{ ci_site_out | combine({'volumeTypes': ci_probe.volume_types}) }}"
+  when: ci_probe.volume_types is defined
 
 - name: Publish the global external networks
   ansible.builtin.set_fact:

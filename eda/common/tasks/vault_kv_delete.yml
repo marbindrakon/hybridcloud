@@ -14,6 +14,8 @@
   loop: "{{ vault_kv_delete_paths | select | unique | list }}"
   loop_control:
     label: "{{ item }}"
+  # the request carries the job's Vault token (module arguments are shown at higher verbosity)
+  no_log: true
 
 - name: Record deleted Vault paths
   ansible.builtin.set_fact:

@@ -186,22 +186,24 @@
           observedGeneration: "{{ cloudinfrastructure_generation }}"
           capabilities: "{{ ci_capabilities_out }}"
           site: "{{ ci_site_out }}"
-          conditions:
-            - type: Ready
-              status: "True"
-              lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
-              reason: EDASucceeded
-              message: "{{ ci_message | trim }}"
-            - type: CredentialsValid
-              status: "True"
-              lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
-              reason: Verified
-              message: "{{ ci_credentials_message | default('') }}"
-            - type: EvpnCapable
-              status: "{{ 'True' if (ci_capabilities_out.evpn | default(false) | bool) else 'False' }}"
-              lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
-              reason: "{{ ci_evpn_reason | default('Checked') }}"
-              message: "{{ ci_evpn_message | default('') | trim }}"
+          # the type's own conditions follow (an openstack site: SignInConfigured)
+          conditions: "{{ _ci_conditions + (ci_extra_conditions | default([], true)) }}"
+        _ci_conditions:
+          - type: Ready
+            status: "True"
+            lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+            reason: EDASucceeded
+            message: "{{ ci_message | trim }}"
+          - type: CredentialsValid
+            status: "True"
+            lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+            reason: Verified
+            message: "{{ ci_credentials_message | default('') }}"
+          - type: EvpnCapable
+            status: "{{ 'True' if (ci_capabilities_out.evpn | default(false) | bool) else 'False' }}"
+            lastTransitionTime: "{{ cloudinfrastructure_status_transition_time }}"
+            reason: "{{ ci_evpn_reason | default('Checked') }}"
+            message: "{{ ci_evpn_message | default('') | trim }}"
 
     # tenants see this site in their TenantProfile: wake the Entities when that view changed
     - name: Refresh the tenants' view of the site

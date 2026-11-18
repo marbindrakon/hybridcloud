@@ -131,14 +131,16 @@ spec:
                           (networks that span sites), DNS (names for environments), IPv6 (placements can have an
                           IPv6 subnet), IPv6Only (placements without IPv4), IPv6NetworkSource (IPv6 subnets from the
                           network's address space), IPv6ProviderSource (IPv6 subnets from the cloud provider),
-                          IPv6Translation (placements without IPv4 reach IPv4-only destinations by translation).
+                          IPv6Translation (placements without IPv4 reach IPv4-only destinations by translation),
+                          ConsoleSignIn (people sign in to the site's dashboard with their platform identity),
+                          ApiCredentials (people can create credentials for command-line tools in the dashboard).
                         type: array
                         maxItems: 16
                         x-kubernetes-list-type: set
                         items:
                           type: string
                           enum: [Virtualization, HybridNetworking, DNS, IPv6, IPv6Only, IPv6NetworkSource,
-                                 IPv6ProviderSource, IPv6Translation]
+                                 IPv6ProviderSource, IPv6Translation, ConsoleSignIn, ApiCredentials]
                       externalNetworks:
                         description: >-
                           External networks of an OpenStack site that every project may use: an OpenShift cluster's

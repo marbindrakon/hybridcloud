@@ -132,6 +132,85 @@ class GlobalExternalNetworks(unittest.TestCase):
         self.assertEqual(notes, ["external networks not listed: PermissionError"])
 
 
+class NotAnAdministrator(unittest.TestCase):
+    """A site account that is not an administrator of the cloud (a domain manager): Neutron shows it no network
+    policies but its own project's, and the volume types are refused it. The probe says so in plain words and leaves
+    both lists out (the site keeps what it had) instead of publishing empty lists."""
+
+    def test_a_non_administrators_list_is_never_published(self):
+        """Neutron shows a non-administrator only its own project's policies: an empty list says nothing, and a
+        non-empty one may be part of the site's list (A5). Neither is published; the network service is not asked."""
+        note = ("external networks not listed: the account is not an administrator of the cloud, and the site shows "
+                "such an account only its own project's network policies, so the list could be incomplete; the last "
+                "list stands")
+        for conn in (site(), Obj(network=FakeNetwork([], [], []))):
+            notes = []
+            self.assertIsNone(S.global_external_networks(conn, notes, admin=False))
+            self.assertEqual(notes, [note])
+            self.assertEqual(conn.network.filters, [])
+        empty = Obj(network=FakeNetwork([], [], []))
+        notes = []
+        self.assertEqual(S.global_external_networks(empty, notes, admin=True), [])   # an administrator: none exist
+        self.assertEqual(notes, [])
+
+    def test_the_site_probe_passes_the_accounts_own_roles(self):
+        """F4: site_probe itself lists the networks only for an account whose token holds admin (the A5 rule wired
+        through the probe, not just the function)."""
+        from unittest import mock
+        for roles, listed in ((["manager", "member"], False), (["admin", "member"], True)):
+            conn = site()
+            conn.authorize = lambda: None
+            access = Obj(role_names=roles, user_id="u1", project_id="p1",
+                         service_catalog=Obj(catalog=[{"type": "network"}]))
+            conn.session = Obj(auth=Obj(get_access=lambda _s, a=access: a))
+            conn.network.extensions = lambda: []
+            acct = mock.MagicMock()
+            acct.own_scope.return_value = conn
+            acct.own_auth = {"auth_url": "https://keystone.example.org/v3"}
+            acct.region = "r1"
+            with mock.patch.object(S, "Account", return_value=acct):
+                out = S.site_probe({})
+            self.assertEqual("external_networks" in out, listed, roles)
+            self.assertEqual(any(n.startswith("external networks not listed") for n in out["notes"]), not listed)
+
+    def test_volume_types_refused(self):
+        class Refusing:
+            def get(self, *_):
+                raise S.openstack.exceptions.ForbiddenException("refused")
+
+            def types(self):
+                raise S.openstack.exceptions.ForbiddenException("refused")
+        notes = []
+        self.assertIsNone(S.public_volume_types(Obj(block_storage=Refusing()), ["volumev3"], notes))
+        self.assertEqual(notes, ["volume types not listed: the account may not read them (an administrator of the "
+                                 "cloud may); the last list stands"])
+
+
+@unittest.skipIf(yaml is None or not HAVE_ANSIBLE, "PyYAML or ansible-playbook missing")
+class SiteStatusVolumeTypes(unittest.TestCase):
+    """The site job publishes the volume types only when the probe read them; otherwise the probe's note joins the
+    message and status.site.volumeTypes stays as it was (the status is merge-patched)."""
+
+    def test_cases(self):
+        tasks = load(OS_TASKS)
+        steps = [{"ansible.builtin.set_fact": {"ci_probe": "{{ case.probe }}", "ci_notes": ["earlier note"],
+                                               "ci_site_out": {"region": "r1"}}}]
+        steps += [by_name(tasks, n) for n in ("Note a volume type list the probe could not read",
+                                              "Publish the volume types")]
+        res = run_cases(steps, [
+            {"probe": {"volume_types": [{"name": "ceph", "default": True}], "notes": []}},
+            {"probe": {"volume_types": [], "notes": []}},
+            {"probe": {"notes": ["volume types not listed: the account may not read them (an administrator of the "
+                                 "cloud may); the last list stands", "external networks not listed: X"]}},
+        ], "{'site': ci_site_out, 'notes': ci_notes}")
+        self.assertEqual(res[0], {"site": {"region": "r1", "volumeTypes": [{"name": "ceph", "default": True}]},
+                                  "notes": ["earlier note"]})
+        self.assertEqual(res[1]["site"], {"region": "r1", "volumeTypes": []})
+        self.assertEqual(res[2]["site"], {"region": "r1"})
+        self.assertEqual(res[2]["notes"], ["earlier note", "volume types not listed: the account may not read them (an "
+                                                           "administrator of the cloud may); the last list stands"])
+
+
 @unittest.skipIf(yaml is None or not HAVE_ANSIBLE, "PyYAML or ansible-playbook missing")
 class SiteStatusExternalNetworks(unittest.TestCase):
     """The site job's status.site.externalNetworks: the three tasks of openstack.yml in ansible-playbook."""

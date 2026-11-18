@@ -401,6 +401,17 @@ export function sanitizeCloudOSOSpec(raw) {
   const vrf = bool(raw.enableVRF);
   if (vrf === "invalid") return { error: "spec.enableVRF must be a boolean" };
   if (vrf !== undefined) spec.enableVRF = vrf;
+  // Who can use the environment on the site: access group names, as for CloudVirt.
+  if (raw.toolRbac != null) {
+    if (!isObject(raw.toolRbac)) return { error: "spec.toolRbac must be an object" };
+    const toolRbac = {};
+    for (const key of ["editRbac", "viewRbac"]) {
+      const list = stringList(raw.toolRbac[key]);
+      if (list === false) return { error: `spec.toolRbac.${key} must be a list of access group names` };
+      if (list) toolRbac[key] = list;
+    }
+    if (Object.keys(toolRbac).length) spec.toolRbac = toolRbac;
+  }
   return { spec };
 }
 

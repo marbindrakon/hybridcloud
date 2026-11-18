@@ -2,22 +2,23 @@
 # The installer finds the cluster's external network by name (install-config platform.openstack.externalNetwork takes
 # a name only, and the installer fails when the project sees two networks of that name, or takes the only one it
 # sees). Before anything is created (Review R2 M3, DESIGN cnet §10 R2): the networks of that name, listed with the
-# environment's own credential (the installer's: oso/projects/<environment>/clouds-config, scoped to the
-# environment's project), so that Neutron itself decides what the project sees (shc_openstack.py network-name-check),
+# cluster's own credential (the installer's: cluster/oso/<build>/build/provider-creds, scoped to the environment's
+# project; common/tasks/openstack_cluster_credential.yml), so that Neutron itself decides what the project sees
+# (shc_openstack.py network-name-check),
 # must be exactly the chosen one, and it must be external for the project. The site account only lends the site's CA
 # bundle. Inputs: pnn_name, pnn_id (the placed network, or the global external network in effect), pnn_hybrid (true:
 # a placed network, whose policy for the project may still be on its way), pnn_credential (the Vault path of the
-# environment's credential). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
+# cluster's credential). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
 # ("" = the name leads to the network alone) and stops through preflight_stop.yml (a wait goes to po_deferred_wait
 # instead when pnn_defer_wait is true and no earlier wait is kept: the caller stops with it later): refuses NetworkNameNotUnique (another network of the name is
 # visible: the tenant renames or removes its own, or the platform team the share), waits WaitingForPlacement (a placed
 # network not visible or not external for the project yet), or refuses ExternalNetworkNotListed (a global external
 # network the project does not see as external).
-- name: Require the environment's credential
+- name: Require the cluster's credential
   ansible.builtin.assert:
     that: (pnn_credential | default('', true)) | length > 0
     fail_msg: >-
-      PlatformOpenshift {{ ansible_operator_meta.name }}: the Vault path of the environment's credential (pnn_credential)
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the Vault path of the cluster's credential (pnn_credential)
       is not set.
 
 # the accounts' clouds.yaml files in /tmp go whatever happens (Review R2 L11)
@@ -33,7 +34,7 @@
       ansible.builtin.set_fact:
         pnn_site_cacert: "{{ os_account_cacert | default('', true) }}"
 
-    - name: Load the environment's credential (the one the installer runs with)
+    - name: Load the cluster's credential (the one the installer runs with)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
         os_account_vault_path: "{{ pnn_credential }}"

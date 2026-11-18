@@ -35,6 +35,8 @@ entries=(
   "forms/clusterSpec.ts:clusterSpec"
   "forms/clusterNetworkChoice.ts:clusterNetworkChoice"
   "forms/placementUse.ts:placementUse"
+  "forms/openstackAccess.ts:openstackAccess"
+  "scope/resolveIdentity.ts:resolveIdentity"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

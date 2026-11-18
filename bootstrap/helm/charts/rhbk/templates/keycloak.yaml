@@ -16,6 +16,10 @@ spec:
   hostname:
     hostname: ""
   {{- end }}
+  {{- if not (include "rhbk.ingressEnabled" .) }}
+  ingress:
+    enabled: false
+  {{- end }}
   {{- if .Values.keycloak.db.enabled }}
   db:
     vendor: {{ .Values.keycloak.db.vendor }}

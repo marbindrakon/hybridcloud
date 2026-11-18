@@ -83,29 +83,13 @@
         - rbac_cfg_final.resources | default([]) | length > 0
         - rbac_cfg_final.resources[0].spec.secret is defined
       block:
-        - name: Discover Keycloak external URL from services cluster Route
-          kubernetes.core.k8s_info:
-            host: "{{ services_api_host }}"
-            api_key: "{{ services_bearer_token }}"
-            validate_certs: false
-            api_version: route.openshift.io/v1
-            kind: Route
-            namespace: services-rhbk
-            label_selectors:
-              - "app=keycloak"
-          register: kc_route_final
+        # the labelled Route, else KEYCLOAK_EXTERNAL_URL; neither fails the job with a message that names the setting
+        - name: The sign-in directory's address
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
 
-        - name: Set Keycloak URL from Route
+        - name: Set Keycloak URL
           ansible.builtin.set_fact:
-            svc_keycloak_url: "https://{{ kc_route_final.resources[0].spec.host }}"
-          when: kc_route_final.resources | length > 0
-
-        - name: Fallback to configured Keycloak URL
-          ansible.builtin.set_fact:
-            svc_keycloak_url: >-
-              {{ lookup('env', 'KEYCLOAK_EXTERNAL_URL')
-                 | default(plugin_rbac_keycloak_url_default, true) }}
-          when: kc_route_final.resources | length == 0
+            svc_keycloak_url: "{{ skc_url }}"
 
         - name: Obtain the realm token for the access group removal
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"

@@ -1,0 +1,27 @@
+---
+# A fault of the access step (access.yml's rescue): from the helper's answer when the helper said it, else from the
+# failed task (a directory call's status, its message). transient: the site or the directory did not answer (a 5xx,
+# 408, 429, no connection); else a refusal. Input: oaf_into (the fact to set), oaf_helper (the helper's answer of the
+# step, {} when none failed). Sets <oaf_into>: {transient, message}.
+- name: The access step's fault (the environment stays as it is)
+  vars:
+    _r: "{{ ansible_failed_result | default({}) }}"
+    _from_helper: "{{ (oaf_helper.error | default('', true)) | length > 0 }}"
+    _item_status: >-
+      {{ (_r.results | default([]) | selectattr('failed', 'defined') | selectattr('failed')
+          | selectattr('status', 'defined') | map(attribute='status') | list + [0]) | first }}
+    _status: "{{ _r.status | default(_item_status, true) | int }}"
+    _msg: >-
+      {{ (_r.results | default([]) | selectattr('failed', 'defined') | selectattr('failed')
+          | selectattr('msg', 'defined') | map(attribute='msg') | list + [_r.msg | default('', true)]) | first }}
+  ansible.builtin.set_fact:
+    "{{ oaf_into }}":
+      transient: >-
+        {{ (oaf_helper.transient | default(false) | bool) if _from_helper | bool
+           else (_status | int == -1 or _status | int >= 500 or _status | int in [408, 429]
+                 or (_msg is search('(?i)timed out|timeout|connection|unreachable|name or service'))) }}
+      message: >-
+        {{ (oaf_helper.message | default('', true) or oaf_helper.error) if _from_helper | bool
+           else (('the sign-in directory answered HTTP ' ~ _status) if _status | int > 0
+                 else ('the sign-in directory did not answer') if _status | int == -1
+                 else ((_msg | trim) or ansible_failed_task.name | default('the access step failed', true))) }}

@@ -6,33 +6,43 @@
 # rootca-public); it goes to a second temp file that openstack_call.yml passes as the request's cacert.
 # Inputs: os_account_vault_path, os_account_tag (temp file name).
 # Sets os_account_clouds_yaml, os_account_cacert ('' without a CA).
-- name: Read the OpenStack account from Vault {{ os_account_vault_path }}
-  ansible.builtin.include_tasks: vault_kv_read.yml
-  vars:
-    vault_kv_path: "{{ os_account_vault_path }}"
+# The secret is read into the two private files by files/shc_vault_files.py: no task result or fact ever holds it
+# (the task's result names the fields only).
+- name: No stale account files
+  ansible.builtin.file:
+    path: "/tmp/eda-{{ os_account_tag }}-{{ item }}"
+    state: absent
+  loop: [clouds.yaml, ca.crt]
+
+- name: Read the OpenStack account from Vault {{ os_account_vault_path }} into private files
+  ansible.builtin.command:
+    argv: [python3, "{{ role_path }}/../../../common/files/shc_vault_files.py"]
+    stdin: >-
+      {{ {'path': os_account_vault_path, 'mount': vault_kv_mount | default('central'),
+          'files': {'clouds.yaml': '/tmp/eda-' ~ os_account_tag ~ '-clouds.yaml',
+                    'ca.crt': '/tmp/eda-' ~ os_account_tag ~ '-ca.crt'}} | to_json }}
+  register: _os_account_read
+  changed_when: false
+  failed_when: false
+
+- name: The fields Vault holds
+  ansible.builtin.set_fact:
+    _os_account_fields: >-
+      {{ (_os_account_read.stdout | from_json) if (_os_account_read.stdout | default('') | trim).startswith('{')
+         else {'error': (_os_account_read.stderr | default('') | trim)[-300:]} }}
+
+- name: Fail when Vault did not answer
+  ansible.builtin.fail:
+    msg: "Vault {{ os_account_vault_path }}: {{ _os_account_fields.error }}"
+  when: _os_account_read.rc != 0
 
 - name: Fail when the account has no clouds.yaml
   ansible.builtin.assert:
     that:
-      - (vault_kv_data['clouds.yaml'] | default('')) | length > 0
+      - "'clouds.yaml' in (_os_account_fields.written | default([]))"
     fail_msg: "Vault {{ os_account_vault_path }} has no clouds.yaml property"
-
-- name: Write the account clouds.yaml to a private temp file
-  ansible.builtin.copy:
-    content: "{{ vault_kv_data['clouds.yaml'] }}"
-    dest: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
-    mode: "0600"
-  no_log: true
-
-- name: Write the account's CA bundle to a temp file
-  ansible.builtin.copy:
-    content: "{{ vault_kv_data['ca.crt'] }}"
-    dest: "/tmp/eda-{{ os_account_tag }}-ca.crt"
-    mode: "0600"
-  when: (vault_kv_data['ca.crt'] | default('')) | length > 0
 
 - name: Remember the account files
   ansible.builtin.set_fact:
     os_account_clouds_yaml: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
-    os_account_cacert: "{{ ('/tmp/eda-' ~ os_account_tag ~ '-ca.crt') if (vault_kv_data['ca.crt'] | default('')) | length > 0 else '' }}"
-    vault_kv_data: {}
+    os_account_cacert: "{{ ('/tmp/eda-' ~ os_account_tag ~ '-ca.crt') if 'ca.crt' in (_os_account_fields.written | default([])) else '' }}"

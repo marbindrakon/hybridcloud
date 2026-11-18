@@ -30,10 +30,11 @@ spec:
           description: >-
             An OpenStack environment: the tenant's project on a platform OpenStack site, comparable
             to an OpenStack project with its quota, an AWS account in one Region or a Google Cloud
-            project. The platform creates the project on the site named by spec.cloudRef, a
-            credential for it, and the environment's DNS zone <environment>.<tenant>.<tenant DNS
-            domain>. With cloudRef set, the site supplies every site setting and the legacy fields
-            below have no effect.
+            project. The platform creates the project on the site named by spec.cloudRef and the
+            environment's DNS zone <environment>.<tenant>.<tenant DNS domain>. Where the site offers
+            sign-in with the platform identity, members of the access groups in spec.toolRbac sign in
+            to the site's dashboard and work in the project. With cloudRef set, the site supplies every
+            site setting and the legacy fields below have no effect.
           type: object
           required:
             - spec
@@ -69,6 +70,24 @@ spec:
                       description: Name of the OpenStack site (CloudInfrastructure).
                       type: string
                       maxLength: 253
+                toolRbac:
+                  type: object
+                  description: >-
+                    Who can use the environment on the site (access groups, Rbac names in this namespace).
+                  properties:
+                    editRbac:
+                      type: array
+                      description: >-
+                        Access groups whose members can create, change and delete resources in the
+                        environment's project.
+                      items:
+                        type: string
+                    viewRbac:
+                      type: array
+                      description: >-
+                        Access groups whose members get read-only access to the environment's project.
+                      items:
+                        type: string
                 project:
                   type: string
                   description: Name hint for the OpenStack project. Required.
@@ -175,6 +194,126 @@ spec:
                 domainName:
                   type: string
                   description: Name of the OpenStack domain that holds the project.
+                access:
+                  type: object
+                  description: >-
+                    Who can use the environment on the site: the sign-in directory client the site's
+                    sign-in uses, the domain of the site's identity service that holds the groups, and one
+                    entry per access group in spec.toolRbac.
+                  properties:
+                    signInClient:
+                      type: string
+                      description: >-
+                        The client of the platform's sign-in directory that the site's sign-in uses. Kept after the
+                        site stops offering sign-in until the environment's groups are removed.
+                    groupDomain:
+                      type: string
+                      description: >-
+                        Domain of the site's identity service that holds the environment's groups. Kept after the
+                        site stops offering sign-in until the environment's groups are removed.
+                    groups:
+                      type: array
+                      description: One entry per access group in spec.toolRbac.
+                      items:
+                        type: object
+                        description: An access group and its group on the site.
+                        properties:
+                          rbac:
+                            type: string
+                            description: The access group (Rbac name).
+                          group:
+                            type: string
+                            description: Name of the group on the site and in the sign-in token, <tenant>.<access group>.
+                          access:
+                            type: string
+                            description: Edit (create, change and delete resources) or View (read only).
+                          role:
+                            type: string
+                            description: The role the group holds on the project.
+                          state:
+                            type: string
+                            description: >-
+                              Granted, Waiting (not usable yet: the access group has no group in the sign-in
+                              directory yet, or the site offers no sign-in; message says which) or Failed (the site
+                              refused; message says why). When the site or the sign-in directory could not be
+                              asked, the group keeps its last state and message says so.
+                          message:
+                            type: string
+                            description: Why the group is waiting or failed, or why its state was not checked, in plain words.
+                    removing:
+                      type: array
+                      description: >-
+                        Groups the environment no longer wants whose removal from the site or the sign-in directory
+                        is not finished; the next reconcile goes on with it.
+                      items:
+                        type: string
+                endpoints:
+                  type: object
+                  description: How people and tools reach the environment.
+                  properties:
+                    console:
+                      type: string
+                      description: >-
+                        The link that opens the site's dashboard for this environment and starts sign-in. Empty when
+                        people cannot sign in to the environment (the site offers no sign-in, or it is not working).
+                    signIn:
+                      type: object
+                      description: How people sign in to the dashboard.
+                      properties:
+                        method:
+                          type: string
+                          description: TenantSSO (with the platform identity) or NotAvailable (the site offers no sign-in for people).
+                        idpName:
+                          type: string
+                          description: Name of the entry to choose on the dashboard's sign-in page.
+                        start:
+                          type: string
+                          description: >-
+                            IdentityProvider: the console link starts sign-in at the identity provider and returns
+                            to the dashboard. Dashboard: the link opens the dashboard's sign-in page.
+                    signInGroups:
+                      type: array
+                      description: The groups whose members can sign in to the environment.
+                      items:
+                        type: string
+                    api:
+                      type: string
+                      description: The site's identity endpoint, the entry point of its API.
+                    project:
+                      type: string
+                      description: Name of the environment's project.
+                    projectId:
+                      type: string
+                      description: Identifier of the environment's project.
+                    domain:
+                      type: string
+                      description: Name of the domain that holds the project.
+                    domainId:
+                      type: string
+                      description: Identifier of the domain that holds the project.
+                    region:
+                      type: string
+                      description: The site's region name, as command-line tools ask for it.
+                    location:
+                      type: string
+                      description: Where the site is, in words.
+                    apiCredentials:
+                      type: object
+                      description: >-
+                        Whether people can create application credentials (secrets that let command-line tools
+                        act as them in the project) in the dashboard, and for how long they work.
+                      properties:
+                        state:
+                          type: string
+                          description: Offered, NotOffered or Unknown (the site does not report it and nobody declared it).
+                        validMinutesAfterSignIn:
+                          type: integer
+                          description: >-
+                            How long an application credential keeps working after the person's last sign-in to
+                            the dashboard, in minutes. It works again after the next sign-in.
+                        source:
+                          type: string
+                          description: Site (read from the site) or Declared (stated by the platform team).
                 status:
                   type: string
                   description: Short state word written by the platform's automation.

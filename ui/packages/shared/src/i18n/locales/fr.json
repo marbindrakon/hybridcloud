@@ -733,7 +733,16 @@
     "publicCloudSiteHelp": "La plateforme atteint cette région avec sa propre identité de charge de travail ; aucune clé n'est stockée. Les environnements des locataires y reçoivent des comptes ou projets attribués par la plateforme.",
     "cloudAwsSiteHelp": "Le site AWS de cet environnement ; la plateforme attribue le compte.",
     "networkIpv4Prefixes": "Espace d'adresses IPv4",
-    "networkIpv4PrefixesHelp": "Les préfixes IPv4 du réseau (8 préfixes au plus en tout ; /8 à /29 ; forme canonique avec bits d'hôte à zéro, p. ex. 10.60.0.0/16). Facultatif quand le réseau a de l'IPv6. La plateforme alloue les sous-réseaux des placements dans ces préfixes. Des préfixes peuvent être ajoutés à tout moment ; un préfixe ne peut être retiré que si aucun sous-réseau de placement ne s'y trouve."
+    "networkIpv4PrefixesHelp": "Les préfixes IPv4 du réseau (8 préfixes au plus en tout ; /8 à /29 ; forme canonique avec bits d'hôte à zéro, p. ex. 10.60.0.0/16). Facultatif quand le réseau a de l'IPv6. La plateforme alloue les sous-réseaux des placements dans ces préfixes. Des préfixes peuvent être ajoutés à tout moment ; un préfixe ne peut être retiré que si aucun sous-réseau de placement ne s'y trouve.",
+    "osoAccessGroups": "Groupes qui peuvent utiliser cet environnement",
+    "osoAccessGroupsHelp": "Les membres peuvent se connecter au tableau de bord du site et travailler dans le projet. Prérempli avec vos groupes d'accès dans ce locataire.",
+    "osoEditRbac": "Créer et modifier",
+    "osoViewRbac": "Lecture seule",
+    "osoSiteNoSignIn": "Personne ne peut encore se connecter sur ce site. La plateforme peut toujours construire des clusters OpenShift dans l'environnement.",
+    "osoEditRbacEdit": "Groupes qui peuvent utiliser cet environnement : créer et modifier",
+    "osoViewRbacEdit": "Groupes qui peuvent utiliser cet environnement : lecture seule",
+    "osoEditRbacHelp": "Groupes d'accès dont les membres peuvent créer, modifier et supprimer des ressources dans le projet de l'environnement.",
+    "osoViewRbacHelp": "Groupes d'accès dont les membres ont un accès en lecture seule au projet de l'environnement."
   },
   "detail": {
     "allocated": "Alloués",
@@ -837,7 +846,18 @@
     "cliGetTitle": "Lire cet objet en ligne de commande",
     "conditionEvent": "Événement {{id}}",
     "placementUses": "Utilisations",
-    "tenantDescription": "Description du locataire"
+    "tenantDescription": "Description du locataire",
+    "siteNetwork": "Réseau sur le site : {{name}} ({{id}})",
+    "siteNetworkNoId": "Réseau sur le site : {{name}}",
+    "siteNetworkUse": "Choisissez ce réseau quand vous créez un serveur. Il est partagé avec votre projet et appartient à la plateforme.",
+    "siteNetworkCommand": "Commande qui crée un serveur sur ce réseau",
+    "copy": "Copier",
+    "copied": "Copié",
+    "siteUser": "Utilisateur sur le site",
+    "siteUserActions": "Les actions de cet utilisateur dans le projet sont celles de ce cluster.",
+    "siteCredentialMade": "Identifiant créé",
+    "clusterCredentialRefused": "Le cluster n'a pas d'identifiant sur le site",
+    "clusterCredentialSecretMissing": "L'identifiant du cluster attend l'équipe plateforme"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
@@ -1058,7 +1078,9 @@
     "noneOfType": "Aucun site de ce type n'est disponible pour ce locataire. Contactez l'équipe plateforme.",
     "capVirtualization": "Machines virtuelles",
     "capNetworking": "Réseaux hybrides",
-    "capDns": "DNS"
+    "capDns": "DNS",
+    "capConsoleSignIn": "Connexion au tableau de bord",
+    "capApiCredentials": "Identifiants d'API"
   },
   "kindsOne": {
     "Entity": "Locataire",
@@ -1217,7 +1239,35 @@
     "youAreIn": "Vous êtes dans {{groups}}.",
     "youAreNotIn": "Vous n'êtes dans aucun de ces groupes ; demandez à l'administrateur des accès de votre locataire.",
     "virtScope": "Sovereign Cloud ne crée ni VM, ni volumes, ni groupes de sécurité ; créez-les dans la console du site.",
-    "openstackScope": "Sovereign Cloud crée le projet ; serveurs, volumes et groupes de sécurité se créent avec l'API ou le tableau de bord OpenStack."
+    "openstackScope": "Sovereign Cloud crée le projet ; serveurs, volumes et groupes de sécurité se créent avec l'API ou le tableau de bord OpenStack.",
+    "region": "Région",
+    "nameAndId": "{{name}} (ID {{id}})",
+    "oso": {
+      "signInIdentityProvider": "Vous vous connectez avec votre identité de la plateforme.",
+      "signInDashboard": "Sur la page de connexion, choisissez {{name}}. Vous vous connectez avec votre identité de la plateforme.",
+      "groups": "Groupes qui peuvent l'utiliser",
+      "groupEdit": "{{group}} (créer et modifier)",
+      "groupView": "{{group}} (lecture seule)",
+      "groupNotReady": "{{group}} (pas prêt : {{message}})",
+      "groupNotReadyNoMessage": "{{group}} (pas prêt)",
+      "groupRemoving": "{{group}} (en cours de retrait)",
+      "youAreNotIn": "Vous n'êtes dans aucun de ces groupes. Demandez à l'administrateur des accès de votre locataire de vous ajouter à l'un d'eux.",
+      "noGroup": "Aucun groupe d'accès ne peut utiliser cet environnement. Personne ne peut s'y connecter. Ajoutez un groupe d'accès à l'environnement.",
+      "apiCredentials": "Identifiants d'API",
+      "apiCredentialsIntro": "Pour les outils en ligne de commande, créez un identifiant d'application dans le tableau de bord (Identity, Application Credentials) et téléchargez son fichier clouds.yaml. Un identifiant d'application est un secret qui permet à un outil d'agir en votre nom dans ce projet.",
+      "apiCredentialsPeriod": "Il fonctionne pendant {{period}} après votre dernière connexion au tableau de bord. Connectez-vous de nouveau pour qu'il continue de fonctionner.",
+      "apiCredentialsUnknown": "La durée pendant laquelle il fonctionne après votre dernière connexion est fixée par le site. Demandez à l'équipe de la plateforme.",
+      "apiCredentialsNotOffered": "Personne ne peut créer d'identifiants d'API sur ce site. Utilisez le tableau de bord, ou demandez à l'équipe de la plateforme.",
+      "siteNoSignIn": "La connexion avec l'identité de la plateforme n'est pas configurée sur ce site. Personne ne peut utiliser cet environnement directement. La plateforme peut toujours y construire des clusters OpenShift."
+    },
+    "period": {
+      "day_one": "{{count}} jour",
+      "day_other": "{{count}} jours",
+      "hour_one": "{{count}} heure",
+      "hour_other": "{{count}} heures",
+      "minute_one": "{{count}} minute",
+      "minute_other": "{{count}} minutes"
+    }
   },
   "toolSignIn": {
     "title": "Connexion",
@@ -1361,7 +1411,13 @@
     "vmsListedAndMore_other": "({{count}} VM) : {{names}} et {{more}} de plus",
     "vmsInNamespace_one": "({{count}} VM)",
     "vmsInNamespace_other": "({{count}} VM)",
-    "listedAt": "Liste lue sur le site le {{time}} ; une VM créée ou supprimée depuis peut manquer ou figurer encore. La suppression attend les VM réellement présentes."
+    "listedAt": "Liste lue sur le site le {{time}} ; une VM créée ou supprimée depuis peut manquer ou figurer encore. La suppression attend les VM réellement présentes.",
+    "fieldsOf": {
+      "CloudOSO": {
+        "editRbac": "créer et modifier",
+        "viewRbac": "lecture seule"
+      }
+    }
   },
   "donut": {
     "total": "Total",

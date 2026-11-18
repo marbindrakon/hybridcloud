@@ -478,6 +478,30 @@ spec:
                   type: array
                   items:
                     type: string
+                credential:
+                  description: >-
+                    OpenStack: the cluster's own credential on the site, an application credential of a site user
+                    made for this cluster alone (identifiers only). It is deleted with the cluster.
+                  type: object
+                  properties:
+                    id:
+                      description: Identifier of the application credential.
+                      type: string
+                    user:
+                      description: Name of the site user that owns it. Actions by this user in the project are this cluster's.
+                      type: string
+                    userId:
+                      description: Identifier of that user.
+                      type: string
+                    domain:
+                      description: Name of the domain of the site's identity service that holds the user.
+                      type: string
+                    domainId:
+                      description: Identifier of that domain.
+                      type: string
+                    createdAt:
+                      description: When the platform made the credential (UTC, RFC 3339). The site's identity service does not report it; empty when it is not known.
+                      type: string
                 floatingIPs:
                   description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."
                   type: object

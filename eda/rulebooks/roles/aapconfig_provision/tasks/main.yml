@@ -66,27 +66,17 @@
         aap_oidc_client_id: "aap-{{ aapconfig_cr_name }}"
         keycloak_vault_path: "{{ _rbac_config.resources[0].spec.secret | default('rhbk-services-admin') }}"
 
-    - name: Discover Keycloak external URL from services cluster Route
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: route.openshift.io/v1
-        kind: Route
-        namespace: services-rhbk
-        label_selectors:
-          - "app=keycloak"
-      register: kc_route
-
-    - name: Debug Keycloak route discovery
-      ansible.builtin.debug:
-        msg: "Found {{ kc_route.resources | length }} Keycloak route(s) in services-rhbk"
+    # without a labelled Route the job keeps KEYCLOAK_INTERNAL_URL / KEYCLOAK_EXTERNAL_URL of its environment
+    - name: The sign-in directory's address
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
+      vars:
+        skc_required: false
 
     - name: Override keycloak_internal_url with discovered Route
       ansible.builtin.set_fact:
-        keycloak_internal_url: "https://{{ kc_route.resources[0].spec.host }}"
-        keycloak_external_url: "https://{{ kc_route.resources[0].spec.host }}"
-      when: kc_route.resources | length > 0
+        keycloak_internal_url: "{{ skc_url }}"
+        keycloak_external_url: "{{ skc_url }}"
+      when: skc_source == 'route'
 
     - name: Discover AAP gateway Route from services cluster
       kubernetes.core.k8s_info:
@@ -153,6 +143,23 @@
       register: _kc_client_secret
       no_log: true
 
+    - name: The authenticator's wanted settings
+      ansible.builtin.set_fact:
+        _aap_auth_wanted:
+          OIDC_ENDPOINT: "{{ keycloak_external_url | regex_replace('/+$', '') }}/realms/{{ keycloak_realm }}"
+          KEY: "{{ aap_oidc_client_id }}"
+          GROUPS_CLAIM: "{{ aap_oidc_groups_claim }}"
+
+    # never an endpoint without the Keycloak's address ("/realms/<realm>"): neither created nor converged
+    - name: The authenticator needs the Keycloak's address
+      ansible.builtin.assert:
+        that: _aap_auth_wanted.OIDC_ENDPOINT is match('^https?://[^/]+')
+        quiet: true
+        fail_msg: >-
+          The sign-in directory's address is not known (no labelled Route of the Keycloak on the services cluster,
+          and the job's environment does not set KEYCLOAK_EXTERNAL_URL), so the AAP sign-in authenticator was neither
+          created nor changed.
+
     - name: Configure OIDC authenticator via AAP gateway
       ansible.builtin.uri:
         url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/"
@@ -168,11 +175,11 @@
           create_objects: true
           remove_users: false
           configuration:
-            OIDC_ENDPOINT: "{{ keycloak_external_url }}/realms/{{ keycloak_realm }}"
-            KEY: "{{ aap_oidc_client_id }}"
+            OIDC_ENDPOINT: "{{ _aap_auth_wanted.OIDC_ENDPOINT }}"
+            KEY: "{{ _aap_auth_wanted.KEY }}"
             SECRET: "{{ _kc_client_secret.json.value }}"
             # the claim the Keycloak groups mapper emits (the gateway's default, "Group", never matches it)
-            GROUPS_CLAIM: "{{ aap_oidc_groups_claim }}"
+            GROUPS_CLAIM: "{{ _aap_auth_wanted.GROUPS_CLAIM }}"
           slug: "oidc-{{ aapconfig_cr_name | lower }}"
         validate_certs: false
         status_code: [200, 201]
@@ -192,8 +199,23 @@
       register: _existing_auth
       when: _aap_auth is failed or (_aap_auth.status | default(0) == 400)
 
-    # the gateway replaces the whole configuration on PATCH; the masked SECRET ("$encrypted$") keeps the stored one
-    - name: Converge the groups claim of the existing authenticator
+    # an existing authenticator converges to the Keycloak's current address, the client and the groups claim (a
+    # changed Keycloak host name reaches it at the next run). The gateway replaces the whole configuration on PATCH;
+    # the masked SECRET ("$encrypted$") it returns keeps the stored one, so the secret is never sent. No PATCH when
+    # nothing differs (trailing slashes of the endpoint ignored).
+    - name: What differs in the existing authenticator
+      vars:
+        _have: "{{ (_existing_auth.json.results | default([{}], true) | first).configuration | default({}, true) }}"
+      ansible.builtin.set_fact:
+        _aap_auth_differs: >-
+          {{ (_have.OIDC_ENDPOINT | default('', true) | regex_replace('/+$', '')) != _aap_auth_wanted.OIDC_ENDPOINT
+             or (_have.KEY | default('', true)) != _aap_auth_wanted.KEY
+             or (_have.GROUPS_CLAIM | default('', true)) != _aap_auth_wanted.GROUPS_CLAIM }}
+      when:
+        - _existing_auth.json is defined
+        - _existing_auth.json.results | default([]) | length > 0
+
+    - name: Converge the existing authenticator (endpoint, client, groups claim)
       ansible.builtin.uri:
         url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticators/{{ _existing_auth.json.results[0].id }}/"
         method: PATCH
@@ -202,15 +224,15 @@
         force_basic_auth: true
         body_format: json
         body:
-          configuration: >-
-            {{ _existing_auth.json.results[0].configuration | combine({'GROUPS_CLAIM': aap_oidc_groups_claim}) }}
+          configuration: "{{ _existing_auth.json.results[0].configuration | combine(_aap_auth_wanted) }}"
         validate_certs: false
         status_code: [200]
-      register: _aap_auth_groups_claim
+      register: _aap_auth_converged
+      no_log: true
       when:
         - _existing_auth.json is defined
         - _existing_auth.json.results | default([]) | length > 0
-        - _existing_auth.json.results[0].configuration.GROUPS_CLAIM | default('', true) != aap_oidc_groups_claim
+        - _aap_auth_differs | default(false) | bool
 
     - name: Read the authenticator's callback
       ansible.builtin.set_fact:

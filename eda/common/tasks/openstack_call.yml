@@ -11,7 +11,11 @@
       - "{{ role_path }}/../../../common/files/{{ os_helper | default('shc_openstack.py') }}"
     stdin: "{{ os_request | combine({'clouds_yaml': os_account_clouds_yaml, 'cacert': os_account_cacert | default('')}) | to_json }}"
   register: _os_call
-  changed_when: os_request.action not in ['check-empty']
+  # an action that reports whether it wrote anything (access-groups) is "changed" only then
+  changed_when: >-
+    os_request.action not in ['check-empty']
+    and ((_os_call.stdout | from_json).changed | default(true) | bool
+         if (_os_call.stdout | default('') | trim).startswith('{') else true)
   failed_when: false
   no_log: "{{ os_call_no_log | default(true) }}"
 

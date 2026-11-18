@@ -9,30 +9,18 @@
     - name: Resolve services cluster API connection
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
 
-    - name: Discover Keycloak external URL
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: route.openshift.io/v1
-        kind: Route
-        namespace: services-rhbk
-        label_selectors:
-          - "app=keycloak"
-      register: kc_route
-
-    - name: Set Keycloak URL
-      ansible.builtin.set_fact:
-        plugin_rbac_keycloak_url: >-
-          {{
-            ('https://' + kc_route.resources[0].spec.host)
-            if (kc_route.resources | length > 0)
-            else lookup('env', 'KEYCLOAK_EXTERNAL_URL') | default('https://rhbk-services.apps.cluster.local', true)
-          }}
-
     - name: Run Keycloak admin cleanup when spec is available
       when: rbac_config_spec.secret is defined
       block:
+        # the labelled Route, else KEYCLOAK_EXTERNAL_URL; neither fails the delete with a message that names the
+        # setting
+        - name: The sign-in directory's address
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
+
+        - name: Set Keycloak URL
+          ansible.builtin.set_fact:
+            plugin_rbac_keycloak_url: "{{ skc_url }}"
+
         - name: Load Keycloak admin credentials
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_admin_credentials.yml"
           vars:

@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
+import { safeLink } from '../forms/safeLink';
 import {
   Alert,
   Button,
@@ -68,11 +69,12 @@ const DIAGNOSTIC_KEYS = ['delivery', 'edaJobs', 'observedGeneration', 'lastRecon
 /**
  * Status keys of helper objects that no longer exist (the API says "No longer set"); old
  * objects may still carry them. scripts/check-content.py leaves the same keys out of its
- * runtime label check (any status key with "helper" in its name).
+ * runtime label check (any status key with "helper" in its name). appCredentialId: the credential
+ * environments used before each cluster had its own (written as null since).
  */
-export const LEGACY_STATUS_KEYS = ['osoHelperName', 'osoHelperCreated', 'awsHelperName', 'awsHelperCreated', 'helperName', 'helperProvider'];
+export const LEGACY_STATUS_KEYS = ['osoHelperName', 'osoHelperCreated', 'awsHelperName', 'awsHelperCreated', 'helperName', 'helperProvider', 'appCredentialId'];
 
-function formatValue(val: unknown): React.ReactNode {
+export function formatValue(val: unknown): React.ReactNode {
   if (val === null || val === undefined || val === '') {
     return <span className="sc-text-muted">—</span>;
   }
@@ -97,10 +99,11 @@ function formatValue(val: unknown): React.ReactNode {
     return <code style={{ fontSize: '0.8125rem' }}>{JSON.stringify(val)}</code>;
   }
   const str = String(val);
-  if (str.startsWith('http://') || str.startsWith('https://')) {
+  const url = safeLink(str);
+  if (url) {
     return (
-      <a href={str} target="_blank" rel="noopener noreferrer" style={{ wordBreak: 'break-all' }}>
-        {str}
+      <a href={url} target="_blank" rel="noopener noreferrer" style={{ wordBreak: 'break-all' }}>
+        {url}
       </a>
     );
   }
@@ -202,7 +205,7 @@ function JsonTab({ item }: { item: K8sResource | null }): React.ReactElement {
 }
 
 /** Admins only: delivery and job diagnostics of the platform, collapsed. */
-function DiagnosticsBlock({ item }: { item: K8sResource }): React.ReactElement | null {
+export function DiagnosticsBlock({ item }: { item: K8sResource }): React.ReactElement | null {
   const { t } = useTranslation();
   const [open, setOpen] = useState(false);
   const status = (item.status ?? {}) as Record<string, unknown>;
@@ -216,8 +219,8 @@ function DiagnosticsBlock({ item }: { item: K8sResource }): React.ReactElement |
         <ul>
           {jobs.map((j, i) => (
             <li key={`${j.jobId ?? j.name}-${i}`}>
-              {j.url ? (
-                <a href={j.url} target="_blank" rel="noopener noreferrer">
+              {safeLink(j.url) ? (
+                <a href={safeLink(j.url)} target="_blank" rel="noopener noreferrer">
                   {j.name ?? j.jobId}
                 </a>
               ) : (

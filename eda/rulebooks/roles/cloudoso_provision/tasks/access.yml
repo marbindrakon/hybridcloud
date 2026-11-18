@@ -1,0 +1,466 @@
+---
+# Who can use the environment on its site (spec.toolRbac). Where the site declares sign-in with the platform's tenant
+# identities (CloudInfrastructure spec.openstack.signIn) and its probe found it set up (condition SignInConfigured
+# True), each access group whose Rbac has a group in the sign-in directory gets:
+#   1. a Keystone group <entity>.<rbac> in the site's group domain (status.site.signIn.groupDomain: the declared
+#      signIn.groupDomain, default the site's projectDomain), marked as the platform's, with the realization's role on
+#      the project (editRoles for editRbac, viewRoles for viewRbac) - files/shc_openstack.py access-groups;
+#   2. then the client role <entity>.<rbac> of the site's client in the tenant realm (openstack.tenantSignIn.clientId,
+#      "{site}" = the site), owned by this environment and mapped to the Rbac's group (common/tasks/
+#      services_signin_groups.yml), so a member's token names the group and Keystone looks it up.
+# A group no longer wanted goes the other way round: this environment leaves the client role's owners (the role goes
+# with its last owner), then the group's role on this project is revoked, then the Keystone group is deleted when its
+# client role went and it holds no role anywhere else. Removals run also while the site's sign-in is not confirmed
+# (what can be done is done, the rest is reported), from the recorded client and group domain; a site whose signIn
+# is no longer declared gets all the recorded groups removed. The record of the client and group domain stays until
+# its groups are gone (status.access.removing names the ones still to go).
+# A fault of this step never fails the environment (Ready follows the project and DNS): AccessReady says it. A fault
+# of the moment (the site or the directory did not answer) is AccessNotChecked and keeps the groups' last states; a
+# refusal is GrantRefused. A group the site did not answer for keeps its state and this environment's ownership of its
+# client role; a group the site refused keeps the ownership only when it held its roles already.
+# Runs after environmentprep.yml (ep_os, ep_vault_path). Sets oso_access (status.access), oso_access_condition
+# (AccessReady), oso_signin_ok.
+- name: Load the realization defaults (tenant sign-in on OpenStack sites)
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+
+- name: The site's sign-in and the access groups wanted
+  vars:
+    _real: "{{ fabric_realization_defaults | combine(fabric_realization | default({}, true), recursive=True) }}"
+    _si_os: "{{ (_real.openstack | default({})).tenantSignIn | default({}) }}"
+    _si_ocp: "{{ (_real.openshift | default({})).tenantSignIn | default({}) }}"
+    _ci_os: "{{ (ci_spec | default({})).openstack | default({}, true) }}"
+    _spec_si: "{{ _ci_os.signIn | default({}, true) }}"
+    _st_si: "{{ (((ci_obj | default({})).status | default({}, true)).site | default({}, true)).signIn | default({}, true) }}"
+    _cond: >-
+      {{ (((ci_obj | default({})).status | default({}, true)).conditions | default([], true)
+          | selectattr('type', 'equalto', 'SignInConfigured') | list) + [{}] }}
+    _tool: "{{ oso_spec.toolRbac | default({}, true) }}"
+    _rec: "{{ (cloudoso_cr_lookup.resources[0].status | default({}, true)).access | default({}, true) }}"
+  ansible.builtin.set_fact:
+    oa_site: "{{ oso_cloudinfra_name }}"
+    oa_declared: "{{ (_spec_si.identityProvider | default('', true)) | length > 0 }}"
+    oa_signin_ok: >-
+      {{ (_spec_si.identityProvider | default('', true)) | length > 0
+         and ((_cond | first).status | default('') | string) == 'True' }}
+    # the site's (G1/G2): what its probe published, else what it declares, else its project domain
+    oa_group_domain: >-
+      {{ _st_si.groupDomain | default('', true) or _spec_si.groupDomain | default('', true)
+         or _ci_os.projectDomain | default('', true) }}
+    oa_client_id: "{{ (_si_os.clientId | default('openstack-{site}', true)) | replace('{site}', oso_cloudinfra_name) }}"
+    oa_realm: "{{ _si_os.realm | default('', true) or _si_ocp.realm | default('', true) }}"
+    oa_rbac_config: "{{ _si_os.rbacConfig | default('', true) or _si_ocp.rbacConfig | default('', true) }}"
+    oa_edit_roles: "{{ _si_os.editRoles | default(['member'], true) }}"
+    oa_view_roles: "{{ _si_os.viewRoles | default(['reader'], true) }}"
+    # an access group in both lists gets edit
+    oa_wanted: >-
+      {%- set out = [] -%}
+      {%- for r in _tool.editRbac | default([], true) | unique -%}
+        {%- set _ = out.append({'rbac': r, 'access': 'Edit'}) -%}
+      {%- endfor -%}
+      {%- for r in _tool.viewRbac | default([], true) | unique if r not in (_tool.editRbac | default([], true)) -%}
+        {%- set _ = out.append({'rbac': r, 'access': 'View'}) -%}
+      {%- endfor -%}
+      {{ out }}
+    oa_rec_client: "{{ _rec.signInClient | default('', true) }}"
+    oa_rec_group_domain: "{{ _rec.groupDomain | default('', true) }}"
+    oa_rec_groups: "{{ _rec.groups | default([], true) }}"
+    oa_recorded: >-
+      {{ ((_rec.groups | default([], true) | map(attribute='group') | list)
+          + (_rec.removing | default([], true) | list)) | unique | list }}
+    oa_fault: {}
+    oa_present: {}
+    oa_absent: {}
+    oa_revoke: {}
+    oa_gone: []
+
+- name: Read the access groups of the namespace
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Rbac
+    namespace: "{{ cloudoso_cr_namespace }}"
+  register: _oa_rbacs
+  when: oa_wanted | length > 0
+
+- name: The groups of the access groups
+  vars:
+    _rbacs: "{{ _oa_rbacs.resources | default([]) }}"
+  ansible.builtin.set_fact:
+    # exists: the Rbac is in the namespace; path: its group in the sign-in directory ('' = none yet)
+    oa_grants: >-
+      {%- set out = [] -%}
+      {%- for g in oa_wanted -%}
+        {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', g.rbac) | list + [{}]) | first -%}
+        {%- set path = (r.status | default({}, true)).group | default('', true) -%}
+        {%- set roles = oa_edit_roles if g.access == 'Edit' else oa_view_roles -%}
+        {%- set _ = out.append(g | combine({'path': path, 'exists': r | length > 0, 'group': entity_name ~ '.' ~ g.rbac,
+                                            'roles': roles, 'role': roles | join(', ')})) -%}
+      {%- endfor -%}
+      {{ out }}
+    oa_dir_done: false
+    oa_rm_fault: {}
+    oa_ssg_faults: []
+
+# what goes: the recorded groups no longer wanted (or whose access group is gone); all of them when the site no longer
+# declares sign-in; with a confirmed sign-in also the platform's groups of this tenant the site finds on the project.
+# A wanted group whose access group exists keeps what it has, also while its Rbac shows no directory group.
+- name: The groups this environment no longer wants
+  vars:
+    _keep: "{{ [] if not (oa_declared | bool) else oa_grants | selectattr('exists') | map(attribute='group') | list }}"
+  ansible.builtin.set_fact:
+    oa_gone: "{{ oa_recorded | reject('in', _keep) | list }}"
+    oa_keep: "{{ _keep }}"
+    # where the groups no longer wanted live: the site's group domain with a confirmed sign-in, else the recorded one
+    oa_rm_group_domain: "{{ (oa_group_domain | trim) if oa_signin_ok | bool else (oa_rec_group_domain or oa_group_domain | trim) }}"
+
+# 1. Keystone groups and their roles first (a token that names a group Keystone does not have yet loses nothing),
+# then the client roles of the site's sign-in client, group by group
+- name: The site's side and the directory's side of the wanted access groups
+  when: oa_signin_ok | bool
+  block:
+    - name: Require the tenant realm of the site's sign-in client and the group domain
+      ansible.builtin.assert:
+        that:
+          - oa_realm | length > 0
+          - oa_group_domain | trim | length > 0
+        fail_msg: >-
+          site {{ oa_site }} declares sign-in, but the realization names no tenant realm (openstack.tenantSignIn.realm
+          and openshift.tenantSignIn.realm are empty) or the site names no group domain
+
+    - name: Load the site account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ ep_vault_path }}"
+        os_account_tag: "cloudoso-{{ cloudoso_cr_name }}"
+
+    - name: The Keystone groups and their roles on the project
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: access-groups
+          state: present
+          domain: "{{ ep_project_domain }}"
+          project_id: "{{ ep_os.project.id }}"
+          group_domain: "{{ oa_group_domain | trim }}"
+          entity: "{{ entity_name }}"
+          managed_roles: "{{ (oa_edit_roles + oa_view_roles) | unique | list }}"
+          groups: >-
+            {%- set out = [] -%}
+            {%- for g in oa_grants if g.path | length > 0 -%}
+              {%- set _ = out.append({'group': g.group, 'roles': g.roles,
+                                      'description': 'Access group ' ~ g.rbac ~ ' of tenant ' ~ entity_name}) -%}
+            {%- endfor -%}
+            {{ out }}
+          # an access group without a directory group keeps its grant (it is not unwanted)
+          keep: "{{ oa_grants | selectattr('exists') | rejectattr('path') | map(attribute='group') | list }}"
+
+    - name: Keep the site's answer
+      ansible.builtin.set_fact:
+        oa_present: "{{ os_result }}"
+        oa_gone: "{{ (oa_gone + (os_result.unwanted | default([]))) | unique | reject('in', oa_keep) | list }}"
+
+    - name: Stop at the site's answer
+      ansible.builtin.fail:
+        msg: "{{ oa_present.message | default('', true) or oa_present.error }}"
+      when: (oa_present.error | default('', true)) | length > 0
+
+    # the client roles this environment keeps: a group granted now, one the site did not answer for (its state is
+    # not known, nothing changes), one the site refused that held its roles before; a wanted group whose access group
+    # exists is never left (ssg_keep); a group the directory refuses is that group's fault (ssg_per_group)
+    - name: The client roles of the site's sign-in client
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        _oa_answers: "{{ oa_present.groups | default([]) }}"
+        _oa_rec_granted: "{{ oa_rec_groups | selectattr('state', 'equalto', 'Granted') | map(attribute='group') | list }}"
+        _oa_owned: >-
+          {%- set out = [] -%}
+          {%- for a in _oa_answers -%}
+            {%- if a.state in ['Granted', 'Unchecked']
+                  or (a.state == 'Failed' and (a.held | default(false) | bool or a.group in _oa_rec_granted)) -%}
+              {%- set _ = out.append(a.group) -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ out }}
+        ssg_entity: "{{ entity_name }}"
+        ssg_owner: "CloudOSO/{{ cloudoso_cr_name }}"
+        ssg_label: "CloudOSO {{ cloudoso_cr_name }}"
+        ssg_wanted: "{{ oa_grants | selectattr('path') | selectattr('group', 'in', _oa_owned) | list }}"
+        ssg_keep: "{{ oa_keep }}"
+        ssg_per_group: true
+        ssg_role_description: "Group {{ item }} on OpenStack site {{ oa_site }} (environments of {{ entity_name }})"
+        entity_signin_realm: "{{ oa_realm }}"
+        entity_signin_client: "{{ oa_client_id }}"
+        entity_signin_rbac_config: "{{ oa_rbac_config }}"
+
+    - name: The directory's side is done
+      ansible.builtin.set_fact:
+        oa_dir_done: true
+        oa_ssg_faults: "{{ ssg_faults | default([]) }}"
+  rescue:
+    - name: The access step's fault
+      ansible.builtin.include_tasks: access_fault.yml
+      vars:
+        oaf_into: oa_fault
+        oaf_helper: "{{ oa_present }}"
+
+# 2. the groups no longer wanted, each on its own, whatever happened to the wanted ones. First their role on this
+# project is revoked, never waiting for the directory (a token that still names the group gets nothing on the
+# project); then this environment leaves their client roles where the directory can be asked; then a group is
+# deleted once the directory was asked, its client role went and it holds no role elsewhere. What is not finished is
+# recorded (status.access.removing) and the next run goes on with it.
+- name: Revoke the groups no longer wanted on the project
+  when:
+    - oa_gone | length > 0
+    - oa_signin_ok | bool or oa_rec_client | length > 0 or oa_rec_group_domain | length > 0
+  block:
+    - name: Load the site account
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
+      vars:
+        os_account_vault_path: "{{ ep_vault_path }}"
+        os_account_tag: "cloudoso-{{ cloudoso_cr_name }}"
+
+    - name: Revoke their roles
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: access-groups
+          state: absent
+          domain: "{{ ep_project_domain }}"
+          project_id: "{{ ep_os.project.id }}"
+          group_domain: "{{ oa_rm_group_domain }}"
+          managed_roles: "{{ (oa_edit_roles + oa_view_roles) | unique | list }}"
+          groups: >-
+            {%- set out = [] -%}
+            {%- for g in oa_gone -%}
+              {%- set _ = out.append({'group': g, 'delete': false}) -%}
+            {%- endfor -%}
+            {{ out }}
+
+    - name: Keep the site's answer to the revoke
+      ansible.builtin.set_fact:
+        oa_revoke: "{{ os_result }}"
+
+    - name: Stop at the site's answer to the revoke
+      ansible.builtin.fail:
+        msg: "{{ oa_revoke.message | default('', true) or oa_revoke.error }}"
+      when: (oa_revoke.error | default('', true)) | length > 0
+  rescue:
+    - name: The revoke's fault
+      ansible.builtin.include_tasks: access_fault.yml
+      vars:
+        oaf_into: oa_rm_fault
+        oaf_helper: "{{ oa_revoke }}"
+
+# without a confirmed sign-in: the recorded client; this environment keeps the recorded groups still wanted
+- name: The client roles of the recorded sign-in client
+  when:
+    - oa_gone | length > 0
+    - not (oa_signin_ok | bool)
+    - oa_rec_client | length > 0 and oa_realm | length > 0
+  block:
+    - name: Leave the client roles of the groups no longer wanted
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+      vars:
+        ssg_entity: "{{ entity_name }}"
+        ssg_owner: "CloudOSO/{{ cloudoso_cr_name }}"
+        ssg_label: "CloudOSO {{ cloudoso_cr_name }}"
+        ssg_wanted: []
+        ssg_keep: "{{ oa_keep }}"
+        ssg_role_description: "Group {{ item }} on OpenStack site {{ oa_site }} (environments of {{ entity_name }})"
+        entity_signin_realm: "{{ oa_realm }}"
+        entity_signin_client: "{{ oa_rec_client }}"
+        entity_signin_rbac_config: "{{ oa_rbac_config }}"
+
+    - name: The directory's side is done
+      ansible.builtin.set_fact:
+        oa_dir_done: true
+  rescue:
+    - name: The directory's fault for the removal
+      ansible.builtin.include_tasks: access_fault.yml
+      vars:
+        oaf_into: oa_rm_fault
+        oaf_helper: {}
+
+- name: Delete the groups whose client role went
+  when:
+    - oa_gone | length > 0
+    - oa_dir_done | bool
+    - (oa_revoke.error | default('', true)) | length == 0
+    - (oa_revoke.groups | default([])) | length > 0
+  block:
+    - name: Delete them
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
+      vars:
+        _oa_deleted: "{{ ssg_released | default([]) | rejectattr('value.owners') | map(attribute='key') | list }}"
+        os_call_no_log: false
+        os_call_soft: true
+        os_request:
+          action: access-groups
+          state: absent
+          domain: "{{ ep_project_domain }}"
+          project_id: "{{ ep_os.project.id }}"
+          group_domain: "{{ oa_rm_group_domain }}"
+          managed_roles: "{{ (oa_edit_roles + oa_view_roles) | unique | list }}"
+          groups: >-
+            {%- set out = [] -%}
+            {%- for g in oa_gone -%}
+              {%- set _ = out.append({'group': g, 'delete': g in _oa_deleted or g not in ssg_all_role_names | default([g])}) -%}
+            {%- endfor -%}
+            {{ out }}
+
+    - name: Keep the site's answer to the removal
+      ansible.builtin.set_fact:
+        oa_absent: "{{ os_result }}"
+
+    - name: Stop at the site's answer to the removal
+      ansible.builtin.fail:
+        msg: "{{ oa_absent.message | default('', true) or oa_absent.error }}"
+      when: (oa_absent.error | default('', true)) | length > 0
+  rescue:
+    - name: The removal's fault
+      ansible.builtin.include_tasks: access_fault.yml
+      vars:
+        oaf_into: oa_rm_fault
+        oaf_helper: "{{ oa_absent }}"
+
+- name: The environment's access (status.access)
+  vars:
+    _answers: "{{ oa_present.groups | default([]) }}"
+    _site_msg: >-
+      Sign-in with the platform identity is not set up on site {{ oa_site if oa_site | length > 0 else 'of this environment' }}.
+    _fault: "{{ oa_fault }}"
+    _dir_faults: "{{ oa_ssg_faults }}"
+    _absent: "{{ oa_absent.groups | default([]) if (oa_absent.error | default('', true)) | length == 0 else [] }}"
+    _revoked: "{{ oa_revoke.groups | default([]) if (oa_revoke.error | default('', true)) | length == 0 else [] }}"
+    _dir_needed: "{{ oa_signin_ok | bool or oa_rec_client | length > 0 }}"
+    _can_remove: "{{ oa_signin_ok | bool or oa_rec_client | length > 0 or oa_rec_group_domain | length > 0 }}"
+    _computed: >-
+      {%- set groups, unchecked, removing, left, refused = [], [], [], [], [] -%}
+      {%- for g in oa_grants -%}
+        {%- set a = (_answers | selectattr('group', 'equalto', g.group) | list + [{}]) | first -%}
+        {%- set rec = (oa_rec_groups | selectattr('group', 'equalto', g.group) | list + [{}]) | first -%}
+        {%- set d = (_dir_faults | selectattr('group', 'equalto', g.group) | list + [{}]) | first -%}
+        {%- if not (oa_signin_ok | bool) -%}
+          {%- set st, msg = 'Waiting', _site_msg | trim -%}
+        {%- elif _fault and _fault.transient | bool -%}
+          {%- set st, msg = rec.state | default('Waiting', true), 'Could not be checked this time: '
+                            ~ (_fault.message | regex_replace('\\.$', '')) ~ '.' -%}
+          {%- set _ = unchecked.append({'rbac': g.rbac, 'cause': _fault.message}) -%}
+        {%- elif _fault and not a -%}
+          {%- set st, msg = 'Failed', _fault.message -%}
+        {%- elif not g.exists -%}
+          {%- set st, msg = 'Waiting', 'The access group does not exist in this tenant.' -%}
+        {%- elif g.path | length == 0 -%}
+          {%- set st, msg = 'Waiting', 'The access group has no group in the sign-in directory yet.' -%}
+        {%- elif a.state | default('') == 'Failed' -%}
+          {%- set st, msg = 'Failed', a.message | default('') -%}
+          {%- set _ = refused.append({'group': g.group, 'message': msg, 'by': 'site'}) -%}
+        {%- elif a.state | default('') == 'Unchecked' -%}
+          {%- set st, msg = rec.state | default('Waiting', true), 'Could not be checked this time: '
+                            ~ (a.message | default('') | regex_replace('\\.$', '')) ~ '.' -%}
+          {%- set _ = unchecked.append({'rbac': g.rbac, 'cause': a.message | default('')}) -%}
+        {%- elif d and d.missing | default(false) | bool -%}
+          {%- set st, msg = 'Waiting', d.message -%}
+        {%- elif d -%}
+          {%- set st, msg = 'Failed', d.message -%}
+          {%- set _ = refused.append({'group': g.group, 'message': msg, 'by': 'directory'}) -%}
+        {%- else -%}
+          {%- set st, msg = 'Granted', '' -%}
+        {%- endif -%}
+        {%- set _ = groups.append({'rbac': g.rbac, 'group': g.group, 'access': g.access, 'role': g.role, 'state': st,
+                                   'message': msg}) -%}
+      {%- endfor -%}
+      {%- for name in oa_gone if _can_remove | bool -%}
+        {%- set v = (_revoked | selectattr('group', 'equalto', name) | list + [{}]) | first -%}
+        {%- set r = (_absent | selectattr('group', 'equalto', name) | list + [{}]) | first -%}
+        {%- if not v or v.error | default('', true) | length > 0
+              or (_dir_needed | bool and (not (oa_dir_done | bool) or not r or r.error | default('', true) | length > 0)) -%}
+          {%- set _ = removing.append(name) -%}
+        {%- elif r.kept | default('', true) | length > 0 and r.kept not in ['not found', 'holds a role on another project'] -%}
+          {%- set _ = left.append(name ~ ': ' ~ r.kept) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {%- set rm_errors = (_revoked + _absent) | selectattr('error', 'defined') | selectattr('error') | list -%}
+      {{ {'groups': groups, 'unchecked': unchecked, 'removing': removing | sort, 'left': left, 'refused': refused,
+          'rmCause': ((rm_errors | first).group ~ ': ' ~ (rm_errors | first).error) if rm_errors
+                     else (oa_rm_fault.message | default('') or (_fault.message | default('') if _fault else ''))} }}
+  ansible.builtin.set_fact:
+    oso_signin_ok: "{{ oa_signin_ok | bool }}"
+    oa_unchecked: "{{ _computed.unchecked }}"
+    oa_left: "{{ _computed.left }}"
+    oa_refused: "{{ _computed.refused }}"
+    oa_rm_cause: "{{ _computed.rmCause }}"
+    oso_access:
+      signInClient: >-
+        {{ oa_client_id if oa_declared | bool else (oa_rec_client if _computed.removing | length > 0 else '') }}
+      groupDomain: >-
+        {{ (oa_group_domain | trim) if oa_declared | bool
+           else (oa_rec_group_domain if _computed.removing | length > 0 else '') }}
+      groups: "{{ _computed.groups }}"
+      removing: "{{ _computed.removing }}"
+
+- name: AccessReady
+  vars:
+    _groups: "{{ oso_access.groups }}"
+    _fault: "{{ oa_fault }}"
+    _unchecked: "{{ oa_unchecked }}"
+    _waiting: "{{ _groups | selectattr('state', 'equalto', 'Waiting') | list }}"
+    _granted: "{{ _groups | selectattr('state', 'equalto', 'Granted') | list }}"
+    _removing: "{{ oso_access.removing }}"
+    _site_msg: >-
+      Sign-in with the platform identity is not set up on site {{ oa_site if oa_site | length > 0 else 'of this environment' }}.
+    _cause: "{{ (_fault.message | default('') | regex_replace('\\.$', '')) }}"
+    _rm_cause: "{{ (oa_rm_cause | default('') | regex_replace('\\.$', '')) }}"
+  ansible.builtin.set_fact:
+    oso_access_condition: >-
+      {%- if not (oa_signin_ok | bool) -%}
+        {%- set r, m = 'SignInNotSetUp', _site_msg | trim -%}
+        {%- if _removing | length > 0 -%}
+          {%- set m = m ~ ' The removal of group ' ~ (_removing | join(', ')) ~ ' is not finished'
+                      ~ ((': ' ~ _rm_cause) if _rm_cause | length > 0 else '') ~ '; the next run goes on.' -%}
+        {%- endif -%}
+      {%- elif _fault and _fault.transient | bool -%}
+        {%- set r, m = 'AccessNotChecked', 'The access groups could not be checked this time: ' ~ _cause
+                       ~ '. They keep their last state; the next run checks again.' -%}
+      {%- elif _fault -%}
+        {%- set r, m = 'GrantRefused', 'The access groups were refused: ' ~ _cause ~ '.' -%}
+      {%- elif _groups | length == 0 and _removing | length == 0 -%}
+        {%- set r, m = 'NoAccessGroups', 'No access group can use this environment. Nobody can sign in to it.' -%}
+      {%- elif oa_refused | length > 0 -%}
+        {%- set f = oa_refused | first -%}
+        {%- set r, m = 'GrantRefused', (('The site refused the role for group ' if f.by == 'site'
+                                          else 'The sign-in directory refused group ') ~ f.group ~ ': '
+                                         ~ (f.message | regex_replace('\\.$', '')) ~ '.') -%}
+      {%- elif _unchecked | length > 0 -%}
+        {%- set r, m = 'AccessNotChecked', 'Access group ' ~ (_unchecked | first).rbac ~ ' could not be checked this time: '
+                       ~ ((_unchecked | first).cause | regex_replace('\\.$', ''))
+                       ~ '. It keeps its last state; the next run checks again.' -%}
+      {%- elif _waiting | length > 0 -%}
+        {%- set w = _waiting | first -%}
+        {%- set r, m = 'WaitingForGroup', ('Access group ' ~ w.rbac ~ ' has no group in the sign-in directory yet.')
+                       if w.message == 'The access group has no group in the sign-in directory yet.'
+                       else ('Access group ' ~ w.rbac ~ ' is not usable yet: ' ~ (w.message | regex_replace('\\.$', '')) ~ '.') -%}
+      {%- elif _removing | length > 0 -%}
+        {%- set r, m = 'AccessNotChecked', 'The removal of group ' ~ (_removing | join(', ')) ~ ' is not finished'
+                       ~ ((': ' ~ _rm_cause) if _rm_cause | length > 0 else '') ~ '; the next run goes on.' -%}
+      {%- elif _groups | length == 0 -%}
+        {%- set r, m = 'NoAccessGroups', 'No access group can use this environment. Nobody can sign in to it.' -%}
+      {%- else -%}
+        {%- set r, m = 'GroupsGranted', (_granted | length) ~ ' access group' ~ ('s' if _granted | length != 1 else '')
+                       ~ ' can use this environment.' -%}
+      {%- endif -%}
+      {{ {'type': 'AccessReady', 'status': 'True' if r == 'GroupsGranted' else 'False', 'reason': r, 'message': m} }}
+
+- name: Say what the access step found
+  ansible.builtin.debug:
+    msg: >-
+      AccessReady {{ oso_access_condition.reason }}: {{ oso_access_condition.message }}
+      {{ ('Left on the site: ' ~ (oa_left | join('; ')) ~ '.') if oa_left | length > 0 else '' }}
+  when: oso_access_condition.status != 'True' or oa_left | length > 0

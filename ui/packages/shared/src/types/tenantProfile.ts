@@ -16,7 +16,11 @@ export type TenantSiteCapability =
   | 'IPv6Only'
   | 'IPv6NetworkSource'
   | 'IPv6ProviderSource'
-  | 'IPv6Translation';
+  | 'IPv6Translation'
+  /** OpenStack: people can sign in to the site's dashboard with their platform identity */
+  | 'ConsoleSignIn'
+  /** OpenStack: people can create API credentials (application credentials) on the site */
+  | 'ApiCredentials';
 
 export interface TenantSiteStorageClass {
   name: string;

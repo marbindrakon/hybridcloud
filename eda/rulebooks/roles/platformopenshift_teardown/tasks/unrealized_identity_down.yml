@@ -1,0 +1,42 @@
+---
+# A cluster refused before anything was recorded (teardown_unrealized.yml) may still have its own user on its OpenStack
+# site: an earlier run made it in its preflight and failed before the record, a later run was refused by an earlier
+# check. The user of the cluster's computed name goes, as in the full delete (cluster_identity_down.yml: only a build
+# no other cluster holds, only a user with the platform's mark, of the environment's domain and of that name). When
+# the environment or its account cannot be resolved this says so; the environment's delete sweeps the platform's users
+# left in its project.
+# only for a cluster whose identity step ran at least once (a recorded credential or a ClusterCredential condition):
+# a cluster refused before it is deleted without a site call, as always; when the step ran, a site that does not
+# answer fails the delete, which runs again
+- name: The cluster's site user (OpenStack)
+  vars:
+    _uid_st: "{{ shc_live_cr.status | default({}, true) }}"
+  when:
+    - (shc_live_cr.spec | default({}, true)).type | default('') == 'openstack'
+    - (_uid_st.credential | default({}, true) | length > 0)
+      or (_uid_st.conditions | default([], true) | selectattr('type', 'defined')
+          | selectattr('type', 'equalto', 'ClusterCredential') | list | length > 0)
+  block:
+    - name: The cluster
+      ansible.builtin.set_fact:
+        platformopenshift_cr_name: "{{ shc_live_cr.metadata.name }}"
+        platformopenshift_cr_namespace: "{{ shc_live_cr.metadata.namespace }}"
+        po_cr: {resources: ["{{ shc_live_cr }}"]}
+        po_oso_env: "{{ ((shc_live_cr.spec | default({}, true)).openstack | default({}, true)).environment | default('', true) }}"
+        po_build_name: ""
+        po_hub_owned: false
+        po_vault_paths: []
+
+    - name: Resolve services cluster API connection from Vault
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
+
+    - name: Resolve central cluster API connection from Vault SA
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_central_cluster_sa_from_vault.yml"
+
+    - name: Delete the cluster's user on the site
+      ansible.builtin.include_tasks: "{{ role_path }}/tasks/cluster_identity_down.yml"
+
+    - name: Say what could not be looked for
+      ansible.builtin.debug:
+        msg: "{{ cid_note }}"
+      when: cid_note | default('') | length > 0

@@ -39,7 +39,7 @@ flowchart TB
 | Parameter | Value |
 |-----------|-------|
 | Auth mount | `oidc` |
-| OIDC discovery URL | `https://rhbk-services.apps.services.lab.example.com/realms/sovereign-tenants` |
+| OIDC discovery URL | `https://auth.example.com/realms/sovereign-tenants` |
 | Client ID | `vault` |
 | Client secret | Vault KV `central/data/vault-services-client` → `client_secret` |
 | Admin group | `sovereign-admin` |

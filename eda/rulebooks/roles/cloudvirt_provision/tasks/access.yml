@@ -37,20 +37,12 @@
 - name: Keycloak (services, tenant realm)
   when: cv_grants | selectattr('path') | list | length > 0
   block:
-    - name: Discover the Keycloak route on services
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: route.openshift.io/v1
-        kind: Route
-        namespace: services-rhbk
-        label_selectors: ["app=keycloak"]
-      register: _cv_kc_route
+    - name: The sign-in directory's address
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_keycloak_url.yml"
 
     - name: Keycloak URL
       ansible.builtin.set_fact:
-        cv_kc: "https://{{ _cv_kc_route.resources[0].spec.host }}"
+        cv_kc: "{{ skc_url }}"
 
     # the tenant realm's own automation clients: clients (the site sign-in client's roles), membership (group mappings)
     - name: Realm token for the sign-in client's roles

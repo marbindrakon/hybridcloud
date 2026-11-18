@@ -1,16 +1,39 @@
 ---
-# How tenants reach this environment (status.endpoints): the site's Keystone endpoint, the project and its
-# domain, the region and the sign-in method. No Vault path or credential reference. Human sign-in to the
-# OpenStack dashboard is not offered by this platform yet (signIn.method NotAvailable); a site that
-# publishes a dashboard URL (status.site.console) is passed on. Sets oso_endpoints.
+# How people and tools reach this environment (status.endpoints): the console link, the sign-in, the groups that can
+# sign in, the site's identity endpoint, the project and its domain (names and ids), the region and where the site
+# is. No Vault path or credential reference. From the site object (its probe publishes status.site.dashboard and
+# status.site.signIn: the start URL and the authorization TTL with its source) and access.yml (oso_access,
+# oso_signin_ok). The console link is there only while people can sign in (sign-in declared and confirmed): without
+# it signIn.method is NotAvailable and console is null, so no page offers a dashboard nobody can enter. Keys that no
+# longer apply are written as null (the status is merge-patched).
+# Sets oso_endpoints.
 - name: Set the environment's way in
   vars:
-    _site: "{{ ((ci_obj | default({})).status | default({}, true)).site | default({}, true) }}"
+    _ci: "{{ ci_obj | default({}) }}"
+    _site: "{{ (_ci.status | default({}, true)).site | default({}, true) }}"
+    _si: "{{ _site.signIn | default({}, true) }}"
+    _ok: "{{ oso_signin_ok | default(false) | bool }}"
+    # 0 is a value (no credentials for people), not "not known"
+    _ttl_raw: "{{ '' if _si.authorizationTTLMinutes is not defined or _si.authorizationTTLMinutes is none else _si.authorizationTTLMinutes | string }}"
+    _ttl_known: "{{ (_ttl_raw is match('^[0-9]+$')) and (_si.authorizationTTLSource | default('') in ['Site', 'Declared']) }}"
+    _granted: "{{ (oso_access | default({})).groups | default([]) | selectattr('state', 'equalto', 'Granted') | map(attribute='group') | list }}"
   ansible.builtin.set_fact:
     oso_endpoints: >-
-      {{ {'console': _site.console | default('', true),
+      {{ {'console': (_si.startUrl | default(_site.dashboard | default('', true), true) or none) if _ok | bool else none,
           'api': _site.endpoint | default('', true),
-          'signIn': {'method': 'NotAvailable'},
+          'signIn': ({'method': 'TenantSSO', 'idpName': _si.displayName | default(_si.identityProvider | default(''), true),
+                      'start': _si.start | default('Dashboard', true)} if _ok | bool
+                     else {'method': 'NotAvailable', 'idpName': none, 'start': none}),
+          'signInGroups': _granted if _ok | bool else [],
           'project': oso_project_name,
+          'projectId': oso_project_id,
           'domain': oso_domain_name,
-          'location': _site.region | default(((ci_obj | default({})).spec | default({}, true)).displayName | default(oso_cloudinfra_name, true), true)} }}
+          'domainId': oso_domain_id,
+          'region': _site.region | default(oso_settings.regionName | default('', true), true),
+          'location': (_ci.spec | default({}, true)).location
+                      | default((_ci.spec | default({}, true)).displayName | default(oso_cloudinfra_name, true), true),
+          'apiCredentials': ({'state': 'NotOffered', 'validMinutesAfterSignIn': none, 'source': none} if not (_ok | bool)
+                             else ({'state': 'Offered' if (_ttl_raw | int) > 0 else 'NotOffered',
+                                    'validMinutesAfterSignIn': _ttl_raw | int, 'source': _si.authorizationTTLSource}
+                                   if _ttl_known | bool
+                                   else {'state': 'Unknown', 'validMinutesAfterSignIn': none, 'source': none}))} }}
