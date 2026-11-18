@@ -54,3 +54,31 @@ export function fieldErrorsFrom(err: unknown, fieldMap: Record<string, string>):
 export function causeLines(causes: K8sStatusCause[]): string[] {
   return causes.map((c) => (c.field ? `${normaliseFieldPath(c.field)}: ${c.message}` : c.message));
 }
+
+/** A cause's message without the API's lead-in ("Invalid value: "object": ", "Forbidden: "). */
+function ruleSentence(message: string | undefined): string {
+  return (message ?? '')
+    .replace(/^\s*(?:Invalid value: (?:"[^"]*"|[^:]*): |Forbidden: |Required value: )/, '')
+    .trim();
+}
+
+/** Causes of a rule on the whole object or its whole spec (no field of their own). */
+const OBJECT_RULE_FIELDS = new Set(['', '<nil>', 'spec']);
+
+/**
+ * The API's own sentences for a refusal by a rule on the whole object (a transition rule that compares
+ * the spec with the stored one), without the API's lead-in; empty when the refusal is of another kind.
+ * Read from the causes, else from the message ("… is invalid: <nil>: Invalid value: "object": <sentence>").
+ */
+export function objectRuleMessages(err: unknown): string[] {
+  if (!isK8sApiError(err)) return [];
+  const fromCauses = (err.causes ?? [])
+    .filter((c) => OBJECT_RULE_FIELDS.has(normaliseFieldPath(c.field)))
+    .map((c) => ruleSentence(c.message))
+    .filter(Boolean);
+  if (fromCauses.length) return fromCauses;
+  if (err.causes?.length) return [];
+  const m = /\bis invalid: (?:<nil>|spec): (.+)$/s.exec(err.detail ?? '');
+  const one = m ? ruleSentence(m[1]) : '';
+  return one ? [one] : [];
+}

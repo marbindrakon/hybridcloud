@@ -37,6 +37,9 @@ entries=(
   "forms/placementUse.ts:placementUse"
   "forms/openstackAccess.ts:openstackAccess"
   "scope/resolveIdentity.ts:resolveIdentity"
+  "status/install.ts:install"
+  "status/durations.ts:durations"
+  "forms/specFieldMeta.ts:specFieldMeta"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

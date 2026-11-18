@@ -66,8 +66,8 @@ export const KIND_STATUS_KEYS: Partial<Record<HybridSovereignKind, string[]>> = 
   CloudVirt: ['site', 'namespaces', 'dns', 'storageClass', 'access'],
   // access: shown by the way-in panel (groups that can use it)
   CloudOSO: ['access'],
-  // credential: the cluster's site user, shown by the cluster panel
-  PlatformOpenshift: ['credential'],
+  // credential: the cluster's site user, shown by the cluster panel; install: shown by the status callout
+  PlatformOpenshift: ['credential', 'install'],
   // loginUrl / orgUrl: shown by the sign-in panel
   AAPOrg: ['loginUrl', 'orgUrl'],
   QuayOrg: ['loginUrl', 'orgUrl'],

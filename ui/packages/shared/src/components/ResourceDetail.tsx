@@ -28,12 +28,14 @@ import { RefreshFailedAlert } from './ResourceListTable';
 import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
 import { WayInPanel } from './WayInPanel';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { RetryInstallationModal } from './RetryInstallationModal';
 import { GatedButton } from '../access/GatedButton';
 import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
 import { displayText, fieldLabel, inText, kindTerm } from '../i18n/vocabulary';
 import { condStatus, phaseOf, requestMessage, retryQueued } from '../status/phase';
+import { isInstallStopped, retryLabelKey } from '../status/install';
 import { formatRelativeTime } from '../list/listColumns';
 import {
   COMMON_STATUS_KEYS,
@@ -272,6 +274,8 @@ export function ResourceDetail({
   const [retrySent, setRetrySent] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Retry installation asks first: it starts a new installation of a stopped cluster. */
+  const [confirmRetry, setConfirmRetry] = useState(false);
   /** A delete was requested here: keep polling until the object is gone (UX-061). */
   const [deleteRequested, setDeleteRequested] = useState(false);
   const kindLabel = kindTerm(t, kind);
@@ -387,6 +391,9 @@ export function ResourceDetail({
   const since = resource.status?.phaseSince;
   const sinceRel = since ? formatRelativeTime(since) : undefined;
   const isDeleting = phase === 'Deleting' || deleteRequested;
+  // a cluster whose installation stopped: the button starts a new installation, after a confirmation
+  const retryInstall = kind === 'PlatformOpenshift' && isInstallStopped(resource);
+  const retryLabel = kind === 'PlatformOpenshift' ? t(retryLabelKey(resource)) : t('detail.retryNow');
 
   return (
     <div className="sc-detail">
@@ -413,9 +420,9 @@ export function ResourceDetail({
                 icon={retrying ? <Spinner size="md" /> : <RedoIcon />}
                 enabled={!retrying && !queued}
                 disabledReason={queued ? t('detail.retryQueued') : undefined}
-                onClick={() => void handleRetry()}
+                onClick={() => (retryInstall ? setConfirmRetry(true) : void handleRetry())}
               >
-                {queued ? t('detail.retryQueued') : t('detail.retryNow')}
+                {queued ? t('detail.retryQueued') : retryLabel}
               </GatedButton>
             )}
             <Button variant="secondary" icon={<SyncAltIcon />} onClick={refresh}>
@@ -512,6 +519,17 @@ export function ResourceDetail({
           </div>
         </Tab>
       </Tabs>
+
+      <RetryInstallationModal
+        isOpen={confirmRetry}
+        spec={resource.spec}
+        busy={retrying}
+        onConfirm={() => {
+          setConfirmRetry(false);
+          void handleRetry();
+        }}
+        onCancel={() => setConfirmRetry(false)}
+      />
 
       <DeleteConfirmModal
         isOpen={confirmDelete}
