@@ -67,14 +67,18 @@ attempt fails while the installer still has attempts left, the cluster stays **C
 failed: the site reports too little quota: Cores (72 needed, limit 64).* You can act on it at
 once.
 
-When the installer has made its last attempt, or the installation has not finished within the
-time the platform allows (reason `InstallOverdue`), the installation **stops**: the cluster is
-**Failed**, its `Stalled` condition is True with the cause as reason (`QuotaExceeded`,
-`InstallSettingRefused`, `CredentialsInvalid`, `InstallNotStarted`, `InstallFailed` or
-`InstallOverdue`), and the message says what failed. Nothing reinstalls by itself: the cluster
-stays Failed until you act. The messages hold only what the platform can read reliably (resource
-names and numbers, the flavor or instance type you set); the platform team can read the
-installer's full log.
+When the installer stops (after its last attempt, or earlier for a cause it does not retry), the
+installation **stops**: the cluster is **Failed**, its `Stalled` condition is True with the cause
+as reason (`QuotaExceeded`, `InstallSettingRefused`, `InstallCredentialsRefused`,
+`InstallNotStarted` or `InstallFailed`), and the message says what failed. Nothing reinstalls by
+itself: the cluster stays Failed until you act. The messages hold only what the platform can read
+reliably (resource names and numbers, the flavor or instance type you set); the platform team can
+read the installer's full log.
+
+When the installation has not finished in the time the platform allows (reason `InstallOverdue`),
+the cluster is shown **Failed** too, but the installer may still be working: the platform keeps
+checking it. If it finishes, the cluster becomes ready; if the installer stops, the cluster shows
+the stop with its cause and you can retry it. You can delete the cluster at any time.
 
 What you can do:
 
@@ -85,14 +89,18 @@ What you can do:
 - **Change a setting and save.** On a stopped cluster you can change the node counts, the
   flavors or instance types, the release and the image; saving starts a new installation with
   them, the same way. Change what the reason names, for example fewer or smaller nodes for
-  `QuotaExceeded`, or have the environment's quota raised.
-- **Delete the cluster and create it again** for what cannot change on a cluster: its network,
-  its address ranges and its environment.
+  `QuotaExceeded`, or have the environment's quota raised. A change of anything else (access
+  groups, viewers, deletion protection) is applied as far as it can be without an installation
+  and starts nothing.
+- **Delete the cluster and create it again** for what cannot change on a cluster: its
+  environment type, its environment, its region, its network and its address ranges.
 
 While a cluster is being installed, and once it is installed, the platform refuses a change of
-those installation settings ("The cluster is being installed or is installed. ..."). Access groups
-and deletion protection can always change. A retry never touches an installation that is running
-or a cluster that is installed.
+those installation settings ("The cluster is being installed or is installed. ..."). On AWS and
+Google Cloud the worker count is the exception once the cluster is installed: a change scales the
+cluster's workers (it is refused only while the cluster is being installed). Access groups and
+deletion protection can always change. A retry never touches an installation that is running or a
+cluster that is installed.
 
 ## Deleting
 
@@ -220,6 +228,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `CredentialSecretMissing` | The cluster's credential secret is missing from the platform's secret store. Nothing was changed. The platform team acts. | The platform team |
 | `CredentialsInvalid` | The site credentials were refused. The platform team is looking at it. | The platform team |
 | `CredentialsMissing` | The site credentials are missing. The platform team is looking at it. | The platform team |
+| `DefaultFlavorNotFound` | The environment lacks the platform's default flavor for cluster nodes. Name a flavor it offers, or ask the platform team. | The platform team |
 | `DnsProjectNotFound` | The DNS project does not exist. The platform team is looking at it. | The platform team |
 | `EDAFailed` | Could not be completed; see the reason. | The platform team |
 | `EntityNotAllowed` | This site is not available to this tenant. | You (the tenant) |
@@ -236,9 +245,10 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `IdentityProviderNotFound` | The site has no identity provider of the declared name. The platform team is looking at it. | The platform team |
+| `InstallCredentialsRefused` | The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster. | The platform team |
 | `InstallFailed` | The installation failed and was stopped. You can retry it; the platform team can see why it failed. | The platform team |
-| `InstallNotStarted` | The installation could not be started on the platform. The platform team is looking at it. | The platform team |
-| `InstallOverdue` | The installation did not finish in the time allowed. You can retry it or delete the cluster. | The platform team |
+| `InstallNotStarted` | The installation could not be started on the platform. Retry it once the platform team has fixed the cause, or delete the cluster. | The platform team |
+| `InstallOverdue` | The installation has not finished in the time allowed. The platform keeps checking it. | The platform team |
 | `InstallSettingRefused` | The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |

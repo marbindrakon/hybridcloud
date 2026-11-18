@@ -14,14 +14,18 @@ description:
     (module_utils shc_install.observe) and writes C(status.install), the C(Ready) condition and, on a stop, the
     C(Stalled) condition when something changed or the check time is due. It returns whether the watching job must
     end and why.
-  - C(mode=check) reads the cluster object only and says whether it is still the job's object and request (the check
-    right before the job makes the release).
+  - C(mode=check) reads the cluster object only and says whether it is still the job's object, request and (with
+    C(generation)) spec: the check right before the job makes the release. An object that cannot be read after a few
+    tries ends the job (no release on an unknown object).
   - C(mode=removal) reads the cluster object and the hub's ClusterDeployment and says whether the stopped build may be
-    removed for a new installation (module_utils shc_install.may_remove_build). An unreadable hub or object never
-    allows a removal.
+    removed for a new installation (module_utils shc_install.may_remove_build), and ends the job when the object is
+    not the job's any more. An unreadable hub or object never allows a removal.
+  - C(mode=wait) is one round of a wait of the removal: it reads the cluster object (ends the job like the watch when
+    it is gone, another object, being deleted or has a newer request) and the hub object named by C(wait_for), and
+    says whether that is gone (or, for the uninstall job, finished).
   - Never copies text of the hub, the installer's log or the site into the status or its result messages.
 options:
-  mode: {description: observe, check or removal., type: str, default: observe, choices: [observe, check, removal]}
+  mode: {description: observe, check, removal or wait., type: str, default: observe, choices: [observe, check, removal, wait]}
   host: {description: Services cluster API URL., type: str, required: true}
   api_key: {description: Services cluster bearer token., type: str, required: true, no_log: true}
   validate_certs: {description: Verify the services API certificate., type: bool, default: true}
@@ -36,6 +40,9 @@ options:
   job_started_at: {description: When the job started (RFC 3339)., type: str, default: ""}
   settings: {description: windowMinutes, deadlineMinutes, writeEveryMinutes, provider, tenantValues., type: dict, default: {}}
   release_failed: {description: removal - a failed release of the build exists., type: bool, default: false}
+  release_exists: {description: removal - a release of the build exists on the hub., type: bool, default: false}
+  generation: {description: check - the generation the job read the spec at (0 - not compared)., type: int, default: 0}
+  wait_for: {description: wait - managedcluster, clusterdeployment, uninstall or namespace., type: str, default: ""}
   recheck: {description: removal - the fresh read right before the first delete of a removal this run decided., type: bool, default: false}
   job: {description: Job entry recorded in status.edaJobs (name, jobId, url)., type: dict}
   timeout: {description: HTTP timeout in seconds., type: int, default: 30}
@@ -46,6 +53,8 @@ RETURN = r"""
 end: {description: The job must end now (observe)., type: bool, returned: always}
 outcome: {description: gone, replaced, deleting, superseded, installed, stopped, overdue, window or none., type: str, returned: always}
 ok: {description: check - the job may go on; removal - the build may be removed., type: bool, returned: check, removal}
+stage: {description: removal - status.install.stage of the object as read., type: str, returned: removal}
+done: {description: wait - the hub object is gone (the uninstall job finished)., type: bool, returned: wait}
 why: {description: A sentence on the decision (no hub or installer text)., type: str, returned: always}
 install: {description: status.install as decided., type: dict, returned: observe}
 written: {description: A status write was made., type: bool, returned: observe}
@@ -53,6 +62,7 @@ written: {description: A status write was made., type: bool, returned: observe}
 
 import datetime
 import json
+import time
 
 from ansible.module_utils.basic import AnsibleModule
 from ansible.module_utils.urls import open_url
@@ -84,10 +94,17 @@ def _get(url, token, validate, timeout, method="GET", data=None, content_type=No
         return None, {}
 
 
+def _int_or0(value):
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
+
+
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            mode=dict(type="str", default="observe", choices=["observe", "check", "removal"]),
+            mode=dict(type="str", default="observe", choices=["observe", "check", "removal", "wait"]),
             host=dict(type="str", required=True),
             api_key=dict(type="str", required=True, no_log=True),
             validate_certs=dict(type="bool", default=True),
@@ -102,6 +119,9 @@ def main():
             job_started_at=dict(type="str", default=""),
             settings=dict(type="dict", default={}),
             release_failed=dict(type="bool", default=False),
+            release_exists=dict(type="bool", default=False),
+            generation=dict(type="int", default=0),
+            wait_for=dict(type="str", default=""),
             recheck=dict(type="bool", default=False),
             job=dict(type="dict"),
             timeout=dict(type="int", default=30),
@@ -119,37 +139,71 @@ def main():
             return None, True
         return body, False
 
-    def read_hub(path):
-        url = "%s/apis/%s/namespaces/%s/%s" % (p["hub_host"].rstrip("/"), HIVE, p["build"], path)
-        code, body = _get(url, p["hub_api_key"], p["hub_validate_certs"], p["timeout"])
+    def read_url(path):
+        code, body = _get(p["hub_host"].rstrip("/") + path, p["hub_api_key"], p["hub_validate_certs"], p["timeout"])
         if code == 404:
             return None, False
         if code != 200:
             return None, True
         return body, False
 
+    def read_hub(path):
+        return read_url("/apis/%s/namespaces/%s/%s" % (HIVE, p["build"], path))
+
     obj, obj_error = read_obj()
 
     if p["mode"] == "check":
+        # an object that cannot be read is read again a few times; still unknown, the job ends without a release
+        for _ in range(3):
+            if not obj_error:
+                break
+            time.sleep(2)
+            obj, obj_error = read_obj()
         if obj_error:
-            module.exit_json(changed=False, ok=True, end=False, outcome="",
-                             why="the cluster object could not be read; the job goes on")
-        ok, why = I.same_object(obj, p["uid"], p["event_id"].strip())
+            module.exit_json(changed=False, ok=False, end=True, outcome="ended",
+                             why="the cluster object could not be read; the job ends without a release")
+        ok, why = I.same_object(obj, p["uid"], p["event_id"].strip(), p["generation"] or None)
         module.exit_json(changed=False, ok=ok, end=not ok, outcome="" if ok else "ended", why=why)
 
     for key in ("hub_host", "hub_api_key", "build"):
         if not p[key]:
             module.fail_json(msg="install_observe: %s is required in mode %s" % (key, p["mode"]))
 
+    if p["mode"] in ("removal", "wait") and not obj_error:
+        # the removal looks at its object like the watch: gone, another object, deleted or a newer request ends it
+        ok, why = I.same_object(obj, p["uid"], p["event_id"].strip())
+        if not ok:
+            module.exit_json(changed=False, ok=False, end=True, done=False, outcome="ended", why=why, stage="")
+
     if p["mode"] == "removal":
         cd, hub_error = read_hub("clusterdeployments/%s" % p["build"])
-        if not obj_error and obj is not None:
-            ok, why = I.same_object(obj, p["uid"], p["event_id"].strip())
-            if not ok:
-                module.exit_json(changed=False, ok=False, end=True, outcome="ended", why=why)
         ok, why = I.may_remove_build(None if obj_error else obj, cd, not hub_error, p["release_failed"],
-                                     recheck=p["recheck"])
-        module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why)
+                                     recheck=p["recheck"], release_exists=p["release_exists"])
+        stage = str((((obj or {}).get("status") or {}).get("install") or {}).get("stage") or "")
+        module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why, stage=stage)
+
+    if p["mode"] == "wait":
+        build = p["build"]
+        paths = {"managedcluster": "/apis/cluster.open-cluster-management.io/v1/managedclusters/%s" % build,
+                 "clusterdeployment": "/apis/%s/namespaces/%s/clusterdeployments/%s" % (HIVE, build, build),
+                 "uninstall": "/apis/batch/v1/namespaces/%s/jobs?labelSelector=%s" % (
+                     build, "hive.openshift.io%2Fcluster-deployment-name%3D" + build),
+                 "namespace": "/api/v1/namespaces/%s" % build}
+        if p["wait_for"] not in paths:
+            module.fail_json(msg="install_observe: wait_for must be one of %s" % ", ".join(sorted(paths)))
+        if obj_error:
+            module.exit_json(changed=False, end=False, done=False, outcome="",
+                             why="the cluster object could not be read; waiting")
+        found, err = read_url(paths[p["wait_for"]])
+        if err:
+            module.exit_json(changed=False, end=False, done=False, outcome="", why="the hub could not be read; waiting")
+        if p["wait_for"] == "uninstall":
+            items = [x for x in ((found or {}).get("items") or []) if isinstance(x, dict)]
+            done = not items or any(_int_or0((x.get("status") or {}).get("succeeded")) >= 1 for x in items)
+        else:
+            done = found is None
+        module.exit_json(changed=False, end=False, done=done, outcome="",
+                         why="%s %s" % (p["wait_for"], "gone" if done else "still there"))
 
     for key in ("windowMinutes", "deadlineMinutes", "writeEveryMinutes", "provider"):
         if p["settings"].get(key) in (None, ""):
@@ -178,7 +232,12 @@ def main():
 
     now = datetime.datetime.now(datetime.timezone.utc)
     job = {"uid": p["uid"], "eventId": p["event_id"].strip(), "startedAt": p["job_started_at"]}
-    res = I.observe(obj, job, cd, prov, now, settings, obj_error=obj_error, hub_error=hub_error, provisions=provs)
+    try:
+        res = I.observe(obj, job, cd, prov, now, settings, obj_error=obj_error, hub_error=hub_error,
+                        provisions=provs)
+    except Exception as e:  # a decision on data it cannot read: the same data fails again, so the watch ends
+        module.exit_json(changed=False, end=True, outcome="error", written=False, install={},
+                         why="the installation could not be decided from what was read (%s)" % type(e).__name__)
     out = {"end": res["end"], "outcome": res["outcome"] or "", "why": res["log"], "install": res["install"] or {},
            "written": False, "changed": False}
     if res["write"] and not module.check_mode:

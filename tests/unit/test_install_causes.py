@@ -80,12 +80,22 @@ class Quota(unittest.TestCase):
         log = "Cores is not available because the required number of resources (7e2) is more than the limit of 64"
         self.assertEqual(I.parse_quota(log), [])
 
-    def test_a_long_log_is_read_from_its_end_only(self):
+    def test_the_whole_stored_log_is_read(self):
+        """A quota sentence or a flavor warning near the start of a long log still decides the cause."""
         head = "Cores is not available because the required number of resources (72) is more than the limit of 64\n"
-        log = head + ("x" * (I.LOG_SCAN_LIMIT + 10))
-        self.assertNotEqual(I.classify("openstack", "UnknownError", log)["reason"], "QuotaExceeded")
-        self.assertEqual(I.classify("openstack", "UnknownError", ("x" * (I.LOG_SCAN_LIMIT * 2)) + "\n" + head)["reason"],
-                         "QuotaExceeded")
+        log = head + ("x" * 3_000_000)
+        self.assertLess(len(log), I.LOG_SCAN_LIMIT)
+        self.assertEqual(I.classify("openstack", "UnknownError", log)["reason"], "QuotaExceeded")
+        warn = "level=warning msg=Unable to find flavor with name example.large\n"
+        got = I.classify("openstack", "UnknownError", warn + "y" * 3_000_000, {"compute": "example.large"})
+        self.assertEqual(got["reason"], "InstallSettingRefused")
+
+    def test_beyond_the_bound_the_first_and_last_halves_are_read(self):
+        head = "Cores is not available because the required number of resources (72) is more than the limit of 64\n"
+        filler = "x" * (I.LOG_SCAN_LIMIT * 2)
+        for log in (head + filler, filler + "\n" + head):
+            self.assertEqual(I.classify("openstack", "UnknownError", log)["reason"], "QuotaExceeded")
+        self.assertEqual(I.LOG_SCAN_LIMIT, 4 * 1024 * 1024)
 
     def test_the_resource_word_comes_from_the_fixed_list(self):
         log = ("evil.example.org is not available because the required number of resources (1) is more than "
@@ -130,6 +140,14 @@ class Hostile(unittest.TestCase):
             log = "".join(rnd.choice(parts) for _ in range(rnd.randint(1, 12)))
             self.check(I.classify(rnd.choice(["openstack", "aws", "gcp"]), rnd.choice(["UnknownError", "X"]), log,
                                   TENANT))
+
+    def test_a_tenant_value_must_match_whole(self):
+        """A value with a trailing newline is not the tenant's value as typed: not shown."""
+        got = I.classify("openstack", "", 'compute[0].platform.openstack.type: Not found: "example.large\n"',
+                         {"compute": "example.large\n"})
+        self.assertNotIn("example.large", got["text"])
+        self.assertIsNone(I.TENANT_VALUE.fullmatch("example.large\n"))
+        self.assertEqual(I.classify("openstack", "AWSEC2QuotaExceeded\n", "")["reason"], "InstallFailed")
 
     def test_a_tenant_value_with_odd_characters_is_not_shown(self):
         got = I.classify("openstack", "", 'compute[0].platform.openstack.type: Not found: "a b/c"', {"compute": "a b/c"})

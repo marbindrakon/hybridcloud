@@ -35,7 +35,29 @@ def shc_install_installed(status):
     return I.install_installed(_status(status), _now())
 
 
+def shc_install_asked(obj):
+    """{asked, why} for a cluster whose installation stopped: whether someone asked for a new one since the stop."""
+    asked, why = I.asked_since_stop(obj if isinstance(obj, dict) else {})
+    return {"asked": asked, "why": why}
+
+
+def shc_install_overdue(status, deadline_minutes):
+    """Whether the recorded installation runs past the deadline (a run then makes one observation and ends)."""
+    return I.overdue(_status(status), _now(), deadline_minutes)
+
+
+def shc_install_stopped_seen(obj):
+    return I.install_stopped_seen(obj if isinstance(obj, dict) else {})
+
+
+def shc_install_spec_digest(spec):
+    return I.spec_digest(spec)
+
+
 class FilterModule(object):
     def filters(self):
         return {"shc_install_preparing": shc_install_preparing, "shc_install_starting": shc_install_starting,
-                "shc_install_cleaning": shc_install_cleaning, "shc_install_installed": shc_install_installed}
+                "shc_install_cleaning": shc_install_cleaning, "shc_install_installed": shc_install_installed,
+                "shc_install_asked": shc_install_asked, "shc_install_overdue": shc_install_overdue,
+                "shc_install_stopped_seen": shc_install_stopped_seen,
+                "shc_install_spec_digest": shc_install_spec_digest}

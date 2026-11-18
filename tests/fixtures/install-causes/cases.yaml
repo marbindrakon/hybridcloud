@@ -97,26 +97,26 @@
   hive: UnknownError
   log: |
     level=fatal msg=failed to fetch Cluster: failed to create a network client: Authentication failed
-  reason: CredentialsInvalid
+  reason: InstallCredentialsRefused
   message: "the site refused the credentials the installer uses"
 - name: aws credentials through Hive's code
   provider: aws
   hive: InvalidCredentials
   log: "level=error msg=InvalidClientTokenId: The security token included in the request is invalid."
-  reason: CredentialsInvalid
+  reason: InstallCredentialsRefused
   message: "the site refused the credentials the installer uses"
 - name: empty log
   provider: openstack
   hive: UnknownError
   log: ""
-  reason: InstallNotStarted
-  message: "the attempt ended before the installer wrote a log"
+  reason: InstallFailed
+  message: "the attempt left no installer log to read"
 - name: no log at all
   provider: gcp
   hive: UnknownError
   log: null
-  reason: InstallNotStarted
-  message: "the attempt ended before the installer wrote a log"
+  reason: InstallFailed
+  message: "the attempt left no installer log to read"
 - name: Hive's specific code for something else
   provider: openstack
   hive: KubeAPIWaitTimeout

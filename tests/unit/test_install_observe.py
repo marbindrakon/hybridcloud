@@ -30,7 +30,10 @@ def t(minutes_ago):
     return I.fmt_time(NOW - datetime.timedelta(minutes=minutes_ago))
 
 
-def po(install=None, uid="uid-1", event="ev-1", generation=1, deleting=False, conditions=None, **status):
+SPEC = {"type": "openstack", "openstack": {"environment": "env", "workerCount": 3, "controlPlaneFlavor": "example.xlarge"}}
+
+
+def po(install=None, uid="uid-1", event="ev-1", generation=1, deleting=False, conditions=None, spec=None, **status):
     st = dict(status)
     st["delivery"] = {"eventId": event, "acknowledgedEventId": event, "jobStartedAt": t(10)}
     if install is not None:
@@ -42,7 +45,7 @@ def po(install=None, uid="uid-1", event="ev-1", generation=1, deleting=False, co
     if deleting:
         meta["deletionTimestamp"] = t(1)
     return {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift", "metadata": meta,
-            "status": st}
+            "spec": spec if spec is not None else SPEC, "status": st}
 
 
 def cond(ctype, status, reason="", message=""):
@@ -136,17 +139,119 @@ class Endings(unittest.TestCase):
         self.assertEqual(res["install"]["endedAt"], I.fmt_time(NOW))
         self.assertEqual(res["install"]["stoppedGeneration"], 4)
         self.assertEqual(res["install"]["stoppedRequest"], "2026-11-18T10:00:00Z")
+        self.assertEqual(res["install"]["stoppedSpec"], I.spec_digest(SPEC))
         msg = ("Attempt 3 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64). "
                "The installer stopped after 3 attempts.")
         self.assertEqual(ready(res), cond("Ready", "False", "QuotaExceeded", msg))
         self.assertEqual(stalled(res), cond("Stalled", "True", "QuotaExceeded", msg))
 
-    def test_overdue(self):
+    def test_stop_texts_say_what_the_hub_knows(self):
+        """The attempts made, not the limit; a stop for another reason says only that it stopped; the times are the
+        hub's, not the check's."""
+        hub = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=1)
+        hub["status"]["conditions"][-2]["reason"] = "SomethingElse"
+        hub["status"]["conditions"][-2]["lastTransitionTime"] = t(7)
+        p = prov(attempt=1, stage="failed", reason="UnknownError", log=QUOTA_LOG)
+        p["status"]["conditions"][0]["lastTransitionTime"] = t(9)
+        res = observe(po(RUNNING), hub, p)
+        self.assertTrue(stalled(res)["message"].endswith("). The installer stopped."), stalled(res)["message"])
+        self.assertTrue(stalled(res)["message"].startswith("Attempt 2 of 3 failed"))
+        self.assertEqual(res["install"]["lastFailure"]["time"], t(9))
+        self.assertEqual(res["install"]["endedAt"], t(7))
+        two = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=1)
+        res = observe(po(RUNNING), two, p)
+        self.assertTrue(stalled(res)["message"].endswith("The installer stopped after 2 attempts."))
+
+    def test_overdue_is_failed_and_keeps_being_checked(self):
+        """Past the deadline: Failed (InstallOverdue) without Stalled, so the operator's periodic runs go on checking
+        it; nothing of a stop is recorded."""
         res = observe(po(dict(RUNNING, startedAt=t(400))), cd(provisioned=False), prov(attempt=1))
-        self.assertEqual((res["end"], res["outcome"], res["action"]), (True, "overdue", "failed"))
+        self.assertEqual((res["end"], res["outcome"], res["action"], res["write"]), (True, "overdue", "failed", True))
         self.assertEqual(ready(res)["reason"], "InstallOverdue")
-        self.assertEqual(stalled(res)["reason"], "InstallOverdue")
+        self.assertEqual(ready(res)["message"], "Attempt 2 of 3 has not finished; the installation has run for more "
+                                                "than 360 minutes.")
+        self.assertIsNone(stalled(res))
         self.assertEqual(res["install"]["stage"], "Installing", "Hive may still be trying: the stage stays")
+        for k in ("stoppedGeneration", "stoppedRequest", "stoppedSpec", "endedAt"):
+            self.assertNotIn(k, res["install"])
+        patch, info = S.compute_status_patch(po(RUNNING), {"status": res["status"], "install": res["install"],
+                                                           "conditions": res["conditions"]},
+                                             {"action": res["action"], "event_id": "ev-1"})
+        self.assertEqual(info["phase"], "Failed")
+        self.assertEqual(patch["status"]["delivery"]["completedEventId"], "ev-1", "the next periodic run publishes")
+        self.assertIn("The platform keeps checking it", patch["status"]["summary"])
+
+    def test_overdue_then_installed_or_stopped(self):
+        late = po(dict(RUNNING, startedAt=t(500)), conditions=[cond("Ready", "False", "InstallOverdue", "m")])
+        res = observe(late, cd(installed=True, provisioned=True), prov(stage="complete", attempt=1))
+        self.assertEqual((res["outcome"], res["install"]["stage"]), ("installed", "Finishing"))
+        res = observe(late, cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3),
+                      prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        self.assertEqual((res["outcome"], stalled(res)["reason"]), ("stopped", "QuotaExceeded"))
+
+    def test_overdue_helpers(self):
+        self.assertTrue(I.overdue({"install": dict(RUNNING, startedAt=t(400))}, NOW, 360))
+        self.assertFalse(I.overdue({"install": dict(RUNNING, startedAt=t(100))}, NOW, 360))
+        self.assertFalse(I.overdue({"install": dict(STOPPED)}, NOW, 360))
+        self.assertFalse(I.overdue({}, NOW, 360))
+
+    def test_a_build_being_removed_concludes_nothing(self):
+        """A ClusterDeployment with a deletion time (a removal under way): no stop, no write, the watch goes on."""
+        hub = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
+        hub["metadata"]["deletionTimestamp"] = t(1)
+        res = observe(po({"stage": "Installing", "run": 2, "startedAt": t(2)}), hub,
+                      prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (False, None, False))
+        res = observe(po(RUNNING), hub, None, job=dict(JOB, startedAt=t(200)))
+        self.assertEqual((res["end"], res["outcome"], res["write"]), (True, "window", False))
+
+    def test_stalled_never_stands_while_an_installation_runs(self):
+        stale = [cond("Stalled", "True", "QuotaExceeded", "old")]
+        for hub, p in ((cd(provisioned=False), prov()), (None, None),
+                       (cd(provisioned=False, failed="UnknownError", restarts=1),
+                        prov(attempt=0, stage="failed", reason="UnknownError", log=QUOTA_LOG))):
+            res = observe(po(RUNNING, conditions=stale), hub, p)
+            self.assertEqual(stalled(res)["status"], "False", hub)
+        res = observe(po(dict(RUNNING, startedAt=t(400)), conditions=stale), cd(provisioned=False), prov())
+        self.assertEqual(stalled(res)["status"], "False", "overdue")
+
+    def test_a_retry_that_arrives_after_the_stop_is_not_swallowed(self):
+        """The job of a Retry published after Hive stopped writes the stop: the request is not recorded as handled, so
+        it still asks for a new installation."""
+        hub = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
+        hub["status"]["conditions"][-2]["lastTransitionTime"] = t(5)
+        obj = po(RUNNING, lastHandledReconcileRequest="2026-11-18T11:58:00Z")
+        obj["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=t(2))
+        res = observe(obj, hub, prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        self.assertEqual(res["install"]["stoppedRequest"], "")
+        stopped = po(res["install"], lastHandledReconcileRequest="2026-11-18T11:58:00Z")
+        self.assertTrue(I.asked_since_stop(stopped)[0])
+        # a Retry published before the stop was handled by the run that watched it stop
+        obj["status"]["delivery"]["publishedAt"] = t(8)
+        res = observe(obj, hub, prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        self.assertEqual(res["install"]["stoppedRequest"], "2026-11-18T11:58:00Z")
+
+    def test_malformed_status_or_hub_data_does_not_raise(self):
+        for lf in ({"attempt": 1}, {"attempt": 1, "reason": "QuotaExceeded"}, "text", None):
+            observe(po(dict(RUNNING, lastFailure=lf)), cd(provisioned=False, stopped=True, restarts=3), prov())
+            observe(po(dict(RUNNING, lastFailure=lf)), cd(provisioned=False, failed="UnknownError", restarts=3),
+                    prov(attempt=2, stage="failed"))
+        nulls = prov()
+        nulls["spec"] = None
+        observe(po(RUNNING), cd(provisioned=False), nulls)
+        observe(po(RUNNING), cd(provisioned=False), None, provisions=[nulls, prov(attempt=1)])
+
+    def test_a_failed_release_without_a_build_is_a_stop(self):
+        res = observe(po({"stage": "Installing", "run": 2, "startedAt": t(3)}), None, None,
+                      settings=dict(SETTINGS, releaseFailed=True))
+        self.assertEqual((res["end"], res["outcome"], res["action"]), (True, "stopped", "failed"))
+        self.assertEqual(res["install"]["stage"], "Stopped")
+        self.assertEqual(stalled(res)["reason"], "InstallNotStarted")
+        self.assertEqual(res["install"]["stoppedSpec"], I.spec_digest(SPEC))
+        stopped = po(res["install"])
+        self.assertTrue(I.may_remove_build(stopped, None, True, release_failed=True, event={"x": 1})[0] is False)
+        changed = po(res["install"], spec={"type": "openstack", "openstack": {"environment": "env", "workerCount": 0}})
+        self.assertTrue(I.may_remove_build(changed, None, True, release_failed=True)[0])
 
     def test_window_reached(self):
         res = observe(po(RUNNING), cd(provisioned=False), prov(), job=dict(JOB, startedAt=t(121)))
@@ -252,7 +357,10 @@ class Stages(unittest.TestCase):
         lf = {"attempt": 1, "reason": "QuotaExceeded", "message": "m", "time": t(3)}
         res = observe(po(dict(RUNNING, lastFailure=lf), conditions=[cond("Stalled", "True", "QuotaExceeded")]),
                       cd(installed=True, provisioned=True), prov(stage="complete", attempt=1))
-        self.assertNotIn("lastFailure", res["install"])
+        # sent as null: the merge patch removes the stored failure (an omitted key would keep it)
+        self.assertIn("lastFailure", res["install"])
+        self.assertIsNone(res["install"]["lastFailure"])
+        self.assertEqual(res["install"]["endedAt"], I.fmt_time(NOW))
         self.assertEqual(stalled(res)["status"], "False")
 
 
@@ -312,9 +420,19 @@ class SameObject(unittest.TestCase):
         self.assertFalse(I.same_object(po(deleting=True), "uid-1", "ev-1")[0])
         self.assertFalse(I.same_object(po(event="ev-2"), "uid-1", "ev-1")[0])
 
+    def test_the_spec_read_is_the_spec_installed(self):
+        """The check before the release compares the generation the job read its spec at."""
+        self.assertTrue(I.same_object(po(generation=4), "uid-1", "ev-1", 4)[0])
+        ok, why = I.same_object(po(generation=5), "uid-1", "ev-1", 4)
+        self.assertFalse(ok)
+        self.assertIn("spec changed", why)
+        self.assertTrue(I.same_object(po(generation=5), "uid-1", "ev-1")[0], "the removal's checks do not compare it")
+
 
 STOPPED = {"stage": "Stopped", "run": 1, "startedAt": t(60), "endedAt": t(30), "stoppedGeneration": 2,
-           "stoppedRequest": "2026-11-18T09:00:00Z", "attempt": 3, "attemptsLimit": 3}
+           "stoppedRequest": "2026-11-18T09:00:00Z", "stoppedSpec": I.spec_digest(SPEC), "attempt": 3,
+           "attemptsLimit": 3}
+SMALLER = {"type": "openstack", "openstack": dict(SPEC["openstack"], workerCount=0)}
 
 
 class Removal(unittest.TestCase):
@@ -323,10 +441,28 @@ class Removal(unittest.TestCase):
     STOPPED_CD = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
 
     def asked(self, **kw):
-        return po(STOPPED, generation=3, lastHandledReconcileRequest="2026-11-18T09:00:00Z", **kw)
+        """Stopped, and the installer's part of the spec changed since (the worker count)."""
+        return po(STOPPED, generation=3, lastHandledReconcileRequest="2026-11-18T09:00:00Z", spec=SMALLER, **kw)
 
-    def test_allowed_on_a_newer_generation(self):
+    def test_allowed_on_a_change_of_the_installation_settings(self):
         self.assertTrue(I.may_remove_build(self.asked(), self.STOPPED_CD, True)[0])
+
+    def test_a_change_outside_the_installation_settings_does_not_ask(self):
+        """Access groups, viewers, deletion protection: a newer generation with the same installer settings."""
+        for extra in ({"toolRbac": {"clusterAdminRbac": ["admins"]}}, {"clusterViewerRbac": ["readers"]},
+                      {"deletionProtection": True}):
+            obj = po(STOPPED, generation=3, lastHandledReconcileRequest="2026-11-18T09:00:00Z",
+                     spec=dict(SPEC, **extra))
+            ok, why = I.may_remove_build(obj, self.STOPPED_CD, True)
+            self.assertFalse(ok, extra)
+            self.assertIn("nobody asked", why)
+
+    def test_a_stop_recorded_without_the_digest_compares_the_generation(self):
+        install = {k: v for k, v in STOPPED.items() if k != "stoppedSpec"}
+        self.assertTrue(I.asked_since_stop(po(install, generation=3,
+                                              lastHandledReconcileRequest="2026-11-18T09:00:00Z"))[0])
+        self.assertFalse(I.asked_since_stop(po(install, generation=2,
+                                               lastHandledReconcileRequest="2026-11-18T09:00:00Z"))[0])
 
     def test_allowed_on_a_newer_retry_request(self):
         obj = po(STOPPED, generation=2, lastHandledReconcileRequest="2026-11-18T11:59:00Z")
@@ -356,9 +492,12 @@ class Removal(unittest.TestCase):
         for hub in (cd(provisioned=False, failed="UnknownError", restarts=1), cd(provisioned=False)):
             self.assertFalse(I.may_remove_build(self.asked(), hub, True)[0])
 
-    def test_failed_release_without_a_deployment(self):
-        self.assertTrue(I.may_remove_build(self.asked(), None, True, release_failed=True)[0])
-        self.assertFalse(I.may_remove_build(self.asked(), None, True, release_failed=False)[0])
+    def test_no_deployment_left(self):
+        """No ClusterDeployment: a failed release or nothing at all goes on (a fresh installation); a release that
+        did not fail without a ClusterDeployment is kept."""
+        self.assertTrue(I.may_remove_build(self.asked(), None, True, release_failed=True, release_exists=True)[0])
+        self.assertTrue(I.may_remove_build(self.asked(), None, True, release_exists=False)[0])
+        self.assertFalse(I.may_remove_build(self.asked(), None, True, release_failed=False, release_exists=True)[0])
 
     def test_object_without_a_recorded_stop(self):
         obj = po({"stage": "Installing", "run": 1}, generation=3)
@@ -374,44 +513,69 @@ class Removal(unittest.TestCase):
                         for readable in (False, True):
                             hub = cd(installed=hub_installed, provisioned=hub_installed or None, stopped=hub_stopped,
                                      failed="UnknownError")
-                            install = dict(STOPPED)
                             extra = {}
                             if obj_installed:
                                 extra["clusterInstalled"] = True
-                            obj = po(install, generation=3 if asked else 2,
+                            obj = po(dict(STOPPED), generation=3, spec=SMALLER if asked else SPEC,
                                      lastHandledReconcileRequest="2026-11-18T09:00:00Z", **extra)
                             ok = I.may_remove_build(obj, hub, readable)[0]
                             want = readable and not hub_installed and hub_stopped and not obj_installed and asked
                             self.assertEqual(ok, want, (hub_installed, hub_stopped, obj_installed, asked, readable))
 
     def test_installed_anywhere_is_never_removed_per_provider(self):
-        for provider in ("openstack", "aws", "gcp"):
+        specs = {"openstack": SMALLER,
+                 "aws": {"type": "aws", "aws": {"environment": "env", "workerCount": 0}},
+                 "gcp": {"type": "gcp", "gcp": {"environment": "env", "workerCount": 0}}}
+        for provider, spec in specs.items():
             with self.subTest(provider):
+                stop = dict(STOPPED, stoppedSpec=I.spec_digest(dict(spec, **{provider: dict(spec[provider],
+                                                                                              workerCount=2)})))
+                asked = po(stop, generation=3, spec=spec, lastHandledReconcileRequest="2026-11-18T09:00:00Z")
+                self.assertTrue(I.may_remove_build(asked, self.STOPPED_CD, True)[0], "asked and stopped: removed")
                 # the hub says installed
                 hub = cd(installed=True, provisioned=True, stopped=True)
-                self.assertFalse(I.may_remove_build(self.asked(), hub, True)[0])
+                self.assertFalse(I.may_remove_build(asked, hub, True)[0])
+                self.assertFalse(I.may_remove_build(asked, hub, True, recheck=True)[0])
                 # the object says installed
-                self.assertFalse(I.may_remove_build(self.asked(clusterInstalled=True), self.STOPPED_CD, True)[0])
+                inst = po(stop, generation=3, spec=spec, clusterInstalled=True)
+                self.assertFalse(I.may_remove_build(inst, self.STOPPED_CD, True)[0])
+                self.assertFalse(I.may_remove_build(inst, None, True, release_failed=True)[0])
                 for stage in ("Finishing", "Installed"):
-                    obj = po(dict(STOPPED, stage=stage), generation=3)
+                    obj = po(dict(stop, stage=stage), generation=3, spec=spec)
                     self.assertFalse(I.may_remove_build(obj, self.STOPPED_CD, True)[0])
+                    self.assertFalse(I.may_remove_build(obj, None, True, recheck=True)[0])
 
 
 class Recheck(unittest.TestCase):
-    """The fresh read right before the first delete (the run recorded CleaningUp after its decision)."""
+    """The fresh read right before the first delete, and a removal under way that a later run continues."""
+
+    STOPPED_CD = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
 
     def test_recheck(self):
-        stopped_cd = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
         cleaning = po(dict(STOPPED, stage="CleaningUp", run=2), generation=3)
-        self.assertTrue(I.may_remove_build(cleaning, stopped_cd, True, recheck=True)[0])
-        self.assertFalse(I.may_remove_build(cleaning, stopped_cd, True)[0], "CleaningUp alone never decides")
+        self.assertTrue(I.may_remove_build(cleaning, self.STOPPED_CD, True, recheck=True)[0])
         self.assertFalse(I.may_remove_build(cleaning, cd(installed=True, provisioned=True), True, recheck=True)[0])
-        self.assertFalse(I.may_remove_build(cleaning, stopped_cd, False, recheck=True)[0])
+        self.assertFalse(I.may_remove_build(cleaning, self.STOPPED_CD, False, recheck=True)[0])
         self.assertFalse(I.may_remove_build(cleaning, cd(provisioned=False), True, recheck=True)[0])
         installed = po(dict(STOPPED, stage="CleaningUp"), clusterInstalled=True)
-        self.assertFalse(I.may_remove_build(installed, stopped_cd, True, recheck=True)[0])
+        self.assertFalse(I.may_remove_build(installed, self.STOPPED_CD, True, recheck=True)[0])
         running = po(dict(STOPPED, stage="Installing"))
-        self.assertFalse(I.may_remove_build(running, stopped_cd, True, recheck=True)[0])
+        self.assertFalse(I.may_remove_build(running, self.STOPPED_CD, True, recheck=True)[0])
+
+    def test_a_removal_under_way_is_continued(self):
+        """Stage CleaningUp (an earlier job decided and recorded it): a later job continues the removal through the
+        same guard, whether the ClusterDeployment is stopped, being deleted or gone; never a running or installed
+        build."""
+        cleaning = po({"stage": "CleaningUp", "run": 2, "observedAt": t(2)}, generation=3)
+        deleting = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
+        deleting["metadata"]["deletionTimestamp"] = t(1)
+        for hub in (self.STOPPED_CD, deleting, None):
+            ok, why = I.may_remove_build(cleaning, hub, True, release_exists=True)
+            self.assertTrue(ok, hub)
+            self.assertIn("goes on", why)
+        self.assertFalse(I.may_remove_build(cleaning, cd(provisioned=False), True)[0])
+        self.assertFalse(I.may_remove_build(cleaning, cd(installed=True, provisioned=True), True)[0])
+        self.assertFalse(I.may_remove_build(cleaning, self.STOPPED_CD, False)[0])
 
 
 class NetworkPath(unittest.TestCase):
@@ -463,20 +627,31 @@ class InstallBlocks(unittest.TestCase):
             self.assertIsNone(got[k])
 
     def test_installed(self):
-        got = I.install_installed({"install": {"stage": "Finishing", "run": 2, "endedAt": None}}, NOW)
-        self.assertEqual((got["stage"], got["endedAt"]), ("Installed", I.fmt_time(NOW)))
+        got = I.install_installed({"install": {"stage": "Finishing", "run": 2, "endedAt": t(4)}}, NOW)
+        self.assertEqual((got["stage"], got["endedAt"]), ("Installed", t(4)))
         self.assertNotIn("run", got)
+        self.assertIsNone(got["stoppedSpec"])
+
+    def test_an_older_installed_cluster_gets_no_invented_end(self):
+        """A cluster installed before installations were recorded: its end is not known, none is written."""
+        self.assertIsNone(I.install_installed({"clusterInstalled": True}, NOW)["endedAt"])
+
+    def test_stopped_seen(self):
+        self.assertEqual(I.install_stopped_seen(po(STOPPED, generation=5)), {"stoppedGeneration": 5})
 
 
-class Fresh(unittest.TestCase):
-    def test_observation_freshness(self):
-        st = {"delivery": {"jobStartedAt": t(30)}, "install": {"observedAt": t(5)}}
-        self.assertTrue(I.observation_fresh(st, NOW, 15))
-        st["install"]["observedAt"] = t(20)
-        self.assertFalse(I.observation_fresh(st, NOW, 15))
-        st["install"]["observedAt"] = t(40)   # an earlier job's observation
-        self.assertIsNone(I.observation_fresh(st, NOW, 15))
-        self.assertIsNone(I.observation_fresh({"delivery": {"jobStartedAt": t(3)}}, NOW, 15))
+class Digest(unittest.TestCase):
+    def test_the_installers_part_only(self):
+        base = I.spec_digest(SPEC)
+        self.assertEqual(base, I.spec_digest(dict(SPEC, toolRbac={"clusterAdminRbac": ["a"]}, deletionProtection=True,
+                                                   clusterViewerRbac=["r"])))
+        self.assertNotEqual(base, I.spec_digest(SMALLER))
+        self.assertNotEqual(base, I.spec_digest(dict(SPEC, type="aws")))
+        # key order does not matter
+        self.assertEqual(base, I.spec_digest({"openstack": dict(reversed(list(SPEC["openstack"].items()))),
+                                              "type": "openstack"}))
+        self.assertRegex(base, r"^[0-9a-f]{64}$")
+        self.assertEqual(I.spec_digest(None), I.spec_digest({}))
 
 
 if __name__ == "__main__":
