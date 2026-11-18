@@ -196,6 +196,57 @@ test('PlatformOpenshift: status.credential keeps ids and names only', () => {
   assert.deepEqual(secretKeys(out), []);
 });
 
+// the installation as the platform writes it while an attempt failed and the installer tries again
+const installStatus = () => ({
+  stage: 'Installing', attempt: 2, attemptsLimit: 3, run: 1,
+  startedAt: '2026-11-18T10:00:00Z', observedAt: '2026-11-18T10:03:20Z',
+  lastFailure: { attempt: 1, reason: 'QuotaExceeded', time: '2026-11-18T10:02:40Z',
+    message: 'Attempt 1 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64).' },
+});
+
+test('PlatformOpenshift: status.install passes with its keys, whole', () => {
+  const obj = platform();
+  obj.status.install = installStatus();
+  const out = m.tenantSafe('PlatformOpenshift', obj);
+  assert.deepEqual(out.status.install, installStatus());
+  // a stopped installation: endedAt passes too
+  obj.status.install = { ...installStatus(), stage: 'Stopped', attempt: 3, endedAt: '2026-11-18T10:07:00Z' };
+  assert.equal(m.tenantSafe('PlatformOpenshift', obj).status.install.endedAt, '2026-11-18T10:07:00Z');
+  // the same through the dashboard's answer hook (item, list and status paths)
+  const base = '/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-t1/platformopenshifts';
+  obj.status.install = installStatus();
+  assert.deepEqual(m.transformBody(`${base}/c1`, obj, {}).status.install, installStatus());
+  assert.deepEqual(m.transformBody(`${base}/c1/status`, obj, {}).status.install, installStatus());
+  assert.deepEqual(m.transformBody(base, { kind: 'PlatformOpenshiftList', items: [obj] }, {}).items[0].status.install, installStatus());
+});
+
+test('PlatformOpenshift: keys added later to status.install or lastFailure do not reach tenants', () => {
+  const obj = platform();
+  obj.status.install = {
+    ...installStatus(),
+    provisionName: 'c1-0-abcde', hubNamespace: 'build-ns', logExcerpt: 'level=error msg=...', kubeconfigSecret: 'x',
+    lastFailure: { ...installStatus().lastFailure, hiveReason: 'UnknownError', log: 'https://203.0.113.5/x?token=y' },
+  };
+  const out = m.tenantSafe('PlatformOpenshift', obj);
+  assert.deepEqual(out.status.install, installStatus());
+  assert.deepEqual(secretKeys(out), []);
+  // a malformed install (not an object) carries nothing
+  obj.status.install = 'Installing';
+  assert.equal('install' in m.tenantSafe('PlatformOpenshift', obj).status, false);
+});
+
+test('PlatformOpenshift: the install keys are the only status keys this round adds', () => {
+  const keys = m.TENANT_STATUS_ALLOW.PlatformOpenshift.map((e) => (Array.isArray(e) ? e[0] : e));
+  assert.deepEqual(keys, [
+    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'slug', 'domain', 'apiURL', 'appsURL',
+    'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth', 'provisionStatus', 'acmAvailable',
+    'clusterInstalled', 'buildName', 'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
+    'serviceAccountIssuer', 'network', 'placement', 'publish', 'machineNetwork', 'oidcClientId',
+    'externalNetwork', 'clusterNetwork', 'serviceNetwork', 'platformPrefixes', 'installStarted',
+    'floatingIPs', 'dns', 'site', 'credential', 'install',
+  ]);
+});
+
 test('NetworkPlacement is not filtered: status.siteNetwork reaches the placement page', () => {
   const np = { kind: 'NetworkPlacement', status: { siteNetwork: { name: 'hn10042', id: 'n1', project: 'hybrid-fabric', subnets: [{ family: 4, prefix: '10.60.1.0/24', gateway: '10.60.1.1', id: 's1' }] } } };
   assert.equal(m.tenantSafe('NetworkPlacement', np), np);
