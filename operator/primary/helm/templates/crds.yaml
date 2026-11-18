@@ -7406,6 +7406,28 @@ spec:
           type: object
           required:
             - spec
+          x-kubernetes-validations:
+            - rule: >-
+                (has(self.status) && has(self.status.clusterInstalled) && self.status.clusterInstalled == true
+                 ? false
+                 : !has(self.status) ||
+                   (has(self.status.install) && has(self.status.install.stage)
+                    && self.status.install.stage == 'Stopped') ||
+                   ((!has(self.status.install) || !has(self.status.install.stage)
+                     || self.status.install.stage == 'Preparing')
+                    && !(has(self.status.installStarted) && self.status.installStarted == true)))
+                || ((has(self.spec.type) == has(oldSelf.spec.type)
+                     && (!has(self.spec.type) || self.spec.type == oldSelf.spec.type))
+                    && has(self.spec.openstack) == has(oldSelf.spec.openstack)
+                    && (!has(self.spec.openstack) || self.spec.openstack == oldSelf.spec.openstack)
+                    && has(self.spec.aws) == has(oldSelf.spec.aws)
+                    && (!has(self.spec.aws) || self.spec.aws == oldSelf.spec.aws)
+                    && has(self.spec.gcp) == has(oldSelf.spec.gcp)
+                    && (!has(self.spec.gcp) || self.spec.gcp == oldSelf.spec.gcp))
+              message: >-
+                The cluster is being installed or is installed. Sizes, flavors, release and image can be changed
+                before the installation starts or after it has stopped.
+              reason: FieldValueForbidden
           properties:
             apiVersion:
               type: string
@@ -7778,7 +7800,81 @@ spec:
                   description: Overall health of the cluster.
                 provisionStatus:
                   type: string
-                  description: Installation status.
+                  description: >-
+                    The installer's own state word for the cluster's build. See status.install for the
+                    installation's stage.
+                install:
+                  type: object
+                  description: >-
+                    The installation of the cluster, written by the platform. Present from the first check of a
+                    new cluster; kept after the installation ends. When the installation stopped, a new Retry now
+                    request (status.lastHandledReconcileRequest) or a changed spec starts the installation again.
+                  properties:
+                    stage:
+                      type: string
+                      enum: [Preparing, CleaningUp, Installing, Finishing, Installed, Stopped]
+                      description: >-
+                        Where the installation is. Preparing: checks, addresses and names. CleaningUp: a stopped
+                        installation is being removed before a new one starts. Installing: the installer is running.
+                        Finishing: the cluster is installed and is being connected to the platform. Installed: done.
+                        Stopped: the installation ended without a cluster; lastFailure says why.
+                    attempt:
+                      type: integer
+                      description: Number of the installer's current or last attempt, starting at 1.
+                    attemptsLimit:
+                      type: integer
+                      description: How many attempts the installer makes before the installation stops.
+                    run:
+                      type: integer
+                      description: >-
+                        How many installations were started for this cluster, starting at 1. Retrying a stopped
+                        installation starts a new one.
+                    startedAt:
+                      type: string
+                      format: date-time
+                      description: When the current installation started (RFC 3339).
+                    endedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the current installation ended, with a cluster or stopped (RFC 3339). Empty while it
+                        runs.
+                    observedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the platform last read the state of the installation (RFC 3339). While the stage is
+                        Installing, an old time means the state shown may be out of date.
+                    lastFailure:
+                      type: object
+                      description: >-
+                        The last failed attempt of the current installation. Kept while a later attempt runs;
+                        removed when the installation succeeds or a new one starts.
+                      properties:
+                        attempt:
+                          type: integer
+                          description: The attempt that failed.
+                        reason:
+                          type: string
+                          description: One-word cause in CamelCase, stable enough to match on.
+                        message:
+                          type: string
+                          description: What failed, in plain words. Holds no secrets and no addresses of the platform.
+                        time:
+                          type: string
+                          format: date-time
+                          description: When the attempt failed (RFC 3339).
+                    stoppedGeneration:
+                      type: integer
+                      format: int64
+                      description: >-
+                        The metadata.generation when the installation stopped. A later generation (a changed spec)
+                        starts a new installation.
+                    stoppedRequest:
+                      type: string
+                      description: >-
+                        The Retry now request handled when the installation stopped. A request other than this one
+                        starts a new installation.
                 acmAvailable:
                   type: boolean
                   description: True when the platform's cluster management reaches the cluster.
@@ -8020,7 +8116,10 @@ spec:
                 conditions:
                   description: >-
                     Standard conditions. Ready says whether the object is usable; the others say
-                    what the platform is waiting for or what failed.
+                    what the platform is waiting for or what failed. Stalled is True when the platform has
+                    stopped trying by itself: a deletion that failed repeatedly, or an installation that stopped.
+                    Its message says what to fix; then use Retry now (on a stopped installation: Retry
+                    installation).
                   type: array
                   items:
                     description: One condition.
