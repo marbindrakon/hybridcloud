@@ -190,24 +190,23 @@ test('a stopped installation: title and the line about Retry installation', () =
   assert.equal(ins.installStoppedCallout(t, { ...stopped, metadata: { ...stopped.metadata, deletionTimestamp: ago(1) } }), null);
 });
 
-test('past the time allowed while the installer may still run: say so, no Retry installation', () => {
+test('past the time allowed while the installer may still run: the platform keeps checking, no Retry installation', () => {
   const overdue = cluster({
     phase: 'Failed',
     reason: 'InstallOverdue',
-    summary: 'The installation did not finish in the time allowed. You can retry it or delete the cluster.',
+    summary: 'The installation has not finished in the time allowed. The platform keeps checking it.',
     install: installing({ attempt: 2, startedAt: ago(6 * 3600 + 60) }),
   });
-  overdue.status.conditions.push({ type: 'Stalled', status: 'True', reason: 'InstallOverdue' });
+  // summary and line: what happens next, no promise of a retry that cannot act
   assert.deepEqual(ins.installStoppedCallout(t, overdue), {
     title: 'Installation did not finish',
-    retryLine: 'The installer may still be running. You can delete this cluster now; Retry installation is offered once the installer has stopped.',
+    retryLine: 'If it finishes, the cluster becomes ready; if the installer stops, you can retry it. You can delete the cluster.',
   });
   assert.equal(t(ins.retryLabelKey(overdue)), 'Retry now');
   assert.equal(ins.installEditState(overdue), 'installing');
   assert.equal(ins.installProgress(t, overdue, NOW), null, 'no running-installation lines on a Failed cluster');
-  // any reason that stops automatic retries works the same (the condition decides, not the reason's name)
-  overdue.status.conditions[1].reason = 'SomeLaterReason';
-  assert.equal(ins.installStoppedCallout(t, overdue).title, 'Installation did not finish');
+  // the reason decides: another failure of a running installation keeps the general callout
+  assert.equal(ins.installStoppedCallout(t, cluster({ phase: 'Failed', reason: 'ProvisionFailed', install: installing() })), null);
   // a failed preflight (stage Preparing, no Stalled) keeps the general failed callout
   const flavor = cluster({ phase: 'Failed', reason: 'FlavorNotFound', install: { stage: 'Preparing', run: 1 } });
   assert.equal(ins.installStoppedCallout(t, flavor), null);
@@ -280,23 +279,56 @@ test('install-time fields: open before the installation and when stopped, read-o
   // texts of the read-only states and of the stopped note
   assert.equal(t('install.noteInstalling'), 'The cluster is being installed. These settings can be changed if the installation stops.');
   assert.equal(t('install.setAtInstallation'), 'Set at installation.');
-  assert.equal(t('install.noteStopped'), 'The installation stopped. Saving a change here starts a new installation with these settings.');
+  assert.equal(t('install.noteStopped'), 'The installation stopped. Saving a change of the size, flavors, release or image starts a new installation with these settings; other changes start nothing.');
+});
+
+test('the worker count on AWS and Google Cloud: read-only while installing, changeable once installed', () => {
+  for (const p of ['aws.workerCount', 'gcp.workerCount']) {
+    assert.equal(ins.isInstallLocked(p, 'installing'), true, p);
+    assert.equal(ins.isInstallLocked(p, 'installed'), false, p);
+    assert.equal(ins.isInstallLocked(p, 'stopped'), false, p);
+    assert.equal(ins.isInstallLocked(p, 'open'), false, p);
+  }
+  for (const p of ['openstack.workerCount', 'aws.workerFlavor', 'gcp.controllerFlavor']) {
+    assert.equal(ins.isInstallLocked(p, 'installing'), true, p);
+    assert.equal(ins.isInstallLocked(p, 'installed'), true, p);
+    assert.equal(ins.isInstallLocked(p, 'stopped'), false, p);
+  }
+  assert.equal(ins.isInstallLocked('toolRbac.clusterAdminRbac', 'installed'), false);
+});
+
+test('on a stopped cluster only a change of the installation settings asks to start again', () => {
+  const spec = { type: 'openstack', openstack: { environment: 'env-a', controlPlaneCount: 3, workerCount: 3 }, toolRbac: { clusterAdminRbac: ['a'] } };
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, toolRbac: { clusterAdminRbac: ['a', 'b'] } }), false);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, clusterViewerRbac: ['r'] }), false);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, deletionProtection: true }), false);
+  // the order a form keeps the keys in does not count
+  assert.equal(ins.installSettingsChanged(spec, { toolRbac: spec.toolRbac, openstack: { workerCount: 3, controlPlaneCount: 3, environment: 'env-a' }, type: 'openstack' }), false);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, openstack: { ...spec.openstack, workerCount: 0 } }), true);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, openstack: { ...spec.openstack, workerFlavor: 'example.large' } }), true);
 });
 
 test('the install-time fields are pinned; every changeable provider field of the form is one of them', () => {
+  // the same lists as the API's rule (tests/unit/test_install_api.py compares the two files)
   assert.deepEqual([...ins.INSTALL_TIME_FIELDS], [
     'openstack.controlPlaneCount', 'openstack.workerCount', 'openstack.controlPlaneFlavor', 'openstack.workerFlavor',
     'openstack.ocpImageSet', 'openstack.glanceImageOverride', 'openstack.trustBundle',
-    'aws.region', 'aws.network', 'aws.publish', 'aws.clusterType', 'aws.controlPlaneCount', 'aws.workerCount',
-    'aws.controllerFlavor', 'aws.workerFlavor',
-    'gcp.region', 'gcp.network', 'gcp.publish', 'gcp.controlPlaneCount', 'gcp.workerCount', 'gcp.controllerFlavor',
-    'gcp.workerFlavor',
+    'openstack.pullSecretVaultPath', 'openstack.pullSecretVaultProperty', 'openstack.sshKeyVaultPath',
+    'aws.publish', 'aws.clusterType', 'aws.controlPlaneCount', 'aws.controllerFlavor', 'aws.workerFlavor',
+    'gcp.publish', 'gcp.controlPlaneCount', 'gcp.controllerFlavor', 'gcp.workerFlavor',
   ]);
+  assert.deepEqual([...ins.INSTALLED_CHANGEABLE_FIELDS], ['aws.workerCount', 'gcp.workerCount']);
   const fields = meta.KIND_SPEC_META.PlatformOpenshift.fields;
   for (const f of fields) {
     const provider = /^(openstack|aws|gcp)\./.test(f.path);
-    if (provider && !f.immutable) assert.ok(ins.isInstallTimeField(f.path), `${f.path} is changeable but not install-time`);
+    if (provider && !f.immutable) {
+      assert.ok(ins.isInstallTimeField(f.path) || ins.INSTALLED_CHANGEABLE_FIELDS.includes(f.path), `${f.path} is changeable but of no kind`);
+    }
     if (!provider) assert.equal(ins.isInstallTimeField(f.path), false, `${f.path} is applied to an installed cluster`);
+  }
+  // fixed from creation: read-only in every state
+  for (const p of ['type', 'openstack.environment', 'aws.environment', 'aws.region', 'aws.network', 'gcp.environment', 'gcp.region', 'gcp.network']) {
+    assert.equal(fields.find((f) => f.path === p).immutable, true, p);
   }
   for (const p of ['toolRbac.clusterAdminRbac', 'clusterViewerRbac', 'deletionProtection', 'type']) {
     assert.equal(ins.isInstallTimeField(p), false, p);

@@ -10,7 +10,7 @@
  * Pure module: type-only imports besides the phase and duration modules, so it can be bundled for
  * node tests.
  */
-import { condStatus, detailOf, findCondition, phaseOf, reasonOf, type PhaseSubject } from './phase';
+import { detailOf, phaseOf, reasonOf, type PhaseSubject } from './phase';
 import { CLUSTER_INSTALL_MINUTES } from './durations';
 
 export const INSTALL_STAGES = ['Preparing', 'CleaningUp', 'Installing', 'Finishing', 'Installed', 'Stopped'] as const;
@@ -26,6 +26,12 @@ export const INSTALL_RUNNING_STAGES: ReadonlySet<InstallStage> = new Set<Install
 
 /** The reason of the Ready condition while an attempt failed and the installer tries again. */
 export const INSTALL_RETRYING_REASON = 'InstallRetrying';
+
+/**
+ * The reason of the Ready condition of an installation past the time allowed: shown failed while the
+ * platform keeps checking it (it becomes ready if it finishes; Retry installation once the installer stops).
+ */
+export const INSTALL_OVERDUE_REASON = 'InstallOverdue';
 
 /** A last check older than this many minutes is said plainly: the state shown may be out of date. */
 export const INSTALL_STALE_AFTER_MINUTES = 15;
@@ -203,16 +209,15 @@ export function installProgress(t: T, item: PhaseSubject | null | undefined, now
 /**
  * What the failed callout says about the installation; null when the failure is not the installation's.
  * Stage Stopped: the installation ended without a cluster and Retry installation starts a new one.
- * Automatic retries stopped (Stalled=True, e.g. the time allowed has passed) while the stage still says the
- * installer runs: the installer may still be working, so the cluster can be deleted now and retried once
- * the installer has stopped.
+ * Past the time allowed (reason InstallOverdue while the stage says the installer runs): after the summary
+ * ("…The platform keeps checking it."), what follows: ready if it finishes, a retry once the installer stops,
+ * delete now. Retry installation is not offered while it runs.
  */
 export function installStoppedCallout(t: T, item: PhaseSubject | null | undefined): { title: string; retryLine: string } | null {
   if (phaseOf(item) !== 'Failed') return null;
   const stage = installStage(item);
   if (stage === 'Stopped') return { title: t('install.stoppedTitle'), retryLine: t('install.retryUses') };
-  const stalled = findCondition(item, 'Stalled');
-  if (stage && INSTALL_RUNNING_STAGES.has(stage) && stalled && condStatus(stalled.status) === 'True') {
+  if (stage && INSTALL_RUNNING_STAGES.has(stage) && reasonOf(item) === INSTALL_OVERDUE_REASON) {
     return { title: t('install.unfinishedTitle'), retryLine: t('install.unfinishedLine') };
   }
   return null;
@@ -270,8 +275,9 @@ export function installEditState(item: PhaseSubject | null | undefined): Install
 
 /**
  * Spec fields the installer reads once and the platform does not apply to an installed cluster
- * (dot paths under spec). Fields that are fixed after create anyway (environment, network,
- * address ranges) are not listed: they stay read-only in every state.
+ * (dot paths under spec): read-only while the cluster installs and once it is installed. The same list
+ * as the API's rule (a backend test compares them). Fields fixed from creation (the type, environment,
+ * network, region, address ranges) are not listed: they are read-only in every state.
  */
 export const INSTALL_TIME_FIELDS: readonly string[] = [
   'openstack.controlPlaneCount',
@@ -281,25 +287,65 @@ export const INSTALL_TIME_FIELDS: readonly string[] = [
   'openstack.ocpImageSet',
   'openstack.glanceImageOverride',
   'openstack.trustBundle',
-  'aws.region',
-  'aws.network',
+  'openstack.pullSecretVaultPath',
+  'openstack.pullSecretVaultProperty',
+  'openstack.sshKeyVaultPath',
   'aws.publish',
   'aws.clusterType',
   'aws.controlPlaneCount',
-  'aws.workerCount',
   'aws.controllerFlavor',
   'aws.workerFlavor',
-  'gcp.region',
-  'gcp.network',
   'gcp.publish',
   'gcp.controlPlaneCount',
-  'gcp.workerCount',
   'gcp.controllerFlavor',
   'gcp.workerFlavor',
 ];
 
+/**
+ * Spec fields the platform applies to an installed cluster (the worker count on AWS and Google Cloud):
+ * read-only only while the cluster installs. The same list as the API's rule.
+ */
+export const INSTALLED_CHANGEABLE_FIELDS: readonly string[] = ['aws.workerCount', 'gcp.workerCount'];
+
 const INSTALL_TIME_SET = new Set(INSTALL_TIME_FIELDS);
+const INSTALLED_CHANGEABLE_SET = new Set(INSTALLED_CHANGEABLE_FIELDS);
 
 export function isInstallTimeField(path: string): boolean {
   return INSTALL_TIME_SET.has(path);
+}
+
+/** Whether a field is read-only in this state of the installation (as the API's rule decides). */
+export function isInstallLocked(path: string, state: InstallEditState): boolean {
+  if (state === 'installing') return INSTALL_TIME_SET.has(path) || INSTALLED_CHANGEABLE_SET.has(path);
+  if (state === 'installed') return INSTALL_TIME_SET.has(path);
+  return false;
+}
+
+/** JSON text with the keys of every object sorted (the order a form keeps them in does not count). */
+function stableText(v: unknown): string {
+  if (Array.isArray(v)) return `[${v.map(stableText).join(',')}]`;
+  const r = rec(v);
+  if (r) {
+    return `{${Object.keys(r)
+      .filter((k) => r[k] !== undefined)
+      .sort()
+      .map((k) => `${JSON.stringify(k)}:${stableText(r[k])}`)
+      .join(',')}}`;
+  }
+  return JSON.stringify(v ?? null);
+}
+
+/** The part of a cluster's spec the installer reads (its type and the provider blocks), as text. */
+function installerPart(spec: unknown): string {
+  const s = rec(spec) ?? {};
+  return stableText(['type', 'openstack', 'aws', 'gcp'].map((k) => s[k] ?? null));
+}
+
+/**
+ * Whether a change of a stopped cluster starts a new installation: only a change of the installer's part
+ * of the spec does (the type or a provider block: size, flavors, release, image); access groups, viewers
+ * and deletion protection are applied without one.
+ */
+export function installSettingsChanged(before: unknown, after: unknown): boolean {
+  return installerPart(before) !== installerPart(after);
 }

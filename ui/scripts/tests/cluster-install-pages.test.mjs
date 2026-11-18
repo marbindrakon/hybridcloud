@@ -124,19 +124,22 @@ test('callout when the installation stopped; other failures keep the general tit
   assert.ok(!other.includes(I.retryUses), other);
 });
 
-test('callout past the time allowed: the condition decides, the installer may still run', () => {
+test('callout past the time allowed: the platform keeps checking, the installer may still run', () => {
+  const summary = 'The installation has not finished in the time allowed. The platform keeps checking it.';
   const o = cluster({
-    phase: 'Failed', reason: 'InstallOverdue',
-    summary: 'The installation did not finish in the time allowed. You can retry it or delete the cluster.',
+    phase: 'Failed', reason: 'InstallOverdue', summary,
     install: { stage: 'Installing', attempt: 2, attemptsLimit: 3, run: 1, startedAt: ago(6 * 3600 + 60), observedAt: ago(20) },
   });
-  o.status.conditions.push({ type: 'Stalled', status: 'True', reason: 'InstallOverdue' });
   const html = pages.callout('PlatformOpenshift', o);
   const s = text(html);
   assert.ok(html.includes('pf-m-danger'));
   assert.ok(s.startsWith(`Danger alert: ${I.unfinishedTitle} `), s);
+  assert.ok(s.includes(`${summary} `), s);
   assert.ok(s.includes(I.unfinishedLine), s);
+  // summary and line read as one text
+  assert.ok(s.includes('The installation has not finished in the time allowed. The platform keeps checking it.'), s);
   assert.ok(!s.includes(I.retryUses), s);
+  assert.ok(!/retry installation is offered/i.test(s), s);
   // the install-time fields stay read-only (the API refuses them)
   assert.equal(input(pages.editor(o), 'PlatformOpenshift-openstack.workerCount').disabled, true);
 });
@@ -170,6 +173,19 @@ test('Configuration tab: install-time fields editable before the installation an
   assert.ok(text(stopped).includes(I.noteStopped));
   // fields fixed after create stay fixed
   assert.equal(input(stopped, 'PlatformOpenshift-openstack.environment').disabled, true);
+});
+
+test('Configuration tab on AWS and Google Cloud: the worker count is changeable once installed, the rest stays set', () => {
+  for (const type of ['aws', 'gcp']) {
+    const withType = (o) => ({ ...o, spec: { type, [type]: { environment: 'env-a', controlPlaneCount: 3, workerCount: 2, controllerFlavor: 'example.xlarge', workerFlavor: 'example.large' } } });
+    const installed = pages.editor(withType(cluster({ phase: 'Ready', install: { stage: 'Installed' } })));
+    assert.equal(input(installed, `PlatformOpenshift-${type}.workerCount`).disabled, false, type);
+    assert.equal(input(installed, `PlatformOpenshift-${type}.controlPlaneCount`).disabled, true, type);
+    const installing = pages.editor(withType(cluster({ install: { stage: 'Installing' } })));
+    assert.equal(input(installing, `PlatformOpenshift-${type}.workerCount`).disabled, true, type);
+    const stopped = pages.editor(withType(cluster({ phase: 'Failed', install: { stage: 'Stopped' } })));
+    assert.equal(input(stopped, `PlatformOpenshift-${type}.workerCount`).disabled, false, type);
+  }
 });
 
 test('Configuration tab: read-only while installing and on an installed cluster', () => {

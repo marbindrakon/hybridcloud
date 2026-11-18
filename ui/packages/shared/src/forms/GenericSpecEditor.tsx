@@ -16,7 +16,7 @@ import { AllowedSitesSelect } from '../components/AllowedSitesSelect';
 import { selfSubjectAccessReview } from '../access/ssar';
 import { errorText } from '../access/errorText';
 import { causeLines, fieldErrorsFrom, objectRuleMessages } from './apiErrors';
-import { installEditState, isInstallTimeField } from '../status/install';
+import { installEditState, installSettingsChanged, isInstallLocked, isInstallTimeField } from '../status/install';
 import { RetryInstallationModal } from '../components/RetryInstallationModal';
 import { useServerCheckWith } from './useServerCheck';
 import { HybridSovereignKind, K8sResource, KIND_PLURALS } from '../types';
@@ -289,10 +289,11 @@ export function GenericSpecEditor({
     return Number.isFinite(n) && n > 0;
   };
   // A cluster's install-time fields (sizes, flavors, release, image) change only before its installation starts
-  // and after it stopped; the API refuses them while it installs and once it is installed.
+  // and after it stopped; the API refuses them while it installs and once it is installed. The worker count on AWS
+  // and Google Cloud is applied to an installed cluster: refused only while it installs.
   const installState = kind === 'PlatformOpenshift' ? installEditState(item) : 'open';
   const installLocked = (field: SpecFieldMeta): boolean =>
-    kind === 'PlatformOpenshift' && isInstallTimeField(field.path) && (installState === 'installing' || installState === 'installed');
+    kind === 'PlatformOpenshift' && isInstallLocked(field.path, installState);
   const isLocked = (field: SpecFieldMeta): boolean => {
     if (readOnly || field.immutable) return true;
     if (installLocked(field)) return true;
@@ -365,8 +366,9 @@ export function GenericSpecEditor({
       setSaving(false);
     }
   };
+  // on a stopped cluster only a change of the installation settings starts a new installation: it asks first
   const onSave = () => {
-    if (installState === 'stopped') setConfirmInstall(true);
+    if (installState === 'stopped' && installSettingsChanged(original, specToSend())) setConfirmInstall(true);
     else void save();
   };
 
@@ -402,7 +404,7 @@ export function GenericSpecEditor({
         const locked = isLocked(field);
         const base = field.helpKey ? t(field.helpKey) : undefined;
         const help =
-          installState === 'installed' && installLocked(field) && !readOnly
+          installState === 'installed' && installLocked(field) && isInstallTimeField(field.path) && !readOnly
             ? t('install.setAtInstallation')
             : field.lockedWhileStatus && !readOnly && statusLocked(field)
             ? t(field.lockedWhileStatus.hintKey)

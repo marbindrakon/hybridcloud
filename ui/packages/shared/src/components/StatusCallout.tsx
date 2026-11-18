@@ -100,7 +100,7 @@ export function StatusCallout({ kind, item }: { kind: string; item: PhaseSubject
             {actorText ? ` · ${actorText}` : ''}
           </p>
         )}
-        {stopped && <p>{stopped.retryLine}</p>}
+        {stopped?.retryLine && <p>{stopped.retryLine}</p>}
         {refusedChip}
       </Alert>
     );
