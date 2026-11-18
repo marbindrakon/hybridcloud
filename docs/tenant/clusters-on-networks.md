@@ -163,6 +163,8 @@ install). [Status reasons](status-reasons.md) lists every reason and who acts.
 | `WaitingForPlatformAccess` | The platform is connecting to the network; the cluster waits. |
 | `ServiceNotOffered`, `CircuitNotDeployed`, `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. |
 
-A cluster on a network whose install never reaches the cluster ends Failed with a message that the platform could
-not reach the cluster at its API address; the platform team checks the platform's connection to the network and
-that the site advertises floating IPs ([platform access](../platform/platform-access.md)).
+When the installer of a cluster on a network could not reach the cluster's API, the installation stops and the
+cluster is Failed with a message that says so; the platform team checks the platform's connection to the network and
+that the site advertises floating IPs ([platform access](../platform/platform-access.md)). An installation that
+stops for another reason (quota, a setting, credentials) names that reason instead
+([when a cluster installation stops](status-reasons.md#when-a-cluster-installation-stops)).

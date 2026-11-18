@@ -35,9 +35,12 @@ where the platform wrote one. `oc explain networkplacement.status` describes eac
 
 ## Retry now
 
-The platform retries failed work by itself. When you have fixed what a failure named (or want an
-object processed again at once), use **Retry now** on the object's page. While the request is
-open the page shows **Retry queued**.
+The platform retries failed work by itself, except an OpenShift cluster installation that stopped
+(see [When a cluster installation stops](#when-a-cluster-installation-stops)) and a deletion that
+failed many times: those wait for you. When you have fixed what a failure named (or want an object
+processed again at once), use **Retry now** on the object's page. While the request is open the
+page shows **Retry queued**. On an OpenShift cluster whose installation stopped, the button reads
+**Retry installation** and starts the installation again.
 
 On the command line, write the current time into the annotation
 `ansible.sdk.operatorframework.io/reconcileNow`:
@@ -52,6 +55,44 @@ Every new value is a new request. The platform records the value it handled in
 while the two differ. Always write a new value (the current time): setting the same value again
 does nothing. The older form `reconcileNow="true"` still works; the platform removes that
 annotation once it has handled it.
+
+## When a cluster installation stops
+
+An OpenShift cluster shows how its installation goes in `status.install`: the **stage**
+(`Preparing`, `Installing`, `Finishing`, `Installed`; `CleaningUp` and `Stopped` below), the
+installer's **attempt** out of the attempts it makes (`attempt`, `attemptsLimit`), when the
+installation started (`startedAt`) and when the platform last checked it (`observedAt`). When an
+attempt fails while the installer still has attempts left, the cluster stays **Creating** with reason
+`InstallRetrying`, and `status.install.lastFailure` says what failed, for example *Attempt 1 of 3
+failed: the site reports too little quota: Cores (72 needed, limit 64).* You can act on it at
+once.
+
+When the installer has made its last attempt, or the installation has not finished within the
+time the platform allows (reason `InstallOverdue`), the installation **stops**: the cluster is
+**Failed**, its `Stalled` condition is True with the cause as reason (`QuotaExceeded`,
+`InstallSettingRefused`, `CredentialsInvalid`, `InstallNotStarted`, `InstallFailed` or
+`InstallOverdue`), and the message says what failed. Nothing reinstalls by itself: the cluster
+stays Failed until you act. The messages hold only what the platform can read reliably (resource
+names and numbers, the flavor or instance type you set); the platform team can read the
+installer's full log.
+
+What you can do:
+
+- **Retry installation** (the button, or Retry now on the command line). It starts a new
+  installation with the settings the cluster has now: what the stopped installation left on the
+  site is removed first (stage `CleaningUp`), then the installer starts again (`run` counts the
+  installations). The cluster keeps its name, its addresses and its DNS names.
+- **Change a setting and save.** On a stopped cluster you can change the node counts, the
+  flavors or instance types, the release and the image; saving starts a new installation with
+  them, the same way. Change what the reason names, for example fewer or smaller nodes for
+  `QuotaExceeded`, or have the environment's quota raised.
+- **Delete the cluster and create it again** for what cannot change on a cluster: its network,
+  its address ranges and its environment.
+
+While a cluster is being installed, and once it is installed, the platform refuses a change of
+those installation settings ("The cluster is being installed or is installed. ..."). Access groups
+and deletion protection can always change. A retry never touches an installation that is running
+or a cluster that is installed.
 
 ## Deleting
 
