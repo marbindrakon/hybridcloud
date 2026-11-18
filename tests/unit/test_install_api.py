@@ -180,7 +180,8 @@ class StatusSchema(unittest.TestCase):
         inst = schema()["properties"]["status"]["properties"]["install"]
         self.assertEqual(set(inst["properties"]),
                          {"stage", "attempt", "attemptsLimit", "run", "startedAt", "endedAt", "observedAt",
-                          "lastFailure", "stoppedGeneration", "stoppedRequest", "stoppedSpec"})
+                          "lastFailure", "stoppedGeneration", "stoppedRequest", "stoppedSpec",
+                          "stoppedSpecVersion"})
         self.assertEqual(inst["properties"]["stage"]["enum"], list(I.STAGES))
         self.assertEqual(set(inst["properties"]["lastFailure"]["properties"]), {"attempt", "reason", "message", "time"})
 
@@ -317,6 +318,7 @@ class OperatorRun(unittest.TestCase):
 
     def stopped(self, **install):
         inst = {"stage": "Stopped", "stoppedGeneration": 2, "stoppedSpec": I.spec_digest(self.SPEC),
+                "stoppedSpecVersion": I.DIGEST_VERSION,
                 "stoppedRequest": "req-1", "endedAt": _ago(30)}
         inst.update(install)
         return {"conditions": [{"type": "Stalled", "status": "True", "reason": "QuotaExceeded"}],
@@ -338,6 +340,21 @@ class OperatorRun(unittest.TestCase):
         self.assertTrue(self.stalled_waits(self.stopped(), generation=2))
         smaller = {"type": "openstack", "openstack": dict(self.SPEC["openstack"], workerCount=0)}
         self.assertFalse(self.stalled_waits(self.stopped(), generation=2, spec=smaller))
+
+    def test_the_operators_field_list_is_the_modules(self):
+        decide = self.decide_task("Decide whether a stopped installation waits for a request")
+        self.assertEqual(decide["vars"]["platformopenshift_install_fields"], I.DIGEST_FIELDS)
+
+    def test_a_new_schema_default_or_list_entry_starts_nothing(self):
+        """After a product update: a field the schema now fills in (not listed) gives the same digest; a digest
+        recorded under another list version is not compared (only a Retry publishes)."""
+        more = {"type": "openstack", "openstack": dict(self.SPEC["openstack"], someNewField=7)}
+        self.assertTrue(self.stalled_waits(self.stopped(), generation=2, spec=more))
+        smaller = {"type": "openstack", "openstack": dict(self.SPEC["openstack"], workerCount=0)}
+        older = self.stopped(stoppedSpecVersion="0" * 16)
+        self.assertTrue(self.stalled_waits(older, generation=2, spec=smaller))
+        older["lastHandledReconcileRequest"] = "req-9"
+        self.assertFalse(self.stalled_waits(older, generation=2, spec=smaller), "a Retry still publishes")
 
     def test_an_open_request_or_a_lost_event_publishes(self):
         st = self.stopped()

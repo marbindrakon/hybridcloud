@@ -7985,8 +7985,14 @@ spec:
                     stoppedSpec:
                       type: string
                       description: >-
-                        A digest of spec.type and the provider's block when the installation stopped. A change of
-                        them starts a new installation; a change of anything else does not.
+                        A digest of spec.type and the installation settings of the provider's block when the
+                        installation stopped. A change of them starts a new installation; a change of anything else
+                        does not.
+                    stoppedSpecVersion:
+                      type: string
+                      description: >-
+                        Which installation settings stoppedSpec covers. A digest of another version is not compared
+                        (only a Retry starts a new installation) and is renewed by the next run.
                 acmAvailable:
                   type: boolean
                   description: True when the platform's cluster management reaches the cluster.

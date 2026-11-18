@@ -94,11 +94,12 @@ K.CASES[:] = [
        status({"installStarted": True, "install": {
            "stage": "Stopped", "attempt": 3, "attemptsLimit": 3, "run": 1, "startedAt": "2026-11-18T10:00:00Z",
            "endedAt": "2026-11-18T10:09:00Z", "observedAt": "2026-11-18T10:09:00Z", "stoppedGeneration": 1,
-           "stoppedRequest": "", "lastFailure": {"attempt": 3, "reason": "QuotaExceeded", "message": "m",
+           "stoppedRequest": "", "stoppedSpec": "0" * 64, "stoppedSpecVersion": "0123456789abcdef", "lastFailure": {"attempt": 3, "reason": "QuotaExceeded", "message": "m",
                                                  "time": "2026-11-18T10:09:00Z"}}}),
        ("check", ("PlatformOpenshift", "c",
                   lambda o: None if (o.get("status", {}).get("install", {}).get("lastFailure", {}).get("reason")
-                                     == "QuotaExceeded" and o["status"]["install"].get("stoppedGeneration") == 1)
+                                     == "QuotaExceeded" and o["status"]["install"].get("stoppedGeneration") == 1
+                                     and o["status"]["install"].get("stoppedSpecVersion") == "0123456789abcdef")
                   else "status.install came back as %r" % o.get("status", {}).get("install"), ""), "ok")]),
     C("IT-22", G, "an unknown stage is refused", [("create", po(), "ok"),
                                                   ("status", ("PlatformOpenshift", "c", {"install": {"stage": "Odd"}}),

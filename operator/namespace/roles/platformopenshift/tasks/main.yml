@@ -45,12 +45,21 @@
     # A stopped installation (Stalled=True, stage Stopped) stays Failed until someone asks: no periodic event while
     # nothing changed since the stop. These publish: a Retry request (new, or one handled by the operator that no job
     # acted on yet: status.lastHandledReconcileRequest differs from status.install.stoppedRequest), a change of the
-    # installer's part of the spec (spec.type and the provider blocks: its digest differs from
-    # status.install.stoppedSpec, the same digest as module_utils shc_install.spec_digest), any other spec change once
-    # (a generation above status.install.stoppedGeneration: the job applies what needs no installation and records the
-    # generation), and an event published after the stop that no job completed (a lost event is published again).
+    # installer's settings (the values of the fields listed below and spec.type: the digest differs from
+    # status.install.stoppedSpec, the same digest as module_utils shc_install.spec_digest; compared only when the
+    # recorded list version, status.install.stoppedSpecVersion, is this list's: a record of another version of the
+    # product is renewed by the next run and never compared), any other spec change once (a generation above
+    # status.install.stoppedGeneration: the job applies what needs no installation and records the generation), and
+    # an event published after the stop that no job completed (a lost event is published again).
     # Nothing reinstalls by itself: the job removes and installs only on a request or a change of those settings.
     - name: Decide whether a stopped installation waits for a request
+      vars:
+        # module_utils shc_install.DIGEST_FIELDS (a unit test keeps the two the same)
+        platformopenshift_install_fields:
+          aws: [clusterType, controlPlaneCount, controllerFlavor, publish, workerCount, workerFlavor]
+          gcp: [controlPlaneCount, controllerFlavor, publish, workerCount, workerFlavor]
+          openstack: [controlPlaneCount, controlPlaneFlavor, glanceImageOverride, ocpImageSet, pullSecretVaultPath,
+                      pullSecretVaultProperty, sshKeyVaultPath, trustBundle, workerCount, workerFlavor]
       ansible.builtin.set_fact:
         platformopenshift_stalled_waits: >-
           {%- set st = _hybridsovereign_redhat_platformopenshift.status | default({}, true) -%}
@@ -60,12 +69,18 @@
           {%- set stopped_gen = inst.stoppedGeneration
                                 | default(st.observedGeneration | default(0, true), true) | int -%}
           {%- set spec = _hybridsovereign_redhat_platformopenshift.spec | default({}, true) -%}
-          {%- set part = {} -%}
-          {%- for k in ['type', 'openstack', 'aws', 'gcp'] if k in spec -%}
-            {%- set _ = part.update({k: spec[k]}) -%}
+          {%- set ptype = spec.get('type') -%}
+          {%- set block = spec.get(ptype) if (ptype is string and spec.get(ptype) is mapping) else {} -%}
+          {%- set values = {} -%}
+          {%- for f in (platformopenshift_install_fields.get(ptype, []) if ptype is string else []) -%}
+            {%- set _ = values.update({f: block.get(f)}) -%}
           {%- endfor -%}
-          {%- set digest = part | to_json(sort_keys=true, separators=[',', ':'], ensure_ascii=true) | hash('sha256') -%}
+          {%- set digest = {'type': ptype, 'fields': values}
+                           | to_json(sort_keys=true, separators=[',', ':'], ensure_ascii=true) | hash('sha256') -%}
+          {%- set version = (platformopenshift_install_fields
+                             | to_json(sort_keys=true, separators=[',', ':'], ensure_ascii=true) | hash('sha256'))[:16] -%}
           {%- set spec_changed = (inst.stoppedSpec | default('', true) | string | length > 0)
+                                 and (inst.stoppedSpecVersion | default('', true) | string) == version
                                  and digest != (inst.stoppedSpec | string) -%}
           {%- set request_open = ('stoppedRequest' in inst)
                                  and (st.lastHandledReconcileRequest | default('', true) | string)
