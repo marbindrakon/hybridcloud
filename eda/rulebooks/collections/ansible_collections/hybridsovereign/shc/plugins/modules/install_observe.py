@@ -187,7 +187,8 @@ def main():
         if ready:
             body["reason"] = ready[0]["reason"]
             body["message"] = ready[0]["message"]
-        opts = {"action": res["action"], "event_id": job["eventId"], "partial": False, "job": p["job"]}
+        entry = dict(p["job"], name="platformopenshift-%s" % res["action"]) if p["job"] else None
+        opts = {"action": res["action"], "event_id": job["eventId"], "partial": False, "job": entry}
         for attempt in range(5):
             if attempt:
                 obj, obj_error = read_obj()

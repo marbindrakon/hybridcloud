@@ -91,6 +91,7 @@ class FakeApi:
 
     def close(self):
         self.server.shutdown()
+        self.server.server_close()
 
     def ready_true_written(self):
         for p in self.patches:
@@ -217,6 +218,15 @@ class WatchEndings(unittest.TestCase):
         self.assertNotIn("level=", json.dumps(st))
         self.assertFalse(api.ready_true_written())
         self.assertNotIn("token-not-in-data", H.LAST_OUTPUT)
+
+    def test_the_job_entry_names_the_action(self):
+        api, rc, tr, out = self.watch(po(RUNNING), cd(stopped=True, failed="UnknownError", restarts=3),
+                                      [failed_provision(2)], tower_job_id="4242",
+                                      aap_ui_url="https://controller.example.org/")
+        jobs = api.obj["status"]["edaJobs"]
+        self.assertEqual((jobs[0]["name"], jobs[0]["jobId"], jobs[0]["status"]),
+                         ("platformopenshift-failed", "4242", "failed"))
+        self.assertEqual(jobs[0]["url"], "https://controller.example.org/execution/jobs/playbook/4242/output")
 
     def test_overdue(self):
         api, rc, tr, out = self.watch(po(dict(RUNNING, startedAt=ago(400))), cd())
