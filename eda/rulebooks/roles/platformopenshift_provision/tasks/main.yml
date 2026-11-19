@@ -299,23 +299,19 @@
         cr_name: "{{ platformopenshift_cr_name }}"
         cr_namespace: "{{ platformopenshift_cr_namespace }}"
         # a preflight refusal (preflight_stop.yml) or a named failure sets po_fail_reason; the Preflight condition
-        # goes with a refusal. The message is the failure's own text only when the platform wrote it (a refusal, a
-        # fail or assert task of these roles); any other step's failure text may carry what a site, the hub or a
-        # tool answered, so the status names the step instead.
-        _po_own_text: >-
-          {{ (po_fail_reason | default('', true) | length > 0)
-             or ((ansible_failed_task | default({}, true)).action | default('', true))
-                in ['ansible.builtin.fail', 'fail', 'ansible.builtin.assert', 'assert'] }}
+        # goes with a refusal. Nothing a cloud, the hub, the installer or a helper answered is written: the message is
+        # the failure's own text only when the platform wrote it (a refusal, a fail or assert task of the cluster
+        # roles, the shared call tasks' sentence for the step), else the general sentence naming the step
+        # (shc_failure_message).
         cr_status_body:
           status: failed
           reason: "{{ po_fail_reason | default('ProvisionFailed', true) }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: >-
-            {{ (ansible_failed_result.msg | default('', true) | string)
-               if (_po_own_text | bool) and (ansible_failed_result.msg | default('', true) | string | length) > 0
-               else ('The step "' ~ ((ansible_failed_task | default({}, true)).name | default('provisioning', true))
-                     ~ '" failed; the platform team can see why in the job.') }}
+            {{ ansible_failed_task | default({}, true)
+               | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true),
+                                                         po_fail_reason | default('', true) | length > 0) }}
           conditions: "{{ [po_preflight_condition] if (po_preflight_condition | default({}, true)) else [] }}"
       ignore_errors: true
       # a stopped installation was written by the watch (install_observe.yml) with its cause: nothing replaces it

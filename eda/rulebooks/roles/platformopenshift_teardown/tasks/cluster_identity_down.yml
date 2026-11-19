@@ -110,12 +110,14 @@
         - name: Load the site account
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
           vars:
+            shc_step: "Remove the cluster's identity on the site"
             os_account_vault_path: "{{ rca_account_vault_path }}"
             os_account_tag: "po-cred-down-{{ platformopenshift_cr_name }}"
 
         - name: Delete the user (its credential goes with it)
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
           vars:
+            shc_step: "Remove the cluster's identity on the site"
             os_call_no_log: false
             os_request:
               action: cluster-identity-delete

@@ -72,6 +72,7 @@
     - name: Create the build's namespace for this cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/central_create.yml"
       vars:
+        shc_step: "Claim the build's namespace on the hub"
         cc_path: /api/v1/namespaces
         cc_body:
           apiVersion: v1
@@ -98,6 +99,7 @@
     - name: Whose namespace it is
       ansible.builtin.include_tasks: po_call.yml
       vars:
+        shc_step: "Claim the build's namespace on the hub"
         po_request:
           action: hub-owner
           claim: true

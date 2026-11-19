@@ -29,8 +29,7 @@
       - cb_pull_secret_raw | string | length > 0
       - cb_ssh_public_key | length > 0
     fail_msg: >-
-      Vault {{ cb_pull_secret_vault }} (property {{ cb_pull_secret_vault_property }}) or
-      {{ cb_ssh_key_vault }} (ssh_public_key) is missing.
+      The installation's pull secret or SSH key is missing in Vault (platformopenshift_defaults names where).
 
 - name: Normalize pull secret to valid JSON
   ansible.builtin.command:

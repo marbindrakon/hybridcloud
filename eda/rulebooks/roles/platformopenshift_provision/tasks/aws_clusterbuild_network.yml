@@ -89,6 +89,7 @@
     - name: The placement's public subnets
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
       vars:
+        shc_step: "Prepare the cluster's public subnets on AWS"
         aws_helper: shc_aws_tenant.py
         aws_config: "{{ cb_tenant_cfg }}"
         aws_args: [place-public, --placement, "{{ cb_placement_ref }}", --state, up]

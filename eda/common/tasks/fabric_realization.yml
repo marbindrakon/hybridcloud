@@ -6,7 +6,7 @@
   ansible.builtin.include_vars:
     file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
 
-- name: Set the realization for HybridFabric {{ fab_real_fabric }}
+- name: "Set the realization of the HybridFabric: {{ fab_real_fabric }}"
   vars:
     _inst: "{{ fabric_realization | default({}, true) }}"
   ansible.builtin.set_fact:
@@ -15,7 +15,13 @@
          | combine(_inst | dict2items | rejectattr('key', 'equalto', 'fabrics') | items2dict, recursive=True)
          | combine((_inst.fabrics | default({})).get(fab_real_fabric, {}), recursive=True) }}
 
+- name: Refuse a realization model this platform does not implement (the step's sentence)
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: shc_step is defined and fab_real.model not in fabric_realization_models
+
 - name: Refuse a realization model this platform does not implement
+  when: shc_step is not defined
   ansible.builtin.assert:
     that: fab_real.model in fabric_realization_models
     fail_msg: >-

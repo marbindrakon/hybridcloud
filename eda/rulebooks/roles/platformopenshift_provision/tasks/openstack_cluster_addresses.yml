@@ -46,6 +46,7 @@
     - name: Check the addresses against the other networks the platform reaches
       ansible.builtin.include_tasks: po_call.yml
       vars:
+        shc_step: "Check the cluster's addresses"
         po_request:
           action: fips-check
           addresses: ["{{ cb_api_vip }}", "{{ cb_ingress_vip }}"]

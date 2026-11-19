@@ -1016,3 +1016,40 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, rec
     if not asked:
         return False, why + "; nothing is removed"
     return True, "the stopped build is removed for a new installation (%s)" % why
+
+
+# ---- the text of a failed job step --------------------------------------------------------------------------------
+# What the role's rescue writes to status.message and the Ready condition when a step fails. Nothing a cloud, the hub,
+# the installer or a helper script returned is written there: the text is the platform's own sentence of a refusal or
+# of a fail or assert task of the cluster roles (whose messages carry only values the tenant set or the platform
+# derived from them; a test walks every such task), else the general sentence below with the step's name when that
+# name is plain words. The failed task's name is the templated one, so a name is used only when it has no character a
+# value of another system would bring (digits, dots, slashes, colons, underscores, quotes, braces).
+FAIL_ACTIONS = ("ansible.builtin.fail", "fail", "ansible.builtin.assert", "assert")
+STEP_NAME = re.compile(r"[A-Z][A-Za-z ,'()-]{2,119}")
+STEP_FAILED = "The step \"%s\" failed; the platform team can see why in the job's log."
+NO_STEP_FAILED = "A step of the cluster's %s failed; the platform team can see why in the job's log."
+MESSAGE_MAX = 1000
+# a second line behind the walked messages: text with any of these is never written (an address with a scheme,
+# markup, an e-mail or service account, a cloud resource path or ARN, an id in UUID form, a token-like run)
+NOT_PLATFORM_TEXT = re.compile(
+    r"://|[<>{}@\\]|\barn:|\bprojects/|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-|[A-Za-z0-9+/=_]{32,}|\bBearer\b",
+    re.IGNORECASE)
+
+
+def step_failed(step, what="provisioning"):
+    """The general sentence for a failed step: names it when the name is plain words."""
+    step = step.strip() if isinstance(step, str) else ""
+    if STEP_NAME.fullmatch(step):
+        return STEP_FAILED % step
+    return NO_STEP_FAILED % what
+
+
+def failure_message(action, msg, step, refused=False, what="provisioning"):
+    """status.message of a failed job: the failure's own text when the platform wrote it (a refusal, or a fail or assert
+    task) and it reads as platform text; else the general sentence for the step."""
+    text = msg.strip() if isinstance(msg, str) else ""
+    own = bool(refused) or (action in FAIL_ACTIONS)
+    if own and text and len(text) <= MESSAGE_MAX and not NOT_PLATFORM_TEXT.search(text):
+        return text
+    return step_failed(step, what)

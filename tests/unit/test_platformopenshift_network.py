@@ -1331,7 +1331,8 @@ class TeardownRelease(unittest.TestCase):
         oso = dict(OSO, status={"cloudInfrastructure": "site1"})
         rc, tr, out = self.run_r({f"CloudOSO/{NS}/env1": oso, f"CloudInfrastructure/sovereign-cloud/site1": SITE})
         self.assertNotEqual(rc, 0)
-        self.assertIn("Cannot release the cluster's floating IPs fip-a, fip-i", out)
+        self.assertIn("Cannot release the cluster's floating IPs: its OpenStack environment", out)
+        self.assertNotIn("fip-a", out.split("Cannot release")[-1][:200], "no address id in the failure")
 
 
 # ---- renders --------------------------------------------------------------------------------------------------------

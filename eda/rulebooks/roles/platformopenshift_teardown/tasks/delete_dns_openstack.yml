@@ -4,12 +4,14 @@
 - name: Load the OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
   vars:
+    shc_step: "Remove the cluster's DNS names"
     os_account_vault_path: "{{ po_dns_account_vault_path }}"
     os_account_tag: "po-teardown-{{ platformopenshift_cr_name }}"
 
 - name: Delete the recorded Designate records
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
   vars:
+    shc_step: "Remove the cluster's DNS names"
     os_call_no_log: false
     os_request:
       action: dns-delete

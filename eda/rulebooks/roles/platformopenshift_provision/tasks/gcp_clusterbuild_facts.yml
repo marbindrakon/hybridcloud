@@ -84,13 +84,13 @@
       - cb_app_name | length <= 40
       - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
     fail_msg: >-
-      Build name {{ cb_app_name }} (shc-gcp-<entity>-<name>-<digest>) must be at most 40 characters of [a-z0-9-]; shorten the
-      PlatformOpenshift name.
+      The cluster's build name {{ cb_app_name }} must be at most 40 characters of a-z, 0-9 and hyphens, and the
+      cluster's name a DNS label; create the cluster with a shorter name.
 
 - name: Fail without a cluster-build chart
   ansible.builtin.assert:
     that:
       - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
     fail_msg: >-
-      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
-      (got '{{ mce_cluster_build_chart | trim }}').
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart: the
+      setting is missing or is not an OCI address.

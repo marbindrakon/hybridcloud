@@ -65,7 +65,6 @@
 - name: Fail when Hive did not deprovision the cluster
   ansible.builtin.fail:
     msg: >-
-      ClusterDeployment {{ po_build_name }} is still present after the deprovision
-      (provisionStatus {{ cd_final.resources[0].status.provisionStatus | default('unknown') }});
-      check the uninstall job in namespace {{ po_build_name }} on central.
+      The hub still holds the build {{ po_build_name }} after its removal; the platform team can see why in the
+      uninstall job of the build's namespace on the hub.
   when: cd_final.resources | length > 0

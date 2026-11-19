@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - cb_slug | length == 5
-    fail_msg: "CloudOSO slug must be exactly 5 characters. Got: '{{ cb_slug }}'"
+    fail_msg: "The environment's short name for its DNS names must be exactly 5 characters."
   when: not (use_designate_dns | default(false) | bool)
 
 # The pull secret and SSH key are read with the platform's Vault token and end up in a cluster the tenant
@@ -90,8 +90,8 @@
     that:
       - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
     fail_msg: >-
-      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
-      (got '{{ mce_cluster_build_chart | trim }}').
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart: the
+      setting is missing or is not an OCI address.
 
 # shc (DESIGN cnet §4.2): the build name, the network choice, the floating IPs and (hybrid network) the cluster's
 # prefixes, each recorded before the next step uses it
@@ -178,8 +178,7 @@
       - cb_pull_secret_raw | string | length > 0
       - cb_ssh_public_key | length > 0
     fail_msg: >-
-      Vault {{ cb_pull_secret_vault }} (property {{ cb_pull_secret_vault_property }}) or
-      {{ cb_ssh_key_vault }} (ssh_public_key) is missing.
+      The installation's pull secret or SSH key is missing in Vault (platformopenshift_defaults names where).
 
 - name: Normalize pull secret to valid JSON
   ansible.builtin.command:

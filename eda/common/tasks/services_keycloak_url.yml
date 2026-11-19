@@ -17,9 +17,30 @@
     label_selectors: ["app=keycloak"]
   register: _skc_routes
 
+# With shc_step set (the cluster roles set it), the failures below are the platform's sentence for the step and the
+# details (Route names, hosts, the namespace) go to the job's log only.
+- name: The Routes that carry the label, for the job's log
+  vars:
+    _rs: "{{ _skc_routes.resources | default([], true) }}"
+  ansible.builtin.debug:
+    msg: >-
+      {{ _rs | length }} Routes in namespace {{ skc_namespace | default('services-rhbk', true) }} on the services
+      cluster carry the label app=keycloak ({% for r in _rs %}{{ (r.metadata | default({}, true)).name
+      | default('a Route', true) }} for {{ (r.spec | default({}, true)).host | default('no host', true)
+      }}{{ '' if loop.last else ', ' }}{% endfor %}); only one may carry it.
+  when: _rs | length >= 2 and shc_step is defined
+
+- name: At most one Route may carry the label (the step's sentence)
+  vars:
+    _rs: "{{ _skc_routes.resources | default([], true) }}"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: _rs | length >= 2 and shc_step is defined
+
 - name: At most one Route may carry the label
   vars:
     _rs: "{{ _skc_routes.resources | default([], true) }}"
+  when: shc_step is not defined
   ansible.builtin.assert:
     that: _rs | length < 2
     quiet: true
@@ -38,6 +59,14 @@
     skc_url: "{{ ('https://' ~ (_rs | first).spec.host) if _rs | length == 1 else _setting }}"
     skc_source: "{{ 'route' if _rs | length == 1 else ('setting' if _setting | length > 0 else 'none') }}"
 
+- name: Fail without an address (the step's sentence)
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when:
+    - skc_required | default(true) | bool
+    - skc_url | length == 0
+    - shc_step is defined
+
 - name: Fail without an address
   ansible.builtin.assert:
     that: skc_url | length > 0
@@ -47,4 +76,6 @@
       {{ skc_namespace | default('services-rhbk', true) }} on the services cluster carries the label app=keycloak,
       and the job's environment does not set KEYCLOAK_EXTERNAL_URL. Label the Keycloak's public Route app=keycloak,
       or set KEYCLOAK_EXTERNAL_URL to its address (https://<host>).
-  when: skc_required | default(true) | bool
+  when:
+    - skc_required | default(true) | bool
+    - shc_step is not defined

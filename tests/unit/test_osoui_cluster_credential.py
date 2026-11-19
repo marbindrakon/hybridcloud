@@ -269,7 +269,8 @@ class ClusterCredential(unittest.TestCase):
         self.assertEqual([c for c in self.site.ks.log[n:] if c[0] != "GET" and c[1] != "/v3/auth/tokens"], [])
         self.assertEqual(set(self.site.ks.app_creds), cred_ids)
         self.assertEqual(H.patches(trace), [])
-        self.assertIn("could not be read from Vault (Vault answered HTTP 503", H.LAST_OUTPUT)
+        self.assertIn("could not be read from the platform's secret store; nothing was changed", H.LAST_OUTPUT)
+        self.assertIn("Vault answered HTTP 503", H.LAST_OUTPUT, "Vault's answer goes to the job's log")
 
     def test_the_real_account_loader_keeps_no_secret_in_a_variable(self):
         """R2: the site account (common/tasks/openstack_account.yml) and the cluster's credential are read from Vault
@@ -297,6 +298,7 @@ class ClusterCredential(unittest.TestCase):
         self.assertEqual((ref["reason"], ref["condition"]["reason"]), ("CredentialSecretMissing", "CredentialSecretMissing"))
         self.assertIn("A platform administrator must restore the secret or replace the credential in the cluster",
                       ref["condition"]["message"])
+        self.assertNotIn(cid, ref["condition"]["message"], "the site's ids stay in the job's log")
         self.assertEqual([c for c in self.site.ks.log[n:] if c[1] != "/v3/auth/tokens"], [])
         self.assertEqual(set(self.site.ks.app_creds), creds)
         self.assertNotIn(PATH, self.site.vault.data)
@@ -346,9 +348,11 @@ class ClusterCredential(unittest.TestCase):
         ref = [t["refused"] for t in trace if "refused" in t][0]
         self.assertEqual(ref["reason"], "UserRefused")
         self.assertEqual((ref["condition"]["type"], ref["condition"]["reason"]), ("ClusterCredential", "UserRefused"))
+        # the platform's sentence; what the site answered (the user, its domain) goes to the job's log
         self.assertEqual(ref["condition"]["message"],
-                         f"The site refused the cluster's user {BUILD}: a user named {BUILD} exists in domain "
-                         "tenants and is not the platform's. The cluster cannot be built.")
+                         "The site refused the cluster's user. The cluster cannot be built; the platform team can see "
+                         "why in the job's log.")
+        self.assertIn(f"a user named {BUILD} exists in domain tenants", H.LAST_OUTPUT)
         self.assertNotIn(PATH, self.site.vault.data)
         self.assertEqual(H.patches(trace), [])
 
@@ -363,7 +367,9 @@ class ClusterCredentialManagerAccount(ClusterCredential):
         trace = self.run_cred(fabric_realization=real)
         ref = [t["refused"] for t in trace if "refused" in t][0]
         self.assertEqual(ref["reason"], "RoleRefused")
-        self.assertIn("load-balancer_member", ref["condition"]["message"])
+        self.assertTrue(ref["condition"]["message"].startswith("The site refused a role for the cluster's user."))
+        self.assertNotIn("load-balancer_member", ref["condition"]["message"])
+        self.assertIn("load-balancer_member", H.LAST_OUTPUT)
 
 
 @unittest.skipUnless(H.HAVE_ANSIBLE and HAVE_SDK, "ansible-playbook / openstacksdk not installed")

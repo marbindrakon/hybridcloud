@@ -55,6 +55,7 @@
     - name: The external network in effect
       ansible.builtin.include_tasks: po_call.yml
       vars:
+        shc_step: "Check the cluster's external network"
         po_request:
           action: external
           choice: "{{ oso_external_choice }}"
@@ -120,6 +121,7 @@
 - name: Whose namespace it is
   ansible.builtin.include_tasks: po_call.yml
   vars:
+    shc_step: "Check the build's namespace on the hub"
     po_request:
       action: hub-owner
       claim: true

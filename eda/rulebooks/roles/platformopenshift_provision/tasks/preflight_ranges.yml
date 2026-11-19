@@ -11,6 +11,7 @@
 - name: The cluster's address ranges in effect
   ansible.builtin.include_tasks: po_call.yml
   vars:
+    shc_step: "Check the cluster's address ranges"
     po_request:
       action: networking
       spec: "{{ platform_spec.networking | default({}, true) }}"
@@ -40,6 +41,7 @@
 - name: Check the ranges against each other, the network and the reserved ranges
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
   vars:
+    shc_step: "Check the cluster's address ranges"
     # one expression: on ansible-core 2.16 a number templated inside a nested mapping stays a string.
     # The request is shc_fabric.py's: provider (openstack|aws|gcp) and network (the cluster names a hybrid network:
     # on AWS and Google Cloud the machine network is then the placement's subnet, checked against the reserved ranges

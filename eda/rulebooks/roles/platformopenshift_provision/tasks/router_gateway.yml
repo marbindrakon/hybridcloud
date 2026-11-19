@@ -16,12 +16,14 @@
         - name: Load the site account
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
           vars:
+            shc_step: "Read the cluster's router on the site"
             os_account_vault_path: "{{ cb_fip_account }}"
             os_account_tag: "po-router-{{ cb_app_name }}"
 
         - name: Read the cluster's router
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
           vars:
+            shc_step: "Read the cluster's router on the site"
             os_call_no_log: false
             os_request:
               action: project-routers
@@ -37,6 +39,7 @@
     - name: The router's gateway address
       ansible.builtin.include_tasks: po_call.yml
       vars:
+        shc_step: "Read the cluster's router on the site"
         po_request:
           action: router-gateway
           tag: "openshiftClusterID={{ rg_infra_id }}"

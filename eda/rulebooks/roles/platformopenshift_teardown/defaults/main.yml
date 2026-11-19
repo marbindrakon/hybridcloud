@@ -1,4 +1,10 @@
 ---
+# What the platform was doing, in plain words, when a call to a cloud, a site, the hub or a helper fails: the shared
+# call tasks (common/tasks/*_call.yml, openstack_account.yml, fabric_check.yml, central_create.yml) then fail
+# with the platform's sentence for the step and write what was answered to the job's log only. A step sets its
+# own words where it includes them.
+shc_step: Delete the cluster
+shc_step_what: deletion
 eda_central_work_namespace: sovereign-cloud-jobs
 # shc (§11.6 phase C): Hive deprovision through the chart's pre-delete hook (it waits up to 60 min)
 clusterbuild_uninstall_timeout: 65m

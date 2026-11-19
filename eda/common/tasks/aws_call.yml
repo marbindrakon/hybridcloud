@@ -3,6 +3,9 @@
 # Inputs: aws_helper (shc_aws_edge.py | shc_aws_tenant.py | shc_aws_hub.py), aws_config (dict), aws_args (list),
 # aws_env (dict, optional; secrets go here, never in argv), aws_no_log (default false). Sets aws_result (the
 # helper's JSON line); fails with its error, or sets aws_error instead when aws_soft is true.
+# With shc_step set (the cluster roles set it: plain words for what the platform was doing), the failure is the
+# platform's sentence for that step and the answer goes to the job's log only; without it, the failure carries the
+# answer as before.
 - name: "AWS {{ aws_helper }} {{ aws_args | join(' ') }}"
   ansible.builtin.command:
     argv: "{{ ['python3', role_path ~ '/../../../common/files/' ~ aws_helper, '--config', aws_config | to_json] + aws_args }}"
@@ -25,7 +28,18 @@
     aws_error: "{{ aws_result.error | default('rc ' ~ _aws_call.rc) }}"
   when: _aws_call.rc != 0 or not (aws_result.ok | default(false))
 
+- name: "AWS {{ aws_helper }}: the answer, for the job's log"
+  ansible.builtin.debug:
+    msg: "AWS {{ aws_args | first | default(aws_helper) }} failed: {{ aws_error }}"
+  when: aws_error | length > 0 and not (aws_soft | default(false) | bool) and shc_step is defined
+  no_log: "{{ aws_no_log | default(false) }}"
+
+- name: "AWS {{ aws_helper }}: fail with the step's sentence"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: aws_error | length > 0 and not (aws_soft | default(false) | bool) and shc_step is defined
+
 - name: "AWS {{ aws_helper }}: fail on error"
   ansible.builtin.fail:
     msg: "AWS {{ aws_args | first | default(aws_helper) }} failed: {{ aws_error }}"
-  when: aws_error | length > 0 and not (aws_soft | default(false) | bool)
+  when: aws_error | length > 0 and not (aws_soft | default(false) | bool) and shc_step is not defined

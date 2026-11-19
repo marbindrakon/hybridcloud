@@ -4,6 +4,9 @@
 # shc_gcp_tenant.py | shc_gcp_cluster.py), gcp_args (list), gcp_config (dict, optional: passed as --config),
 # gcp_env (dict, optional; secrets go here, never in argv), gcp_no_log (default false). Sets gcp_result (the helper's
 # JSON line); fails with its error, or sets gcp_error instead when gcp_soft is true.
+# With shc_step set (the cluster roles set it: plain words for what the platform was doing), the failure is the
+# platform's sentence for that step and the answer goes to the job's log only; without it, the failure carries the
+# answer as before.
 - name: "GCP {{ gcp_helper }} {{ gcp_args | join(' ') }}"
   ansible.builtin.command:
     argv: >-
@@ -29,7 +32,18 @@
     gcp_error: "{{ gcp_result.error | default('rc ' ~ _gcp_call.rc) }}"
   when: _gcp_call.rc != 0 or not (gcp_result.ok | default(false))
 
+- name: "GCP {{ gcp_helper }}: the answer, for the job's log"
+  ansible.builtin.debug:
+    msg: "GCP {{ gcp_args | first | default(gcp_helper) }} failed: {{ gcp_error }}"
+  when: gcp_error | length > 0 and not (gcp_soft | default(false) | bool) and shc_step is defined
+  no_log: "{{ gcp_no_log | default(false) }}"
+
+- name: "GCP {{ gcp_helper }}: fail with the step's sentence"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: gcp_error | length > 0 and not (gcp_soft | default(false) | bool) and shc_step is defined
+
 - name: "GCP {{ gcp_helper }}: fail on error"
   ansible.builtin.fail:
     msg: "GCP {{ gcp_args | first | default(gcp_helper) }} failed: {{ gcp_error }}"
-  when: gcp_error | length > 0 and not (gcp_soft | default(false) | bool)
+  when: gcp_error | length > 0 and not (gcp_soft | default(false) | bool) and shc_step is not defined

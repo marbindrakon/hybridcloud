@@ -4,6 +4,9 @@
 # shc_openstack.py; shc_dns.py for tenant DNS), os_call_no_log (default true:
 # provision returns an application credential secret), os_call_soft (default false: true = never fail, the helper's
 # error stays in os_result.error). Sets os_result; fails with the helper's error unless soft.
+# With shc_step set (the cluster roles set it: plain words for what the platform was doing), the failure is the
+# platform's sentence for that step and the answer goes to the job's log only; without it, the failure carries the
+# answer as before.
 - name: "OpenStack {{ os_request.action }}"
   ansible.builtin.command:
     argv:
@@ -26,12 +29,29 @@
          else {'error': (_os_call.stderr | default('') | trim)[-600:]} }}
   no_log: "{{ os_call_no_log | default(true) }}"
 
+- name: "OpenStack {{ os_request.action }}: the answer, for the job's log"
+  ansible.builtin.debug:
+    msg: "OpenStack {{ os_request.action }} failed: {{ os_result.error | default('rc ' ~ _os_call.rc) }}"
+  when:
+    - _os_call.rc != 0
+    - not (os_call_soft | default(false) | bool)
+    - shc_step is defined
+
+- name: "OpenStack {{ os_request.action }}: fail with the step's sentence"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when:
+    - _os_call.rc != 0
+    - not (os_call_soft | default(false) | bool)
+    - shc_step is defined
+
 - name: "OpenStack {{ os_request.action }}: fail on error"
   ansible.builtin.fail:
     msg: "OpenStack {{ os_request.action }} failed: {{ os_result.error | default('rc ' ~ _os_call.rc) }}"
   when:
     - _os_call.rc != 0
     - not (os_call_soft | default(false) | bool)
+    - shc_step is not defined
 
 - name: "OpenStack {{ os_request.action }}: keep the error (soft call)"
   ansible.builtin.set_fact:

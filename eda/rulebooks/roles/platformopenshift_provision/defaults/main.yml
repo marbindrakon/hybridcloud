@@ -1,4 +1,10 @@
 ---
+# What the platform was doing, in plain words, when a call to a cloud, a site, the hub or a helper fails: the shared
+# call tasks (common/tasks/*_call.yml, openstack_account.yml, fabric_check.yml, central_create.yml) then fail
+# with the platform's sentence for the step and write what was answered to the job's log only. A step sets its
+# own words where it includes them.
+shc_step: Provision the cluster
+shc_step_what: provisioning
 platformopenshift_operator_namespace: sovereign-cloud
 eda_central_work_namespace: sovereign-cloud-jobs
 # Central API for the ACM policy calls in keycloak_oidc.yml / cluster_rbac.yml: the connection the

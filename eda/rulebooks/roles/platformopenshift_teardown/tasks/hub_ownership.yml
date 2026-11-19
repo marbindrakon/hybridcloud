@@ -29,6 +29,7 @@
 - name: Whose namespace it is
   ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/po_call.yml"
   vars:
+    shc_step: "Check the build's namespace on the hub"
     po_request:
       action: hub-owner
       claim: false

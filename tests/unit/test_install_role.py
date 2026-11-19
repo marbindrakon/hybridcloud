@@ -858,7 +858,7 @@ class ReleaseAndRescue(unittest.TestCase):
         rescue = dict(rescue, when=["services_api_host is defined"])
         for failing, want in (
                 ({"name": "Read the hub's build", "ansible.builtin.slurp": {"src": "/nonexistent/api.hub.example.org"}},
-                 'The step "Read the hub\'s build" failed; the platform team can see why in the job.'),
+                 'The step "Read the hub\'s build" failed; the platform team can see why in the job\'s log.'),
                 ({"name": "Refuse", "ansible.builtin.fail": {"msg": "The platform's own sentence."}},
                  "The platform's own sentence.")):
             api = FakeApi(po(RUNNING))

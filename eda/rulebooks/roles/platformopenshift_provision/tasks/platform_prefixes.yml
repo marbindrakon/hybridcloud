@@ -61,6 +61,7 @@
 - name: Judge the wait
   ansible.builtin.include_tasks: po_call.yml
   vars:
+    shc_step: "Check the platform's routes to the cluster's network"
     po_request:
       action: service-wait
       network: "{{ ansible_operator_meta.namespace }}/{{ pp_network }}"

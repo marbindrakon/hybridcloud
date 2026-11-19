@@ -70,6 +70,20 @@ def shc_install_spec_digest(spec):
     return I.spec_digest(spec)
 
 
+def shc_failure_message(failed_task, failed_result=None, refused=False, what="provisioning"):
+    """status.message of a failed job from ansible_failed_task and ansible_failed_result (the rescue's)."""
+    task = failed_task if isinstance(failed_task, dict) else {}
+    result = failed_result if isinstance(failed_result, dict) else {}
+    msg = result.get("msg")
+    return I.failure_message(task.get("action") or "", msg if isinstance(msg, str) else "", task.get("name") or "",
+                             refused, what)
+
+
+def shc_step_failed(step, what="provisioning"):
+    """The general sentence for a failed step (the cloud and site call wrappers fail with it)."""
+    return I.step_failed(step, what)
+
+
 class FilterModule(object):
     def filters(self):
         return {"shc_install_preparing": shc_install_preparing, "shc_install_starting": shc_install_starting,
@@ -78,4 +92,5 @@ class FilterModule(object):
                 "shc_install_stopped_seen": shc_install_stopped_seen,
                 "shc_install_spec_digest": shc_install_spec_digest, "shc_install_resumed": shc_install_resumed,
                 "shc_install_release_young": shc_install_release_young,
-                "shc_install_namespace_wait": shc_install_namespace_wait}
+                "shc_install_namespace_wait": shc_install_namespace_wait,
+                "shc_failure_message": shc_failure_message, "shc_step_failed": shc_step_failed}

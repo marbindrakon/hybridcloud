@@ -17,6 +17,7 @@
 - name: Derive the build name
   ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/po_call.yml"
   vars:
+    shc_step: "Work out the cluster's build name"
     po_request:
       action: build-name
       prefix: "{{ bn_prefix | default('shc-oso', true) }}"

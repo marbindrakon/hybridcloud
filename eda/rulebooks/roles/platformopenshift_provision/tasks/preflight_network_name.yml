@@ -30,6 +30,7 @@
     - name: Load the site account (for the site's CA bundle)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
+        shc_step: "Check the network, flavors and image on the site"
         os_account_vault_path: "{{ cb_fip_account }}"
         os_account_tag: "po-netname-{{ cb_app_name }}"
 
@@ -40,6 +41,7 @@
     - name: Load the cluster's credential (the one the installer runs with)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
+        shc_step: "Check the network, flavors and image on the site"
         os_account_vault_path: "{{ pnn_credential }}"
         os_account_tag: "po-netname-env-{{ cb_app_name }}"
 
@@ -50,6 +52,7 @@
     - name: List them as the environment's project
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
       vars:
+        shc_step: "Check the network, flavors and image on the site"
         os_call_no_log: false
         _pnn_request:
           action: network-name-check
