@@ -31,6 +31,13 @@ PENDING_MINUTES = 10
 REMOVAL_MINUTES = 60
 
 
+def setUpModule():
+    """The fixtures' clock starts when the tests run, not when the module is imported: the release step's own
+    conditions read the real time, so in a long run an import-time clock made a young pending release look old."""
+    global NOW
+    NOW = datetime.datetime.now(datetime.timezone.utc)
+
+
 def ago(minutes):
     return I.fmt_time(NOW - datetime.timedelta(minutes=minutes))
 
