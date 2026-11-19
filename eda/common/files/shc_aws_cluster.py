@@ -227,6 +227,44 @@ def issuer_hostpath(issuer):
     return re.sub(r"^https://", "", issuer).rstrip("/")
 
 
+def infra_prefix(name):
+    """The head of the installer's infrastructure id for a cluster name: the name with other characters as "-", cut to
+    21 characters, without a trailing "-" (the id is that head, "-" and 5 random characters)."""
+    return re.sub(r"[^a-z0-9-]", "-", str(name).lower())[:21].rstrip("-")
+
+
+def infra_id_of(name, keys):
+    """The infrastructure ids among tag keys "kubernetes.io/cluster/<id>" that are exactly this cluster's form
+    (<infra_prefix(name)>-<5 characters>); a cluster whose name merely starts the same way does not match."""
+    pat = re.compile(r"^kubernetes\.io/cluster/(%s-[a-z0-9]{5})$" % re.escape(infra_prefix(name)))
+    return {m.group(1) for m in (pat.match(k) for k in keys) if m}
+
+
+def select_lbs(lbs, tags, name):
+    """The cluster's internal API and ingress load balancers ({kind: lb}) of a VPC's internal load balancers and their
+    tags ({arn: {key: value}}): only load balancers tagged with exactly this cluster's infrastructure id; two clusters
+    whose ids both fit the name's form are refused (an alias never goes to another cluster's load balancer)."""
+    ids = set()
+    for l in lbs:
+        ids |= infra_id_of(name, tags.get(l["LoadBalancerArn"], {}))
+    if len(ids) > 1:
+        fail("more than one cluster in the VPC fits the name %s (%s); no alias is written" % (name, ", ".join(sorted(ids))))
+    found = {}
+    for l in lbs:
+        t = tags.get(l["LoadBalancerArn"], {})
+        if not infra_id_of(name, t):
+            continue
+        if l["LoadBalancerName"].endswith("-int"):
+            kind = "api"
+        elif t.get("kubernetes.io/service-name") == "openshift-ingress/router-default":
+            kind = "apps"
+        else:
+            continue
+        if kind not in found and l["State"]["Code"] in ("active", "provisioning"):
+            found[kind] = l
+    return found
+
+
 def dns_alias(cfg, state, zone, name, vpc, wait=0):
     """Public aliases of an Internal cluster's load balancers (they resolve to private addresses: the platform and
     the cluster's network reach them; the installer only writes a private zone for Internal clusters)."""
@@ -248,7 +286,6 @@ def dns_alias(cfg, state, zone, name, vpc, wait=0):
                     {"Action": "DELETE", "ResourceRecordSet": rr}]})
                 gone.append(rr["Name"])
         return {"zone": zone, "removed": gone}
-    prefix = "kubernetes.io/cluster/%s-" % name[:21]
     deadline = time.time() + wait
     done = {}
     while True:
@@ -258,17 +295,8 @@ def dns_alias(cfg, state, zone, name, vpc, wait=0):
         for i in range(0, len(lbs), 20):
             for d in elb.describe_tags(ResourceArns=[l["LoadBalancerArn"] for l in lbs[i:i + 20]])["TagDescriptions"]:
                 tags[d["ResourceArn"]] = {t["Key"]: t["Value"] for t in d["Tags"]}
-        for l in lbs:
-            t = tags.get(l["LoadBalancerArn"], {})
-            if not any(k.startswith(prefix) for k in t):
-                continue
-            if l["LoadBalancerName"].endswith("-int"):
-                kind = "api"
-            elif t.get("kubernetes.io/service-name") == "openshift-ingress/router-default":
-                kind = "apps"
-            else:
-                continue
-            if kind in done or l["State"]["Code"] not in ("active", "provisioning"):
+        for kind, l in select_lbs(lbs, tags, name).items():
+            if kind in done:
                 continue
             r53.change_resource_record_sets(HostedZoneId=zid, ChangeBatch={"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {
                 "Name": names[kind], "Type": "A", "AliasTarget": {"HostedZoneId": l["CanonicalHostedZoneId"],
@@ -322,7 +350,8 @@ class Cluster:
     def roles(self):
         out = []
         for page in self.iam.get_paginator("list_roles").paginate(PathPrefix=self.path):
-            out += page["Roles"]
+            # the path is a prefix to IAM: only roles of exactly this cluster's path are its own
+            out += [r for r in page["Roles"] if r.get("Path") == self.path]
         return out
 
     def role_up(self, cr):

@@ -316,7 +316,7 @@ def node_entries(nodes_in, part, kind, prev, now, cfg, gateway=None):
         for f in entry["findings"]:
             if effective(f) and f["reason"] not in old:
                 events.append({"type": "Warning", "reason": EVENT_OF[f["reason"]],
-                               "message": "%s: %s" % (n["name"], f["message"])[:1000]})
+                               "message": ("%s: %s" % (n["name"], f["message"]))[:1000]})
     if not any(counted(n) for n in out) and any(counted(n) for n in pnodes.values()):
         events.append({"type": "Normal", "reason": "NodeHealthRecovered", "message": "every node is healthy again"})
     return out, events

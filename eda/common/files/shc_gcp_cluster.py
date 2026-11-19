@@ -277,7 +277,7 @@ class Cluster:
             g.http("DELETE", "%s/projects/%s/serviceAccounts/%s" % (IAM, self.project, sa["email"]), token=self.tok)
             self.changed.append("removed service account " + sa["email"].split("@")[0])
         for r in g.list_all("%s/projects/%s/roles" % (IAM, self.project), "roles", self.tok, {"showDeleted": "false"}):
-            if r["name"].rsplit("/", 1)[1].startswith("shc_%s_" % re.sub(r"[^a-zA-Z0-9_.]", "_", self.cluster)):
+            if owns_role(self.cluster, r):
                 g.http("DELETE", "%s/%s" % (IAM, r["name"]), token=self.tok)
                 self.changed.append("removed custom role " + r["name"].rsplit("/", 1)[1])
         pool = g.http("GET", self.pool, token=self.tok, ok404=True)
@@ -293,6 +293,40 @@ def hive_creds(cfg, build):
         hub["projectNumber"], hub.get("hivePool", "shc-central"), hub.get("hiveProvider", "central"))
     sa = "%s@%s.iam.gserviceaccount.com" % (cfg.get("memberServiceAccount", "shc-automation"), cfg["project"])
     return {"osServiceAccount.json": json.dumps(external_account(audience, sa, POD_TOKEN, cfg["project"]), indent=1)}
+
+
+def owns_role(cluster, role):
+    """Whether a custom role (as listed: name, title) is this cluster's: its id has the cluster's head and its title
+    starts with the whole build name and a space, so a cluster whose build name starts another's never takes it."""
+    rid = str(role.get("name") or "").rsplit("/", 1)[-1]
+    head = "shc_%s_" % re.sub(r"[^a-zA-Z0-9_.]", "_", cluster)
+    return rid.startswith(head) and str(role.get("title") or "").startswith(cluster + " ")
+
+
+def infra_prefix(name):
+    """The head of the installer's infrastructure id for a cluster name (as shc_aws_cluster.infra_prefix)."""
+    return re.sub(r"[^a-z0-9-]", "-", str(name).lower())[:21].rstrip("-")
+
+
+def select_rules(rules, name, network):
+    """The cluster's internal API and ingress forwarding rules ({kind: rule}) of a region's rules: the API rule is
+    exactly "<infra id>-api-internal" with an id of this cluster's form; an ingress rule carries no cluster id, so it is
+    taken only when the network holds one cluster (one API rule). Two clusters whose ids fit the name are refused."""
+    api_pat = re.compile(r"^(%s-[a-z0-9]{5})-api-internal$" % re.escape(infra_prefix(name)))
+    mine = [r for r in rules if r.get("loadBalancingScheme") == "INTERNAL" and r.get("IPAddress")
+            and (not network or (r.get("network") or "").endswith("/networks/" + network))]
+    ids = {m.group(1) for m in (api_pat.match(r.get("name") or "") for r in mine) if m}
+    if len(ids) > 1:
+        fail("more than one cluster in the network fits the name %s (%s); no alias is written" % (name, ", ".join(sorted(ids))))
+    found = {}
+    apis = [r for r in mine if api_pat.match(r.get("name") or "")]
+    if apis:
+        found["api"] = apis[0]
+    all_api = [r for r in mine if (r.get("name") or "").endswith("-api-internal")]
+    ingress = [r for r in mine if "openshift-ingress/router-default" in (r.get("description") or "")]
+    if apis and len(all_api) == 1 and len(ingress) == 1:
+        found["apps"] = ingress[0]
+    return found
 
 
 def dns_alias(cfg, state, zone, name, network, wait=0):
@@ -324,17 +358,7 @@ def dns_alias(cfg, state, zone, name, network, wait=0):
     done = {}
     while True:
         rules = g.list_all(base + "/regions/%s/forwardingRules" % cfg["region"], "items", tok)
-        for r in rules:
-            if r.get("loadBalancingScheme") != "INTERNAL" or not r.get("IPAddress"):
-                continue
-            if network and not (r.get("network") or "").endswith("/networks/" + network):
-                continue
-            if r["name"].endswith("-api-internal"):
-                kind = "api"
-            elif "openshift-ingress/router-default" in (r.get("description") or ""):
-                kind = "apps"
-            else:
-                continue
+        for kind, r in select_rules(rules, name, network).items():
             if kind in done:
                 continue
             cur = have(names[kind])
