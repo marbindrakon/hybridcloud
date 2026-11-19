@@ -175,7 +175,7 @@ def base_vars(api, provider="openstack", **kw):
          # the role's defaults with a one-second interval (a task list run here does not load the role's defaults)
          "platformopenshift_install": {"observeIntervalSeconds": 1, "watchWindowMinutes": 120, "deadlineMinutes": 360,
                                        "checkWriteMinutes": 5, "pendingReleaseMinutes": 10,
-                                       "removalLimitMinutes": 60},
+                                       "removalLimitMinutes": 60, "namespaceWaitMinutes": 30},
          # the removal's waits: a few one-second rounds (extra vars win over the include's values)
          "rsw_retries": 3, "rsw_delay": 1, "platformopenshift_generation": 1}
     v.update(kw)
@@ -371,7 +371,7 @@ class Removal(unittest.TestCase):
         body = H.patches(tr)[0]["body"]
         self.assertEqual(body["status"], "failed", "the stop is kept (Ready again from Stalled), the event completed")
         self.assertEqual(body["install"], {"stoppedGeneration": 2, "stoppedSpec": I.spec_digest(SPEC),
-                                           "stoppedSpecVersion": I.DIGEST_VERSION})
+                                           "stoppedSpecVersion": I.DIGEST_VERSION, "stoppedRequest": ""})
 
     def test_stopped_and_asked_is_removed_per_provider(self):
         for provider in PROVIDER_SPECS:
@@ -620,7 +620,7 @@ class StoppedRuns(unittest.TestCase):
         """One run of main.yml's first steps on a recorded stop; asked: a Retry is open; settings: the installation
         settings changed since the stop (no Retry)."""
         obj = po(dict(STOPPED), generation=2 if settings else 1, buildName=BUILD, spec=SMALLER if settings else None,
-                 lastHandledReconcileRequest="2026-11-18T12:00:00Z" if asked else "",
+                 lastHandledReconcileRequest=ago(0) if asked else "",
                  conditions=[{"type": "Stalled", "status": "True", "reason": "QuotaExceeded", "message": "m."}])
         api = FakeApi(obj, hub)
         try:
@@ -700,11 +700,11 @@ class StoppedRuns(unittest.TestCase):
                 self.assertEqual((body["status"], body["reason"]), ("failed", "QuotaExceeded"))
                 self.assertEqual(body["conditions"][0]["message"], "Attempt 3 of 3 failed: m.")
                 self.assertEqual(body["install"], {"stoppedGeneration": 2, "stoppedSpec": I.spec_digest(obj["spec"]),
-                                                   "stoppedSpecVersion": I.DIGEST_VERSION})
+                                                   "stoppedSpecVersion": I.DIGEST_VERSION, "stoppedRequest": ""})
 
     def test_a_retry_or_a_change_of_the_installation_settings_goes_on(self):
         for obj in (po(STOPPED, generation=2, spec=SMALLER),
-                    po(STOPPED, generation=1, lastHandledReconcileRequest="2026-11-18T12:00:00Z")):
+                    po(STOPPED, generation=1, lastHandledReconcileRequest=ago(0))):
             api = FakeApi(obj, cd(stopped=True))
             try:
                 rc, tr, out = self.run_main(api, obj, self.STOPPED_STEPS)
@@ -1211,8 +1211,8 @@ class GatePass(unittest.TestCase):
         self.assertEqual(part[0]["ansible.builtin.include_tasks"], "install_check_time.yml")
         self.assertLessEqual(int(part[1]["retries"]) * int(part[1]["delay"]), 300)
 
-    def claim(self, stage, namespace, after_removal=False):
-        obj = po({"stage": stage, "run": 2} if stage else None)
+    def claim(self, stage, namespace, after_removal=False, **install):
+        obj = po(dict({"stage": stage, "run": 2}, **install) if stage else None)
         api = FakeApi(obj)
         k8s = {"Namespace//%s" % BUILD: [namespace] if namespace else []}
         try:
@@ -1231,11 +1231,39 @@ class GatePass(unittest.TestCase):
         # the removal's own claim does
         api, rc, tr, out = self.claim("CleaningUp", None, after_removal=True)
         self.assertEqual(creates(tr), ["/api/v1/namespaces/" + BUILD])
-        # a namespace that still terminates: hand over, nothing created
+    def test_a_cluster_waits_for_an_earlier_one_of_its_name_with_a_bound(self):
+        """The build's namespace still terminating (an earlier cluster of this name being removed): the cluster says
+        it waits (WaitingForEarlierCluster, the wait's start kept in status), nothing is created; past
+        namespaceWaitMinutes from that start it is refused (NamespaceTaken); a free namespace is claimed and the wait
+        cleared."""
         terminating = {"metadata": {"name": BUILD, "deletionTimestamp": ago(1)}}
-        api, rc, tr, out = self.claim("Stopped", terminating)
+        api, rc, tr, out = self.claim("Preparing", terminating)
         self.assertEqual((rc, creates(tr), after_reached(tr)), (0, [], False), out)
-        self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
+        body = H.patches(tr)[0]["body"]
+        self.assertEqual((body["status"], body["reason"]), ("pending", "WaitingForEarlierCluster"))
+        self.assertTrue(body["install"]["namespaceWaitSince"] >= ago(1))
+        # a later run counts from the first wait
+        since = ago(10)
+        api, rc, tr, out = self.claim("Preparing", terminating, namespaceWaitSince=since)
+        self.assertEqual(H.patches(tr)[0]["body"]["install"]["namespaceWaitSince"], since)
+        # past the bound: refused for the platform team
+        api, rc, tr, out = self.claim("Preparing", terminating, namespaceWaitSince=ago(31))
+        self.assertNotEqual(rc, 0)
+        self.assertIn("is still held by an earlier cluster of this name", out)
+        import yaml
+        with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
+                               "claim_build_wait.yml")) as fh:
+            refuse = next(t for t in yaml.safe_load(fh) if t.get("name") == "Refuse after the wait's bound")
+        self.assertEqual(refuse["vars"]["ps_reason"], "NamespaceTaken")
+        self.assertEqual(creates(tr), [])
+        # free again: the wait is cleared and the namespace claimed
+        api, rc, tr, out = self.claim("Preparing", None, namespaceWaitSince=ago(31))
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.patches(tr)[0]["body"]["install"], {"namespaceWaitSince": None})
+        self.assertEqual(creates(tr), ["/api/v1/namespaces/" + BUILD])
+        # a new cluster whose namespace is free: no wait written
+        api, rc, tr, out = self.claim("Preparing", None)
+        self.assertEqual((H.patches(tr), creates(tr)), ([], ["/api/v1/namespaces/" + BUILD]))
 
     GUARD = FifthPass.GUARD
 

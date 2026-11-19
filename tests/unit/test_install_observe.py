@@ -240,6 +240,30 @@ class Endings(unittest.TestCase):
         self.assertEqual((again["outcome"], again["write"]), ("stopped", False))
         self.assertEqual(again["install"]["stoppedRequest"], "2026-11-18T11:58:00Z")
 
+    def test_a_request_asks_only_when_made_after_the_stop_was_written(self):
+        """A Retry's own time (its value) decides, also when the operator handled it after the stop was written; a
+        request without a time counts by the operator's publish time."""
+        stop = dict(STOPPED, stoppedAt=t(10), stoppedRequest="2026-11-18T11:40:00Z")
+        # pressed 11:49 (before the stop's write at 11:50), handled and published after it
+        early = po(stop, generation=2, lastHandledReconcileRequest="2026-11-18T11:49:00Z")
+        early["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=t(5))
+        self.assertFalse(I.asked_since_stop(early)[0])
+        late = po(stop, generation=2, lastHandledReconcileRequest="2026-11-18T11:55:00Z")
+        self.assertTrue(I.asked_since_stop(late)[0])
+        untimed = po(stop, generation=2, lastHandledReconcileRequest="req-x")
+        untimed["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=t(5))
+        self.assertTrue(I.asked_since_stop(untimed)[0], "published after the stop")
+        untimed["status"]["delivery"]["publishedAt"] = t(12)
+        self.assertFalse(I.asked_since_stop(untimed)[0], "published before the stop")
+        # the nobody-asked keep records such a request as handled at the stop (the operator stops publishing)
+        self.assertEqual(I.install_stopped_seen(early)["stoppedRequest"], "2026-11-18T11:49:00Z")
+
+    def test_the_stop_records_when_it_was_written(self):
+        hub = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
+        res = observe(po(RUNNING), hub, prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
+        self.assertEqual(res["install"]["stoppedAt"], I.fmt_time(NOW))
+        self.assertIsNone(I.install_cleaning({"install": res["install"]}, NOW)["stoppedAt"])
+
     def test_malformed_status_or_hub_data_does_not_raise(self):
         for lf in ({"attempt": 1}, {"attempt": 1, "reason": "QuotaExceeded"}, "text", None):
             observe(po(dict(RUNNING, lastFailure=lf)), cd(provisioned=False, stopped=True, restarts=3), prov())
@@ -676,7 +700,7 @@ class InstallBlocks(unittest.TestCase):
     def test_stopped_seen(self):
         self.assertEqual(I.install_stopped_seen(po(STOPPED, generation=5)),
                          {"stoppedGeneration": 5, "stoppedSpec": I.spec_digest(SPEC),
-                          "stoppedSpecVersion": I.DIGEST_VERSION})
+                          "stoppedSpecVersion": I.DIGEST_VERSION, "stoppedRequest": ""})
 
 
 class HubWins(unittest.TestCase):

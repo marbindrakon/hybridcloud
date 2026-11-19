@@ -86,6 +86,7 @@ REASONS = {
     "CredentialsUnavailable": _r("P", WAITING, "The site credentials are not available yet. The platform team is looking at it."),
     # an OpenShift cluster on a hybrid network (condition Preflight): nobody acts, the cluster is checked again
     "WaitingForPlacement": _r("A", WAITING, "Waiting for the network's placement in this environment to be ready."),
+    "WaitingForEarlierCluster": _r("A", WAITING, "An earlier cluster of this name is still being removed; the installation starts when that is done."),
     "WaitingForPlatformAccess": _r("A", WAITING, "The platform is connecting to the cluster's network; this takes a few minutes."),
     # a NetworkPlacement use turned off while the environment still uses it (condition Degraded)
     "InUse": _r("T", WAITING, "A setting turned off waits until the environment no longer uses it; the message lists what still does."),

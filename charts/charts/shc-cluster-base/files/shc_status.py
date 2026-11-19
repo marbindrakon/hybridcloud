@@ -163,7 +163,7 @@ _INSTALL_RUNNING = ("CleaningUp", "Installing", "Finishing")
 _INSTALL_REASONS = ("Installing", "InstallRetrying", "InstallFinishing", "InstallCleanup", "InstallNotStarted",
                     "InstallOverdue")
 # failures the platform team acts on that every periodic run writes again unchanged: kept as well, in any stage
-_INSTALL_STANDING = ("BuildRecordMissing", "InstallRemovalFailed")
+_INSTALL_STANDING = ("BuildRecordMissing", "InstallRemovalFailed", "WaitingForEarlierCluster")
 
 
 def keeps_installation(obj, body, new_conditions=None):

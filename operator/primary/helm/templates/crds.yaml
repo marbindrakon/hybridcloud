@@ -7990,6 +7990,18 @@ spec:
                         A digest of spec.type and the installation settings of the provider's block when the
                         installation stopped. A change of them starts a new installation; a change of anything else
                         does not.
+                    stoppedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the stop was written (RFC 3339). A Retry request made after this time starts a new
+                        installation; one made before it does not.
+                    namespaceWaitSince:
+                      type: string
+                      format: date-time
+                      description: >-
+                        Since when this cluster waits for an earlier cluster of the same name to be removed from the
+                        platform (RFC 3339); empty when it does not wait.
                     stoppedSpecVersion:
                       type: string
                       description: >-

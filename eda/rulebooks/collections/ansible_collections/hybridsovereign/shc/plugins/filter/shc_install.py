@@ -57,6 +57,11 @@ def shc_install_release_young(info, pending_minutes):
     return I.release_young(info.get("status"), info.get("last_deployed"), _now(), pending_minutes)
 
 
+def shc_install_namespace_wait(status, limit_minutes):
+    """{since, over} of the wait for a namespace an earlier object of the same name still holds."""
+    return I.namespace_wait(_status(status), _now(), limit_minutes)
+
+
 def shc_install_resumed(_unused=None):
     return I.install_resumed({})
 
@@ -72,4 +77,5 @@ class FilterModule(object):
                 "shc_install_asked": shc_install_asked, "shc_install_overdue": shc_install_overdue,
                 "shc_install_stopped_seen": shc_install_stopped_seen,
                 "shc_install_spec_digest": shc_install_spec_digest, "shc_install_resumed": shc_install_resumed,
-                "shc_install_release_young": shc_install_release_young}
+                "shc_install_release_young": shc_install_release_young,
+                "shc_install_namespace_wait": shc_install_namespace_wait}

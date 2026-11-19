@@ -181,7 +181,7 @@ class StatusSchema(unittest.TestCase):
         self.assertEqual(set(inst["properties"]),
                          {"stage", "attempt", "attemptsLimit", "run", "startedAt", "endedAt", "observedAt",
                           "lastFailure", "stoppedGeneration", "stoppedRequest", "stoppedSpec",
-                          "stoppedSpecVersion"})
+                          "stoppedSpecVersion", "stoppedAt", "namespaceWaitSince"})
         self.assertEqual(inst["properties"]["stage"]["enum"], list(I.STAGES))
         self.assertEqual(set(inst["properties"]["lastFailure"]["properties"]), {"attempt", "reason", "message", "time"})
 
@@ -232,7 +232,9 @@ class Template(unittest.TestCase):
         # the watch window, the removal of a stopped build (up to about an hour of waits) and the work around it fit
         self.assertLess(defaults["watchWindowMinutes"] * 60, tpl["timeout"])
         self.assertEqual(set(defaults), {"observeIntervalSeconds", "watchWindowMinutes", "deadlineMinutes",
-                                         "checkWriteMinutes", "pendingReleaseMinutes", "removalLimitMinutes"})
+                                         "checkWriteMinutes", "pendingReleaseMinutes", "removalLimitMinutes",
+                                         "namespaceWaitMinutes"})
+        self.assertEqual(defaults["namespaceWaitMinutes"], 30)
         self.assertEqual(defaults["removalLimitMinutes"], 60)
         self.assertEqual(defaults["pendingReleaseMinutes"], 10)
         self.assertEqual((defaults["watchWindowMinutes"], defaults["deadlineMinutes"]), (120, 360))

@@ -31,14 +31,33 @@
   register: _cl_existing
   when: not (_cl_removing | bool)
 
-- name: Hand over while the build's namespace is still terminating
-  ansible.builtin.include_tasks: install_handover.yml
-  vars:
-    ih_why: the build's namespace on the hub is still being removed; the next run claims it
+
+# the namespace of an earlier cluster of this name (or of the stopped installation) is still terminating: the cluster
+# waits, with a bound (claim_build_wait.yml)
+- name: Wait while the build's namespace is still terminating
+  ansible.builtin.include_tasks: claim_build_wait.yml
   when:
     - not (_cl_removing | bool)
     - ((_cl_existing.resources | default([], true) | first | default({}, true)).metadata
        | default({}, true)).deletionTimestamp is defined
+
+- name: The wait for an earlier cluster is over
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      install:
+        namespaceWaitSince: null
+  when:
+    - not (_cl_removing | bool)
+    - >-
+      (((((po_cr_current | default(platformopenshift_cr | default({}, true), true)).resources | default([{}], true)
+          | first).status | default({}, true)).install | default({}, true)).namespaceWaitSince | default('', true)
+       | length) > 0
 
 - name: Claim the build's namespace
   when: not (_cl_removing | bool)

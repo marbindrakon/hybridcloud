@@ -735,6 +735,8 @@ def _record_stop(install, obj, status, job):
     install["stoppedSpec"] = spec_digest(obj.get("spec"))
     install["stoppedSpecVersion"] = DIGEST_VERSION
     install["stoppedRequest"] = str(status.get("lastHandledReconcileRequest") or "")
+    if not install.get("stoppedAt"):
+        install["stoppedAt"] = install.get("observedAt") or fmt_time(datetime.datetime.now(datetime.timezone.utc))
 
 
 def _find(status, ctype):
@@ -798,7 +800,7 @@ def install_cleaning(status, now):
     # startedAt: the new run starts with the removal (its time bound counts from here; Installing sets it again)
     return {"stage": "CleaningUp", "run": (_int(cur.get("run"), 1) or 1) + 1, "startedAt": fmt_time(now), "endedAt": None,
             "attempt": None, "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None,
-            "stoppedSpec": None, "stoppedSpecVersion": None, "observedAt": fmt_time(now)}
+            "stoppedSpec": None, "stoppedSpecVersion": None, "stoppedAt": None, "observedAt": fmt_time(now)}
 
 
 def install_installed(status, now, cd=None):
@@ -808,7 +810,8 @@ def install_installed(status, now, cd=None):
     the hub has no known end."""
     cur = dict((status or {}).get("install") or {})
     out = {"stage": "Installed", "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None,
-           "stoppedSpec": None, "stoppedSpecVersion": None, "observedAt": fmt_time(now)}
+           "stoppedSpec": None, "stoppedSpecVersion": None, "stoppedAt": None, "namespaceWaitSince": None,
+           "observedAt": fmt_time(now)}
     hub_time = parse_time(((cd or {}).get("status") or {}).get("installedTimestamp")) if isinstance(cd, dict) else None
     ended = cur.get("endedAt") or (fmt_time(hub_time) if hub_time else None)
     if ended:
@@ -833,8 +836,12 @@ def install_stopped_seen(obj):
     digest recorded by another version of the product is replaced, never compared)."""
     obj = obj or {}
     meta = obj.get("metadata") or {}
+    status = obj.get("status") or {}
+    # nobody asked: a request still differing from the stop's was made before the stop was written; it is recorded
+    # as handled at the stop (so the operator stops publishing for it)
     return {"stoppedGeneration": _int(meta.get("generation"), 0), "stoppedSpec": spec_digest(obj.get("spec")),
-            "stoppedSpecVersion": DIGEST_VERSION}
+            "stoppedSpecVersion": DIGEST_VERSION,
+            "stoppedRequest": str(status.get("lastHandledReconcileRequest") or "")}
 
 
 def install_resumed(status, stage="Installing"):
@@ -842,7 +849,7 @@ def install_resumed(status, stage="Installing"):
     stage is the hub's, the stop's bookkeeping and its last failure go (the running installation's own attempt and
     failures are the watch's to write), the run is not counted again."""
     return {"stage": stage, "endedAt": None, "attempt": None, "lastFailure": None, "stoppedGeneration": None,
-            "stoppedRequest": None, "stoppedSpec": None, "stoppedSpecVersion": None}
+            "stoppedRequest": None, "stoppedSpec": None, "stoppedSpecVersion": None, "stoppedAt": None}
 
 
 HUB_STATES = ("unreadable", "none", "deleting", "installed", "stopped", "running")
@@ -861,6 +868,16 @@ def build_record_missing(status, cd, hub_read_ok):
     its name could take the addresses and names of a cluster that may still run); only its deletion leads to a new
     one."""
     return bool(hub_read_ok) and cd is None and recorded_installed(status)
+
+
+def namespace_wait(status, now, limit_minutes):
+    """The wait for the build's namespace of an earlier object of the same name (still terminating on the hub):
+    {since, over}. since: when this object's wait began (status.install.namespaceWaitSince, else now); over: the wait
+    has lasted limit_minutes or more."""
+    install = (status or {}).get("install") or {}
+    since = parse_time(install.get("namespaceWaitSince")) or now
+    return {"since": fmt_time(since),
+            "over": bool(_int(limit_minutes, 0)) and (now - since).total_seconds() >= float(limit_minutes) * 60}
 
 
 def removal_overdue(status, now, limit_minutes):
@@ -909,18 +926,30 @@ def asked_since_stop(obj, event=None):
     status = (obj or {}).get("status") or {}
     install = status.get("install") or {}
     handled = str(status.get("lastHandledReconcileRequest") or "")
-    if "stoppedRequest" in install and handled != str(install.get("stoppedRequest") or ""):
-        return True, "a Retry request since the stop"
     ev = event or {}
     if not ev:
         delivery = status.get("delivery") or {}
         ev = {"reason": delivery.get("reason"), "publishedAt": delivery.get("publishedAt")}
-    # a Retry event counts when it was published after the stop was written (observedAt of the stop's write; Hive's
-    # stop time for a stop recorded without it)
-    written = [t for t in (parse_time(install.get("endedAt")), parse_time(install.get("observedAt"))) if t]
-    ended = max(written) if written else None
+    # the time the stop was written (stoppedAt; the stop's write time observedAt, or Hive's stop time, for a stop
+    # recorded without it)
+    written = parse_time(install.get("stoppedAt"))
+    if written is None:
+        times = [t for t in (parse_time(install.get("endedAt")), parse_time(install.get("observedAt"))) if t]
+        written = max(times) if times else None
     published = parse_time(ev.get("publishedAt"))
-    if str(ev.get("reason") or "").endswith("ReconcileRequested") and ended and published and published > ended:
+    request_timed = False
+    if "stoppedRequest" in install and handled != str(install.get("stoppedRequest") or ""):
+        # a request asks only when it was made after the stop was written: its own time (a Retry request is a time),
+        # else the operator's publish time
+        own = parse_time(handled)
+        request_timed = own is not None
+        made = own or published
+        if written is None or made is None or made > written:
+            return True, "a Retry request since the stop"
+    # a Retry event (a request the operator does not record, or one without a time) published after the stop was
+    # written; the event of a request with its own time was decided by that time above
+    if (not request_timed and str(ev.get("reason") or "").endswith("ReconcileRequested") and written and published
+            and published > written):
         return True, "a Retry request since the stop"
     if install.get("stoppedSpec"):
         if str(install.get("stoppedSpecVersion") or "") != DIGEST_VERSION:

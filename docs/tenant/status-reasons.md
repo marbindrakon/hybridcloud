@@ -188,6 +188,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `WaitingForCluster` | Waiting for a cluster: name the OpenShift cluster to deploy onto. | You (the tenant) |
 | `WaitingForDependencies` | Waiting for the objects this one depends on. | Nobody: it continues by itself |
 | `WaitingForDependents` | Waiting for the objects that depend on this one to be deleted. | Nobody: it continues by itself |
+| `WaitingForEarlierCluster` | An earlier cluster of this name is still being removed; the installation starts when that is done. | Nobody: it continues by itself |
 | `WaitingForFabric` | Waiting for the network fabric to be ready. | Nobody: it continues by itself |
 | `WaitingForGateway` | Waiting for the site connection to be ready. | Nobody: it continues by itself |
 | `WaitingForGroup` | An access group has no group in the sign-in directory yet. | Nobody: it continues by itself |

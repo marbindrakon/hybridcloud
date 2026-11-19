@@ -62,9 +62,14 @@ checks of the OpenStack preflight are left out only for a ClusterDeployment that
 Retry replaces is a new installation and is checked).
 
 A Retry request made before the stop was written (while the page still said Installing) is recorded as handled by
-the write that first records the stop; only a request made after it starts a new installation. A run that meets a
-removal under way never claims the build's namespace (the removal claims it once the old one is gone), and a
-namespace that is still terminating is never claimed: the run hands over. The OpenStack preflight also refuses an
+the write that first records the stop (`status.install.stoppedAt` holds that time); only a request whose own time
+(the request's value; the operator's publish time when the value is not a time) is later than the stop's write starts
+a new installation, also when the operator handled it after the write. A run that meets a removal under way never
+claims the build's namespace (the removal claims it once the old one is gone). A namespace that is still terminating
+(an earlier cluster of the same name being removed) is never claimed: the cluster waits with reason
+`WaitingForEarlierCluster` for at most `namespaceWaitMinutes` (30) from its first wait
+(`status.install.namespaceWaitSince`), then it is refused (`NamespaceTaken`) for the platform team; a Retry checks
+again. The OpenStack preflight also refuses an
 image the environment does not offer (`ImageNotFound` when the spec names it, `DefaultImageNotFound` for the
 installation's default). A cluster from before installations were recorded whose installation started and whose
 ClusterDeployment is gone gets its release made again only on a Retry.
@@ -101,6 +106,7 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 | `checkWriteMinutes` | 5 | How often the check time is written while nothing changes; keep it well below 15. |
 | `pendingReleaseMinutes` | 10 | A pending release of a build with no ClusterDeployment younger than this is left alone by a Retry (an older job is still making it). |
 | `removalLimitMinutes` | 60 | A removal of a stopped installation that waits this long beside a build Hive does not finish deleting is written as failed (`InstallRemovalFailed`). |
+| `namespaceWaitMinutes` | 30 | A cluster whose build's namespace is still held by an earlier cluster of its name (terminating) waits this long, then is refused (`NamespaceTaken`). |
 
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).

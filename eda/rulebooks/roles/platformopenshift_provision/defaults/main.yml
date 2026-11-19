@@ -75,6 +75,9 @@ platformopenshift_service_wait_delay: 20
 #                         release being made: a Retry leaves it alone (older: removed like a failed one)
 # removalLimitMinutes     a removal of a stopped installation that waits this long (from its start) beside a build Hive
 #                         does not finish deleting is written as failed (InstallRemovalFailed) for the platform team
+# namespaceWaitMinutes    a cluster whose build's namespace on the hub is still held by an earlier cluster of the same
+#                         name (terminating) waits this long from its first wait (WaitingForEarlierCluster), then is
+#                         refused (NamespaceTaken) for the platform team
 # checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing
 #                         changes; the operator's in-flight check reads it (operator/roles/_common/tasks/
 #                         skip_if_event_in_flight.yml)
@@ -85,5 +88,6 @@ platformopenshift_install_defaults:
   checkWriteMinutes: 5
   pendingReleaseMinutes: 10
   removalLimitMinutes: 60
+  namespaceWaitMinutes: 30
 platformopenshift_install: >-
   {{ platformopenshift_install_defaults | combine(platformopenshift_defaults.install | default({}, true)) }}

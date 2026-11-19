@@ -170,6 +170,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "WaitingForCluster": { actor: "T", class: "waiting", summary: "Waiting for a cluster: name the OpenShift cluster to deploy onto." },
   "WaitingForDependencies": { actor: "A", class: "waiting", summary: "Waiting for the objects this one depends on." },
   "WaitingForDependents": { actor: "A", class: "waiting", summary: "Waiting for the objects that depend on this one to be deleted." },
+  "WaitingForEarlierCluster": { actor: "A", class: "waiting", summary: "An earlier cluster of this name is still being removed; the installation starts when that is done." },
   "WaitingForFabric": { actor: "A", class: "waiting", summary: "Waiting for the network fabric to be ready." },
   "WaitingForGateway": { actor: "A", class: "waiting", summary: "Waiting for the site connection to be ready." },
   "WaitingForGroup": { actor: "A", class: "waiting", summary: "An access group has no group in the sign-in directory yet." },
