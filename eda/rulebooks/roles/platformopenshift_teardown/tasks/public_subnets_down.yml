@@ -1,0 +1,46 @@
+---
+# The public subnets, route table and internet gateway of an AWS placement are the placement's, made for its External
+# clusters (place-public up); two clusters on one network share them. They go with the last External cluster of the
+# placement: a delete leaves them while another cluster object of the namespace records the same placement as
+# External (being deleted or not: the last delete removes them). Inputs: po_placement, platformopenshift_cr_name,
+# platformopenshift_cr_namespace, po_aws_account, po_aws_region.
+- name: The clusters of the namespace
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    namespace: "{{ platformopenshift_cr_namespace }}"
+  register: _psd_clusters
+
+- name: Whether another cluster uses the placement's public subnets
+  ansible.builtin.set_fact:
+    _psd_others: >-
+      {{ _psd_clusters.resources | default([], true)
+         | rejectattr('metadata.name', 'equalto', platformopenshift_cr_name)
+         | selectattr('status', 'defined')
+         | selectattr('status.placement', 'defined') | selectattr('status.placement', 'equalto', po_placement)
+         | selectattr('status.publish', 'defined') | selectattr('status.publish', 'equalto', 'External')
+         | map(attribute='metadata.name') | list }}
+
+- name: Leave the public subnets to the other clusters
+  ansible.builtin.debug:
+    msg: >-
+      The public subnets of placement {{ po_placement }} stay: {{ _psd_others | join(', ') }} still
+      {{ 'uses' if _psd_others | length == 1 else 'use' }} them; the last External cluster's delete removes them.
+  when: _psd_others | length > 0
+
+- name: The placement's public subnets go
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
+  vars:
+    shc_step: "Remove the cluster's public subnets on AWS"
+    aws_helper: shc_aws_tenant.py
+    aws_config:
+      account: "{{ po_aws_account }}"
+      region: "{{ po_aws_region }}"
+      memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
+      entry: automation
+      azs: []
+    aws_args: [place-public, --placement, "{{ po_placement }}", --state, down]
+  when: _psd_others | length == 0

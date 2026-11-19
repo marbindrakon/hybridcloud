@@ -316,7 +316,8 @@
           message: >-
             {{ ansible_failed_task | default({}, true)
                | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true),
-                                                         _po_refusal if _po_refused | bool else '') }}
+                                                         _po_refusal if _po_refused | bool else '', 'provisioning',
+                                                         [platformopenshift_cr_name | default(''), platformopenshift_cr_namespace | default(''), cb_app_name | default(''), po_build_name | default('')]) }}
           conditions: "{{ [po_preflight_condition] if _po_refused | bool else [] }}"
       ignore_errors: true
       # a stopped installation was written by the watch (install_observe.yml) with its cause: nothing replaces it

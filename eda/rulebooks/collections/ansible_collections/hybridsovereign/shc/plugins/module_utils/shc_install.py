@@ -1075,14 +1075,18 @@ def is_refusal(action, msg, refusal):
     return bool(want) and action in FAIL_ACTIONS and text == want
 
 
-def failure_message(action, msg, step, refused=False, what="provisioning", refusal=""):
+def failure_message(action, msg, step, refused=False, what="provisioning", refusal="", own=()):
     """status.message of a failed job: a refusal's own sentence (built from fixed text and values the tenant set or
     chooses by name; the same text as its condition) when the failure is that refusal (is_refusal); a fail or assert
-    task's own text when it reads as platform text; else the general sentence for the step. refused (older callers):
-    the failure is a refusal whose text is msg."""
+    task's own text when it reads as platform text (the cluster's own names in `own`, which the tenant already sees,
+    are not read: a build name's digits or a date in a name are not another system's); else the general sentence for
+    the step. refused (older callers): the failure is a refusal whose text is msg."""
     text = msg.strip() if isinstance(msg, str) else ""
     if is_refusal(action, msg, refusal) or (refused and text and not refusal):
         return text[:MESSAGE_MAX]
-    if action in FAIL_ACTIONS and text and len(text) <= MESSAGE_MAX and not NOT_PLATFORM_TEXT.search(text):
+    scanned = text
+    for value in sorted((v for v in own or () if isinstance(v, str) and len(v) >= 3), key=len, reverse=True):
+        scanned = scanned.replace(value, " ")
+    if action in FAIL_ACTIONS and text and len(text) <= MESSAGE_MAX and not NOT_PLATFORM_TEXT.search(scanned):
         return text
     return step_failed(step, what)

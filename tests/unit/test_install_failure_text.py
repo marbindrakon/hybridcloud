@@ -82,6 +82,17 @@ class Decision(unittest.TestCase):
             with self.subTest(piece=piece):
                 self.assertEqual(I.failure_message("ansible.builtin.fail", "Failed: " + piece, "Fail"), sentence("Fail"))
 
+    def test_the_clusters_own_names_are_not_read_by_the_second_line(self):
+        """A build name whose digest is all digits, or a name with a date: the platform's own sentence stays."""
+        for own, msg in ((["shc-oso-example-demo-12345678"], "The release of the cluster's build shc-oso-example-demo-12345678 "
+                                                             "on the hub failed (exit 1); the job's log has the release tool's output."),
+                         (["backup-20261119"], "PlatformOpenshift backup-20261119: the cluster's domain is unknown")):
+            self.assertEqual(I.failure_message("ansible.builtin.fail", msg, "Fail", own=own), msg)
+            self.assertEqual(I.failure_message("ansible.builtin.fail", msg, "Fail"), sentence("Fail"), "without own")
+        # another system's number beside the cluster's own name is still refused
+        self.assertEqual(I.failure_message("ansible.builtin.fail", "backup-20261119 in project 123456789012", "Fail",
+                                           own=["backup-20261119"]), sentence("Fail"))
+
     def test_the_deletion_wording(self):
         self.assertEqual(I.failure_message("x", "y", "", what="deletion"),
                          "A step of the cluster's deletion failed; the platform team can see why in the job's log.")
@@ -269,7 +280,7 @@ NAME_VALUES = {
     "ih_why": "a fixed sentence of the calling task",
 }
 
-# The reviewer's ten shapes of a leak, each added to a copy of a task file: the walk must name each.
+# The reviewers' shapes of a leak (ten, then four more), each added to a copy of a task file: the walk must name each.
 MUTATIONS = {
     "fail_via_task_vars": """
 - name: Fail with what the site said
@@ -354,6 +365,44 @@ MUTATIONS = {
         cr_status_partial: true
         cr_status_body:
           conditions: [{type: X, status: "False", reason: Failed, message: "{{ x_error }}"}]
+""",    "cr_status_module": """
+- name: Write the status directly
+  hybridsovereign.shc.cr_status:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    api_version: hybridsovereign.redhat/v1alpha1
+    plural: platformopenshifts
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    status:
+      message: "{{ os_result.error }}"
+  when: false
+""",
+    "uri_patch": """
+- name: Patch the status by hand
+  ansible.builtin.uri:
+    url: "{{ services_api_host }}/apis/hybridsovereign.redhat/v1alpha1/namespaces/x/platformopenshifts/y/status"
+    method: PATCH
+    body: {status: {message: "{{ os_result.error }}"}}
+  when: false
+""",
+    "record_field_from_result": """
+- name: Record the site's answer
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_status_partial: true
+    cr_status_body:
+      description: "{{ os_result.error }}"
+      clusterVersion: "{{ os_result.stderr }}"
+  when: false
+""",
+    "another_key_of_a_helper_root": """
+- name: Refuse with the helper's error
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: InvalidSpec
+    ps_message: "{{ po_result.error }} {{ cl_owner.detail }}"
+  when: false
 """,
 }
 
@@ -391,7 +440,7 @@ class Walk(unittest.TestCase):
                     self.assertTrue(any("cluster_fips.yml" in f for f in found), (name, found))
                 if found:
                     caught.append(name)
-            self.assertEqual(len(caught), 10, caught)
+            self.assertEqual(len(caught), len(MUTATIONS), caught)
         finally:
             shutil.rmtree(tmp, ignore_errors=True)
 
@@ -462,7 +511,54 @@ class Walk(unittest.TestCase):
         with open(os.path.join(ROLES, "platformopenshift_teardown", "tasks", "main.yml")) as fh:
             text = fh.read()
         self.assertNotRegex(text, r"clusterIssuer[^\n]*default\('[^']+'\)")
-        self.assertEqual(text.count("Require the cluster issuer's namespace"), 2)
+        # a delete never needs the issuer setting: the static issuer is found by its exact name and label
+        self.assertNotIn("clusterIssuer", text)
+        self.assertEqual(text.count("ansible.builtin.include_tasks: unpublish_issuer.yml"), 2)
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class TeardownWithoutSettings(unittest.TestCase):
+    """The delete's steps that once needed an installation setting, run with fakes."""
+
+    def run_file(self, f, k8s, **kw):
+        v = {"central_api_host": "https://hub.example.invalid", "central_bearer_token": "token-not-in-data",
+             "services_api_host": "https://svc.example.invalid", "services_bearer_token": "token-not-in-data"}
+        v.update(kw)
+        return H.run("platformopenshift_teardown", f, v, k8s=k8s, result="'end'",
+                     fakes={"aws_call.yml": H.TRACE % "{'aws': aws_args}"})
+
+    def test_the_issuer_is_found_by_its_exact_name_and_label_in_any_namespace(self):
+        b = "shc-aws-example-demo-0a1b2c3d"
+        cms = [{"metadata": {"name": "oidc-static-" + b, "namespace": "issuers-a"}},
+               {"metadata": {"name": "oidc-static-" + b + "-east", "namespace": "issuers-a"}}]
+        rc, tr, out = self.run_file("unpublish_issuer.yml", {"ConfigMap//": cms}, po_build_name=b)
+        self.assertEqual(rc, 0, out)
+        deletes = [t["k8s"] for t in tr if "k8s" in t]
+        self.assertEqual(deletes, [{"state": "absent", "kind": "ConfigMap", "name": "oidc-static-" + b,
+                                    "namespace": "issuers-a"}])
+        self.assertEqual(tr[-1], {"result": "end"})
+        # none: said, and the delete goes on
+        rc, tr, out = self.run_file("unpublish_issuer.yml", {"ConfigMap//": []}, po_build_name=b)
+        self.assertEqual((rc, [t for t in tr if "k8s" in t], tr[-1]), (0, [], {"result": "end"}), out)
+        self.assertIn("nothing to unpublish", out)
+
+    def test_public_subnets_stay_while_another_external_cluster_uses_the_placement(self):
+        def po_(name, placement, publish):
+            return {"metadata": {"name": name}, "status": {"placement": placement, "publish": publish}}
+        common = dict(po_placement="tenant-a/p1", platformopenshift_cr_name="c1", platformopenshift_cr_namespace="tenant-a",
+                      po_aws_account="123", po_aws_region="us-east-2", aws_real={})
+        shared = [po_("c1", "tenant-a/p1", "External"), po_("c2", "tenant-a/p1", "External")]
+        rc, tr, out = self.run_file("public_subnets_down.yml", {"PlatformOpenshift/tenant-a/": shared}, **common)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([t for t in tr if "aws" in t], [], "another External cluster uses them")
+        self.assertIn("c2 still uses them", out)
+        for others in ([po_("c1", "tenant-a/p1", "External")],
+                       [po_("c1", "tenant-a/p1", "External"), po_("c3", "tenant-a/p1", "Internal"),
+                        po_("c4", "tenant-a/p2", "External"), {"metadata": {"name": "c5"}}]):
+            rc, tr, out = self.run_file("public_subnets_down.yml", {"PlatformOpenshift/tenant-a/": others}, **common)
+            self.assertEqual(rc, 0, out)
+            self.assertEqual([t["aws"] for t in tr if "aws" in t],
+                             [["place-public", "--placement", "tenant-a/p1", "--state", "down"]])
 
 
 # ---- 4. refusals: the tenant's own sentence, the same in the message and the condition ---------------------------------

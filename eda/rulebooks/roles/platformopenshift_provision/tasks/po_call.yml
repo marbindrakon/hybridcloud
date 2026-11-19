@@ -29,3 +29,9 @@
   ansible.builtin.fail:
     msg: "{{ shc_step | default('', true) | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
   when: _po_call.rc != 0 or 'error' in po_result
+
+# what a decision keeps out of the tenant's text (e.g. the uids of a BuildOwnerMismatch) goes to the job's log
+- name: "PlatformOpenshift {{ po_request.action }}: the detail, for the job's log"
+  ansible.builtin.debug:
+    msg: "{{ po_result.detail }}"
+  when: (po_result.detail | default('', true)) | length > 0

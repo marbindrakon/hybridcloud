@@ -395,7 +395,13 @@ test('the detail page follows its object: fast while it is not settled, 30 s oth
     [cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 1 }, reason: 'InstallRetrying' }), fast, 'a retrying reason'],
   ];
   for (const [o, want, why] of cases) assert.equal(ins.detailPollMs(o, { now: NOW }), want, why);
-  assert.equal(ins.detailPollMs(null, { missing: true }), 60000, 'a missing or forbidden object backs off');
+  // fast only before the first answer: after any failed answer (404, 403, 5xx, 401, none) it backs off
+  assert.equal(ins.detailPollMs(null, {}), fast, 'not read yet');
+  assert.equal(ins.detailPollMs(null, { answered: true }), 60000, 'an answer without the object backs off');
+  // an unhandled request: fast for three minutes from when the page saw it, then the ordinary pace
+  const queued = { ...stopped, metadata: { ...stopped.metadata, annotations: { 'ansible.sdk.operatorframework.io/reconcileNow': 'x' } } };
+  assert.equal(ins.detailPollMs(queued, { now: NOW, queuedSince: NOW - 60_000 }), fast);
+  assert.equal(ins.detailPollMs(queued, { now: NOW, queuedSince: NOW - 181_000 }), slow, 'capped');
   // sent from this page: fast until the stage or the run differs, at most three minutes
   const sent = ins.sentMark(stopped, NOW);
   assert.equal(ins.detailPollMs(stopped, { sent, now: NOW + 60_000 }), fast);
@@ -455,7 +461,10 @@ test('the detail page takes its interval from detailPollMs and marks what it sen
   const call = src.slice(src.indexOf('useK8sResource<K8sResource>(kind, name, {'), src.indexOf('});', src.indexOf('useK8sResource<K8sResource>(kind, name, {')));
   assert.match(call, /pollIntervalMs: deleteRequested \? 5000 : pollMs,/);
   assert.doesNotMatch(call, /pollIntervalMs: \d{5,}/, 'no fixed long interval');
-  assert.match(src, /const nextPollMs = detailPollMs\(resource, \{ sent, now, missing: missingObject \}\);/);
+  assert.match(src, /const nextPollMs = detailPollMs\(resource, \{ sent, now, answered: !!error, queuedSince \}\);/);
+  assert.match(src, /setQueuedSince\(\(q\) => \(isQueued \? \(q \?\? Date\.now\(\)\) : null\)\)/);
+  // the page's clock: the decision and the read-time line follow the time without a new read
+  assert.match(src, /const id = setInterval\(\(\) => setNow\(Date\.now\(\)\), 5000\);/);
   assert.match(src, /useEffect\(\(\) => setPollMs\(nextPollMs\), \[nextPollMs\]\);/);
   assert.match(src, /await forceReconcile\(kind, name, namespace\);\s*setSent\(sentMark\(resource, Date\.now\(\)\)\);/);
   assert.match(src, /if \(installing\) setSent\(sentMark\(resource, Date\.now\(\)\)\);/);
@@ -470,6 +479,9 @@ test("the Configuration tab's Save follows saveStep: confirm opens the dialog, o
   assert.match(src, /onClick=\{onSave\}/);
   assert.match(src, /setConfirmInstall\(false\);\s*void save\(true\);/);
   assert.match(src, /if \(!check\.passed && !confirmed\) return;/);
+  // the page learns that a confirmed save asked for a new installation (it then follows the object closely)
+  assert.match(src, /onSaved\(confirmed\);/);
+  assert.doesNotMatch(src, /onSaved\(\);/);
   assert.equal((src.match(/void save\(/g) || []).length, 2, 'save is called from onSave and from the dialog only');
 });
 

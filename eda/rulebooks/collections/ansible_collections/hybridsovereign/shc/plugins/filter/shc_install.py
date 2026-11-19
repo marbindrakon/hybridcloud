@@ -77,12 +77,14 @@ def _failed(failed_task, failed_result):
     return task.get("action") or "", msg if isinstance(msg, str) else "", task.get("name") or ""
 
 
-def shc_failure_message(failed_task, failed_result=None, refusal="", what="provisioning"):
+def shc_failure_message(failed_task, failed_result=None, refusal="", what="provisioning", own=None):
     """status.message of a failed job from ansible_failed_task and ansible_failed_result (the rescue's); refusal: the
-    sentence of a refusal noted in this job (its condition's message), "" for none."""
+    sentence of a refusal noted in this job (its condition's message), "" for none; own: the cluster's own names
+    (object name, namespace, build name)."""
     action, msg, name = _failed(failed_task, failed_result)
     refusal = refusal if isinstance(refusal, str) else ""
-    return I.failure_message(action, msg, name, what=what, refusal=refusal)
+    own = [str(v) for v in own if v] if isinstance(own, (list, tuple)) else []
+    return I.failure_message(action, msg, name, what=what, refusal=refusal, own=own)
 
 
 def shc_failure_is_refusal(failed_task, failed_result=None, refusal=""):

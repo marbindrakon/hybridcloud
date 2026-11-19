@@ -393,21 +393,24 @@ export function sentMark(item: PhaseSubject | null | undefined, now: number = Da
  * The refresh interval of an object's detail page. Fast (IN_FLIGHT_POLL_MS) while the object is being created,
  * changed or deleted, waits, has a request not yet handled, records an installation that runs or retries a failed
  * attempt, and after a Retry or an installing Save sent from this page until the installation's stage or run differs
- * from what the page sent it on (at most SENT_FOLLOW_MS); slow (IDLE_POLL_MS) otherwise. A page that has not read its
- * object reads fast, one whose object is missing or forbidden at MISSING_POLL_MS. (A hidden tab: pollDelayMs.)
+ * from what the page sent it on (at most SENT_FOLLOW_MS); slow (IDLE_POLL_MS) otherwise. A request not handled yet
+ * reads fast for at most SENT_FOLLOW_MS from when the page first saw it (queuedSince). A page reads fast only until
+ * the first answer: with no object after an answer (missing, forbidden, an error) it reads at MISSING_POLL_MS.
+ * (A hidden tab: pollDelayMs.)
  */
 export function detailPollMs(
   item: PhaseSubject | null | undefined,
-  opts: { sent?: SentMark | null; now?: number; missing?: boolean } = {},
+  opts: { sent?: SentMark | null; now?: number; answered?: boolean; queuedSince?: number | null } = {},
 ): number {
-  if (!item) return opts.missing ? MISSING_POLL_MS : IN_FLIGHT_POLL_MS;
+  if (!item) return opts.answered ? MISSING_POLL_MS : IN_FLIGHT_POLL_MS;
   const install = installOf(item);
   const sent = opts.sent;
   const now = opts.now ?? Date.now();
   if (sent && now - sent.at < SENT_FOLLOW_MS && install?.stage === sent.stage && install?.run === sent.run) {
     return IN_FLIGHT_POLL_MS;
   }
-  if (retryQueued(item) || isInFlight(phaseOf(item))) return IN_FLIGHT_POLL_MS;
+  if (retryQueued(item) && (opts.queuedSince == null || now - opts.queuedSince < SENT_FOLLOW_MS)) return IN_FLIGHT_POLL_MS;
+  if (isInFlight(phaseOf(item))) return IN_FLIGHT_POLL_MS;
   if (install?.stage && INSTALL_RUNNING_STAGES.has(install.stage)) return IN_FLIGHT_POLL_MS;
   if (reasonOf(item) === INSTALL_RETRYING_REASON) return IN_FLIGHT_POLL_MS;
   return IDLE_POLL_MS;

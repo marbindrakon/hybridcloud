@@ -92,13 +92,23 @@ ALLOWED = {
     "ra_failed": "a reason word, printed only when it matches [A-Za-z]{2,40}",
     # the platform's own decisions (files/po_preflight.py, shc_fabric.py's range check): fixed sentences with the
     # tenant's values (RefusalTexts checks them free of platform identifiers)
-    "po_result": "a decision of files/po_preflight.py",
-    "pf": "the network decision of files/po_preflight.py",
-    "pp_outcome": "the platform-access decision of files/po_preflight.py",
-    "cl_owner": "the hub-owner decision of files/po_preflight.py",
-    "cb_fip_conflict": "the floating-address decision of files/po_preflight.py",
-    "po_deferred_wait": "a wait noted from a decision of files/po_preflight.py or the network-name check",
-    "fab_check_result": "shc_fabric.py's range check: the tenant's ranges and the platform's published reserved ranges",
+    "po_result.message": "a decision of files/po_preflight.py", "po_result.reason": "a decision of files/po_preflight.py",
+    "pf.message": "the network decision of files/po_preflight.py", "pf.reason": "the network decision of files/po_preflight.py",
+    "pp_outcome.message": "the platform-access decision of files/po_preflight.py", "pp_outcome.reason": "the platform-access decision of files/po_preflight.py",
+    "cl_owner.message": "the hub-owner decision of files/po_preflight.py", "cl_owner.reason": "the hub-owner decision of files/po_preflight.py",
+    "cb_fip_conflict.message": "the floating-address decision of files/po_preflight.py", "cb_fip_conflict.reason": "the floating-address decision of files/po_preflight.py",
+    "po_deferred_wait.message": "a wait noted from a decision of files/po_preflight.py or the network-name check", "po_deferred_wait.reason": "a wait noted from a decision of files/po_preflight.py or the network-name check",
+    "fab_check_result.message": "shc_fabric.py's range check: the tenant's ranges and the platform's published reserved ranges", "fab_check_result.reason": "shc_fabric.py's range check: the tenant's ranges and the platform's published reserved ranges",
+    "pf.placement": "the tenant's placement name",
+    "pf.networkName": "the network's name on the site, the tenant's network",
+    "po_result.network.name": "the external network the tenant chose by name",
+    "po_result.address": "the address of the cluster's own router's gateway",
+    "po_result.note": "the router gateway's note: fixed words and the cluster's router's name",
+    "po_result.clusterNetwork": "the cluster's own range", "po_result.serviceNetwork": "the cluster's own range",
+    "po_result.machineNetwork": "the cluster's own range",
+    "fab_check_result.errors": "shc_fabric.py's range check: the tenant's ranges and the platform's reserved ranges",
+    "cb_machine_network": "the cluster's own machine network",
+    "cb_cluster_network": "the cluster's own cluster network", "cb_service_network": "the cluster's own service network",
     "cb_credential.reason": "printed only when it is one of the fixed reason words of the credential's texts",
     "cb_credential.user.name": "the cluster's own site user, named after its build",
     "cid_user_name": "the cluster's own site user, named after its build",
@@ -170,6 +180,28 @@ SOURCES = {
 }
 # sources for one name only
 NAME_SOURCES = {"ra_failed": ("os_result",)}   # a reason word, printed only when it matches [A-Za-z]{2,40}
+
+
+# Values a record field may take besides ALLOWED and SOURCES (each the platform's own record of the cluster).
+RECORD_VALUES = {
+    "cb_issuer": "the cluster's own issuer address", "resolved_entity": "the tenant namespace's label",
+    "resolved_billing_id": "the tenant namespace's label", "resolved_description": "the tenant namespace's annotation",
+    "cb_cluster_version": "the cluster's OpenShift version", "cb_power_state": "a state word",
+    "aws_account": "the account of the tenant's AWS environment", "gcp_project": "the project of the tenant's Google "
+    "Cloud environment", "cb_vpc_id": "the placement's VPC", "cb_vpc_name": "the placement's VPC",
+    "pp_prefixes": "the cluster's own addresses", "cb_fips": "the cluster's own floating addresses",
+    "platform_type": "the spec's type", "dr_records": "the cluster's own DNS record names",
+    "cb_credential.credential.id": "the cluster's own credential record (never its secret)",
+    "cb_credential.credential.createdAt": "a time", "cb_credential.user.id": "the cluster's own site user",
+    "cb_credential.user.domainId": "the cluster's own site user's domain", "cc_domain": "the environment's domain",
+    "cb_slug": "the environment's short DNS label", "oso_domain": "the environment's DNS domain",
+    "cb_acm_available": "a flag", "cb_cluster_network": "the cluster's own range",
+    "cb_service_network": "the cluster's own range", "cb_machine_network": "the cluster's own range",
+}
+
+
+def record_value_allowed(p):
+    return any(p == k or p.startswith(k + ".") or p.startswith(k + "[") for k in RECORD_VALUES)
 
 
 def source_allowed(p):
@@ -420,15 +452,29 @@ class Walk(object):
                             out.append((path, t, tv, "assert message", str(v[mk])))
             inc = _include(t) or ""
             base = os.path.basename(inc)
+            bodies = []
             if base == "patch_cr_status.yml":
-                body = (t.get("vars") or {}).get("cr_status_body")
-                for key, s in _leaves(body):
+                bodies.append((t.get("vars") or {}).get("cr_status_body"))
+            for k in ("hybridsovereign.shc.cr_status", "cr_status"):
+                if isinstance(t.get(k), dict):
+                    bodies.append(t[k].get("status"))
+            for k in ("ansible.builtin.uri", "uri"):
+                u = t.get(k)
+                if isinstance(u, dict) and "status" in str(u.get("url") or "") \
+                        and str(u.get("method") or "GET").upper() in ("PATCH", "PUT", "POST"):
+                    # a status written by hand: every value is read as text
+                    for s2 in strings(u.get("body")):
+                        out.append((path, t, tv, "status written with uri", s2))
+            for body in bodies:
+                for key, s2 in _leaves(body):
                     if key is None or key.split(".")[-1].split("[")[0] in TEXT_KEYS \
                             or key.split(".")[0].split("[")[0] in TEXT_KEYS:
-                        out.append((path, t, tv, "status %s" % (key or "body"), s))
+                        out.append((path, t, tv, "status %s" % (key or "body"), s2))
                     elif not _record(key):
                         out.append((path, t, tv, "status field %s (not a known record field)" % key, "{{ __unknown }}"))
-            elif base in INPUTS:
+                    else:
+                        out.append((path, t, tv, "record " + key, s2))
+            if base in INPUTS and base != "patch_cr_status.yml":
                 for var in INPUTS[base]:
                     for s in strings((t.get("vars") or {}).get(var)):
                         out.append((path, t, tv, "%s of %s" % (var, base), s))
@@ -511,6 +557,8 @@ class Walk(object):
                                                                             t.get("name"), name, sorted(set(bad))))
         for path, t, tv, what, template in self.sinks():
             bad = check(template, tv, t, 0, path)
+            if what.startswith("record "):
+                bad = [b for b in bad if not source_allowed(b) and not record_value_allowed(b)]
             if bad:
                 found.append("%s: %r (%s) writes %s" % (os.path.relpath(path, self.eda), t.get("name"), what,
                                                          sorted(set(bad))))

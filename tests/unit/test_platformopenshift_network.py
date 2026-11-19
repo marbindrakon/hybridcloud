@@ -1045,9 +1045,11 @@ class RouterGatewayFile(unittest.TestCase):
         self.assertEqual(self.prefixes(tr), [])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn('it could not be read: The step "Read the cluster\'s router on the site" failed; the platform team can '
-                      "see why in the job's log", msg)
-        self.assertIn("calls to the hub are not admitted on the platform's path", msg)
+        # one sentence after another, the step's own at the end
+        self.assertTrue(msg.endswith('path. The step "Read the cluster\'s router on the site" failed; the platform team '
+                                     "can see why in the job's log."), msg)
+        self.assertNotIn("(The step", msg)
+        self.assertIn("calls to the hub leave by the network's own path", msg)
         self.assertEqual(tr[-1], {"result": ""})
 
     def test_a_failure_after_the_record_takes_the_gateway_out(self):
@@ -1115,8 +1117,10 @@ class RouterGatewayAgain(unittest.TestCase):
         self.assertFalse(os.path.exists(f"/tmp/eda-po-router-{tag}-clouds.yaml"))
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn('it could not be read: The step "Read the cluster\'s router on the site" failed; the platform team can '
-                      "see why in the job's log", msg)
+        # one sentence after another, the step's own at the end
+        self.assertTrue(msg.endswith('path. The step "Read the cluster\'s router on the site" failed; the platform team '
+                                     "can see why in the job's log."), msg)
+        self.assertNotIn("(The step", msg)
         self.assertEqual(self.prefixes(tr), [])
         self.assertFalse([p for p in H.patches(tr) if not p["partial"]])
 
@@ -1135,7 +1139,8 @@ class RouterGatewayAgain(unittest.TestCase):
         self.assertEqual(H.os_calls(tr), [])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn("the network could not be read: Set fabric_platform_namespace", msg)
+        self.assertIn("its network could not be read", msg)
+        self.assertIn("Set fabric_platform_namespace", msg)
 
     def test_no_hub_endpoints_nothing_happens(self):
         # the hub's API outside the service range (reached by the network's own path): nothing to add

@@ -139,8 +139,25 @@ as a call when its name is plain words, else `A step of the cluster's provisioni
 delete), with reason `ProvisionFailed` (`TeardownFailed` for the delete): the platform team reads the job's log named
 in `status.edaJobs`. The same holds for the conditions the steps write (the router gateway's, the Preflight
 condition) and for the cluster's events. AWS and Google Cloud clusters need the realization's `clusterIssuer.baseURL`
-and `clusterIssuer.namespace`; there is no default, and the job names the missing setting (a delete of a cluster
-whose build the hub holds needs `clusterIssuer.namespace` to unpublish its issuer).
+and `clusterIssuer.namespace`; there is no default, and the job names the missing setting. A delete never needs it:
+it finds the cluster's static issuer (`oidc-static-<build>`) by that exact name and the build's label in any namespace,
+and says so in its result when there is none.
+
+**Upgrade note.** Before upgrading, set `clusterIssuer.baseURL` (an https address) and `clusterIssuer.namespace` in
+`AWS_REALIZATION` and `GCP_REALIZATION` to the values in use; there is no default any more. Without them every AWS and
+Google Cloud cluster job fails naming the setting.
+
+The names of an Internal AWS or Google Cloud cluster (`api.` and `*.apps.` in the environment's zone) point at the
+cluster's own internal load balancers, found by the installer's infrastructure id of the cluster: read from the
+cluster's private zone (named after the cluster), then the load balancers tagged with exactly that id (AWS), or the
+API rule named after it and the ingress rule whose instances are all the cluster's (Google Cloud). Another cluster on
+the same network is never taken, whatever its name. When the cluster's own resources are not found yet, nothing is
+published, the job's result and the cluster's status message say that the names are not published yet, and the next
+periodic run tries again (a run waits at most about three minutes for them).
+
+On AWS the public subnets, route table and internet gateway of a placement serve all External clusters on it: a
+delete leaves them while another cluster object of the namespace records the same placement as External; the last
+one's delete removes them.
 
 On OpenStack the preflight refuses a flavor the environment does not offer before anything is created: named to the
 tenant (`FlavorNotFound`) when the cluster's spec names it; when it is the installation's default

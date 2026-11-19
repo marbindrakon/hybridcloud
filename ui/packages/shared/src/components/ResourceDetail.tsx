@@ -336,8 +336,11 @@ export function ResourceDetail({
   }, [resource, shown, namespace, kind, t]);
 
   const queued = retrySent || (resource ? retryQueued(resource) : false);
-  const missingObject = !!error && ['notFound', 'forbidden'].includes(classifyError(error));
-  const nextPollMs = detailPollMs(resource, { sent, now, missing: missingObject });
+  // a request not handled yet is followed fast for a while from when this page first saw it
+  const isQueued = !!resource && retryQueued(resource);
+  const [queuedSince, setQueuedSince] = useState<number | null>(null);
+  useEffect(() => setQueuedSince((q) => (isQueued ? (q ?? Date.now()) : null)), [isQueued]);
+  const nextPollMs = detailPollMs(resource, { sent, now, answered: !!error, queuedSince });
   useEffect(() => setPollMs(nextPollMs), [nextPollMs]);
   const readLine = kind === 'PlatformOpenshift' && resource ? pageReadLine(t, loadedAt, now) : undefined;
   const handleRetry = async () => {
