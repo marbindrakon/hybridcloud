@@ -173,48 +173,223 @@ class NothingOfAnotherCluster(unittest.TestCase):
         self.assertTrue(G.owns_role(longer, theirs))
         self.assertFalse(G.owns_role(longer, mine))
 
-    def test_aws_load_balancers_of_a_name_that_starts_another(self):
-        def lb(arn, name):
-            return {"LoadBalancerArn": arn, "LoadBalancerName": name, "State": {"Code": "active"}}
-        lbs = [lb("a1", "prod-ab12c-int"), lb("a2", "a2"), lb("b1", "prod-east-xy34z-int"), lb("b2", "b2")]
-        tags = {"a1": {"kubernetes.io/cluster/prod-ab12c": "owned"},
-                "a2": {"kubernetes.io/cluster/prod-ab12c": "owned",
-                       "kubernetes.io/service-name": "openshift-ingress/router-default"},
-                "b1": {"kubernetes.io/cluster/prod-east-xy34z": "owned"},
-                "b2": {"kubernetes.io/cluster/prod-east-xy34z": "owned",
-                       "kubernetes.io/service-name": "openshift-ingress/router-default"}}
-        got = A.select_lbs(lbs, tags, "prod")
-        self.assertEqual({k: v["LoadBalancerArn"] for k, v in got.items()}, {"api": "a1", "apps": "a2"})
-        got = A.select_lbs(lbs, tags, "prod-east")
-        self.assertEqual({k: v["LoadBalancerArn"] for k, v in got.items()}, {"api": "b1", "apps": "b2"})
+    # ---- the call sites (a prefix put back fails these) -----------------------------------------------------------
+    def test_wif_down_deletes_only_its_own_roles(self):
+        short, longer = "shc-gcp-acme-prod-0a1b2c3d", "shc-gcp-acme-prod-0a1b2c3d-east"
+        roles = [{"name": "projects/p/roles/" + G.role_id(b, "openshift-ingress-operator", "cloud-credentials"),
+                  "title": G.labelled_name(b, "openshift-ingress-operator", "cloud-credentials", 100)}
+                 for b in (longer, short)]
+        rec = _Recorder()
+        old = (G.g.http, G.g.list_all)
+        G.g.http = rec.http
+        G.g.list_all = lambda url, key, tok, params=None: roles if url.endswith("/roles") else []
+        try:
+            c = object.__new__(G.Cluster)
+            c.cluster, c.project, c.tok, c.changed = short, "p", "token-not-in-data", []
+            c.pool = "https://iam.example.invalid/pool"
+            c.pool_id = "pool"
+            c.down()
+        finally:
+            G.g.http, G.g.list_all = old
+        self.assertEqual(c.changed, ["removed custom role " + roles[1]["name"].rsplit("/", 1)[1]])
 
-    def test_aws_two_clusters_of_one_form_are_refused(self):
-        lbs = [{"LoadBalancerArn": a, "LoadBalancerName": a + "-int", "State": {"Code": "active"}} for a in ("x", "y")]
-        tags = {"x": {"kubernetes.io/cluster/prod-ab12c": "owned"}, "y": {"kubernetes.io/cluster/prod-zz99z": "owned"}}
-        with self.assertRaises(SystemExit):
-            A.select_lbs(lbs, tags, "prod")
+    def test_the_iam_role_list_is_exactly_the_clusters_path(self):
+        class Pager:
+            def paginate(self, PathPrefix):
+                return [{"Roles": [{"RoleName": "a", "Path": "/shc/prod/"}, {"RoleName": "b", "Path": "/shc/prod/x/"}]}]
 
-    def test_gcp_forwarding_rules_of_a_name_that_starts_another(self):
-        def rule(name, desc=""):
-            return {"name": name, "loadBalancingScheme": "INTERNAL", "IPAddress": "192.0.2.%d" % (len(name) % 200),
-                    "network": "projects/p/global/networks/net-a", "description": desc}
-        ingress = rule("a0123", '{"kubernetes.io/service-name":"openshift-ingress/router-default"}')
-        one = [rule("prod-ab12c-api-internal"), ingress]
-        self.assertEqual(set(G.select_rules(one, "prod", "net-a")), {"api", "apps"})
-        two = [rule("prod-east-xy34z-api-internal"), ingress]
-        self.assertEqual(G.select_rules(two, "prod", "net-a"), {}, "another cluster's rules are not prod's")
-        both = [rule("prod-ab12c-api-internal"), rule("prod-east-xy34z-api-internal"), ingress]
-        got = G.select_rules(both, "prod", "net-a")
-        self.assertEqual(got["api"]["name"], "prod-ab12c-api-internal")
-        self.assertNotIn("apps", got, "an ingress rule names no cluster: not taken beside another cluster")
+        class Iam:
+            def get_paginator(self, name):
+                return Pager()
+        c = object.__new__(A.Cluster)
+        c.iam, c.path = Iam(), "/shc/prod/"
+        self.assertEqual([r["RoleName"] for r in c.roles()], ["a"])
 
-    def test_aws_public_subnets_exactly(self):
+    def test_place_public_down_deletes_only_its_subnets(self):
         sys.path.insert(0, FILES)
         import shc_aws_tenant as T
-        name = "shc-ns-p"
-        self.assertTrue(T.public_subnet_of(name, "shc-ns-p-public-a", {"AvailabilityZone": "us-east-2a"}))
-        self.assertFalse(T.public_subnet_of(name, "shc-ns-p-public-public-a", {"AvailabilityZone": "us-east-2a"}))
-        self.assertFalse(T.public_subnet_of(name, "shc-ns-p-public-b", {"AvailabilityZone": "us-east-2a"}))
+
+        class Ec2:
+            def __init__(self):
+                self.deleted = []
+
+            def describe_vpcs(self, Filters):
+                return {"Vpcs": [{"VpcId": "vpc-1", "Tags": []}]}
+
+            def describe_subnets(self, Filters):
+                mk = lambda i, n, az: {"SubnetId": i, "AvailabilityZone": az, "Tags": [{"Key": "Name", "Value": n}]}
+                return {"Subnets": [mk("s1", "shc-ns-p-public-a", "us-east-2a"),
+                                    mk("s2", "shc-ns-p-public-public-a", "us-east-2a"),
+                                    mk("s3", "shc-ns-p-public-b-extra", "us-east-2b")]}
+
+            def describe_route_tables(self, Filters):
+                return {"RouteTables": []}
+
+            def describe_internet_gateways(self, Filters):
+                return {"InternetGateways": []}
+
+            def delete_subnet(self, SubnetId):
+                self.deleted.append(SubnetId)
+        t = object.__new__(T.Tenant)
+        t.ec2, t.cfg, t.changed = Ec2(), {}, []
+        t.place_public("ns/p", "down")
+        self.assertEqual(t.ec2.deleted, ["s1"])
+
+
+# ---- the published names: the cluster's own load balancers by its infrastructure id ------------------------------
+class _R53:
+    def __init__(self, zones):
+        self.zones, self.upserts = zones, []
+
+    def list_hosted_zones_by_name(self, DNSName, MaxItems):
+        return {"HostedZones": [{"Id": "/hostedzone/" + z["id"], "Name": z["name"], "Config": {"PrivateZone": z["private"]}}
+                                for z in self.zones]}
+
+    def list_tags_for_resource(self, ResourceType, ResourceId):
+        z = next(z for z in self.zones if z["id"] == ResourceId)
+        return {"ResourceTagSet": {"Tags": [{"Key": k, "Value": v} for k, v in z.get("tags", {}).items()]}}
+
+    def change_resource_record_sets(self, HostedZoneId, ChangeBatch):
+        for ch in ChangeBatch["Changes"]:
+            self.upserts.append((ch["ResourceRecordSet"]["Name"], ch["ResourceRecordSet"]["AliasTarget"]["DNSName"]))
+
+
+class _Elb:
+    def __init__(self, lbs, tags):
+        self.lbs, self.tags = lbs, tags
+
+    def get_paginator(self, name):
+        lbs = self.lbs
+
+        class P:
+            def paginate(self):
+                return [{"LoadBalancers": lbs}]
+        return P()
+
+    def describe_tags(self, ResourceArns):
+        return {"TagDescriptions": [{"ResourceArn": a, "Tags": [{"Key": k, "Value": v} for k, v in self.tags[a].items()]}
+                                    for a in ResourceArns]}
+
+
+def _lb(arn, name):
+    return {"LoadBalancerArn": arn, "LoadBalancerName": name, "State": {"Code": "active"}, "VpcId": "vpc-1",
+            "Scheme": "internal", "DNSName": arn + ".elb.example", "CanonicalHostedZoneId": "Z1"}
+
+
+# two clusters on one network: names sharing their first 21 characters, and a name with "--"
+PAIRS = [("averyveryverylongname-a", "averyveryverylongname-abc12", "averyveryverylongname-b", "averyveryverylongname-xyz98"),
+         ("prod", "prod-ab12c", "prod-east", "prod-east-xy34z"),
+         ("a--b", "a--b-q1w2e", "a--b-c", "a--b-c-r5t6y")]
+
+
+class PublishedNames(unittest.TestCase):
+    def aws(self, name, infra_mine, name2, infra_other, own_zone=True):
+        zn = "env.example.org."
+        zones = [{"id": "PUB", "name": zn, "private": False},
+                 {"id": "Z2", "name": "%s.%s" % (name2, zn), "private": True,
+                  "tags": {"kubernetes.io/cluster/" + infra_other: "owned"}}]
+        if own_zone:
+            zones.append({"id": "Z1", "name": "%s.%s" % (name, zn), "private": True,
+                          "tags": {"kubernetes.io/cluster/" + infra_mine: "owned", "Name": "x"}})
+        lbs, tags = [], {}
+        for infra in (infra_other, infra_mine):
+            lbs += [_lb(infra + "-api", infra[:20] + "-int"), _lb(infra + "-apps", "a" + infra[:10])]
+            tags[infra + "-api"] = {"kubernetes.io/cluster/" + infra: "owned"}
+            tags[infra + "-apps"] = {"kubernetes.io/cluster/" + infra: "owned",
+                                     "kubernetes.io/service-name": "openshift-ingress/router-default"}
+        r53 = _R53(zones)
+
+        class S:
+            def client(self, kind):
+                return r53 if kind == "route53" else _Elb(lbs, tags)
+        old = A.session
+        A.session = lambda cfg: S()
+        try:
+            out = A.dns_alias({}, "up", "env.example.org", name, "vpc-1", wait=0)
+        finally:
+            A.session = old
+        return out, r53.upserts
+
+    def test_aws_each_cluster_gets_its_own_load_balancers(self):
+        for a, ia, b, ib in PAIRS:
+            for name, mine, other, iother in ((a, ia, b, ib), (b, ib, a, ia)):
+                with self.subTest(name=name):
+                    out, ups = self.aws(name, mine, other, iother)
+                    self.assertTrue(out["complete"], out)
+                    self.assertEqual(out["infraID"], mine)
+                    self.assertEqual(sorted(t for _, t in ups), sorted([mine + "-api.elb.example", mine + "-apps.elb.example"]))
+
+    def test_aws_without_its_own_resources_nothing_is_published(self):
+        a, ia, b, ib = PAIRS[1]
+        out, ups = self.aws(a, ia, b, ib, own_zone=False)
+        self.assertEqual((out["complete"], out["missing"], ups), (False, ["api", "apps"], []))
+
+    def gcp(self, name, infra_mine, name2, infra_other, own_zone=True):
+        zn = "env.example.org."
+        zones = [{"name": "pub", "dnsName": zn, "visibility": "public"},
+                 {"name": infra_other + "-private-zone", "dnsName": "%s.%s" % (name2, zn), "visibility": "private"}]
+        if own_zone:
+            zones.append({"name": infra_mine + "-private-zone", "dnsName": "%s.%s" % (name, zn), "visibility": "private"})
+        rules, members = [], {}
+        for n, infra in enumerate((infra_other, infra_mine)):
+            rules.append({"name": infra + "-api-internal", "loadBalancingScheme": "INTERNAL", "IPAddress": "10.0.0.%d" % (n + 1),
+                          "network": "projects/p/global/networks/net-a"})
+            rules.append({"name": "a%d" % n, "loadBalancingScheme": "INTERNAL", "IPAddress": "10.0.1.%d" % (n + 1),
+                          "network": "projects/p/global/networks/net-a", "backendService": "bs/%d" % n,
+                          "description": '{"kubernetes.io/service-name":"openshift-ingress/router-default"}'})
+            members["bs/%d" % n] = [infra + "-worker-b-abcd", infra + "-worker-c-efgh"]
+        posts = []
+
+        def list_all(url, key, tok, params=None):
+            if url.endswith("/managedZones"):
+                return zones
+            if url.endswith("/rrsets"):
+                return []
+            return rules
+
+        def http(method, url, body=None, token=None, **kw):
+            if method == "GET" and url in members:
+                return {"backends": [{"group": "ig/" + url}]}
+            if url.endswith("/listInstances"):
+                return {"items": [{"instance": "zones/z/instances/" + i} for i in members[url[3:-len("/listInstances")]]]}
+            posts.append(body)
+            return {}
+
+        class Ident:
+            def project(self, p):
+                return "token-not-in-data"
+        old = (G.g.list_all, G.g.http, G.g.Identity)
+        G.g.list_all, G.g.http, G.g.Identity = list_all, http, Ident
+        try:
+            out = G.dns_alias({"project": "p", "region": "r"}, "up", "env.example.org", name, "net-a", wait=0)
+        finally:
+            G.g.list_all, G.g.http, G.g.Identity = old
+        return out, posts
+
+    def test_gcp_each_cluster_gets_its_own_rules(self):
+        for a, ia, b, ib in PAIRS:
+            for name, mine, other, iother in ((a, ia, b, ib), (b, ib, a, ia)):
+                with self.subTest(name=name):
+                    out, posts = self.gcp(name, mine, other, iother)
+                    self.assertTrue(out["complete"], out)
+                    self.assertEqual(out["infraID"], mine)
+                    want = {"10.0.0.2", "10.0.1.2"}   # this cluster's rules come second in the list
+                    self.assertEqual({r for p in posts for a2 in p.get("additions", []) for r in a2["rrdatas"]}, want)
+
+    def test_gcp_without_its_own_resources_nothing_is_published(self):
+        a, ia, b, ib = PAIRS[0]
+        out, posts = self.gcp(a, ia, b, ib, own_zone=False)
+        self.assertEqual((out["complete"], posts), (False, []))
+
+    def test_the_infra_ids_are_read_exactly(self):
+        zn = "env.example.org."
+        self.assertEqual(G.infra_id_of_zones([{"name": "x-private-zone", "dnsName": "prod-east." + zn,
+                                              "visibility": "private"}], "prod", zn), None)
+        self.assertIsNone(A.infra_id_of_zone("prod-east." + zn, "prod." + zn, {"kubernetes.io/cluster/p-1": "owned"}))
+        self.assertIsNone(A.infra_id_of_zone("prod." + zn, "prod." + zn, {"kubernetes.io/cluster/p-1": "owned",
+                                                                          "kubernetes.io/cluster/p-2": "owned"}))
+        self.assertEqual(A.select_lbs([_lb("x", "x-int")], {"x": {"kubernetes.io/cluster/prod-ab12c-x": "owned"}},
+                                      "prod-ab12c"), {}, "a tag that only starts with the id")
 
 
 if __name__ == "__main__":

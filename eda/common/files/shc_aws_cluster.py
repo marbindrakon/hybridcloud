@@ -227,32 +227,29 @@ def issuer_hostpath(issuer):
     return re.sub(r"^https://", "", issuer).rstrip("/")
 
 
-def infra_prefix(name):
-    """The head of the installer's infrastructure id for a cluster name: the name with other characters as "-", cut to
-    21 characters, without a trailing "-" (the id is that head, "-" and 5 random characters)."""
-    return re.sub(r"[^a-z0-9-]", "-", str(name).lower())[:21].rstrip("-")
+CLUSTER_TAG = re.compile(r"^kubernetes\.io/cluster/([A-Za-z0-9][A-Za-z0-9-]*)$")
 
 
-def infra_id_of(name, keys):
-    """The infrastructure ids among tag keys "kubernetes.io/cluster/<id>" that are exactly this cluster's form
-    (<infra_prefix(name)>-<5 characters>); a cluster whose name merely starts the same way does not match."""
-    pat = re.compile(r"^kubernetes\.io/cluster/(%s-[a-z0-9]{5})$" % re.escape(infra_prefix(name)))
-    return {m.group(1) for m in (pat.match(k) for k in keys) if m}
+def infra_id_of_zone(zone_name, want, tags):
+    """The installer's infrastructure id of a cluster, from its private hosted zone: the zone named exactly
+    "<cluster name>.<base domain>." (one per cluster name and domain) carries the tag kubernetes.io/cluster/<id> =
+    owned. None while the installer has not made it, or when it does not say exactly one id."""
+    if zone_name != want:
+        return None
+    ids = {m.group(1) for k, v in (tags or {}).items() for m in [CLUSTER_TAG.match(k)] if m and v == "owned"}
+    return ids.pop() if len(ids) == 1 else None
 
 
-def select_lbs(lbs, tags, name):
-    """The cluster's internal API and ingress load balancers ({kind: lb}) of a VPC's internal load balancers and their
-    tags ({arn: {key: value}}): only load balancers tagged with exactly this cluster's infrastructure id; two clusters
-    whose ids both fit the name's form are refused (an alias never goes to another cluster's load balancer)."""
-    ids = set()
-    for l in lbs:
-        ids |= infra_id_of(name, tags.get(l["LoadBalancerArn"], {}))
-    if len(ids) > 1:
-        fail("more than one cluster in the VPC fits the name %s (%s); no alias is written" % (name, ", ".join(sorted(ids))))
+def select_lbs(lbs, tags, infra_id):
+    """The cluster's internal API and ingress load balancers ({kind: lb}): only those tagged exactly
+    kubernetes.io/cluster/<infra_id> (the installer's and the cloud provider's tag of the cluster's own resources)."""
+    if not infra_id:
+        return {}
+    key = "kubernetes.io/cluster/" + infra_id
     found = {}
     for l in lbs:
         t = tags.get(l["LoadBalancerArn"], {})
-        if not infra_id_of(name, t):
+        if key not in t:
             continue
         if l["LoadBalancerName"].endswith("-int"):
             kind = "api"
@@ -263,6 +260,17 @@ def select_lbs(lbs, tags, name):
         if kind not in found and l["State"]["Code"] in ("active", "provisioning"):
             found[kind] = l
     return found
+
+
+def _own_infra_id(r53, name, zn):
+    want = "%s.%s" % (name, zn)
+    for z in r53.list_hosted_zones_by_name(DNSName=want, MaxItems="5")["HostedZones"]:
+        if z["Name"] == want and z["Config"].get("PrivateZone"):
+            tags = r53.list_tags_for_resource(ResourceType="hostedzone", ResourceId=z["Id"].split("/")[-1])
+            got = infra_id_of_zone(z["Name"], want, {t["Key"]: t["Value"] for t in tags["ResourceTagSet"]["Tags"]})
+            if got:
+                return got
+    return None
 
 
 def dns_alias(cfg, state, zone, name, vpc, wait=0):
@@ -288,14 +296,16 @@ def dns_alias(cfg, state, zone, name, vpc, wait=0):
         return {"zone": zone, "removed": gone}
     deadline = time.time() + wait
     done = {}
+    infra = None
     while True:
+        infra = infra or _own_infra_id(r53, name, zn)
         lbs = [l for p in elb.get_paginator("describe_load_balancers").paginate() for l in p["LoadBalancers"]
-               if l.get("VpcId") == vpc and l.get("Scheme") == "internal"]
+               if l.get("VpcId") == vpc and l.get("Scheme") == "internal"] if infra else []
         tags = {}
         for i in range(0, len(lbs), 20):
             for d in elb.describe_tags(ResourceArns=[l["LoadBalancerArn"] for l in lbs[i:i + 20]])["TagDescriptions"]:
                 tags[d["ResourceArn"]] = {t["Key"]: t["Value"] for t in d["Tags"]}
-        for kind, l in select_lbs(lbs, tags, name).items():
+        for kind, l in select_lbs(lbs, tags, infra).items():
             if kind in done:
                 continue
             r53.change_resource_record_sets(HostedZoneId=zid, ChangeBatch={"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {
@@ -305,9 +315,9 @@ def dns_alias(cfg, state, zone, name, vpc, wait=0):
         if len(done) == 2 or time.time() >= deadline:
             break
         time.sleep(20)
-    if "api" not in done:
-        fail("the cluster's internal API load balancer did not appear in %s" % vpc, aliases=done)
-    return {"zone": zone, "aliases": done, "complete": len(done) == 2}
+    # not found (yet): said in the result, nothing published that could be another cluster's; the next run tries again
+    return {"zone": zone, "aliases": done, "complete": len(done) == 2, "infraID": infra or "",
+            "missing": sorted({"api", "apps"} - set(done))}
 
 
 class Cluster:

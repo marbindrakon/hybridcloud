@@ -1234,15 +1234,16 @@ class GatePass(unittest.TestCase):
                           ("gcp_clusterbuild.yml", "aws_clusterbuild_deploy.yml")):
             inc = includes(f)
             self.assertEqual(inc[inc.index(before) - 1], "install_check_time.yml", (f, before))
-        # the published names (up to 30 minutes) wait in parts of about five, each after a check time
+        # the published names: a short look (a minute) and one short try (two minutes), never a long wait in one run;
+        # both below the check time's five minutes
         with open(os.path.join(tdir, "aws_clusterbuild_postinstall.yml")) as fh:
             post = yaml.safe_load(fh)
-        wait = next(t for t in post if t.get("name") == "The cluster's published names (Internal)")
-        self.assertEqual(wait["ansible.builtin.include_tasks"], "aws_published_names_wait.yml")
-        with open(os.path.join(tdir, "aws_published_names_wait.yml")) as fh:
-            part = yaml.safe_load(fh)
-        self.assertEqual(part[0]["ansible.builtin.include_tasks"], "install_check_time.yml")
-        self.assertLessEqual(int(part[1]["retries"]) * int(part[1]["delay"]), 300)
+        look = next(t for t in post if t.get("name") == "The cluster's published names (Internal)")
+        self.assertLessEqual(int(look["retries"]) * int(look["delay"]), 60)
+        now = next(t for t in post if t.get("name") == "Publish the cluster's names now (Internal)")
+        self.assertEqual(now["ansible.builtin.command"]["argv"], "{{ cb_dns_alias_cmd[:-1] + ['120'] }}")
+        self.assertIs(now["failed_when"], False)
+        self.assertNotIn("aws_published_names_wait.yml", json.dumps(post))
 
     def claim(self, stage, namespace, after_removal=False, **install):
         obj = po(dict({"stage": stage, "run": 2}, **install) if stage else None)

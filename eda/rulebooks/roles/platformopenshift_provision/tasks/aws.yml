@@ -135,7 +135,8 @@
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"
       message: >-
-        {{ ('AWS cluster ' ~ cb_ocp_name ~ ' installed (' ~ cb_api_url ~ ')') if cb_cluster_installed | bool
+        {{ ('AWS cluster ' ~ cb_ocp_name ~ ' installed (' ~ cb_api_url ~ ')' ~ cb_names_note | default('', true))
+           if cb_cluster_installed | bool
            else ('AWS cluster build ' ~ cb_app_name ~ ' not installed: ' ~ cb_provision_status | default('Unknown')) }}
       name: "{{ ansible_operator_meta.name }}"
       namespace: "{{ ansible_operator_meta.namespace }}"

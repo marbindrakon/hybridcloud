@@ -313,13 +313,18 @@
 
 # Internal: the installer writes only a private zone; the platform (Hive's installer on central, ACM) and the network
 # resolve the cluster through public aliases of its internal load balancers, published as soon as they exist
-- name: Publish the cluster's names while it installs (Internal)
-  ansible.builtin.command:
-    argv: >-
+# the helper finds the cluster's own load balancers by its infrastructure id (from its private zone), exactly
+- name: The command that publishes the cluster's names (Internal)
+  ansible.builtin.set_fact:
+    cb_dns_alias_cmd: >-
       {{ cb_dns_alias_argv | default([
            'python3', role_path ~ '/../../../common/files/shc_aws_cluster.py', '--config', cb_aws_cfg | default({}) | to_json,
            'dns-alias', '--state', 'up', '--zone', aws_domain | default(''), '--name', cb_ocp_name, '--vpc', cb_vpc_id,
            '--wait-seconds', '6600']) }}
+
+- name: Publish the cluster's names while it installs (Internal)
+  ansible.builtin.command:
+    argv: "{{ cb_dns_alias_cmd }}"
   async: 7000
   poll: 0
   register: cb_dns_alias_job

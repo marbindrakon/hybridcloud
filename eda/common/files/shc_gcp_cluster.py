@@ -303,29 +303,40 @@ def owns_role(cluster, role):
     return rid.startswith(head) and str(role.get("title") or "").startswith(cluster + " ")
 
 
-def infra_prefix(name):
-    """The head of the installer's infrastructure id for a cluster name (as shc_aws_cluster.infra_prefix)."""
-    return re.sub(r"[^a-z0-9-]", "-", str(name).lower())[:21].rstrip("-")
+PRIVATE_ZONE_SUFFIX = "-private-zone"
 
 
-def select_rules(rules, name, network):
-    """The cluster's internal API and ingress forwarding rules ({kind: rule}) of a region's rules: the API rule is
-    exactly "<infra id>-api-internal" with an id of this cluster's form; an ingress rule carries no cluster id, so it is
-    taken only when the network holds one cluster (one API rule). Two clusters whose ids fit the name are refused."""
-    api_pat = re.compile(r"^(%s-[a-z0-9]{5})-api-internal$" % re.escape(infra_prefix(name)))
+def infra_id_of_zones(zones, name, zn):
+    """The installer's infrastructure id of a cluster, from its private managed zone: the private zone whose DNS
+    name is exactly "<cluster name>.<base domain>." is named "<infra id>-private-zone". None while there is none, or
+    when there is not exactly one."""
+    want = "%s.%s" % (name, zn)
+    ids = {z["name"][:-len(PRIVATE_ZONE_SUFFIX)] for z in zones
+           if z.get("dnsName") == want and z.get("visibility") == "private"
+           and str(z.get("name") or "").endswith(PRIVATE_ZONE_SUFFIX)}
+    return ids.pop() if len(ids) == 1 else None
+
+
+def select_rules(rules, infra_id, network, instances_of):
+    """The cluster's internal API and ingress forwarding rules ({kind: rule}): the API rule is exactly
+    "<infra id>-api-internal"; an ingress rule (the cloud provider's, named after the Service, not the cluster) is the
+    cluster's only when every instance behind it is one of the cluster's own ("<infra id>-master-..." or
+    "<infra id>-worker-..."). instances_of(rule): the names of the instances behind a rule."""
+    if not infra_id:
+        return {}
+    own = re.compile(r"^%s-(master|worker)-" % re.escape(infra_id))
     mine = [r for r in rules if r.get("loadBalancingScheme") == "INTERNAL" and r.get("IPAddress")
             and (not network or (r.get("network") or "").endswith("/networks/" + network))]
-    ids = {m.group(1) for m in (api_pat.match(r.get("name") or "") for r in mine) if m}
-    if len(ids) > 1:
-        fail("more than one cluster in the network fits the name %s (%s); no alias is written" % (name, ", ".join(sorted(ids))))
     found = {}
-    apis = [r for r in mine if api_pat.match(r.get("name") or "")]
-    if apis:
-        found["api"] = apis[0]
-    all_api = [r for r in mine if (r.get("name") or "").endswith("-api-internal")]
-    ingress = [r for r in mine if "openshift-ingress/router-default" in (r.get("description") or "")]
-    if apis and len(all_api) == 1 and len(ingress) == 1:
-        found["apps"] = ingress[0]
+    for r in mine:
+        if r.get("name") == infra_id + "-api-internal":
+            found.setdefault("api", r)
+    for r in mine:
+        if "apps" in found or "openshift-ingress/router-default" not in (r.get("description") or ""):
+            continue
+        names = instances_of(r)
+        if names and all(own.match(n) for n in names):
+            found["apps"] = r
     return found
 
 
@@ -354,11 +365,23 @@ def dns_alias(cfg, state, zone, name, network, wait=0):
                 g.http("POST", zurl + "/changes", {"deletions": [rr]}, token=tok)
                 gone.append(n)
         return {"zone": zone, "removed": gone}
+    def instances_of(rule):
+        names = []
+        bs = g.http("GET", rule["backendService"], token=tok) if rule.get("backendService") else {}
+        for be in (bs or {}).get("backends") or []:
+            listed = g.http("POST", be["group"] + "/listInstances", {}, token=tok) or {}
+            names += [str(x.get("instance") or "").rsplit("/", 1)[-1] for x in listed.get("items") or []]
+        return names
+
     deadline = time.time() + wait
     done = {}
+    infra = None
     while True:
-        rules = g.list_all(base + "/regions/%s/forwardingRules" % cfg["region"], "items", tok)
-        for kind, r in select_rules(rules, name, network).items():
+        if not infra:
+            infra = infra_id_of_zones(g.list_all("%s/projects/%s/managedZones" % (DNS, cfg["project"]), "managedZones",
+                                                 tok), name, zn)
+        rules = g.list_all(base + "/regions/%s/forwardingRules" % cfg["region"], "items", tok) if infra else []
+        for kind, r in select_rules(rules, infra, network, instances_of).items():
             if kind in done:
                 continue
             cur = have(names[kind])
@@ -371,9 +394,9 @@ def dns_alias(cfg, state, zone, name, network, wait=0):
         if len(done) == 2 or time.time() >= deadline:
             break
         time.sleep(20)
-    if "api" not in done:
-        fail("the cluster's internal API load balancer did not appear in %s" % (network or cfg["region"]), aliases=done)
-    return {"zone": zone, "aliases": done, "complete": len(done) == 2}
+    # not found (yet): said in the result, nothing published that could be another cluster's; the next run tries again
+    return {"zone": zone, "aliases": done, "complete": len(done) == 2, "infraID": infra or "",
+            "missing": sorted({"api", "apps"} - set(done))}
 
 
 def main():
