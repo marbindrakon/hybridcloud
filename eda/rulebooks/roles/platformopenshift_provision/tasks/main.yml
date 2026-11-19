@@ -201,7 +201,9 @@
     # as written, nothing is built or removed.
     - name: Decide whether a stopped installation is asked to start again
       ansible.builtin.set_fact:
-        po_stopped_asked: "{{ platformopenshift_cr.resources[0] | hybridsovereign.shc.shc_install_asked }}"
+        po_stopped_asked: >-
+          {{ platformopenshift_cr.resources[0]
+             | hybridsovereign.shc.shc_install_asked(platformopenshift_install.retryMarginMinutes | int) }}
       when:
         - platform_type in ['openstack', 'aws', 'gcp']
         - ((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage | default('') == 'Stopped'

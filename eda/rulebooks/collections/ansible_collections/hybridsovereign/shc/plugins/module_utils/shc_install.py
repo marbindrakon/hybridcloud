@@ -915,7 +915,7 @@ def hub_state(cd, hub_read_ok):
 
 
 # ---- the guarded removal of a stopped build ----------------------------------------------------------------------
-def asked_since_stop(obj, event=None):
+def asked_since_stop(obj, event=None, margin_minutes=1):
     """Whether someone asked for a new installation since the recorded stop: (asked, why). Counts:
     - a Retry request other than the one handled at the stop (status.lastHandledReconcileRequest vs
       status.install.stoppedRequest), or a Retry event published after the stop (event: {reason, publishedAt}; the
@@ -937,19 +937,18 @@ def asked_since_stop(obj, event=None):
         times = [t for t in (parse_time(install.get("endedAt")), parse_time(install.get("observedAt"))) if t]
         written = max(times) if times else None
     published = parse_time(ev.get("publishedAt"))
-    request_timed = False
+    # a request asks when it was made after the stop was written: by its own time (a Retry request's value is a
+    # time), or because the operator published it more than margin_minutes after the write (a client clock that runs
+    # slow, a value that is not a time); a request published within the margin was in flight when the stop was
+    # written and asked about the installation, not for a new one
+    late = (written + datetime.timedelta(minutes=float(margin_minutes))) if written is not None else None
+    published_late = published is not None and late is not None and published > late
     if "stoppedRequest" in install and handled != str(install.get("stoppedRequest") or ""):
-        # a request asks only when it was made after the stop was written: its own time (a Retry request is a time),
-        # else the operator's publish time
         own = parse_time(handled)
-        request_timed = own is not None
-        made = own or published
-        if written is None or made is None or made > written:
+        if written is None or (own is not None and own > written) or published_late:
             return True, "a Retry request since the stop"
-    # a Retry event (a request the operator does not record, or one without a time) published after the stop was
-    # written; the event of a request with its own time was decided by that time above
-    if (not request_timed and str(ev.get("reason") or "").endswith("ReconcileRequested") and written and published
-            and published > written):
+    # a Retry event the operator does not record as a request, published after the stop was written (the same margin)
+    if str(ev.get("reason") or "").endswith("ReconcileRequested") and published_late:
         return True, "a Retry request since the stop"
     if install.get("stoppedSpec"):
         if str(install.get("stoppedSpecVersion") or "") != DIGEST_VERSION:
@@ -968,7 +967,7 @@ def asked_since_stop(obj, event=None):
 
 
 def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, recheck=False, release_exists=None,
-                     release_young=False):
+                     release_young=False, margin_minutes=1):
     """Whether the build of a stopped installation may be removed before a new one: (allowed, why).
 
     All of these must hold, read fresh in the same run:
@@ -1013,7 +1012,7 @@ def may_remove_build(obj, cd, hub_read_ok, release_failed=False, event=None, rec
         return True, "the removal of the stopped build recorded on the cluster goes on"
     if recheck:
         return True, "the stopped build is removed for a new installation"
-    asked, why = asked_since_stop(obj, event)
+    asked, why = asked_since_stop(obj, event, margin_minutes)
     if not asked:
         return False, why + "; nothing is removed"
     return True, "the stopped build is removed for a new installation (%s)" % why

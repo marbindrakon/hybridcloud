@@ -51,6 +51,7 @@ options:
   release_status: {description: removal - the release's status word (failed, deployed, pending-install, ...)., type: str, default: ""}
   release_deployed_at: {description: removal - when the release was last deployed (RFC 3339)., type: str, default: ""}
   pending_minutes: {description: removal - a pending release younger than this is left alone., type: int, default: 10}
+  retry_margin_minutes: {description: removal - a request published this long after the stop's write asks., type: int, default: 1}
   removal_minutes: {description: removal - a removal waiting beside a build being deleted fails after this long (0 - no bound)., type: int, default: 0}
   generation: {description: check - the generation the job read the spec at (0 - not compared)., type: int, default: 0}
   wait_for: {description: wait - managedcluster, clusterdeployment, uninstall or namespace., type: str, default: ""}
@@ -140,6 +141,7 @@ def main():
             release_deployed_at=dict(type="str", default=""),
             pending_minutes=dict(type="int", default=10),
             removal_minutes=dict(type="int", default=0),
+            retry_margin_minutes=dict(type="int", default=1),
             generation=dict(type="int", default=0),
             wait_for=dict(type="str", default=""),
             recheck=dict(type="bool", default=False),
@@ -255,12 +257,13 @@ def main():
         young = I.release_young(p["release_status"], p["release_deployed_at"],
                                 datetime.datetime.now(datetime.timezone.utc), p["pending_minutes"])
         ok, why = I.may_remove_build(None if obj_error else obj, cd, not hub_error, p["release_failed"],
-                                     recheck=p["recheck"], release_exists=p["release_exists"], release_young=young)
+                                     recheck=p["recheck"], release_exists=p["release_exists"], release_young=young,
+                                     margin_minutes=p["retry_margin_minutes"])
         stage = str((((obj or {}).get("status") or {}).get("install") or {}).get("stage") or "")
         hub = I.hub_state(cd, not hub_error)
         if hub == "none" and young:
             hub = "starting"
-        asked = bool(obj) and not obj_error and I.asked_since_stop(obj)[0]
+        asked = bool(obj) and not obj_error and I.asked_since_stop(obj, None, p["retry_margin_minutes"])[0]
         overdue = bool(obj) and not obj_error and I.removal_overdue(
             obj.get("status"), datetime.datetime.now(datetime.timezone.utc), p["removal_minutes"])
         module.exit_json(changed=False, ok=ok, end=False, outcome="", why=why, stage=stage, hub=hub, asked=asked,

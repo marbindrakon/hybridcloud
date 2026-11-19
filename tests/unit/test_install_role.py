@@ -175,7 +175,8 @@ def base_vars(api, provider="openstack", **kw):
          # the role's defaults with a one-second interval (a task list run here does not load the role's defaults)
          "platformopenshift_install": {"observeIntervalSeconds": 1, "watchWindowMinutes": 120, "deadlineMinutes": 360,
                                        "checkWriteMinutes": 5, "pendingReleaseMinutes": 10,
-                                       "removalLimitMinutes": 60, "namespaceWaitMinutes": 30},
+                                       "removalLimitMinutes": 60, "namespaceWaitMinutes": 30,
+                                       "retryMarginMinutes": 1},
          # the removal's waits: a few one-second rounds (extra vars win over the include's values)
          "rsw_retries": 3, "rsw_delay": 1, "platformopenshift_generation": 1}
     v.update(kw)

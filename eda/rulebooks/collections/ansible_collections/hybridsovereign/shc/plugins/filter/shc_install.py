@@ -36,9 +36,9 @@ def shc_install_installed(status, cd=None):
     return I.install_installed(_status(status), _now(), cd if isinstance(cd, dict) else None)
 
 
-def shc_install_asked(obj):
+def shc_install_asked(obj, margin_minutes=1):
     """{asked, why} for a cluster whose installation stopped: whether someone asked for a new one since the stop."""
-    asked, why = I.asked_since_stop(obj if isinstance(obj, dict) else {})
+    asked, why = I.asked_since_stop(obj if isinstance(obj, dict) else {}, None, margin_minutes)
     return {"asked": asked, "why": why}
 
 

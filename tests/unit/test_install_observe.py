@@ -5,6 +5,7 @@ removed, per provider); the in-flight freshness; the status.install blocks the r
 
 Documentation ranges and example names only.
 """
+import copy
 import datetime
 import os
 import sys
@@ -231,8 +232,9 @@ class Endings(unittest.TestCase):
         # a request after the stop's write asks
         later = po(res["install"], lastHandledReconcileRequest="2026-11-18T12:00:30Z")
         self.assertTrue(I.asked_since_stop(later)[0])
-        # an event published after the stop was written asks too (a request the operator does not record)
-        ev = {"reason": "PlatformOpenshiftReconcileRequested", "publishedAt": I.fmt_time(NOW + datetime.timedelta(minutes=1))}
+        # an event published more than a minute after the stop was written asks too (a request the operator does not
+        # record)
+        ev = {"reason": "PlatformOpenshiftReconcileRequested", "publishedAt": I.fmt_time(NOW + datetime.timedelta(minutes=2))}
         self.assertTrue(I.asked_since_stop(stopped, event=ev)[0])
         # a second observation of the same stop records nothing again
         again = I.observe(po(res["install"], lastHandledReconcileRequest="2026-11-18T12:00:30Z"), JOB, hub, None,
@@ -241,12 +243,14 @@ class Endings(unittest.TestCase):
         self.assertEqual(again["install"]["stoppedRequest"], "2026-11-18T11:58:00Z")
 
     def test_a_request_asks_only_when_made_after_the_stop_was_written(self):
-        """A Retry's own time (its value) decides, also when the operator handled it after the stop was written; a
-        request without a time counts by the operator's publish time."""
+        """A Retry's own time (its value) after the stop's write asks; one before it, handled and published by the
+        operator within a minute after the write, does not; a request without a time counts by the operator's
+        publish time (with the same margin)."""
         stop = dict(STOPPED, stoppedAt=t(10), stoppedRequest="2026-11-18T11:40:00Z")
-        # pressed 11:49 (before the stop's write at 11:50), handled and published after it
+        # pressed 11:49 (before the stop's write at 11:50), handled and published 3 s after it
         early = po(stop, generation=2, lastHandledReconcileRequest="2026-11-18T11:49:00Z")
-        early["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=t(5))
+        early["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested",
+                                           publishedAt="2026-11-18T11:50:03Z")
         self.assertFalse(I.asked_since_stop(early)[0])
         late = po(stop, generation=2, lastHandledReconcileRequest="2026-11-18T11:55:00Z")
         self.assertTrue(I.asked_since_stop(late)[0])
@@ -257,6 +261,51 @@ class Endings(unittest.TestCase):
         self.assertFalse(I.asked_since_stop(untimed)[0], "published before the stop")
         # the nobody-asked keep records such a request as handled at the stop (the operator stops publishing)
         self.assertEqual(I.install_stopped_seen(early)["stoppedRequest"], "2026-11-18T11:49:00Z")
+
+    def test_a_request_published_well_after_the_stop_asks_whatever_its_own_time(self):
+        """A request asks when its own time is after the stop's write, or when the operator published it more than
+        the margin (one minute) after it; a request in flight when the stop was written does not."""
+        written = NOW - datetime.timedelta(minutes=10)
+        stop = dict(STOPPED, stoppedAt=I.fmt_time(written), stoppedRequest="2026-11-18T11:00:00Z")
+
+        def case(request, published_after_s):
+            obj = po(stop, generation=2, lastHandledReconcileRequest=request)
+            obj["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested",
+                                             publishedAt=I.fmt_time(written + datetime.timedelta(
+                                                 seconds=published_after_s)))
+            return I.asked_since_stop(obj)[0]
+        before = lambda s: I.fmt_time(written - datetime.timedelta(seconds=s))  # noqa: E731
+        # the gate's F3 sequence: made before the stop, published again 20 s after it: does not ask
+        self.assertFalse(case(before(30), 20))
+        # pressed 2 s before the write, handled 3 s after: does not ask
+        self.assertFalse(case(before(2), 3))
+        # a browser 10 minutes slow pressing 5 minutes after the stop (its value 5 minutes before): asks
+        self.assertTrue(case(before(300), 300))
+        # a value that is not a time: by the publish time alone, with the same margin
+        self.assertFalse(case("not-a-time", 30))
+        self.assertTrue(case("not-a-time", 90))
+        # a hand-made old value published well after: asks
+        self.assertTrue(case("2020-01-01T00:00:00Z", 120))
+        # the margin is a setting
+        obj = po(stop, generation=2, lastHandledReconcileRequest=before(300))
+        obj["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested",
+                                         publishedAt=I.fmt_time(written + datetime.timedelta(seconds=300)))
+        self.assertFalse(I.asked_since_stop(obj, None, 10)[0])
+
+    def test_a_request_asks_once(self):
+        """The same request seen by a later run still asks until a run acts on it; once the next stop records it as
+        handled, it asks no more."""
+        written = NOW - datetime.timedelta(minutes=10)
+        late = I.fmt_time(written + datetime.timedelta(minutes=5))
+        obj = po(dict(STOPPED, stoppedAt=I.fmt_time(written), stoppedRequest=""), generation=2,
+                 lastHandledReconcileRequest=late)
+        self.assertTrue(I.asked_since_stop(obj)[0])
+        self.assertTrue(I.asked_since_stop(copy.deepcopy(obj))[0], "a later run before anyone acted")
+        # a run acted (CleaningUp, then a new stop records the request as handled at that stop)
+        acted = po(dict(STOPPED, stoppedAt=I.fmt_time(NOW), stoppedRequest=late), generation=2,
+                   lastHandledReconcileRequest=late)
+        acted["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=late)
+        self.assertFalse(I.asked_since_stop(acted)[0])
 
     def test_the_stop_records_when_it_was_written(self):
         hub = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)

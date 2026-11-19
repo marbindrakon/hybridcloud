@@ -233,7 +233,8 @@ class Template(unittest.TestCase):
         self.assertLess(defaults["watchWindowMinutes"] * 60, tpl["timeout"])
         self.assertEqual(set(defaults), {"observeIntervalSeconds", "watchWindowMinutes", "deadlineMinutes",
                                          "checkWriteMinutes", "pendingReleaseMinutes", "removalLimitMinutes",
-                                         "namespaceWaitMinutes"})
+                                         "namespaceWaitMinutes", "retryMarginMinutes"})
+        self.assertEqual(defaults["retryMarginMinutes"], 1)
         self.assertEqual(defaults["namespaceWaitMinutes"], 30)
         self.assertEqual(defaults["removalLimitMinutes"], 60)
         self.assertEqual(defaults["pendingReleaseMinutes"], 10)

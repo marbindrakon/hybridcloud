@@ -18,7 +18,7 @@
     that:
       - (platformopenshift_install[item] | default('', true) | string | length) > 0
     fail_msg: "Set platformopenshift_defaults.install.{{ item }} (the installation setting is missing)."
-  loop: [pendingReleaseMinutes, removalLimitMinutes]
+  loop: [pendingReleaseMinutes, removalLimitMinutes, retryMarginMinutes]
 
 - name: Set Vault root token from job credential
   ansible.builtin.set_fact:
@@ -71,6 +71,7 @@
     release_deployed_at: "{{ _rsb_release.last_deployed | default('', true) }}"
     pending_minutes: "{{ platformopenshift_install.pendingReleaseMinutes | int }}"
     removal_minutes: "{{ platformopenshift_install.removalLimitMinutes | int }}"
+    retry_margin_minutes: "{{ platformopenshift_install.retryMarginMinutes | int }}"
   register: rsb_decision
 
 - name: Say why the build is kept or removed
