@@ -298,9 +298,9 @@
         cr_plural: platformopenshifts
         cr_name: "{{ platformopenshift_cr_name }}"
         cr_namespace: "{{ platformopenshift_cr_namespace }}"
-        # a refusal (preflight_stop.yml, the cluster credential) notes po_fail_reason and its condition, then fails
-        # with exactly the condition's sentence: only that failure writes the refusal (reason, the same sentence in
-        # the message and the condition). Nothing a cloud, the hub, the installer or a helper answered is written:
+        # a refusal (preflight_stop.yml: the Preflight condition; the cluster credential) notes po_fail_reason and its
+        # condition, then fails with exactly the condition's sentence: only that failure writes the refusal (reason,
+        # the same sentence in the message and the condition). Nothing a cloud, the hub, the installer or a helper answered is written:
         # otherwise the message is a fail or assert task's own platform text, else the general sentence naming the
         # step (shc_failure_message), with reason ProvisionFailed.
         _po_refusal: "{{ (po_preflight_condition | default({}, true)).message | default('', true) | string }}"
