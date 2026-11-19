@@ -55,6 +55,41 @@ def short_id(text, limit, prefix=""):
     return out
 
 
+# Google's limits for the names this helper builds (the build name is at most 40 characters of [a-z0-9-])
+POOL_ID_MAX = 32            # workload identity pool id: 4-32 of [a-z0-9-]
+POOL_DISPLAY_NAME_MAX = 32  # workload identity pool display name
+SA_ID_MAX = 30              # service account id: 6-30 of [a-z0-9-], starts with a letter
+SA_DISPLAY_NAME_MAX = 100   # service account display name
+ROLE_ID_MAX = 64            # custom role id: 3-64 of [a-zA-Z0-9_.]
+ROLE_TITLE_MAX = 100        # custom role title
+
+
+def labelled_name(cluster, ns, name, limit):
+    """"<cluster> <ns>/<name>" in at most `limit` characters: the build name stays whole (it is what the platform
+    finds the cluster's objects by), the CredentialsRequest's namespace/name is cut to the room left."""
+    room = limit - len(cluster) - 1
+    if room <= 0:
+        return cluster[:limit]
+    return "%s %s" % (cluster, ("%s/%s" % (ns, name))[:room])
+
+
+def pool_id(cluster):
+    return short_id(cluster, POOL_ID_MAX, "shc-")
+
+
+def sa_account_id(cluster, ns, name):
+    return short_id("%s-%s-%s" % (cluster, ns, name), SA_ID_MAX)
+
+
+def role_id(cluster, ns, name):
+    """One custom role per request: several requests share the secret name "cloud-credentials" (ingress,
+    cloud-network-config-controller), so the id carries the namespace."""
+    rid = re.sub(r"[^a-zA-Z0-9_.]", "_", "shc_%s_%s_%s" % (cluster, ns, name))
+    if len(rid) > ROLE_ID_MAX:
+        rid = rid[:ROLE_ID_MAX - 7] + "_" + hashlib.sha256(rid.encode()).hexdigest()[:6]
+    return rid
+
+
 def external_account(audience, sa_email, token_file, project=None):
     doc = {"type": "external_account", "audience": audience,
            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": STS,
@@ -76,7 +111,7 @@ class Cluster:
         self.changed = []
         p = g.http("GET", "%s/projects/%s" % (g.CRM, self.project), token=self.tok)
         self.number = (p.get("name") or "").split("/")[-1]
-        self.pool_id = short_id(cluster, 32, "shc-")
+        self.pool_id = pool_id(cluster)
         self.pool = "%s/projects/%s/locations/global/workloadIdentityPools/%s" % (IAM, self.project, self.pool_id)
         self.provider = self.pool + "/providers/oidc"
         self.audience = "//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/oidc" % (self.number, self.pool_id)
@@ -95,7 +130,7 @@ class Cluster:
                     break
         if not pool:
             g.http("POST", "%s/projects/%s/locations/global/workloadIdentityPools?workloadIdentityPoolId=%s" % (IAM, self.project, self.pool_id),
-                   {"displayName": self.cluster[:32], "description": "OpenShift cluster %s (SHC)" % self.cluster}, token=self.tok)
+                   {"displayName": self.cluster[:POOL_DISPLAY_NAME_MAX], "description": "OpenShift cluster %s (SHC)" % self.cluster}, token=self.tok)
             self.changed.append("pool " + self.pool_id)
             for _ in range(30):
                 time.sleep(5)
@@ -125,7 +160,7 @@ class Cluster:
         sa = g.http("GET", "%s/projects/%s/serviceAccounts/%s" % (IAM, self.project, email), token=self.tok, ok404=True)
         if not sa:
             g.http("POST", "%s/projects/%s/serviceAccounts" % (IAM, self.project), {
-                "accountId": account_id, "serviceAccount": {"displayName": "%s %s/%s" % (self.cluster, ref["namespace"], ref["name"])[:100],
+                "accountId": account_id, "serviceAccount": {"displayName": labelled_name(self.cluster, ref["namespace"], ref["name"], SA_DISPLAY_NAME_MAX),
                                                             "description": "shc-cluster=" + self.cluster}}, token=self.tok)
             self.changed.append("service account " + account_id)
             time.sleep(3)
@@ -166,7 +201,7 @@ class Cluster:
             self.changed.append("custom role undeleted " + role_id)
         if not r:
             g.http("POST", "%s/projects/%s/roles" % (IAM, self.project), {"roleId": role_id, "role": {
-                "title": title[:100], "includedPermissions": sorted(permissions), "stage": "GA"}}, token=self.tok)
+                "title": title[:ROLE_TITLE_MAX], "includedPermissions": sorted(permissions), "stage": "GA"}}, token=self.tok)
             self.changed.append("custom role " + role_id)
         elif sorted(r.get("includedPermissions", [])) != sorted(permissions):
             g.http("PATCH", "%s/%s?updateMask=includedPermissions" % (IAM, name), {"includedPermissions": sorted(permissions)}, token=self.tok)
@@ -206,18 +241,15 @@ class Cluster:
             sas = spec.get("serviceAccountNames") or []
             if not sas:
                 fail("CredentialsRequest without serviceAccountNames", name=cr["metadata"]["name"])
-            account_id = short_id("%s-%s-%s" % (self.cluster, ref["namespace"], ref["name"]), 30)
+            account_id = sa_account_id(self.cluster, ref["namespace"], ref["name"])
             email = self.ensure_sa(account_id, ref)
             want.add(email)
             ps = spec["providerSpec"]
             roles = list(ps.get("predefinedRoles") or [])
             if ps.get("permissions"):
-                # one custom role per request: several requests share the secret name "cloud-credentials" (ingress,
-                # cloud-network-config-controller), so the id carries the namespace (ids are [a-zA-Z0-9_.]{3,64})
-                rid = re.sub(r"[^a-zA-Z0-9_.]", "_", "shc_%s_%s_%s" % (self.cluster, ref["namespace"], ref["name"]))
-                if len(rid) > 64:
-                    rid = rid[:57] + "_" + hashlib.sha256(rid.encode()).hexdigest()[:6]
-                roles.append(self.custom_role_up(rid, ps["permissions"], "%s %s/%s" % (self.cluster, ref["namespace"], ref["name"])))
+                rid = role_id(self.cluster, ref["namespace"], ref["name"])
+                roles.append(self.custom_role_up(rid, ps["permissions"],
+                                                 labelled_name(self.cluster, ref["namespace"], ref["name"], ROLE_TITLE_MAX)))
             if self.project_policy_add("serviceAccount:" + email, roles):
                 self.changed.append("roles for " + account_id)
             self.sa_binding_up(email, ["system:serviceaccount:%s:%s" % (ref["namespace"], sa) for sa in sas])
