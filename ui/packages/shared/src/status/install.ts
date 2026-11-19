@@ -10,7 +10,7 @@
  * Pure module: type-only imports besides the phase and duration modules, so it can be bundled for
  * node tests.
  */
-import { detailOf, phaseOf, reasonOf, type PhaseSubject } from './phase';
+import { detailOf, isInFlight, phaseOf, reasonOf, retryQueued, type PhaseSubject } from './phase';
 import { CLUSTER_INSTALL_MINUTES } from './durations';
 
 export const INSTALL_STAGES = ['Preparing', 'CleaningUp', 'Installing', 'Finishing', 'Installed', 'Stopped'] as const;
@@ -149,17 +149,33 @@ export interface InstallProgress {
   showEstimate: boolean;
 }
 
-function stageSentence(t: T, install: InstallStatus): string | undefined {
+/**
+ * The attempt the installer runs or is about to run. While a failed attempt is retried the recorded attempt can
+ * still be the one that failed (the next has not started yet): the line then names the next one, so it never repeats
+ * the failed attempt shown below it. Undefined when no attempt is left (the failure line says enough).
+ */
+function currentAttempt(install: InstallStatus, retrying: boolean): number | undefined | null {
+  const failed = retrying ? install.lastFailure?.attempt : undefined;
+  if (failed === undefined) return install.attempt;
+  const next = Math.max(install.attempt ?? 0, failed + 1);
+  if (install.attemptsLimit && next > install.attemptsLimit) return null;
+  return next;
+}
+
+function stageSentence(t: T, install: InstallStatus, retrying = false): string | undefined {
   switch (install.stage) {
     case 'Preparing':
       return t('install.stagePreparing');
     case 'CleaningUp':
       return t('install.stageCleaningUp');
-    case 'Installing':
-      if (install.attempt && install.attemptsLimit) {
-        return t('install.stageInstalling', { attempt: install.attempt, limit: install.attemptsLimit });
+    case 'Installing': {
+      const attempt = currentAttempt(install, retrying);
+      if (attempt === null) return undefined;
+      if (attempt && install.attemptsLimit) {
+        return t('install.stageInstalling', { attempt, limit: install.attemptsLimit });
       }
-      return install.attempt ? t('install.stageInstallingAttempt', { attempt: install.attempt }) : t('install.stageInstallingPlain');
+      return attempt ? t('install.stageInstallingAttempt', { attempt }) : t('install.stageInstallingPlain');
+    }
     case 'Finishing':
       return t('install.stageFinishing');
     default:
@@ -177,7 +193,8 @@ export function installProgress(t: T, item: PhaseSubject | null | undefined, now
   const phase = phaseOf(item);
   if (phase !== 'Creating' && phase !== 'Updating') return null;
 
-  const out: InstallProgress = { variant: 'info', showEstimate: true, stage: stageSentence(t, install) };
+  const retrying = reasonOf(item) === INSTALL_RETRYING_REASON;
+  const out: InstallProgress = { variant: 'info', showEstimate: true, stage: stageSentence(t, install, retrying) };
 
   const elapsed = msSince(install.startedAt, now);
   const checked = msSince(install.observedAt, now);
@@ -189,7 +206,7 @@ export function installProgress(t: T, item: PhaseSubject | null | undefined, now
   if (times.length) out.times = times.join(' ');
   if (stale && checked !== undefined) out.stale = t('install.stale', { elapsed: elapsedText(t, checked) });
 
-  if (reasonOf(item) === INSTALL_RETRYING_REASON) {
+  if (retrying) {
     out.variant = 'warning';
     out.failure = detailOf(item) ?? install.lastFailure?.message;
   }
@@ -348,4 +365,38 @@ function installerPart(spec: unknown): string {
  */
 export function installSettingsChanged(before: unknown, after: unknown): boolean {
   return installerPart(before) !== installerPart(after);
+}
+
+/** How often an open detail page reads its object while it is not settled, and otherwise. */
+export const DETAIL_POLL_UNSETTLED_MS = 12_000;
+export const DETAIL_POLL_SETTLED_MS = 60_000;
+
+/**
+ * The refresh interval of an object's detail page: every DETAIL_POLL_UNSETTLED_MS while the object is not settled
+ * (being created, changed or deleted, waiting, a Retry or reconcile request not yet handled, or an installation
+ * recorded as running), else every DETAIL_POLL_SETTLED_MS. A page that has not read the object yet counts as not
+ * settled.
+ */
+export function detailPollMs(item: PhaseSubject | null | undefined, opts: { retrySent?: boolean } = {}): number {
+  if (!item) return DETAIL_POLL_UNSETTLED_MS;
+  if (opts.retrySent || retryQueued(item)) return DETAIL_POLL_UNSETTLED_MS;
+  if (isInFlight(phaseOf(item))) return DETAIL_POLL_UNSETTLED_MS;
+  const stage = installStage(item);
+  if (stage && INSTALL_RUNNING_STAGES.has(stage)) return DETAIL_POLL_UNSETTLED_MS;
+  return DETAIL_POLL_SETTLED_MS;
+}
+
+/**
+ * What Save does on a cluster's Configuration tab: on a cluster the page believes stopped, a change of the
+ * installation settings always asks first ('confirm'; the API then answers the save itself, its refusal included),
+ * whatever the server's check said; any other change is saved once the check passed ('save'), else nothing.
+ */
+export function saveStep(
+  state: InstallEditState,
+  before: unknown,
+  after: unknown,
+  checkPassed: boolean,
+): 'confirm' | 'save' | 'none' {
+  if (state === 'stopped' && installSettingsChanged(before, after)) return 'confirm';
+  return checkPassed ? 'save' : 'none';
 }

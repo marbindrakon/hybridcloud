@@ -16,7 +16,7 @@ import { AllowedSitesSelect } from '../components/AllowedSitesSelect';
 import { selfSubjectAccessReview } from '../access/ssar';
 import { errorText } from '../access/errorText';
 import { causeLines, fieldErrorsFrom, objectRuleMessages } from './apiErrors';
-import { installEditState, installSettingsChanged, isInstallLocked, isInstallTimeField } from '../status/install';
+import { installEditState, isInstallLocked, isInstallTimeField, saveStep } from '../status/install';
 import { RetryInstallationModal } from '../components/RetryInstallationModal';
 import { useServerCheckWith } from './useServerCheck';
 import { HybridSovereignKind, K8sResource, KIND_PLURALS } from '../types';
@@ -350,8 +350,9 @@ export function GenericSpecEditor({
   const ruleText = (err: unknown): string => (kind === 'PlatformOpenshift' ? objectRuleMessages(err).join(' ') : '');
   const checkRule = check.error ? ruleText(check.error) : '';
 
-  const save = async () => {
-    if (!check.passed) return;
+  // confirmed: the tenant confirmed a new installation of a stopped cluster (the API answers the save itself)
+  const save = async (confirmed = false) => {
+    if (!check.passed && !confirmed) return;
     setSaving(true);
     setError(null);
     setSaved(false);
@@ -366,10 +367,12 @@ export function GenericSpecEditor({
       setSaving(false);
     }
   };
-  // on a stopped cluster only a change of the installation settings starts a new installation: it asks first
+  // on a stopped cluster only a change of the installation settings starts a new installation: every such Save asks
+  // first, also while the server's check is pending or refused (the confirmed save shows the API's own answer)
+  const step = dirty ? saveStep(installState, original, specToSend(), check.passed) : 'none';
   const onSave = () => {
-    if (installState === 'stopped' && installSettingsChanged(original, specToSend())) setConfirmInstall(true);
-    else void save();
+    if (step === 'confirm') setConfirmInstall(true);
+    else if (step === 'save') void save();
   };
 
   const reset = () => {
@@ -662,7 +665,7 @@ export function GenericSpecEditor({
         <div style={{ display: 'flex', gap: '0.5rem', alignItems: 'center' }}>
           <Button
             variant="primary"
-            isAriaDisabled={saving || !editable || hasInvalid || hasJsonErrors || !dirty || !check.passed}
+            isAriaDisabled={saving || !editable || hasInvalid || hasJsonErrors || step === 'none'}
             isLoading={saving || (dirty && check.checking)}
             onClick={onSave}
           >
@@ -680,7 +683,7 @@ export function GenericSpecEditor({
         busy={saving}
         onConfirm={() => {
           setConfirmInstall(false);
-          void save();
+          void save(true);
         }}
         onCancel={() => setConfirmInstall(false)}
       />

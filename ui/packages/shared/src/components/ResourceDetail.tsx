@@ -35,7 +35,7 @@ import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
 import { displayText, fieldLabel, inText, kindTerm } from '../i18n/vocabulary';
 import { condStatus, phaseOf, requestMessage, retryQueued } from '../status/phase';
-import { isInstallStopped, retryLabelKey } from '../status/install';
+import { DETAIL_POLL_UNSETTLED_MS, detailPollMs, isInstallStopped, retryLabelKey } from '../status/install';
 import { formatRelativeTime } from '../list/listColumns';
 import {
   COMMON_STATUS_KEYS,
@@ -280,11 +280,13 @@ export function ResourceDetail({
   const [deleteRequested, setDeleteRequested] = useState(false);
   const kindLabel = kindTerm(t, kind);
 
+  // The page follows its object: often while it is not settled (being created, changed or deleted, a request not
+  // yet handled, an installation running), slowly otherwise. The interval is decided from the object last read.
+  const [pollMs, setPollMs] = useState(DETAIL_POLL_UNSETTLED_MS);
   const { resource, loading, error, refreshError, loadedAt, refresh } = useK8sResource<K8sResource>(kind, name, {
     namespace,
-    pollWhileInFlight: true,
     // After a delete request the object may not show deletionTimestamp yet: poll fast regardless.
-    pollIntervalMs: deleteRequested ? 5000 : undefined,
+    pollIntervalMs: deleteRequested ? 5000 : pollMs,
   });
 
   // The object went away after a delete requested from this page: say so and go to the parent.
@@ -325,6 +327,8 @@ export function ResourceDetail({
   }, [resource, shown, namespace, kind, t]);
 
   const queued = retrySent || (resource ? retryQueued(resource) : false);
+  const nextPollMs = detailPollMs(resource, { retrySent });
+  useEffect(() => setPollMs(nextPollMs), [nextPollMs]);
   const handleRetry = async () => {
     if (retrying || queued || !namespace || !name) return;
     setRetrying(true);

@@ -124,7 +124,7 @@ test('a failed attempt while the installer retries: warning style and the messag
     install: installing({ attempt: 2, startedAt: ago(3 * 60), lastFailure: { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30) } }),
     reason: 'InstallRetrying',
     message: QUOTA,
-    summary: 'An installation attempt failed; the installer is trying again. The message says what failed.',
+    summary: 'An installation attempt failed; the installer is trying again.',
   });
   const r = ins.installProgress(t, o, NOW);
   assert.equal(r.variant, 'warning');
@@ -218,7 +218,7 @@ test('the retrying message is shown as the platform wrote it, whichever ending i
   for (const ending of ['The next attempt starts shortly.', 'No attempts are left; the installer is about to stop.']) {
     const msg = `Attempt 3 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64). ${ending}`;
     const o = cluster({ install: installing({ attempt: 3 }), reason: 'InstallRetrying', message: msg,
-      summary: 'An installation attempt failed; the installer is trying again. The message says what failed.' });
+      summary: 'An installation attempt failed; the installer is trying again.' });
     const r = ins.installProgress(t, o, NOW);
     assert.equal(r.failure, msg);
     assert.equal(r.variant, 'warning');
@@ -349,4 +349,68 @@ test('the reader keeps well-formed values only', () => {
   assert.equal(ins.installOf(cluster()), undefined);
   assert.equal(ins.isInstallStopped(cluster({ install: { stage: 'Stopped' } })), true);
   assert.equal(ins.isInstallStopped(null), false);
+});
+
+test('while a failed attempt is retried the attempt line names the next attempt, never the failed one', () => {
+  const failed1 = { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30) };
+  // Hive has not started attempt 2 yet: the record still says attempt 1
+  const o = cluster({ install: installing({ attempt: 1, lastFailure: failed1 }), reason: 'InstallRetrying', message: QUOTA });
+  const r = ins.installProgress(t, o, NOW);
+  assert.equal(r.stage, 'Installing, attempt 2 of 3.');
+  assert.equal(r.failure, QUOTA);
+  // attempt 2 runs
+  assert.equal(ins.installProgress(t, cluster({ install: installing({ attempt: 2, lastFailure: failed1 }),
+    reason: 'InstallRetrying', message: QUOTA }), NOW).stage, 'Installing, attempt 2 of 3.');
+  // the last attempt failed: no attempt line, the failure line says what follows
+  const last = { attempt: 3, message: 'Attempt 3 of 3 failed: x. No attempts are left; the installer is about to stop.' };
+  const l = ins.installProgress(t, cluster({ install: installing({ attempt: 3, lastFailure: last }),
+    reason: 'InstallRetrying', message: last.message }), NOW);
+  assert.equal(l.stage, undefined);
+  assert.equal(l.failure, last.message);
+  // a kept failure while no retry is said: the recorded attempt
+  assert.equal(ins.installProgress(t, cluster({ install: installing({ attempt: 1, lastFailure: failed1 }) }), NOW).stage,
+    'Installing, attempt 1 of 3.');
+});
+
+test('the detail page follows its object: often while it is not settled, slowly otherwise', () => {
+  const fast = ins.DETAIL_POLL_UNSETTLED_MS;
+  const slow = ins.DETAIL_POLL_SETTLED_MS;
+  assert.ok(fast >= 10_000 && fast <= 15_000, 'every 10 to 15 seconds');
+  assert.ok(slow > fast);
+  const stopped = cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 1 }, reason: 'QuotaExceeded' });
+  const ready = cluster({ phase: 'Ready', install: { stage: 'Installed' }, reason: 'Ready' });
+  const cases = [
+    [null, fast, 'not read yet'],
+    [cluster({ install: installing() }), fast, 'Creating'],
+    [cluster({ phase: 'Deleting', install: installing() }), fast, 'Deleting'],
+    [cluster({ phase: 'Updating' }), fast, 'Updating'],
+    [cluster({ phase: 'Waiting' }), fast, 'Waiting'],
+    [stopped, slow, 'a stop nobody asked to retry'],
+    [ready, slow, 'installed and ready'],
+    // the page still shows the stop, the Retry is queued (annotation newer than the handled request)
+    [{ ...stopped, metadata: { ...stopped.metadata, annotations: { 'ansible.sdk.operatorframework.io/reconcileNow': '2026-11-18T12:00:00Z' } } }, fast, 'a queued retry'],
+    // the object is Failed (InstallOverdue) while its installation is recorded as running
+    [cluster({ phase: 'Failed', install: installing(), reason: 'InstallOverdue' }), fast, 'an installation recorded as running'],
+    [cluster({ phase: 'Failed', install: { stage: 'CleaningUp' }, reason: 'InstallRemovalFailed' }), fast, 'a removal recorded as running'],
+  ];
+  for (const [o, want, why] of cases) assert.equal(ins.detailPollMs(o), want, why);
+  assert.equal(ins.detailPollMs(stopped, { retrySent: true }), fast, 'a retry sent from this page');
+  assert.equal(ins.detailPollMs(ready, { retrySent: false }), slow);
+});
+
+test('every Save that changes an installation setting of a cluster the page believes stopped asks first', () => {
+  const before = { type: 'openstack', openstack: { environment: 'env-a', workerCount: 12 } };
+  const fewer = { type: 'openstack', openstack: { environment: 'env-a', workerCount: 11 } };
+  const access = { ...before, toolRbac: { clusterAdminRbac: ['admins'] } };
+  // the server's check passed, is pending or refused (the object moved on): it still asks
+  for (const passed of [true, false]) {
+    assert.equal(ins.saveStep('stopped', before, fewer, passed), 'confirm');
+    // a second change in the same page (the first is the page's new original)
+    assert.equal(ins.saveStep('stopped', fewer, { ...fewer, openstack: { ...fewer.openstack, workerCount: 10 } }, passed), 'confirm');
+  }
+  assert.equal(ins.saveStep('stopped', before, access, true), 'save', 'access groups start nothing');
+  assert.equal(ins.saveStep('stopped', before, access, false), 'none');
+  assert.equal(ins.saveStep('open', before, fewer, true), 'save');
+  assert.equal(ins.saveStep('open', before, fewer, false), 'none');
+  assert.equal(ins.saveStep('installed', before, access, true), 'save');
 });
