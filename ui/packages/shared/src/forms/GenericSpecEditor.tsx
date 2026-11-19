@@ -36,7 +36,8 @@ export interface GenericSpecEditorProps {
   kind: HybridSovereignKind;
   namespace: string;
   item: K8sResource;
-  onSaved: () => void;
+  /** installing: the save asked for a new installation of a stopped cluster (confirmed) */
+  onSaved: (installing?: boolean) => void;
   /** Show the fields without allowing changes */
   readOnly?: boolean;
   /** tenant pages hide platform-only fields (adminOnly) */
@@ -359,7 +360,7 @@ export function GenericSpecEditor({
     try {
       await updateDashboardResource(kind, item.metadata.name, namespace, { spec: specToSend() });
       setSaved(true);
-      onSaved();
+      onSaved(confirmed);
     } catch (err) {
       const txt = errorText(err, t, { action: 'action' });
       setError(ruleText(err) || [txt.title, txt.body].filter(Boolean).join(' '));

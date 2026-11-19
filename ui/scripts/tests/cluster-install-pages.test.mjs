@@ -84,7 +84,7 @@ test('callout while a failed attempt is retried: warning style and the failed at
       lastFailure: { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30) } },
     reason: 'InstallRetrying',
     message: QUOTA,
-    summary: 'An installation attempt failed; the installer is trying again.',
+    summary: 'An installation attempt failed; the installer tries again while attempts are left.',
   }));
   assert.ok(html.includes('pf-m-warning'), 'warning style');
   const s = text(html);

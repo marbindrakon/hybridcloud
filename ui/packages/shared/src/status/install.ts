@@ -7,11 +7,12 @@
  * from the string catalogue: the functions take `t` and return the sentences, so the tests read
  * the same words the page shows.
  *
- * Pure module: type-only imports besides the phase and duration modules, so it can be bundled for
+ * Pure module: type-only imports besides the phase, duration and fetch-state modules, so it can be bundled for
  * node tests.
  */
 import { detailOf, isInFlight, phaseOf, reasonOf, retryQueued, type PhaseSubject } from './phase';
 import { CLUSTER_INSTALL_MINUTES } from './durations';
+import { IDLE_POLL_MS, IN_FLIGHT_POLL_MS } from '../hooks/fetchState';
 
 export const INSTALL_STAGES = ['Preparing', 'CleaningUp', 'Installing', 'Finishing', 'Installed', 'Stopped'] as const;
 export type InstallStage = (typeof INSTALL_STAGES)[number];
@@ -157,6 +158,8 @@ export interface InstallProgress {
 function currentAttempt(install: InstallStatus, retrying: boolean): number | undefined | null {
   const failed = retrying ? install.lastFailure?.attempt : undefined;
   if (failed === undefined) return install.attempt;
+  // without a known limit no attempt is named while one is retried (never a number beyond the limit)
+  if (!install.attemptsLimit) return 0;
   const next = Math.max(install.attempt ?? 0, failed + 1);
   if (install.attemptsLimit && next > install.attemptsLimit) return null;
   return next;
@@ -367,29 +370,59 @@ export function installSettingsChanged(before: unknown, after: unknown): boolean
   return installerPart(before) !== installerPart(after);
 }
 
-/** How often an open detail page reads its object while it is not settled, and otherwise. */
-export const DETAIL_POLL_UNSETTLED_MS = 12_000;
-export const DETAIL_POLL_SETTLED_MS = 60_000;
+/** After a Retry or an installing Save sent from the page: how long it reads fast for the object to move on. */
+export const SENT_FOLLOW_MS = 180_000;
+/** A page whose object is missing or not readable reads again at this pace (not fast for ever). */
+export const MISSING_POLL_MS = 60_000;
+/** The page says when it last read the object once that is older than this. */
+export const PAGE_READ_OLD_MS = 30_000;
 
-/**
- * The refresh interval of an object's detail page: every DETAIL_POLL_UNSETTLED_MS while the object is not settled
- * (being created, changed or deleted, waiting, a Retry or reconcile request not yet handled, or an installation
- * recorded as running), else every DETAIL_POLL_SETTLED_MS. A page that has not read the object yet counts as not
- * settled.
- */
-export function detailPollMs(item: PhaseSubject | null | undefined, opts: { retrySent?: boolean } = {}): number {
-  if (!item) return DETAIL_POLL_UNSETTLED_MS;
-  if (opts.retrySent || retryQueued(item)) return DETAIL_POLL_UNSETTLED_MS;
-  if (isInFlight(phaseOf(item))) return DETAIL_POLL_UNSETTLED_MS;
-  const stage = installStage(item);
-  if (stage && INSTALL_RUNNING_STAGES.has(stage)) return DETAIL_POLL_UNSETTLED_MS;
-  return DETAIL_POLL_SETTLED_MS;
+/** What the page knew of the object when it sent a Retry or an installing Save. */
+export interface SentMark {
+  at: number;
+  stage?: InstallStage;
+  run?: number;
+}
+
+export function sentMark(item: PhaseSubject | null | undefined, now: number = Date.now()): SentMark {
+  const install = installOf(item);
+  return { at: now, stage: install?.stage, run: install?.run };
 }
 
 /**
- * What Save does on a cluster's Configuration tab: on a cluster the page believes stopped, a change of the
- * installation settings always asks first ('confirm'; the API then answers the save itself, its refusal included),
- * whatever the server's check said; any other change is saved once the check passed ('save'), else nothing.
+ * The refresh interval of an object's detail page. Fast (IN_FLIGHT_POLL_MS) while the object is being created,
+ * changed or deleted, waits, has a request not yet handled, records an installation that runs or retries a failed
+ * attempt, and after a Retry or an installing Save sent from this page until the installation's stage or run differs
+ * from what the page sent it on (at most SENT_FOLLOW_MS); slow (IDLE_POLL_MS) otherwise. A page that has not read its
+ * object reads fast, one whose object is missing or forbidden at MISSING_POLL_MS. (A hidden tab: pollDelayMs.)
+ */
+export function detailPollMs(
+  item: PhaseSubject | null | undefined,
+  opts: { sent?: SentMark | null; now?: number; missing?: boolean } = {},
+): number {
+  if (!item) return opts.missing ? MISSING_POLL_MS : IN_FLIGHT_POLL_MS;
+  const install = installOf(item);
+  const sent = opts.sent;
+  const now = opts.now ?? Date.now();
+  if (sent && now - sent.at < SENT_FOLLOW_MS && install?.stage === sent.stage && install?.run === sent.run) {
+    return IN_FLIGHT_POLL_MS;
+  }
+  if (retryQueued(item) || isInFlight(phaseOf(item))) return IN_FLIGHT_POLL_MS;
+  if (install?.stage && INSTALL_RUNNING_STAGES.has(install.stage)) return IN_FLIGHT_POLL_MS;
+  if (reasonOf(item) === INSTALL_RETRYING_REASON) return IN_FLIGHT_POLL_MS;
+  return IDLE_POLL_MS;
+}
+
+/** "This page last read the cluster 40 seconds ago." once the page's own read is older than PAGE_READ_OLD_MS. */
+export function pageReadLine(t: T, loadedAt: number | undefined, now: number = Date.now()): string | undefined {
+  if (!loadedAt || now - loadedAt <= PAGE_READ_OLD_MS) return undefined;
+  return t('install.pageRead', { elapsed: elapsedText(t, now - loadedAt) });
+}
+
+/**
+ * What Save does on a cluster's Configuration tab: on a cluster the page believes stopped or installing (a draft
+ * typed while it was stopped), a change of the installation settings always asks first ('confirm'; the API then
+ * answers the save itself, its refusal included), whatever the server's check said; any other change is saved once the check passed ('save'), else nothing.
  */
 export function saveStep(
   state: InstallEditState,
@@ -397,6 +430,6 @@ export function saveStep(
   after: unknown,
   checkPassed: boolean,
 ): 'confirm' | 'save' | 'none' {
-  if (state === 'stopped' && installSettingsChanged(before, after)) return 'confirm';
+  if ((state === 'stopped' || state === 'installing') && installSettingsChanged(before, after)) return 'confirm';
   return checkPassed ? 'save' : 'none';
 }

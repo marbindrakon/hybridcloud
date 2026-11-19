@@ -7,7 +7,7 @@ import {
 } from '../types';
 import { usePermissions } from './permissions';
 import { errorFromFetchFailure, errorFromResponse, K8sApiErrorContext, parseWarningHeaders } from './errors';
-import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs } from './fetchState';
+import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs, readOnShow } from './fetchState';
 import { isInFlight, phaseOf } from '../status/phase';
 
 export type K8sApiStyle = 'raw' | 'dashboard';
@@ -539,7 +539,7 @@ function useDocumentHidden(): boolean {
 function useRefreshWhenShown(hidden: boolean, active: boolean, refresh: () => void): void {
   const wasHidden = useRef(hidden);
   useEffect(() => {
-    if (wasHidden.current && !hidden && active) refresh();
+    if (readOnShow(wasHidden.current, hidden, active)) refresh();
     wasHidden.current = hidden;
   }, [hidden, active, refresh]);
 }
@@ -603,6 +603,7 @@ export function useK8sResourceList<T extends K8sResource>(
   const current = state.key === url ? state : initialFetchState<T[]>(url);
   const items = (current.data ?? NO_ITEMS) as T[];
   const hidden = useDocumentHidden();
+  useRefreshWhenShown(hidden, enabled, refresh);
   const inFlight = !!pollWhileInFlight && items.some((i) => isInFlight(phaseOf(i)));
   const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
   useNextRefresh(delay, enabled && !loading, refresh);

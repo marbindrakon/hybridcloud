@@ -1220,6 +1220,7 @@
     "stageFinishing": "Finishing: the cluster is installed; the platform is connecting it.",
     "started": "Started {{elapsed}} ago.",
     "lastChecked": "Last checked {{elapsed}} ago.",
+    "pageRead": "This page last read the cluster {{elapsed}} ago.",
     "stale": "The state shown was last checked {{elapsed}} ago.",
     "longerThanUsual": "This is taking longer than usual. The installer tries up to {{limit}} times; if it stops, this page says why.",
     "longerThanUsualNoLimit": "This is taking longer than usual. The installer tries again by itself; if it stops, this page says why.",

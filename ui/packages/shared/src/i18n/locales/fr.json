@@ -1220,6 +1220,7 @@
     "stageFinishing": "Finalisation : le cluster est installé ; la plateforme le raccorde.",
     "started": "Commencée il y a {{elapsed}}.",
     "lastChecked": "Dernière vérification il y a {{elapsed}}.",
+    "pageRead": "Cette page a lu le cluster pour la dernière fois il y a {{elapsed}}.",
     "stale": "L'état affiché a été vérifié pour la dernière fois il y a {{elapsed}}.",
     "longerThanUsual": "Cela prend plus de temps que d'habitude. L'installateur essaie jusqu'à {{limit}} fois ; s'il s'arrête, cette page indique pourquoi.",
     "longerThanUsualNoLimit": "Cela prend plus de temps que d'habitude. L'installateur réessaie de lui-même ; s'il s'arrête, cette page indique pourquoi.",
