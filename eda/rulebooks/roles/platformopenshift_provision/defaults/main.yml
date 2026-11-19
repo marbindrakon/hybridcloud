@@ -83,7 +83,7 @@ platformopenshift_service_wait_delay: 20
 #                         does not finish deleting is written as failed (InstallRemovalFailed) for the platform team
 # namespaceWaitMinutes    a cluster whose build's namespace on the hub is still held by an earlier cluster of the same
 #                         name (terminating) waits this long from its first wait (WaitingForEarlierCluster), then is
-#                         refused (NamespaceTaken) for the platform team
+#                         refused (EarlierClusterNotRemoved) for the platform team
 # retryMarginMinutes      a Retry request on a stopped installation asks for a new one when its own time is after the
 #                         stop was written, or when it was published more than this long after the write
 # checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing

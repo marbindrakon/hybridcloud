@@ -1287,7 +1287,7 @@ class GatePass(unittest.TestCase):
         with open(os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks",
                                "claim_build_wait.yml")) as fh:
             refuse = next(t for t in yaml.safe_load(fh) if t.get("name") == "Refuse after the wait's bound")
-        self.assertEqual(refuse["vars"]["ps_reason"], "NamespaceTaken")
+        self.assertEqual(refuse["vars"]["ps_reason"], "EarlierClusterNotRemoved")
         self.assertEqual(creates(tr), [])
         # free again: the wait is cleared and the namespace claimed
         api, rc, tr, out = self.claim("Preparing", None, namespaceWaitSince=ago(31))

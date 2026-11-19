@@ -162,7 +162,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `InProgress` | Applying the change. | Nobody: it continues by itself |
 | `InstallCleanup` | A stopped installation is being removed before the new one starts. | Nobody: it continues by itself |
 | `InstallFinishing` | The cluster is installed; the platform is connecting it. | Nobody: it continues by itself |
-| `InstallRetrying` | An installation attempt failed; the installer is trying again. The message says what failed. | Nobody: it continues by itself |
+| `InstallRetrying` | An installation attempt failed; the installer is trying again. | Nobody: it continues by itself |
 | `Installing` | The cluster is being installed. | Nobody: it continues by itself |
 | `JobRunning` | Applying the change. | Nobody: it continues by itself |
 | `NotReady` | Not ready yet. | Nobody: it continues by itself |
@@ -240,6 +240,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `DefaultImageNotFound` | The environment lacks the image the platform uses for cluster nodes by default. Name an image it offers, or ask the platform team. | The platform team |
 | `DnsProjectNotFound` | The DNS project does not exist. The platform team is looking at it. | The platform team |
 | `EDAFailed` | Could not be completed; see the reason. | The platform team |
+| `EarlierClusterNotRemoved` | An earlier cluster of this name was not removed from the platform in time. The platform team is looking at it. | The platform team |
 | `EntityNotAllowed` | This site is not available to this tenant. | You (the tenant) |
 | `EnvironmentNameTaken` | This environment name is already in use. Choose another name. | You (the tenant) |
 | `ExternalNetworkNotFound` | The site's external network was not found. The platform team is looking at it. | The platform team |

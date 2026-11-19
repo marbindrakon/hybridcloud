@@ -59,7 +59,7 @@ REASONS = {
     "ClusterBuildProvisioned": _r("A", PROGRESS, "The cluster is being installed."),
     # an OpenShift cluster's installation (Ready while it installs; Ready and Stalled when it stopped)
     "Installing": _r("A", PROGRESS, "The cluster is being installed."),
-    "InstallRetrying": _r("A", PROGRESS, "An installation attempt failed; the installer is trying again. The message says what failed."),
+    "InstallRetrying": _r("A", PROGRESS, "An installation attempt failed; the installer is trying again."),
     "InstallFinishing": _r("A", PROGRESS, "The cluster is installed; the platform is connecting it."),
     "InstallCleanup": _r("A", PROGRESS, "A stopped installation is being removed before the new one starts."),
     "Deleting": _r("A", PROGRESS, "Being deleted."),
@@ -106,6 +106,7 @@ REASONS = {
     "FabricMismatch": _r("T", FAILED, "The network and the site belong to different fabrics."),
     "FabricAmbiguous": _r("P", FAILED, "More than one fabric could serve this request. The platform team must resolve it."),
     "NamespaceTaken": _r("T", FAILED, "The namespace name is already in use on the site. Choose another name."),
+    "EarlierClusterNotRemoved": _r("P", FAILED, "An earlier cluster of this name was not removed from the platform in time. The platform team is looking at it."),
     "EnvironmentNameTaken": _r("T", FAILED, "This environment name is already in use. Choose another name."),
     "NameInUse": _r("T", FAILED, "This name is already used by an OpenStack environment of another tenant. Create it with another name."),
     "PrefixInvalid": _r("T", FAILED, "The address prefix is not valid."),

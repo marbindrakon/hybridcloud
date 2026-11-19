@@ -68,8 +68,12 @@ a new installation, also when the operator handled it after the write. A run tha
 claims the build's namespace (the removal claims it once the old one is gone). A namespace that is still terminating
 (an earlier cluster of the same name being removed) is never claimed: the cluster waits with reason
 `WaitingForEarlierCluster` for at most `namespaceWaitMinutes` (30) from its first wait
-(`status.install.namespaceWaitSince`), then it is refused (`NamespaceTaken`) for the platform team; a Retry checks
-again. The OpenStack preflight also refuses an
+(`status.install.namespaceWaitSince`), then it is refused (`EarlierClusterNotRemoved`) for the platform team; a Retry
+checks again. The removal of a stopped installation waits for the build's hub namespace only while it is being
+deleted, or when the removal deleted a ManagedCluster (the hub's cluster management may delete the namespace with it);
+a build that stopped before it was connected has no ManagedCluster, nothing deletes its namespace, and the removal
+claims it again at once. The namespace is the platform's own on every provider (the job makes it and marks it with
+the cluster); the removal never deletes it. The OpenStack preflight also refuses an
 image the environment does not offer (`ImageNotFound` when the spec names it, `DefaultImageNotFound` for the
 installation's default). A cluster from before installations were recorded whose installation started and whose
 ClusterDeployment is gone gets its release made again only on a Retry.
@@ -105,8 +109,9 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 | `deadlineMinutes` | 360 | An installation neither finished nor stopped after this long is shown failed (`InstallOverdue`) and checked once per periodic run. |
 | `checkWriteMinutes` | 5 | How often the check time is written while nothing changes; keep it well below 15. |
 | `pendingReleaseMinutes` | 10 | A pending release of a build with no ClusterDeployment younger than this is left alone by a Retry (an older job is still making it). |
+| `retryMarginMinutes` | 1 | A Retry on a stopped installation starts a new one when its own time is after the stop was written, or when the operator published it more than this long after that write (a client clock that runs slow); a Retry published within it was in flight when the stop was written and starts nothing. |
 | `removalLimitMinutes` | 60 | A removal of a stopped installation that waits this long beside a build Hive does not finish deleting is written as failed (`InstallRemovalFailed`). |
-| `namespaceWaitMinutes` | 30 | A cluster whose build's namespace is still held by an earlier cluster of its name (terminating) waits this long, then is refused (`NamespaceTaken`). |
+| `namespaceWaitMinutes` | 30 | A cluster whose build's namespace is still held by an earlier cluster of its name (terminating) waits this long (`WaitingForEarlierCluster`), then is refused (`EarlierClusterNotRemoved`). |
 
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).
@@ -121,6 +126,14 @@ that could not start or a release of the build that failed with no build on the 
 else, an attempt that left no log included (`InstallFailed`, with Hive's reason code when it is one of Hive's known
 codes). The whole stored log is read (up to 4 MiB, more than an object can hold on the API server). No text of the
 log, of Hive's messages or of the site reaches the cluster object.
+
+The same holds for every other failure of the cluster's jobs (provision and delete). A call to a cloud, a site, the
+hub or a helper that fails ends the job with the platform's sentence for the step, for example `The step "Prepare
+the cluster's identity on Google Cloud" failed; the platform team can see why in the job's log.`; what was answered
+(an API's error, an address, an id) is written to the job's log only. A refusal keeps its own sentence (with values
+the tenant set), and any other failed step is named the same way when its name is plain words, else `A step of the
+cluster's provisioning failed; ...` (`deletion` for the delete). The reason stays `ProvisionFailed` (`TeardownFailed`
+for the delete): the platform team reads the job's log named in `status.edaJobs`.
 
 On OpenStack the preflight refuses a flavor the environment does not offer before anything is created: named to the
 tenant (`FlavorNotFound`) when the cluster's spec names it; when it is the installation's default
