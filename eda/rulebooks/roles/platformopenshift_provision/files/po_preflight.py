@@ -167,11 +167,12 @@ def hub_owner(req):
         if recorded and recorded == build:
             # this object recorded the build, the namespace names another uid: an object restored from a backup or
             # moved gets a new uid. Never adopted: said, so that a human decides
+            # the uids go to the job's log only (detail); the message names what the tenant knows
             return dict(out, reason="BuildOwnerMismatch", owner=owner, message=(
-                f"namespace {build} on the hub carries {OWNER_LABEL}={owner}, but this PlatformOpenshift has uid {uid} "
-                "although it recorded that build (an object restored from a backup or moved gets a new uid); nothing "
-                "of the build on the hub is touched for this object until the platform team, having checked that the "
-                f"build is this cluster's, sets the label to {uid}"))
+                f"namespace {build} on the hub is marked as another cluster object's, although this cluster recorded "
+                "that build (an object restored from a backup or moved is a new object); nothing of the build on the "
+                "hub is touched for this cluster until the platform team has checked that the build is this "
+                "cluster's"), detail=f"{OWNER_LABEL}={owner}; this object's uid {uid}")
         return dict(out, reason="NamespaceTaken", message=f"namespace {build} on the hub belongs to another cluster")
     if recorded and recorded == build:
         return dict(out, owned=True, adopt=flag(req.get("claim")))
@@ -339,24 +340,24 @@ def network(req):
             else:
                 return result(mapped, text, **out)
     if not fab:
-        hold("WaitingForPlatformAccess", f"HybridNetwork {name}: its fabric {hst.get('fabric') or '(none)'} "
-             "could not be read")
+        hold("WaitingForPlatformAccess", f"HybridNetwork {name}: the platform's fabric of the network could not be "
+             "read")
         return done()
     if not svc.get("enabled"):
-        why = (f"it does not realize its service routing domain: {svc.get('message') or svc.get('reason')}"
+        why = (f"it does not realize its service routing domain: {svc.get('reason')}"
                if svc.get("reason") else "its service routing domain is off")
-        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} offers no connection for clusters on "
+        return side_down("ServiceNotOffered", "The platform's fabric offers no connection for clusters on "
                          f"networks ({why})") or done()
     if not [r for r in svc.get("range") or [] if v4(r)]:
         # the service range is required with the service (check-fabric): no address of the hub reaches a cluster
         # without it (a fabric status from before it: the fabric's next run writes it, or refuses the fabric by name)
-        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no addresses the platform reaches "
+        return side_down("ServiceNotOffered", "The platform's fabric names no addresses the platform reaches "
                          "clusters from (service.range)") or done()
     # the ranges a cluster's addresses may lie in (0.0.0.0/0: any range the platform does not refuse; the realization
     # never leaves it empty while the service is realized: Review R4 NH1)
     ranges = [str(r) for r in svc.get("attachableRanges") or []]
     if not ranges:
-        return side_down("ServiceNotOffered", f"HybridFabric {out['fabric']} names no ranges for clusters on networks "
+        return side_down("ServiceNotOffered", "The platform's fabric names no ranges for clusters on networks "
                          "(service.attachableRanges)") or done()
     if subnet4 and not inside(subnet4, ranges):
         return result("OutsideAttachableRanges", f"NetworkPlacement {pref}: subnet {subnet4} lies outside the ranges "
@@ -372,9 +373,9 @@ def network(req):
                      and port in [int(x) for x in e.get("ports") or []]
                      for e in svc.get("hubEndpoints") or [] if isinstance(e, dict))
             if not ok:
-                return result("HubEndpointNotAdmitted", f"The hub's API {a} port {port} lies in the hub's ranges and no "
-                              "hub endpoint of the fabric admits it; a cluster on the network could not reach the hub",
-                              **out)
+                return result("HubEndpointNotAdmitted", "The hub's API lies in the hub's ranges and no hub endpoint "
+                              "of the platform's fabric admits its address and port; a cluster on the network could not "
+                              "reach the hub", **out)
     return done()
 
 
@@ -391,19 +392,19 @@ def external(req):
     if not choice:
         dflt = [n for n in nets if n.get("default") is True]
         if not dflt:
-            return result("NetworkChoiceRequired", f"Site {site} has no default external network; name a network "
+            return result("NetworkChoiceRequired", "The site has no default external network; name a network "
                           "(spec.openstack.network or spec.openstack.externalNetwork)")
         chosen = dflt[0]
     else:
         same = [n for n in nets if n.get("name") == choice]
         if len(same) != 1:
-            return result("ExternalNetworkNotListed", f"{choice} is not an external network of site {site}"
+            return result("ExternalNetworkNotListed", f"{choice} is not an external network of the site"
                           + (" (its name is not unique)" if same else "")
                           + (f"; listed: {', '.join(sorted(n['name'] for n in nets))}" if nets else ""))
         chosen = same[0]
     fams = [str(f) for f in chosen.get("families") or []]
     if fams and "4" not in fams:
-        return result("PlacementHasNoIPv4", f"External network {chosen['name']} of site {site} has no IPv4 subnet; "
+        return result("PlacementHasNoIPv4", f"External network {chosen['name']} of the site has no IPv4 subnet; "
                       "the cluster's floating IPs are IPv4")
     return result(network={"name": chosen["name"], "id": str(chosen.get("id") or "")})
 
@@ -416,7 +417,7 @@ def fips_check(req):
         for a in req.get("addresses") or []:
             for pfx in row.get("prefixes") or []:
                 if inside(f"{a}/32", [pfx]):
-                    return result("ServicePrefixInUse", f"Floating IP {a} lies in {pfx}, which the platform already "
+                    return result("ServicePrefixInUse", f"Floating IP {a} lies in a range the platform already "
                                   "reaches for another network")
     return result()
 
@@ -473,7 +474,8 @@ def router_gateway(req):
     if len(found) != 1:
         return {"address": "", "note": f"{len(found)} routers {what} in the project"}
     router = found[0]
-    label = f"router {router.get('name') or router.get('id')} ({what})"
+    # the router's name (the installer's, from the cluster's own name), never the site's id of it
+    label = f"router {router['name']} ({what})" if router.get("name") else f"the cluster's router ({what})"
     gw = router.get("external_gateway_info") or {}
     want = str(req.get("network_id") or "")
     if not gw.get("network_id"):

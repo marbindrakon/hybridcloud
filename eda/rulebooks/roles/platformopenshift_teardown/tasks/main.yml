@@ -179,6 +179,15 @@
             aws_args: [place-public, --placement, "{{ po_placement }}", --state, down]
           when: po_publish == 'External' and po_placement | length > 0
 
+        # the issuer's namespace is the installation's setting (the object records the issuer's address only): a
+        # build the hub holds for this object cannot be cleaned up without it, so the delete names the setting
+        - name: Require the cluster issuer's namespace
+          ansible.builtin.assert:
+            that: ((aws_real.clusterIssuer | default({}, true)).namespace | default('', true) | string | trim) | length > 0
+            fail_msg: >-
+              Set clusterIssuer.namespace in the AWS realization (AWS_REALIZATION): the installation setting is missing.
+          when: po_hub_owned | bool
+
         - name: Unpublish the cluster's issuer (its static issuer ConfigMap on central)
           kubernetes.core.k8s:
             host: "{{ central_api_host }}"
@@ -188,7 +197,7 @@
             api_version: v1
             kind: ConfigMap
             name: "oidc-static-{{ po_build_name }}"
-            namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+            namespace: "{{ (aws_real.clusterIssuer | default({}, true)).namespace }}"
           when: po_hub_owned | bool
 
     - name: Note the step
@@ -221,6 +230,15 @@
                        "{{ po_domain.split('.', 1)[0] }}"]
           when: po_publish == 'Internal' and po_domain | length > 0
 
+        # the issuer's namespace is the installation's setting (the object records the issuer's address only): a
+        # build the hub holds for this object cannot be cleaned up without it, so the delete names the setting
+        - name: Require the cluster issuer's namespace
+          ansible.builtin.assert:
+            that: ((gcp_real.clusterIssuer | default({}, true)).namespace | default('', true) | string | trim) | length > 0
+            fail_msg: >-
+              Set clusterIssuer.namespace in the Google Cloud realization (GCP_REALIZATION): the installation setting is missing.
+          when: po_hub_owned | bool
+
         - name: Unpublish the cluster's issuer (its static issuer ConfigMap on central)
           kubernetes.core.k8s:
             host: "{{ central_api_host }}"
@@ -230,7 +248,7 @@
             api_version: v1
             kind: ConfigMap
             name: "oidc-static-{{ po_build_name }}"
-            namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+            namespace: "{{ (gcp_real.clusterIssuer | default({}, true)).namespace }}"
           when: po_hub_owned | bool
 
     - name: Note the step
@@ -387,7 +405,7 @@
         # general sentence naming the step (shc_failure_message)
         _msg: >-
           {{ ansible_failed_task | default({}, true)
-             | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true), false, 'deletion') }}
+             | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true), '', 'deletion') }}
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: platformopenshifts
         cr_name: "{{ platformopenshift_cr_name }}"

@@ -59,7 +59,7 @@ REASONS = {
     "ClusterBuildProvisioned": _r("A", PROGRESS, "The cluster is being installed."),
     # an OpenShift cluster's installation (Ready while it installs; Ready and Stalled when it stopped)
     "Installing": _r("A", PROGRESS, "The cluster is being installed."),
-    "InstallRetrying": _r("A", PROGRESS, "An installation attempt failed; the installer is trying again."),
+    "InstallRetrying": _r("A", PROGRESS, "An installation attempt failed; the installer tries again while attempts are left."),
     "InstallFinishing": _r("A", PROGRESS, "The cluster is installed; the platform is connecting it."),
     "InstallCleanup": _r("A", PROGRESS, "A stopped installation is being removed before the new one starts."),
     "Deleting": _r("A", PROGRESS, "Being deleted."),

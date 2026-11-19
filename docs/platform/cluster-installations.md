@@ -130,10 +130,17 @@ log, of Hive's messages or of the site reaches the cluster object.
 The same holds for every other failure of the cluster's jobs (provision and delete). A call to a cloud, a site, the
 hub or a helper that fails ends the job with the platform's sentence for the step, for example `The step "Prepare
 the cluster's identity on Google Cloud" failed; the platform team can see why in the job's log.`; what was answered
-(an API's error, an address, an id) is written to the job's log only. A refusal keeps its own sentence (with values
-the tenant set), and any other failed step is named the same way when its name is plain words, else `A step of the
-cluster's provisioning failed; ...` (`deletion` for the delete). The reason stays `ProvisionFailed` (`TeardownFailed`
-for the delete): the platform team reads the job's log named in `status.edaJobs`.
+(an API's error, an address, an id) is written to the job's log only. A refusal is written with its own reason and
+its own sentence, the same in `status.message` and in its condition: the sentence is built from fixed text and values
+the tenant set or chooses by name (the cluster's name, a network, flavor or image name, its own ranges and floating
+addresses), never a site's or the hub's ids, uids, addresses or object names (those go to the job's log). A failure
+after a refusal was noted (a status write, a module) is not the refusal. Any other failed step is named the same way
+as a call when its name is plain words, else `A step of the cluster's provisioning failed; ...` (`deletion` for the
+delete), with reason `ProvisionFailed` (`TeardownFailed` for the delete): the platform team reads the job's log named
+in `status.edaJobs`. The same holds for the conditions the steps write (the router gateway's, the Preflight
+condition) and for the cluster's events. AWS and Google Cloud clusters need the realization's `clusterIssuer.baseURL`
+and `clusterIssuer.namespace`; there is no default, and the job names the missing setting (a delete of a cluster
+whose build the hub holds needs `clusterIssuer.namespace` to unpublish its issuer).
 
 On OpenStack the preflight refuses a flavor the environment does not offer before anything is created: named to the
 tenant (`FlavorNotFound`) when the cluster's spec names it; when it is the installation's default

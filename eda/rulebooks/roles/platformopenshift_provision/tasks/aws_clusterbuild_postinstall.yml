@@ -57,6 +57,7 @@
       {{ (cd_info.resources[0].status.conditions | default([])
           | selectattr('type', 'equalto', 'Provisioned')
           | map(attribute='reason') | first | default('Unknown'))
+         | regex_replace('(?s)^(?![A-Za-z]{2,40}$).*$', 'Unknown')
          if (cd_info.resources | default([]) | length > 0) else 'Unknown' }}
     cb_provisioned_status: >-
       {{ (cd_info.resources[0].status.conditions | default([])

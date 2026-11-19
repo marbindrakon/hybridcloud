@@ -31,8 +31,8 @@
     cb_pull_secret_vault_property: "{{ default_pull_secret_vault_property }}"
     cb_ssh_key_vault: "{{ default_ssh_key_vault_path }}"
     cb_type: "{{ aws_cluster_type }}"
-    cb_issuer_base: "{{ (aws_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
-    cb_issuer_namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+    cb_issuer_base: "{{ (aws_real.clusterIssuer | default({}, true)).baseURL | default('', true) | string | trim }}"
+    cb_issuer_namespace: "{{ (aws_real.clusterIssuer | default({}, true)).namespace | default('', true) | string | trim }}"
     cb_member_role: "{{ aws_real.memberRoleName | default('shc-automation') }}"
     # the machine network: the placement's subnet (on a network) or the cluster's own (preflight_own_network.yml)
     cb_machine_cidr: ""
@@ -64,6 +64,16 @@
       - "{{ cb_manifests_vault }}"
       - "{{ cb_vault_cluster_path }}/admin-kubeconfig"
       - "{{ cb_vault_cluster_path }}/admin-password"
+
+# the issuer of the cluster's service account tokens is the installation's: no default
+- name: Require the cluster issuer settings
+  ansible.builtin.assert:
+    that:
+      - cb_issuer_base is match('https://[^/]+')
+      - cb_issuer_namespace | length > 0
+    fail_msg: >-
+      Set clusterIssuer.baseURL (an https address) and clusterIssuer.namespace in the AWS realization (AWS_REALIZATION): the
+      installation setting is missing.
 
 - name: Refuse a build name that can't serve as namespace, issuer path and IAM path
   ansible.builtin.assert:

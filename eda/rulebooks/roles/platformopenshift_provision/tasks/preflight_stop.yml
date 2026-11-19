@@ -24,7 +24,7 @@
       status: pending
       ready: false
       reason: "{{ ps_reason }}"
-      message: "{{ ps_message }}"
+      message: "{{ po_preflight_condition.message }}"
       lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
       conditions: ["{{ po_preflight_condition }}"]
   when: po_preflight_waits | bool
@@ -33,6 +33,7 @@
   ansible.builtin.meta: end_play
   when: po_preflight_waits | bool
 
+# exactly the condition's sentence: the rescue writes the refusal only for this failure
 - name: Refuse the cluster
   ansible.builtin.fail:
-    msg: "{{ ps_message }}"
+    msg: "{{ po_preflight_condition.message }}"

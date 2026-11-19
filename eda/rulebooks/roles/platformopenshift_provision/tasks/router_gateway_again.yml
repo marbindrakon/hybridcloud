@@ -25,11 +25,12 @@
         pn_need_router_attachments: true
         pn_judge_only: true
   rescue:
+    # the platform's sentence of the failed step (shc_failure_message), never the task's own failure text
     - name: Keep why the network could not be read
       ansible.builtin.set_fact:
         rga_error: >-
-          {{ (ansible_failed_result.msg | default('', true)
-              or ('task ' ~ (ansible_failed_task.name | default('?', true)) ~ ' failed')) | string | truncate(600, true, '') }}
+          {{ ansible_failed_task | default({}, true)
+               | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true)) }}
 
 - name: The cluster's infra id
   ansible.builtin.set_fact:

@@ -75,7 +75,10 @@ class Decision(unittest.TestCase):
     def test_hostile_pieces_alone(self):
         for piece in ("see https://example.org/x", "<script>", "a@b.example", "arn:aws:iam::1:role/x",
                       "projects/example-proj/zones/z", "0f8fad5b-d9cb-469f-a165-70867728950e",
-                      "Bearer abc", "A" * 40, "{\"error\": 1}", "C:\\path"):
+                      "Bearer abc", "A" * 40, "{\"error\": 1}", "C:\\path",
+                      # a cloud's quota sentence with the project's number, and one with a host of the cloud
+                      "Quota 'CPUS_ALL_REGIONS' exceeded. Limit: 32.0 globally. project 123456789012",
+                      "Quota exceeded for quota metric compute.googleapis.com/cpus in region us-east1"):
             with self.subTest(piece=piece):
                 self.assertEqual(I.failure_message("ansible.builtin.fail", "Failed: " + piece, "Fail"), sentence("Fail"))
 
@@ -244,47 +247,11 @@ class HostileAnswers(unittest.TestCase):
 
 
 # ---- 3. the walk ----------------------------------------------------------------------------------------------------
-# Values a fail or assert message of the cluster roles may carry, and why each is the tenant's own or the platform's
-# fixed text. A key "root" allows the variable wherever it is used; "root.path" allows only that use of it (every
-# use of the root must be that path).
-ALLOWED = {
-    "platformopenshift_cr_name": "the tenant's object name",
-    "platformopenshift_cr_namespace": "the tenant's namespace",
-    "ansible_operator_meta": "the tenant's object name and namespace",
-    "bn_name": "the tenant's object name",
-    "cb_app_name": "the build name, already shown in status.buildName",
-    "cb_cluster_name": "the build name, already shown in status.buildName",
-    "po_build_name": "the build name, already shown in status.buildName",
-    "ocp_oidc_client_id": "the build name and a fixed suffix",
-    "aws_env_name": "the environment name the tenant set in the spec",
-    "gcp_env_name": "the environment name the tenant set in the spec",
-    "oso_env_name": "the environment name the tenant set in the spec",
-    "po_oso_env": "the environment name the tenant set in the spec",
-    "platform_spec": "the tenant's spec (the region the tenant typed)",
-    "aws_region": "the environment's region, shown in the tenant's environment status",
-    "gcp_region": "the environment's region, shown in the tenant's environment status",
-    "cb_placement_ref": "the tenant's network placement name",
-    "po_network": "the tenant's network name",
-    "po_platform_prefixes": "the address ranges of the tenant's own cluster network",
-    "cb_image_set": "the release the tenant chose, or the name of the installation's default release",
-    "item": "a setting name from a literal list in the same task",
-    "_ocb_missing": "a setting name from a literal list in the same file",
-    "teardown_step": "a fixed step word of the teardown",
-    "shc_step": "plain words set in the task files and role defaults (checked below)",
-    "shc_step_what": "a fixed word set in the role defaults",
-    "ps_message": "a refusal: the platform's sentence with values the tenant set (preflight_stop.yml)",
-    "po_preflight_condition.message": "the credential refusal's fixed sentence (openstack_cluster_credential.yml)",
-    "io_obs.install.lastFailure": "only its reason is printed: a catalogue reason word from the installation module",
-    "io_obs.outcome": "a fixed outcome word of the installation module",
-    "rsb_recheck.why": "a fixed sentence of the installation module (may_remove_build)",
-    "cloudaws_raw.status": "an HTTP status number",
-    "cloudgcp_raw.status": "an HTTP status number",
-    "helm_deploy_result.rc": "an exit code",
-    "cloudoso_cr.resources[0].status.dnsProvider": "compared with a fixed word only, never printed",
-    "fabric_realization_models": "the platform's fixed list of model words (only reached outside the cluster roles)",
-}
-# Values a task name of the cluster roles may carry besides ALLOWED: when such a name fails, the rescue either never
-# uses it (the value always brings a character outside plain words) or the value is the platform's fixed word.
+# What the walk allows and why: tests/unit/failure_text_walk.py (ALLOWED, RECORD_FIELDS, SOURCES, DECISION_RESULTS).
+import failure_text_walk as FW  # noqa: E402
+
+# Values a task name of the cluster roles may carry besides FW.ALLOWED: when such a name fails, the rescue either
+# never uses it (the value always brings a character outside plain words) or the value is the platform's fixed word.
 NAME_VALUES = {
     "vault_kv_path": "a Vault path: always has a slash",
     "os_account_vault_path": "a Vault path: always has a slash",
@@ -300,152 +267,164 @@ NAME_VALUES = {
     "ra_state": "present or absent",
     "po_stopped_hub": "a fixed word of the installation module",
     "ih_why": "a fixed sentence of the calling task",
-    "cr_plural": "the kind's plural",
-    "cr_name": "the tenant's object name",
 }
-SKIP_WHEN = "shc_step is not defined"   # a task the cluster roles never run (both set shc_step in their defaults)
-COMMON_INCLUDE = re.compile(r"\{\{ role_path \}\}")
+
+# The reviewer's ten shapes of a leak, each added to a copy of a task file: the walk must name each.
+MUTATIONS = {
+    "fail_via_task_vars": """
+- name: Fail with what the site said
+  vars:
+    _m: "{{ os_result.error | default('') }}"
+  ansible.builtin.fail:
+    msg: "The floating addresses could not be reserved: {{ _m }}"
+  when: false
+""",
+    "ps_message_from_result": """
+- name: Refuse with the site's text
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: QuotaExceeded
+    ps_message: "PlatformOpenshift {{ ansible_operator_meta.name }}: {{ os_result.error }}"
+  when: false
+""",
+    "status_patch_direct": """
+- name: Say what the site answered
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      message: "{{ os_result.error }}"
+  when: false
+""",
+    "fail_loop_item": """
+- name: Fail with each line
+  ansible.builtin.fail:
+    msg: "The site said {{ item }}"
+  loop: "{{ _os_call.stderr_lines | default([]) }}"
+  when: false
+""",
+    "fail_freeform": """
+- name: Fail freeform
+  ansible.builtin.fail: "msg={{ os_result.error }}"
+  when: false
+""",
+    "set_fact_then_fail": """
+- name: Keep the text
+  ansible.builtin.set_fact:
+    cb_image_set: "{{ os_result.error }}"
+- name: Fail with it
+  ansible.builtin.fail:
+    msg: "No image set {{ cb_image_set }}"
+  when: false
+""",
+    "fail_direct_result": """
+- name: Fail with the answer
+  ansible.builtin.fail:
+    msg: "The site said {{ os_result.error }}"
+  when: false
+""",
+    "lookup_vars": """
+- name: Fail with lookup
+  ansible.builtin.fail:
+    msg: "The site said {{ lookup('vars', 'os_result').error }}"
+  when: false
+""",
+    "lastfailure_message_path": """
+- name: Fail with the hub's text
+  ansible.builtin.fail:
+    msg: "Stopped: {{ io_obs.install.lastFailure.message }}"
+  when: false
+""",
+    "rescue_failed_result": """
+- name: Try
+  block:
+    - name: Do it
+      ansible.builtin.command: "true"
+  rescue:
+    - name: Keep why
+      ansible.builtin.set_fact:
+        x_error: "{{ ansible_failed_result.msg }}"
+    - name: Write it
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_status_partial: true
+        cr_status_body:
+          conditions: [{type: X, status: "False", reason: Failed, message: "{{ x_error }}"}]
+""",
+}
 
 
-def _includes(task):
-    for k in ("ansible.builtin.include_tasks", "include_tasks", "ansible.builtin.import_tasks", "import_tasks"):
-        if k in task:
-            ref = task[k]
-            return ref.get("file") if isinstance(ref, dict) else ref
-    return None
-
-
-def _when(task):
-    w = task.get("when")
-    if w is None:
-        return []
-    return [str(x) for x in (w if isinstance(w, list) else [w])]
-
-
-def walk(role):
-    """Every task file the role's main.yml reaches, with its tasks flattened: [(file, task)]."""
-    role_dir = os.path.join(ROLES, role)
-    seen, out = set(), []
-
-    def resolve(cur, ref):
-        if ref is None or "{{" in ref.replace("{{ role_path }}", ""):
-            return None
-        ref = ref.replace("{{ role_path }}", role_dir)
-        if os.path.isabs(ref):
-            return os.path.normpath(ref)
-        for base in (os.path.join(role_dir, "tasks"), os.path.dirname(cur)):
-            p = os.path.normpath(os.path.join(base, ref))
-            if os.path.exists(p):
-                return p
-        return None
-
-    def tasks_of(tasks, cur, inherited_skip):
-        for t in tasks or []:
-            if not isinstance(t, dict):
-                continue
-            skip = inherited_skip or any(SKIP_WHEN in w for w in _when(t))
-            for k in ("block", "rescue", "always"):
-                if k in t:
-                    tasks_of(t[k], cur, skip)
-            out.append((cur, t, skip))
-            ref = _includes(t)
-            if ref is not None:
-                p = resolve(cur, ref)
-                if p and p not in seen:
-                    seen.add(p)
-                    with open(p) as fh:
-                        tasks_of(yaml.safe_load(fh), p, skip)
-
-    main = os.path.join(role_dir, "tasks", "main.yml")
-    seen.add(main)
-    with open(main) as fh:
-        tasks_of(yaml.safe_load(fh), main, False)
-    return seen, out
-
-
-def messages(task):
-    for k in ("ansible.builtin.fail", "fail"):
-        if k in task and isinstance(task[k], dict) and "msg" in task[k]:
-            yield str(task[k]["msg"])
-    for k in ("ansible.builtin.assert", "assert"):
-        if k in task and isinstance(task[k], dict):
-            for mk in ("fail_msg", "msg"):
-                if mk in task[k]:
-                    yield str(task[k][mk])
-
-
-def roots(template):
-    """The variables a template reads (its own loop and set names, and Jinja's globals, left out)."""
-    import jinja2
-    from jinja2 import nodes
-    ast = jinja2.Environment().parse(template)
-    loaded = {n.name for n in ast.find_all(nodes.Name) if n.ctx == "load"}
-    stored = {n.name for n in ast.find_all(nodes.Name) if n.ctx in ("store", "param")}
-    return loaded - stored - {"loop", "lookup", "query", "range", "dict", "namespace", "true", "false", "none"}
-
-
-def disallowed(template, local=()):
-    bad = []
-    for r in sorted(roots(template)):
-        if r in ALLOWED or r in local:
-            continue
-        paths = [k for k in ALLOWED if k.startswith(r + ".") or k.startswith(r + "[")]
-        if paths:
-            uses = re.findall(r"\b%s\b[\w.\[\]0-9]*" % re.escape(r), template)
-            if uses and all(any(u.startswith(p) for p in paths) for u in uses):
-                continue
-        bad.append(r)
-    return bad
+def scratch_tree():
+    """A copy of the task files the walk reads (both cluster roles, the role they borrow from, common tasks)."""
+    tmp = tempfile.mkdtemp(prefix="shc-walk-")
+    for rel in ("eda/common/tasks", "eda/rulebooks/roles/platformopenshift_provision",
+                "eda/rulebooks/roles/platformopenshift_teardown", "eda/rulebooks/roles/networkplacement_provision"):
+        shutil.copytree(os.path.join(H.ROOT, rel), os.path.join(tmp, rel))
+    return tmp
 
 
 class Walk(unittest.TestCase):
-    def test_every_fail_and_assert_message(self):
-        found = []
-        for role in ("platformopenshift_provision", "platformopenshift_teardown"):
-            files, tasks = walk(role)
-            self.assertGreater(len(files), 10, role)
-            for f, t, skip in tasks:
-                if skip:
-                    continue
-                local = set((t.get("vars") or {}).keys())
-                for m in messages(t):
-                    bad = disallowed(m, local)
-                    if bad:
-                        found.append("%s: %r interpolates %s" % (os.path.relpath(f, H.EDA), t.get("name"), bad))
-        self.assertEqual(found, [])
+    def test_every_written_value(self):
+        w = FW.Walk()
+        self.assertGreater(len(w.files), 60)
+        self.assertGreater(len(w.sinks()), 150)
+        self.assertEqual(w.problems(), [])
+
+    def test_each_shape_of_a_leak_is_named(self):
+        tmp = scratch_tree()
+        try:
+            target = os.path.join(tmp, "eda/rulebooks/roles/platformopenshift_provision/tasks/cluster_fips.yml")
+            with open(target) as fh:
+                orig = fh.read()
+            self.assertEqual(FW.Walk(tmp).problems(), [], "the copy is clean")
+            caught = []
+            for name, text in MUTATIONS.items():
+                with open(target, "w") as fh:
+                    fh.write(orig + text)
+                found = FW.Walk(tmp).problems()
+                with self.subTest(name):
+                    self.assertTrue(found, name)
+                    self.assertTrue(any("cluster_fips.yml" in f for f in found), (name, found))
+                if found:
+                    caught.append(name)
+            self.assertEqual(len(caught), 10, caught)
+        finally:
+            shutil.rmtree(tmp, ignore_errors=True)
 
     def test_templated_task_names(self):
         """The rescue uses a failed task's (templated) name only when it is plain words: a templated name carries only
         allowed values, or has a character outside plain words in its own text, so it is never used."""
         found = []
         plain = re.compile(r"[A-Za-z ,'()-]*")
-        for role in ("platformopenshift_provision", "platformopenshift_teardown"):
-            _, tasks = walk(role)
-            for f, t, skip in tasks:
-                name = t.get("name")
-                if not isinstance(name, str) or "{{" not in name:
-                    continue
-                literal = re.sub(r"\{\{.*?\}\}", "", name)
-                if not plain.fullmatch(literal):
-                    continue
-                bad = [b for b in disallowed(name, set((t.get("vars") or {}).keys()) - {"shc_step"})
-                       if b not in NAME_VALUES]
-                if bad:
-                    found.append("%s: %r" % (os.path.relpath(f, H.EDA), name))
+        w = FW.Walk()
+        for f, t, skip, tv in w.tasks:
+            name = t.get("name")
+            if skip or not isinstance(name, str) or "{{" not in name:
+                continue
+            if not plain.fullmatch(re.sub(r"\{\{.*?\}\}", "", name)):
+                continue
+            paths, _ = FW.uses(name)
+            bad = [p for p in paths if not FW.path_allowed(p) and re.split(r"[.\[]", p, 1)[0] not in NAME_VALUES
+                   and re.split(r"[.\[]", p, 1)[0] not in (t.get("vars") or {})]
+            if bad:
+                found.append("%s: %r" % (os.path.relpath(f, H.EDA), name))
         self.assertEqual(found, [])
 
     def test_step_phrases_are_plain_words(self):
         phrases = []
-        for role in ("platformopenshift_provision", "platformopenshift_teardown"):
+        for role in FW.CLUSTER_ROLES:
             with open(os.path.join(ROLES, role, "defaults", "main.yml")) as fh:
                 d = yaml.safe_load(fh)
             phrases.append(d["shc_step"])
             self.assertIn(d["shc_step_what"], ("provisioning", "deletion"))
-            _, tasks = walk(role)
-            for f, t, skip in tasks:
-                v = (t.get("vars") or {}).get("shc_step")
-                if v is not None:
-                    phrases.append(v)
+        for f, t, skip, tv in FW.Walk().tasks:
+            v = (t.get("vars") or {}).get("shc_step")
+            if v is not None:
+                phrases.append(v)
         self.assertGreater(len(phrases), 30)
         for p in phrases:
             self.assertRegex(p, I.STEP_NAME.pattern + r"\Z")
@@ -461,17 +440,105 @@ class Walk(unittest.TestCase):
             step_fails = [t for t in tasks if "ansible.builtin.fail" in t
                           and "shc_step_failed" in t["ansible.builtin.fail"]["msg"]]
             self.assertEqual(len(step_fails), 1, f)
-            self.assertTrue(any("shc_step is defined" in w for w in _when(step_fails[0])), f)
+            self.assertTrue(any("shc_step is defined" in w for w in FW._when(step_fails[0])), f)
             for t in tasks:
-                for m in messages(t):
-                    if "shc_step_failed" not in m:
-                        self.assertTrue(any(SKIP_WHEN in w for w in _when(t)), "%s: %s" % (f, t.get("name")))
+                for k in ("ansible.builtin.fail", "ansible.builtin.assert"):
+                    if k in t and "shc_step_failed" not in json.dumps(t[k]):
+                        self.assertTrue(any(FW.SKIP_WHEN in w for w in FW._when(t)), "%s: %s" % (f, t.get("name")))
 
     def test_both_rescues_use_the_decision(self):
-        for role in ("platformopenshift_provision", "platformopenshift_teardown"):
+        for role in FW.CLUSTER_ROLES:
             text = json.dumps(rescue_of(role))
             self.assertIn("shc_failure_message", text, role)
             self.assertNotIn("ansible_failed_result.msg", text, role)
+
+    def test_no_lab_default_for_the_cluster_issuer(self):
+        """The issuer of a cloud cluster's tokens is the installation's setting: no default, the job names it."""
+        for f in ("aws_clusterbuild_facts.yml", "gcp_clusterbuild_facts.yml"):
+            with open(os.path.join(ROLES, "platformopenshift_provision", "tasks", f)) as fh:
+                text = fh.read()
+            self.assertNotRegex(text, r"clusterIssuer[^\n]*default\('[^']+'\)", f)
+            self.assertIn("Require the cluster issuer settings", text, f)
+        with open(os.path.join(ROLES, "platformopenshift_teardown", "tasks", "main.yml")) as fh:
+            text = fh.read()
+        self.assertNotRegex(text, r"clusterIssuer[^\n]*default\('[^']+'\)")
+        self.assertEqual(text.count("Require the cluster issuer's namespace"), 2)
+
+
+# ---- 4. refusals: the tenant's own sentence, the same in the message and the condition ---------------------------------
+sys.path.insert(0, os.path.join(ROLES, "platformopenshift_provision", "files"))
+import po_preflight as P  # noqa: E402
+
+LONG = "c" * 40   # a 40-character cluster name without a hyphen
+IMAGE_ID = "0f8fad5b-d9cb-469f-a165-70867728950e"   # an image the tenant named by its id
+
+
+def refusals():
+    """Every kind of refusal sentence, built as the role and its helpers build it, with realistic values."""
+    out = []
+    pre = "PlatformOpenshift %s: " % LONG
+    out.append(("FlavorNotFound", pre + "the environment has no flavor m1.nosuch; choose a flavor the environment offers"))
+    out.append(("ImageNotFound", pre + "the environment has no image %s; choose an image the environment offers" % IMAGE_ID))
+    out.append(("ImageNotFound", pre + "the environment has no image rhcos_4_18_custom_image_built_for_tenant_a; choose an "
+                                       "image the environment offers"))
+    out.append(("NetworkNameNotUnique", pre + "the environment sees 2 networks named shc-n1 (1 of them its own) and the "
+                                              "installer takes the network by name; rename or remove the other network "
+                                              "of that name, or ask the platform team about a network shared with the "
+                                              "environment"))
+    out.append(("ExternalNetworkNotListed", pre + "the environment does not see network ext-net as an external network"))
+    for r in (P.external({"choice": "lab-internal", "site": "site-hidden-1", "networks": [{"name": "ext-a"}]}),
+              P.external({"choice": "", "site": "site-hidden-1", "networks": [{"name": "ext-a"}]}),
+              P.fips_check({"network": "ns/n1", "addresses": ["192.0.2.15"],
+                            "service": {"networks": [{"network": "other/n9", "prefixes": ["192.0.2.0/28"]}]}})):
+        out.append((r["reason"], pre + r["message"]))
+    owner = P.hub_owner({"namespace": {"metadata": {"labels": {P.OWNER_LABEL: "uid-of-another-object-0001"}}},
+                         "uid": "uid-of-this-object-0002", "recorded": "shc-oso-example-" + LONG[:20],
+                         "buildName": "shc-oso-example-" + LONG[:20], "claim": True})
+    out.append((owner["reason"], pre + owner["message"]))
+    return out
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class RefusalTexts(unittest.TestCase):
+    def test_no_platform_identifier_in_a_refusal(self):
+        for reason, msg in refusals():
+            with self.subTest(reason):
+                for word in ("site-hidden-1", "uid-of", "192.0.2.0/28", "other/n9"):
+                    self.assertNotIn(word, msg)
+
+    def test_every_refusal_through_the_rescue(self):
+        """Through preflight_stop.yml and the real rescue: reason, message and condition carry the sentence."""
+        tasks = [{"block": [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/preflight_stop.yml"}],
+                  "rescue": [rescue_of("platformopenshift_provision")]}]
+        for reason, msg in refusals():
+            with self.subTest(reason=reason, msg=msg[:60]):
+                rc, tr, out = H.run("platformopenshift_provision", "main.yml",
+                                    {"services_api_host": "http://127.0.0.1:9", "services_bearer_token": "t",
+                                     "platformopenshift_cr_name": LONG, "platformopenshift_cr_namespace": NS,
+                                     "ansible_operator_meta": {"name": LONG, "namespace": NS},
+                                     "ps_reason": reason, "ps_message": msg}, tasks=tasks)
+                body = H.patches(tr)[0]["body"]
+                self.assertEqual(body["reason"], reason, out)
+                self.assertEqual(body["message"], msg)
+                self.assertEqual([c["message"] for c in body["conditions"]], [msg])
+
+    def test_a_failure_after_a_refusal_was_noted_is_not_the_refusal(self):
+        """A refusal noted, then another step fails with a module's text (a failed status write): the general
+        sentence, ProvisionFailed, no condition."""
+        tasks = [{"block": [
+            {"ansible.builtin.set_fact": {"po_fail_reason": "WaitingForPlacement",
+                                          "po_preflight_condition": {"type": "Preflight", "status": "False",
+                                                                     "reason": "WaitingForPlacement", "message": "waits"}}},
+            {"name": "Record what the cluster waits for", "ansible.builtin.fail":
+             {"msg": "status write failed (500): " + HOSTILE}}],
+            "rescue": [rescue_of("platformopenshift_provision")]}]
+        rc, tr, out = H.run("platformopenshift_provision", "main.yml",
+                            {"services_api_host": "http://127.0.0.1:9", "services_bearer_token": "t",
+                             "platformopenshift_cr_name": "demo", "platformopenshift_cr_namespace": NS}, tasks=tasks)
+        body = H.patches(tr)[0]["body"]
+        self.assertEqual(body["reason"], "ProvisionFailed")
+        self.assertEqual(body["message"], sentence("Record what the cluster waits for"))
+        self.assertEqual(body["conditions"], [])
 
 
 if __name__ == "__main__":

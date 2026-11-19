@@ -70,13 +70,25 @@ def shc_install_spec_digest(spec):
     return I.spec_digest(spec)
 
 
-def shc_failure_message(failed_task, failed_result=None, refused=False, what="provisioning"):
-    """status.message of a failed job from ansible_failed_task and ansible_failed_result (the rescue's)."""
+def _failed(failed_task, failed_result):
     task = failed_task if isinstance(failed_task, dict) else {}
     result = failed_result if isinstance(failed_result, dict) else {}
     msg = result.get("msg")
-    return I.failure_message(task.get("action") or "", msg if isinstance(msg, str) else "", task.get("name") or "",
-                             refused, what)
+    return task.get("action") or "", msg if isinstance(msg, str) else "", task.get("name") or ""
+
+
+def shc_failure_message(failed_task, failed_result=None, refusal="", what="provisioning"):
+    """status.message of a failed job from ansible_failed_task and ansible_failed_result (the rescue's); refusal: the
+    sentence of a refusal noted in this job (its condition's message), "" for none."""
+    action, msg, name = _failed(failed_task, failed_result)
+    refusal = refusal if isinstance(refusal, str) else ""
+    return I.failure_message(action, msg, name, what=what, refusal=refusal)
+
+
+def shc_failure_is_refusal(failed_task, failed_result=None, refusal=""):
+    """Whether the job's failure is the refusal noted in it (then its reason and condition are written)."""
+    action, msg, _ = _failed(failed_task, failed_result)
+    return I.is_refusal(action, msg, refusal if isinstance(refusal, str) else "")
 
 
 def shc_step_failed(step, what="provisioning"):
@@ -93,4 +105,5 @@ class FilterModule(object):
                 "shc_install_spec_digest": shc_install_spec_digest, "shc_install_resumed": shc_install_resumed,
                 "shc_install_release_young": shc_install_release_young,
                 "shc_install_namespace_wait": shc_install_namespace_wait,
-                "shc_failure_message": shc_failure_message, "shc_step_failed": shc_step_failed}
+                "shc_failure_message": shc_failure_message,
+                "shc_failure_is_refusal": shc_failure_is_refusal, "shc_step_failed": shc_step_failed}

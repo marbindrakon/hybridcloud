@@ -162,7 +162,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `InProgress` | Applying the change. | Nobody: it continues by itself |
 | `InstallCleanup` | A stopped installation is being removed before the new one starts. | Nobody: it continues by itself |
 | `InstallFinishing` | The cluster is installed; the platform is connecting it. | Nobody: it continues by itself |
-| `InstallRetrying` | An installation attempt failed; the installer is trying again. | Nobody: it continues by itself |
+| `InstallRetrying` | An installation attempt failed; the installer tries again while attempts are left. | Nobody: it continues by itself |
 | `Installing` | The cluster is being installed. | Nobody: it continues by itself |
 | `JobRunning` | Applying the change. | Nobody: it continues by itself |
 | `NotReady` | Not ready yet. | Nobody: it continues by itself |

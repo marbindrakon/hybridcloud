@@ -1050,9 +1050,11 @@ STEP_FAILED = "The step \"%s\" failed; the platform team can see why in the job'
 NO_STEP_FAILED = "A step of the cluster's %s failed; the platform team can see why in the job's log."
 MESSAGE_MAX = 1000
 # a second line behind the walked messages: text with any of these is never written (an address with a scheme,
-# markup, an e-mail or service account, a cloud resource path or ARN, an id in UUID form, a token-like run)
+# markup, an e-mail or service account, a cloud resource path or ARN, an id in UUID form, a token-like run, a run of
+# eight or more digits (a project number, an account id), a host name of a cloud or an organisation)
 NOT_PLATFORM_TEXT = re.compile(
-    r"://|[<>{}@\\]|\barn:|\bprojects/|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-|[A-Za-z0-9+/=_]{32,}|\bBearer\b",
+    r"://|[<>{}@\\]|\barn:|\bprojects/|\b[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-|[A-Za-z0-9+/=_]{32,}|\bBearer\b"
+    r"|\d{8,}|\b(?:[a-z0-9-]+\.)+(?:com|net|org|io|dev|cloud|internal|local|example|gg|amazonaws|googleapis)\b",
     re.IGNORECASE)
 
 
@@ -1064,11 +1066,23 @@ def step_failed(step, what="provisioning"):
     return NO_STEP_FAILED % what
 
 
-def failure_message(action, msg, step, refused=False, what="provisioning"):
-    """status.message of a failed job: the failure's own text when the platform wrote it (a refusal, or a fail or assert
-    task) and it reads as platform text; else the general sentence for the step."""
+def is_refusal(action, msg, refusal):
+    """Whether a failed job ended on a refusal: its failure is the refusal's own fail task (a fail action whose text
+    is exactly the refusal's sentence, as preflight_stop.yml and the cluster credential write it). Any other failure
+    after a refusal was noted (a status write, a module) is not the refusal."""
     text = msg.strip() if isinstance(msg, str) else ""
-    own = bool(refused) or (action in FAIL_ACTIONS)
-    if own and text and len(text) <= MESSAGE_MAX and not NOT_PLATFORM_TEXT.search(text):
+    want = refusal.strip() if isinstance(refusal, str) else ""
+    return bool(want) and action in FAIL_ACTIONS and text == want
+
+
+def failure_message(action, msg, step, refused=False, what="provisioning", refusal=""):
+    """status.message of a failed job: a refusal's own sentence (built from fixed text and values the tenant set or
+    chooses by name; the same text as its condition) when the failure is that refusal (is_refusal); a fail or assert
+    task's own text when it reads as platform text; else the general sentence for the step. refused (older callers):
+    the failure is a refusal whose text is msg."""
+    text = msg.strip() if isinstance(msg, str) else ""
+    if is_refusal(action, msg, refusal) or (refused and text and not refusal):
+        return text[:MESSAGE_MAX]
+    if action in FAIL_ACTIONS and text and len(text) <= MESSAGE_MAX and not NOT_PLATFORM_TEXT.search(text):
         return text
     return step_failed(step, what)

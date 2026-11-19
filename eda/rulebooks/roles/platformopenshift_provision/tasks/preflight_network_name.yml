@@ -89,12 +89,22 @@
     pnn_message: >-
       {{ '' if _usable | bool
          else ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': '
-               ~ (('the environment sees ' ~ (_visible | length) ~ ' network(s) named ' ~ pnn_name ~ ' (' ~ _named
-                   ~ ') and the installer takes the network by name; rename or remove the other network of that name, '
-                   ~ 'or ask the platform team about a network shared with the environment') if _others | length > 0
-                  else ('the environment does not see network ' ~ pnn_name ~ ' (' ~ pnn_id ~ ')'
+               ~ (('the environment sees ' ~ (_visible | length) ~ ' networks named ' ~ pnn_name ~ ' ('
+                   ~ (_visible | selectattr('project_id', 'equalto', cb_oso_project_id) | list | length)
+                   ~ ' of them its own) and the installer takes the network by name; rename or remove the other network '
+                   ~ 'of that name, or ask the platform team about a network shared with the environment')
+                  if _others | length > 0
+                  else ('the environment does not see network ' ~ pnn_name
                         ~ (' as an external network' if _visible | length > 0 else '')
                         ~ (' yet' if pnn_hybrid | bool else '')))) }}
+
+# the networks' ids go to the job's log only (a refusal names what the tenant can choose by name)
+- name: The networks of that name, for the job's log
+  ansible.builtin.debug:
+    msg: "network {{ pnn_name }} ({{ pnn_id }}); seen: {{ _pnn_seen | default([]) }}"
+  vars:
+    _pnn_seen: "{{ (os_result.visible | default([], true)) | map(attribute='id') | list }}"
+  when: pnn_reason | trim | length > 0
 
 # a flavor the cluster asks for that the project does not see: the installer would skip its own checks and fail after
 # its whole run (about 50 minutes over three attempts); refused here, before anything is created. A flavor is named to

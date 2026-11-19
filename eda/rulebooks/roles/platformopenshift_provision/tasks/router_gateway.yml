@@ -74,11 +74,12 @@
         - not (pp_outcome.done | bool)
         - not (pp_outcome.wait | bool)
   rescue:
+    # the platform's sentence of the failed step (shc_failure_message), never the task's own failure text
     - name: Keep why the gateway address could not be added
       ansible.builtin.set_fact:
         rg_error: >-
-          {{ (ansible_failed_result.msg | default('', true)
-              or ('task ' ~ (ansible_failed_task.name | default('?', true)) ~ ' failed')) | string | truncate(600, true, '') }}
+          {{ ansible_failed_task | default({}, true)
+               | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true)) }}
 
     # a failure after the record: the floating IPs stay the cluster's prefixes and the gateway goes (best effort; the
     # condition below says it was not added either way)

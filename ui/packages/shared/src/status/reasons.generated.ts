@@ -80,7 +80,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "InstallNotStarted": { actor: "P", class: "failed", summary: "The installation could not be started on the platform. The message says what happens next." },
   "InstallOverdue": { actor: "P", class: "failed", summary: "The installation has not finished in the time allowed. The platform keeps checking it." },
   "InstallRemovalFailed": { actor: "P", class: "failed", summary: "The stopped installation could not be removed from the site. The platform team has to look at it." },
-  "InstallRetrying": { actor: "A", class: "progress", summary: "An installation attempt failed; the installer is trying again." },
+  "InstallRetrying": { actor: "A", class: "progress", summary: "An installation attempt failed; the installer tries again while attempts are left." },
   "InstallSettingRefused": { actor: "T", class: "failed", summary: "The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again." },
   "Installing": { actor: "A", class: "progress", summary: "The cluster is being installed." },
   "InvalidSecret": { actor: "P", class: "failed", summary: "A required credential is not valid. The platform team is looking at it." },
