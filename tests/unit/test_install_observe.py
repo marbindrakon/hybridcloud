@@ -746,6 +746,25 @@ class InstallBlocks(unittest.TestCase):
                          t(9))
         self.assertNotIn("endedAt", I.install_installed({"install": {"stage": "Finishing"}}, NOW))
 
+    def test_the_end_after_a_retry_is_this_installations(self):
+        """A run that installs after a retry: a status read before this installation ended (the previous run's stop,
+        the removal, Installing) gives no end; the hub's install time does, else nothing is written (the end the
+        watch stored at Finishing stays). A new run starts without an end."""
+        hub = cd(installed=True, provisioned=True)
+        hub["status"]["installedTimestamp"] = t(2)
+        old_stop = {"install": {"stage": "Stopped", "run": 2, "startedAt": t(90), "endedAt": t(80)}}
+        self.assertEqual(I.install_installed(old_stop, NOW, hub)["endedAt"], t(2))
+        self.assertNotIn("endedAt", I.install_installed(old_stop, NOW))
+        for stage in ("CleaningUp", "Installing", "Preparing"):
+            st = {"install": {"stage": stage, "endedAt": t(80)}}
+            self.assertNotIn("endedAt", I.install_installed(st, NOW), stage)
+        self.assertEqual(I.install_installed({"install": {"stage": "Installed", "endedAt": t(3)}}, NOW, hub)["endedAt"],
+                         t(3))
+        cleaning = I.install_cleaning(old_stop, NOW)
+        self.assertIn("endedAt", cleaning)
+        self.assertIsNone(cleaning["endedAt"], "the merge removes the previous run's end")
+        self.assertEqual(cleaning["run"], 3)
+
     def test_stopped_seen(self):
         self.assertEqual(I.install_stopped_seen(po(STOPPED, generation=5)),
                          {"stoppedGeneration": 5, "stoppedSpec": I.spec_digest(SPEC),
@@ -891,6 +910,19 @@ class Digest(unittest.TestCase):
                                               "type": "openstack"}))
         self.assertRegex(base, r"^[0-9a-f]{64}$")
         self.assertEqual(I.spec_digest(None), I.spec_digest({}))
+
+
+class NamespaceWait(unittest.TestCase):
+    """The removal's wait for the build's hub namespace: it ends when the namespace is gone, or when it stands and no
+    ManagedCluster was removed (nothing deletes it then); a namespace being deleted is always waited for."""
+
+    def test_table(self):
+        active = {"metadata": {"name": "b"}}
+        deleting = {"metadata": {"name": "b", "deletionTimestamp": "2026-01-01T00:00:00Z"}}
+        for ns, nothing_removes, done in ((None, False, True), (None, True, True), (active, True, True),
+                                          (active, False, False), (deleting, True, False), (deleting, False, False)):
+            with self.subTest(ns=ns, nothing_removes=nothing_removes):
+                self.assertEqual(I.namespace_wait_done(ns, nothing_removes)[0], done)
 
 
 if __name__ == "__main__":

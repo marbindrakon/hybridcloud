@@ -11,7 +11,8 @@ so that the roles' "{{ role_path }}/../../../common/..." paths resolve, with the
   central_create.yml    records {create: <path>/<name>, body} and answers fake_create["<path>/<name>"] (default 201)
   openstack_cluster_credential.yml  records {credential: <build>} and sets cb_provider_creds_vault
 and a fake kubernetes.core collection (k8s_info returns FAKE_K8S["<Kind>/<namespace>/<name>"], a list query uses
-"<Kind>/<namespace>/"; k8s records {k8s: ...}). No other collection is faked: a task file that needs one the job's
+"<Kind>/<namespace>/"; k8s records {k8s: ...} and reports changed unless FAKE_K8S["changed:<Kind>/<namespace>/<name>"]
+is false). No other collection is faked: a task file that needs one the job's
 execution environment lacks fails here too (test_ee_content.py checks the definitions). The trace is a list of JSON
 lines; the play may end early (meta: end_play) or fail, the trace says what happened.
 """
@@ -103,7 +104,10 @@ def main():
         if p["definition"] is not None:
             rec["definition"] = p["definition"]
         f.write(json.dumps(rec) + "\\n")
-    m.exit_json(changed=True)
+    # FAKE_K8S "changed:<Kind>/<namespace>/<name>": false = the call changed nothing (a delete of an absent object)
+    data = json.load(open(os.environ["FAKE_K8S"]))
+    key = "%s/%s/%s" % (p["kind"], p["namespace"] or "", p["name"] or "")
+    m.exit_json(changed=bool(data.get("changed:" + key, True)))
 main()
 '''
 

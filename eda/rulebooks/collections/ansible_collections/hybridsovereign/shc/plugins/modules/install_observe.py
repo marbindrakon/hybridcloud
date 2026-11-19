@@ -55,6 +55,8 @@ options:
   removal_minutes: {description: removal - a removal waiting beside a build being deleted fails after this long (0 - no bound)., type: int, default: 0}
   generation: {description: check - the generation the job read the spec at (0 - not compared)., type: int, default: 0}
   wait_for: {description: wait - managedcluster, clusterdeployment, uninstall or namespace., type: str, default: ""}
+  nothing_removes: {description: "wait for the namespace - no ManagedCluster was removed, so nothing deletes the
+      namespace: only a namespace being deleted is waited for.", type: bool, default: false}
   recheck: {description: removal - the fresh read right before the first delete of a removal this run decided., type: bool, default: false}
   job: {description: Job entry recorded in status.edaJobs (name, jobId, url)., type: dict}
   timeout: {description: HTTP timeout in seconds., type: int, default: 30}
@@ -144,6 +146,7 @@ def main():
             retry_margin_minutes=dict(type="int", default=1),
             generation=dict(type="int", default=0),
             wait_for=dict(type="str", default=""),
+            nothing_removes=dict(type="bool", default=False),
             recheck=dict(type="bool", default=False),
             job=dict(type="dict"),
             timeout=dict(type="int", default=30),
@@ -306,10 +309,13 @@ def main():
         if p["wait_for"] == "uninstall":
             items = [x for x in ((found or {}).get("items") or []) if isinstance(x, dict)]
             done = not items or any(_int_or0((x.get("status") or {}).get("succeeded")) >= 1 for x in items)
+            why = "uninstall %s" % ("done" if done else "still running")
+        elif p["wait_for"] == "namespace":
+            done, why = I.namespace_wait_done(found, p["nothing_removes"])
         else:
             done = found is None
-        module.exit_json(changed=False, end=False, done=done, outcome="",
-                         why="%s %s" % (p["wait_for"], "gone" if done else "still there"))
+            why = "%s %s" % (p["wait_for"], "gone" if done else "still there")
+        module.exit_json(changed=False, end=False, done=done, outcome="", why=why)
 
     for key in ("windowMinutes", "deadlineMinutes", "writeEveryMinutes", "provider"):
         if p["settings"].get(key) in (None, ""):

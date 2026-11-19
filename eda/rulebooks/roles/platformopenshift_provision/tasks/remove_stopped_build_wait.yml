@@ -8,6 +8,7 @@
   hybridsovereign.shc.install_observe:
     mode: wait
     wait_for: "{{ rsw_for }}"
+    nothing_removes: "{{ rsw_nothing_removes | default(false) | bool }}"
     host: "{{ services_api_host | trim }}"
     api_key: "{{ services_bearer_token | trim }}"
     validate_certs: "{{ services_validate_certs | default(true) | bool }}"

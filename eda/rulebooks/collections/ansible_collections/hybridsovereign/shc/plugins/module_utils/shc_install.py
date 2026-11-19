@@ -804,16 +804,19 @@ def install_cleaning(status, now):
 
 
 def install_installed(status, now, cd=None):
-    """status.install once the cluster is installed and connected. endedAt: as the watch recorded it, else the hub's
-    install time (ClusterDeployment status.installedTimestamp); with neither it is left out (never written empty, so
-    an end already stored stays). A cluster installed before installations were recorded and with no install time on
-    the hub has no known end."""
+    """status.install once the cluster is installed and connected. endedAt: as the watch recorded it for this
+    installation (a status whose stage is Finishing or Installed), else the hub's install time (ClusterDeployment
+    status.installedTimestamp); with neither it is left out (never written empty, so an end already stored stays). A
+    status read before this installation ended (an earlier run's stop, a removal, Installing) carries no end of this
+    installation: its endedAt is never taken. A cluster installed before installations were recorded and with no
+    install time on the hub has no known end."""
     cur = dict((status or {}).get("install") or {})
     out = {"stage": "Installed", "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None,
            "stoppedSpec": None, "stoppedSpecVersion": None, "stoppedAt": None, "namespaceWaitSince": None,
            "observedAt": fmt_time(now)}
     hub_time = parse_time(((cd or {}).get("status") or {}).get("installedTimestamp")) if isinstance(cd, dict) else None
-    ended = cur.get("endedAt") or (fmt_time(hub_time) if hub_time else None)
+    own = cur.get("endedAt") if cur.get("stage") in ("Finishing", "Installed") else None
+    ended = own or (fmt_time(hub_time) if hub_time else None)
     if ended:
         out["endedAt"] = ended
     # run is left as it stands (a merge keeps it), so a status read before a removal in the same job is good enough
@@ -878,6 +881,22 @@ def namespace_wait(status, now, limit_minutes):
     since = parse_time(install.get("namespaceWaitSince")) or now
     return {"since": fmt_time(since),
             "over": bool(_int(limit_minutes, 0)) and (now - since).total_seconds() >= float(limit_minutes) * 60}
+
+
+def namespace_wait_done(namespace, nothing_removes):
+    """Whether the removal of a stopped build is done waiting for the build's hub namespace: (done, why). The
+    namespace is the platform's own (the job creates it and claims it again right after the wait). A namespace being
+    deleted is always waited for (the next claim would refuse it); a namespace that stands is waited for only when a
+    ManagedCluster was removed (the hub's cluster management may then delete it); when none was, nothing deletes it
+    and the wait ends at once. The removal runs only after the build's ClusterDeployment is gone, so the namespace
+    holds no running or installed build here."""
+    if not isinstance(namespace, dict):
+        return True, "namespace gone"
+    if (namespace.get("metadata") or {}).get("deletionTimestamp"):
+        return False, "namespace still being deleted"
+    if nothing_removes:
+        return True, "namespace kept: nothing removes it, it is claimed again"
+    return False, "namespace still there"
 
 
 def removal_overdue(status, now, limit_minutes):

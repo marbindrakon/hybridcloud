@@ -44,6 +44,7 @@ class FakeApi:
         self.cd_reads = cd_reads
         self.obj_reads = obj_reads
         self.list_404 = False
+        self.ns = None   # the build's hub namespace (None: gone)
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -81,6 +82,8 @@ class FakeApi:
                     return self.send(200, {"items": [fake.cd] if fake.cd else []})
                 if path == hive + "clusterprovisions":
                     return self.send(200, {"items": fake.provisions})
+                if path == "/api/v1/namespaces/" + BUILD and fake.ns is not None:
+                    return self.send(200, fake.ns)
                 return self.send(404, {})
 
             def do_PATCH(self):
@@ -392,6 +395,35 @@ class Removal(unittest.TestCase):
                 self.assertLess(order.index("patch"), order.index("delete"))
                 self.assertEqual(creates(tr), ["/api/v1/namespaces/" + BUILD])
                 self.assertTrue(after_reached(tr))
+
+    def test_the_namespace_wait_ends_when_nothing_removes_the_namespace(self):
+        """A stopped build that never got a ManagedCluster: nothing deletes its hub namespace, so the removal does not
+        wait for it (it is claimed again); with a ManagedCluster removed, or a namespace being deleted, it waits as
+        before. The namespace itself is never deleted by the removal."""
+        ns_path = "/api/v1/namespaces/" + BUILD
+        active = {"metadata": {"name": BUILD, "labels": {}}, "status": {"phase": "Active"}}
+        terminating = {"metadata": {"name": BUILD, "deletionTimestamp": ago(1)}, "status": {"phase": "Terminating"}}
+        for provider in PROVIDER_SPECS:
+            for mc_existed, ns, waits in ((False, active, False), (True, active, True), (False, terminating, True)):
+                with self.subTest(provider=provider, mc_existed=mc_existed, ns=ns["status"]["phase"]):
+                    stop, smaller = stopped_for(provider)
+                    obj = po(stop, generation=2, spec=smaller)
+                    api = FakeApi(obj, cd(stopped=True), cd_reads=2)
+                    api.ns = ns
+                    k8s = {} if mc_existed else {"changed:ManagedCluster//" + BUILD: False}
+                    try:
+                        rc, tr, out = H.run("platformopenshift_provision", "main.yml",
+                                            base_vars(api, provider, rsb_obj=obj), tasks=self.STEP, k8s=k8s)
+                    finally:
+                        api.close()
+                    self.assertEqual(rc, 0, out)
+                    rounds = api.gets.count(ns_path)
+                    if waits:
+                        self.assertGreaterEqual(rounds, 3, out)
+                    else:
+                        self.assertEqual(rounds, 1, out)
+                    self.assertNotIn("Namespace", kinds_deleted(tr))
+                    self.assertTrue(after_reached(tr))
 
     def test_hub_unreadable_removes_nothing(self):
         stop, smaller = stopped_for("openstack")
@@ -1235,7 +1267,7 @@ class GatePass(unittest.TestCase):
     def test_a_cluster_waits_for_an_earlier_one_of_its_name_with_a_bound(self):
         """The build's namespace still terminating (an earlier cluster of this name being removed): the cluster says
         it waits (WaitingForEarlierCluster, the wait's start kept in status), nothing is created; past
-        namespaceWaitMinutes from that start it is refused (NamespaceTaken); a free namespace is claimed and the wait
+        namespaceWaitMinutes from that start it is refused (EarlierClusterNotRemoved); a free namespace is claimed and the wait
         cleared."""
         terminating = {"metadata": {"name": BUILD, "deletionTimestamp": ago(1)}}
         api, rc, tr, out = self.claim("Preparing", terminating)

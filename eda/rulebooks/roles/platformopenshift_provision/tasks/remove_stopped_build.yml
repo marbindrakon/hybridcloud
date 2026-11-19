@@ -265,6 +265,7 @@
         api_version: cluster.open-cluster-management.io/v1
         kind: ManagedCluster
         name: "{{ cb_cluster_name }}"
+      register: rsb_mc_delete
       ignore_errors: true
 
     - name: Wait for ManagedCluster deletion
@@ -334,12 +335,18 @@
       changed_when: cleanup_helm_uninstall.rc == 0
       when: cleanup_helm_status.rc == 0
 
+    # The build's namespace is the platform's own (claim_build.yml makes it on every provider) and is claimed again
+    # below. A namespace being deleted is waited for; one that stands only when a ManagedCluster was removed above (the
+    # hub's cluster management may delete its namespace with it). Without a ManagedCluster (a build that stopped
+    # before it was connected) nothing deletes the namespace, so the removal does not wait for it.
     - name: Wait for cluster namespace to finish terminating
       ansible.builtin.include_tasks: remove_stopped_build_wait.yml
       vars:
         rsw_for: namespace
         rsw_retries: 60
         rsw_delay: 10
+        rsw_nothing_removes: >-
+          {{ not ((rsb_mc_delete.changed | default(true) | bool) or (rsb_mc_delete.failed | default(false) | bool)) }}
 
     # the build's namespace may have gone with the ManagedCluster: claim it again for this object before the release
     # makes it, unless the object is not this job's any more (a delete during the removal must not find it again)
