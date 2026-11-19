@@ -164,15 +164,25 @@
       {{ not (po_cd_exists | bool) and not (po_hub_unreadable | default(false) | bool)
          and ((_cb_st.clusterInstalled | default(false) | bool)
               or ((_cb_st.install | default({}, true)).stage | default('')) in ['Finishing', 'Installed']) }}
+    # a cluster from before installations were recorded, started and not installed, whose build the hub does not
+    # hold: its release is made again only when someone asks (a Retry), never by a periodic run
+    _cb_legacy_waits: >-
+      {{ (po_legacy_started | default(false) | bool) and not (po_cd_exists | bool)
+         and not (po_hub_unreadable | default(false) | bool)
+         and not (((event_payload.reason | default('', true)) if (event_payload is defined and event_payload is mapping)
+                   else '') | string is search('ReconcileRequested$')) }}
   ansible.builtin.set_fact:
     cb_record_missing: "{{ _cb_record_missing | bool }}"
+    cb_legacy_waits: "{{ _cb_legacy_waits | bool }}"
     cb_values_changed: >-
-      {{ not (po_hub_unreadable | default(false) | bool) and not (_cb_record_missing | bool) and
+      {{ not (po_hub_unreadable | default(false) | bool) and not (_cb_record_missing | bool)
+         and not (_cb_legacy_waits | bool) and
          (not (cb_helm_release_exists | bool) or not (po_cd_exists | bool) or
           (not (_cb_running | bool) and
            ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true')))) }}
     cb_release_young: >-
       {{ not (po_cd_exists | bool) and (cb_helm_release_exists | bool) and not (_cb_record_missing | bool)
+         and not (_cb_legacy_waits | bool)
          and ((helm_release_status.stdout | default('{}', true) | from_json).info | default({}, true)
               | hybridsovereign.shc.shc_install_release_young(platformopenshift_install.pendingReleaseMinutes | int)) }}
 
@@ -182,6 +192,12 @@
       The hub holds no record of the build of installed cluster {{ ansible_operator_meta.name }}; nothing was released.
       The platform team has to restore the record.
   when: cb_record_missing | bool
+
+- name: Hand over a cluster from before installations were recorded whose build is gone
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub holds no build of this cluster, whose installation started before installations were recorded; a Retry makes its release again
+  when: cb_legacy_waits | bool
 
 # the hub could not be read (after a few tries): the run ends and completes its event; the next period goes on
 - name: Hand over when the hub cannot be read

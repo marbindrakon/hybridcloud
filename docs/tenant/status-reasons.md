@@ -75,6 +75,12 @@ itself: the cluster stays Failed until you act. The messages hold only what the 
 reliably (resource names and numbers, the flavor or instance type you set); the platform team can
 read the installer's full log.
 
+Clusters that install at the same time in one environment share its quota. An installation that
+starts while another one is building can pass its own quota check and still fail part-way, when the
+other one takes what it needed (security group rules are a common case); the page then shows the
+stop and its cause, for example `QuotaExceeded` with the resource that ran out. Install one cluster
+at a time in an environment with a small quota, or have the quota raised.
+
 When the installation has not finished in the time the platform allows (reason `InstallOverdue`),
 the cluster is shown **Failed** too, but the installer may still be working: the platform keeps
 checking it. If it finishes, the cluster becomes ready; if the installer stops, the cluster shows
@@ -230,6 +236,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `CredentialsInvalid` | The site credentials were refused. The platform team is looking at it. | The platform team |
 | `CredentialsMissing` | The site credentials are missing. The platform team is looking at it. | The platform team |
 | `DefaultFlavorNotFound` | The environment lacks the platform's default flavor for cluster nodes. Name a flavor it offers, or ask the platform team. | The platform team |
+| `DefaultImageNotFound` | The environment lacks the image the platform uses for cluster nodes by default. Name an image it offers, or ask the platform team. | The platform team |
 | `DnsProjectNotFound` | The DNS project does not exist. The platform team is looking at it. | The platform team |
 | `EDAFailed` | Could not be completed; see the reason. | The platform team |
 | `EntityNotAllowed` | This site is not available to this tenant. | You (the tenant) |
@@ -246,6 +253,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `IdentityProviderNotFound` | The site has no identity provider of the declared name. The platform team is looking at it. | The platform team |
+| `ImageNotFound` | The image this cluster asks for does not exist in its environment; the message names it. Choose another image. | You (the tenant) |
 | `InstallCredentialsRefused` | The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster. | The platform team |
 | `InstallFailed` | The installation failed and was stopped. You can retry it; the platform team can see why it failed. | The platform team |
 | `InstallNotStarted` | The installation could not be started on the platform. The message says what happens next. | The platform team |

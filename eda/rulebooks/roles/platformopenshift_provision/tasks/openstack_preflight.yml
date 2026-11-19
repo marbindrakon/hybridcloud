@@ -172,6 +172,12 @@
       {{ ([oso_control_plane_flavor | default('', true)]
           + ([oso_worker_flavor | default('', true)] if (oso_worker_count | default(0, true) | int) > 0 else []))
          | select | list }}
+    # the image the installer will use when one is set (the spec's, else the installation's default), and the spec's
+    pnn_images: >-
+      {{ [(platform_spec.openstack | default({}, true)).glanceImageOverride
+          | default(default_glance_image_override | default('', true), true)] | select | list }}
+    pnn_spec_images: >-
+      {{ [(platform_spec.openstack | default({}, true)).glanceImageOverride | default('', true)] | select | list }}
     pnn_spec_flavors: >-
       {{ ([(platform_spec.openstack | default({}, true)).controlPlaneFlavor | default('', true)]
           + ([(platform_spec.openstack | default({}, true)).workerFlavor | default('', true)]

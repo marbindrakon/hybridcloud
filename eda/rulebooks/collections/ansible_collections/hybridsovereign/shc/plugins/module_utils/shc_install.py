@@ -243,6 +243,9 @@ SETTING_FIELD = re.compile(
 # the installer could not find a flavor while it gathered the site's details (a warning; it then skips its own checks
 # and fails much later): a refused setting only when the flavor is one the cluster asked for
 FLAVOR_NOT_FOUND = re.compile(r"Unable to find flavor with name ([A-Za-z0-9][A-Za-z0-9._:-]{0,99})(?![A-Za-z0-9._:-])")
+IMAGE_NOT_FOUND = re.compile(r"Unable to find image with name ([A-Za-z0-9][A-Za-z0-9._:-]{0,99})(?![A-Za-z0-9._:-])")
+# the installer's own sentence when the cluster's temporary control plane did not come up in its time
+BOOTSTRAP_FAILED = re.compile(r"level=error msg=\"?Bootstrap failed to complete")
 IMAGE_FIELD = re.compile(r"platform\.openstack\.clusterOSImage: (Not found|Invalid value): \\?\"([^\"\\]{1,200})\\?\"")
 CREDENTIAL_TEXT = re.compile(
     r"(Authentication failed|The request you have made requires authentication|InvalidClientTokenId|"
@@ -378,6 +381,9 @@ def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_sta
             if pools:
                 label = _pool_label(pools[0], provider) if len(pools) == 1 else "flavor of the nodes"
                 return out(SETTING, "the site refused the %s \"%s\": it does not exist" % (label, name))
+        for m in IMAGE_NOT_FOUND.finditer(log):
+            if _tenant_value(m.group(1), tv, "image"):
+                return out(SETTING, "the site refused the image \"%s\": it does not exist" % m.group(1))
         m = IMAGE_FIELD.search(log)
         if m:
             shown = _tenant_value(m.group(2), tv, "image")
@@ -398,7 +404,10 @@ def classify(provider, hive_reason, install_log, tenant_values=None, pod_not_sta
     if network_path and (code in API_UNREACHABLE_CODES or (log and API_UNREACHABLE_TEXT.search(log))):
         return out(OTHER, "the installer could not reach the cluster's API; a cluster on a network needs the "
                           "platform's connection to the network and a site that advertises floating IPs")
-    # 6. anything else: Hive's specific code, never log text
+    # 6. the installer's bootstrap did not complete (its own sentence; nothing of the log is copied)
+    if log and BOOTSTRAP_FAILED.search(log):
+        return out(OTHER, "the installer's bootstrap of the cluster did not complete")
+    # 7. anything else: Hive's specific code, never log text
     if code in HIVE_SHOWN:
         return out(OTHER, "the installer reported %s" % code)
     return out(OTHER, "the cause is not one the platform recognizes")
@@ -630,6 +639,12 @@ def observe(obj, job, cd, provision, now, settings, obj_error=False, hub_error=F
             if stalled_now:
                 conditions.append(_stalled("False"))
             res.update(end=True, outcome="installed", write=True, log="the hub's build is installed")
+        elif hub_stopped(cd) and cur.get("stage") == "Stopped":
+            # the stop is already recorded: nothing of it is recorded again (its handled request stays)
+            res.update(end=True, outcome="stopped", log="the hub's build stopped; the stop is already recorded")
+            res["install"] = cur
+            res["conditions"] = []
+            return res
         elif hub_stopped(cd):
             install["stage"] = "Stopped"
             install["endedAt"] = cur.get("endedAt") or _cond_time(cd, "ProvisionStopped") or nowt
@@ -711,21 +726,15 @@ def overdue(status, now, deadline_minutes):
 
 def _record_stop(install, obj, status, job):
     """What a later run compares to know whether someone asked since the stop: the generation, the digest of the
-    installer's part of the spec, and the Retry request handled at the stop. A Retry whose event this job carries and
-    that was published after Hive stopped asked for a new installation, not for this check: it is not recorded as
-    handled, so it still counts."""
+    installer's settings, and the Retry request handled at the stop: the newest request present when the stop is
+    first written (a request made before the tenant could see the stop asked about the installation, not for a new
+    one). Only a request made after this write starts a new installation. A stop already recorded is never recorded
+    again (see observe)."""
     meta = obj.get("metadata") or {}
     install["stoppedGeneration"] = _int(meta.get("generation"), 0)
     install["stoppedSpec"] = spec_digest(obj.get("spec"))
     install["stoppedSpecVersion"] = DIGEST_VERSION
-    handled = str(status.get("lastHandledReconcileRequest") or "")
-    delivery = status.get("delivery") or {}
-    published = parse_time(delivery.get("publishedAt"))
-    ended = parse_time(install.get("endedAt"))
-    own_retry = (str(delivery.get("reason") or "").endswith("ReconcileRequested")
-                 and str(delivery.get("eventId") or "") == str(job.get("eventId") or "")
-                 and published is not None and ended is not None and published > ended)
-    install["stoppedRequest"] = "" if own_retry else handled
+    install["stoppedRequest"] = str(status.get("lastHandledReconcileRequest") or "")
 
 
 def _find(status, ctype):
@@ -775,7 +784,8 @@ def install_starting(status, now):
     cur = dict(status.get("install") or {})
     if cur.get("stage") in ("Installing", "Finishing", "Installed", "Stopped"):
         return None
-    if not cur and status.get("clusterInstalled") is True:
+    if not cur and (status.get("clusterInstalled") is True or status.get("installStarted") is True):
+        # a cluster from before installations were recorded: its record is the watch's to write (from the hub)
         return None
     out = {"stage": "Installing", "run": _int(cur.get("run"), 1) or 1, "startedAt": fmt_time(now),
            "endedAt": None, "lastFailure": None, "attempt": None, "observedAt": fmt_time(now)}
@@ -791,15 +801,30 @@ def install_cleaning(status, now):
             "stoppedSpec": None, "stoppedSpecVersion": None, "observedAt": fmt_time(now)}
 
 
-def install_installed(status, now):
-    """status.install once the cluster is installed and connected. endedAt stays as the watch recorded it; a cluster
-    installed before the platform recorded installations has no known end (none is written)."""
+def install_installed(status, now, cd=None):
+    """status.install once the cluster is installed and connected. endedAt: as the watch recorded it, else the hub's
+    install time (ClusterDeployment status.installedTimestamp); with neither it is left out (never written empty, so
+    an end already stored stays). A cluster installed before installations were recorded and with no install time on
+    the hub has no known end."""
     cur = dict((status or {}).get("install") or {})
+    out = {"stage": "Installed", "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None,
+           "stoppedSpec": None, "stoppedSpecVersion": None, "observedAt": fmt_time(now)}
+    hub_time = parse_time(((cd or {}).get("status") or {}).get("installedTimestamp")) if isinstance(cd, dict) else None
+    ended = cur.get("endedAt") or (fmt_time(hub_time) if hub_time else None)
+    if ended:
+        out["endedAt"] = ended
     # run is left as it stands (a merge keeps it), so a status read before a removal in the same job is good enough
-    return {"stage": "Installed", "endedAt": cur.get("endedAt") or None,
-            "lastFailure": None, "stoppedGeneration": None, "stoppedRequest": None, "stoppedSpec": None,
-            "stoppedSpecVersion": None,
-            "observedAt": fmt_time(now)}
+    return out
+
+
+RUNNING_STAGES = ("Preparing", "CleaningUp", "Installing", "Finishing")
+
+
+def install_check_time(status, now):
+    """{observedAt: now} for a run that works on an installation recorded as running (the check time the operator's
+    in-flight rule reads); None otherwise (an installed or stopped record, or none)."""
+    stage = ((status or {}).get("install") or {}).get("stage")
+    return {"observedAt": fmt_time(now)} if stage in RUNNING_STAGES else None
 
 
 def install_stopped_seen(obj):
@@ -890,7 +915,10 @@ def asked_since_stop(obj, event=None):
     if not ev:
         delivery = status.get("delivery") or {}
         ev = {"reason": delivery.get("reason"), "publishedAt": delivery.get("publishedAt")}
-    ended = parse_time(install.get("endedAt"))
+    # a Retry event counts when it was published after the stop was written (observedAt of the stop's write; Hive's
+    # stop time for a stop recorded without it)
+    written = [t for t in (parse_time(install.get("endedAt")), parse_time(install.get("observedAt"))) if t]
+    ended = max(written) if written else None
     published = parse_time(ev.get("publishedAt"))
     if str(ev.get("reason") or "").endswith("ReconcileRequested") and ended and published and published > ended:
         return True, "a Retry request since the stop"

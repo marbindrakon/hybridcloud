@@ -65,6 +65,7 @@ HANDOVER = "hand over (event completed, nothing changed)"
 OVERDUE_CHECK = "one check of the overdue installation, then end"
 RECORD_MISSING = "refuse: the build of an installed cluster is missing (nothing released or removed)"
 REMOVAL_FAILED = "write the removal as failed for the platform team"
+LEGACY_WAITS = "hand over until someone asks (a Retry makes the release again)"
 X = None   # impossible
 
 # ---- the expected table (rows: recorded state; columns: the hub) ----------------------------------------------------
@@ -81,7 +82,9 @@ CLEANING = {"NO_RELEASE": REMOVE, "RELEASE_FAILED": REMOVE, "PENDING_YOUNG": STA
             "UNREADABLE": HANDOVER}
 TABLE = {
     "NONE": NEW,
-    "LEGACY_STARTED": RUNNING,
+    # a cluster from before installations were recorded whose build is gone: its release is made again on a Retry only
+    "LEGACY_STARTED": dict(RUNNING, **{h: (LEGACY_WAITS, STARTING if h == "PENDING_YOUNG" else RELEASE)
+                                       for h in NO_CD}),
     "LEGACY_INSTALLED": INSTALLED_ROW,
     "PREPARING": NEW,
     "CLEANINGUP": CLEANING,
@@ -119,6 +122,7 @@ WAITS_ON = {
               "again (the next periodic run)",
     RECORD_MISSING: "the platform team restoring the build's record on the hub, or the object's deletion",
     REMOVAL_FAILED: "the platform team (the build Hive could not delete)",
+    LEGACY_WAITS: "the tenant's Retry (nothing reinstalls by itself)",
     KEEP: "a Retry or a setting change (the tenant), or the hub answering / the build's deletion ending",
 }
 
@@ -126,6 +130,8 @@ WAITS_ON = {
 def expected(rec, hub, asked):
     entry = TABLE[rec].get(hub, X)
     if isinstance(entry, tuple):
+        if rec == "LEGACY_STARTED":   # only a Retry asks a record without status.install (no stop to compare with)
+            return entry[1] if asked in ("retry", "both") else entry[0]
         return entry[1] if asked in ("retry", "setting", "both") else entry[0]
     return entry
 
@@ -265,7 +271,9 @@ def flag_combos():
                 continue
             cdx, rel, ok = hub_for(hub)
             for f in ("openstack_clusterbuild.yml", "aws_clusterbuild_deploy.yml"):
-                out.add((f, _status_key(rec), json.dumps(rel, sort_keys=True), cdx is not None or not ok, not ok))
+                for retry in (False, True):
+                    out.add((f, _status_key(rec), json.dumps(rel, sort_keys=True), cdx is not None or not ok, not ok,
+                             retry))
     return sorted(out, key=str)
 
 
@@ -281,7 +289,7 @@ class Release:
             return cls.results
         combos = flag_combos()
         tasks = []
-        for i, (f, status_key, rel, cd_exists, unreadable) in enumerate(combos):
+        for i, (f, status_key, rel, cd_exists, unreadable, retry) in enumerate(combos):
             legacy = copy.deepcopy(next(t for t in _yaml(f)
                                         if t.get("name") == "Whether the installation started before installations "
                                                             "were recorded"))
@@ -289,6 +297,8 @@ class Release:
             relv = json.loads(rel)
             status = {"resources": [{"status": json.loads(status_key)}]}
             legacy["vars"].update({"_po_now": status, "platformopenshift_cr": status})
+            task["vars"]["event_payload"] = {"eventId": "ev-1", "reason": "PlatformOpenshift%sRequested"
+                                                                          % ("Reconcile" if retry else "Create")}
             tasks.append(legacy)
             task["vars"].update({
                 "_po_now": status, "platformopenshift_cr": status, "po_cd_exists": cd_exists, "po_adopted": False,
@@ -300,7 +310,8 @@ class Release:
             tasks.append(task)
             tasks.append({"ansible.builtin.set_fact": {"_r%d" % i: "{{ [cb_values_changed | bool, "
                                                                      "cb_release_young | bool, "
-                                                                     "cb_record_missing | bool] }}"}})
+                                                                     "cb_record_missing | bool, "
+                                                                     "cb_legacy_waits | bool] }}"}})
         rc, tr, out = H.run("platformopenshift_provision", "main.yml", {}, tasks=tasks,
                             result="[" + ", ".join("_r%d" % i for i in range(len(combos))) + "]")
         assert rc == 0, out
@@ -372,9 +383,13 @@ def actual(rec, hub, asked):
     results = Release.load()
     outs = set()
     for f in ("openstack_clusterbuild.yml", "aws_clusterbuild_deploy.yml"):
-        changed, young, missing = results[(f, _status_key(rec), json.dumps(rel, sort_keys=True), cd_exists, not ok)]
+        retry = asked in ("retry", "both")
+        changed, young, missing, legacy = results[(f, _status_key(rec), json.dumps(rel, sort_keys=True), cd_exists,
+                                                   not ok, retry)]
         if missing:
             outs.add(RECORD_MISSING)
+        elif legacy and release_step_hands_over_legacy(f):
+            outs.add(LEGACY_WAITS)
         elif not ok and release_step_hands_over(f):
             outs.add(HANDOVER)
         elif young:
@@ -385,6 +400,12 @@ def actual(rec, hub, asked):
             outs.add(watch(obj, cdx, ok)[0])
     assert len(outs) == 1, (rec, hub, outs)   # the two providers' release steps decide the same
     return outs.pop()
+
+
+def release_step_hands_over_legacy(f):
+    t = next((t for t in _yaml(f) if t.get("name") == "Hand over a cluster from before installations were recorded "
+                                                        "whose build is gone"), None)
+    return t is not None and "cb_legacy_waits" in json.dumps(t.get("when"))
 
 
 def release_step_hands_over(f):
@@ -434,7 +455,8 @@ class StateSpace(unittest.TestCase):
             for hub in NO_CD:
                 self.assertEqual(TABLE[rec][hub], RECORD_MISSING, (rec, hub))
         # clusters from before installations were recorded: every hub state the running path meets
-        self.assertEqual(TABLE["LEGACY_STARTED"], RUNNING)
+        self.assertEqual({h: e for h, e in TABLE["LEGACY_STARTED"].items() if h not in NO_CD},
+                         {h: e for h, e in RUNNING.items() if h not in NO_CD})
 
     def test_an_installed_cluster_never_gets_a_release_or_a_removal_without_its_build(self):
         """A cluster recorded as installed (clusterInstalled, Finishing, Installed) whose ClusterDeployment the hub
@@ -446,9 +468,10 @@ class StateSpace(unittest.TestCase):
                     self.assertEqual(actual(rec, hub, asked), RECORD_MISSING, (rec, hub, asked))
                 cdx, rel, ok = hub_for(hub)
                 for f in ("openstack_clusterbuild.yml", "aws_clusterbuild_deploy.yml"):
-                    changed, young, missing = Release.load()[(f, _status_key(rec), json.dumps(rel, sort_keys=True),
-                                                              False, False)]
-                    self.assertEqual((changed, young, missing), (False, False, True), (rec, hub, f))
+                    for retry in (False, True):
+                        changed, young, missing, _ = Release.load()[(f, _status_key(rec), json.dumps(rel, sort_keys=True),
+                                                                     False, False, retry)]
+                        self.assertEqual((changed, young, missing), (False, False, True), (rec, hub, f))
 
     def test_nothing_is_removed_beside_a_live_or_unknown_build(self):
         for rec, hub, asked in cells():
@@ -472,6 +495,9 @@ class StateSpace(unittest.TestCase):
             if got == RELEASE:
                 self.assertIn(rec, ("NONE", "PREPARING", "INSTALLING", "OVERDUE", "LEGACY_STARTED"),
                               (rec, hub, asked))
+            # a cluster from before installations were recorded gets its release made again only on a Retry
+            if rec == "LEGACY_STARTED" and hub in NO_CD and asked not in ("retry", "both"):
+                self.assertNotEqual(got, RELEASE, (hub, asked))
 
     def test_no_dead_end(self):
         """In every cell where the cluster is not installed the run moves the state forward, a Retry in that cell
@@ -485,6 +511,8 @@ class StateSpace(unittest.TestCase):
             if got in forward:
                 continue
             self.assertIn(got, WAITS_ON, (rec, hub, asked, got))
+            if got == LEGACY_WAITS:
+                self.assertIn(actual(rec, hub, "retry"), (RELEASE, STARTING), (rec, hub))
             if got == KEEP:
                 retry = actual(rec, hub, "retry")
                 self.assertTrue(retry in forward or retry == STARTING or hub in ("DELETING", "UNREADABLE"),

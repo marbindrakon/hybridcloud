@@ -552,6 +552,26 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertNotEqual(rc, 0)
         self.assertIn("has no flavor example.missing", out)
 
+    def test_a_missing_image_is_refused_before_anything(self):
+        """The image the cluster's spec names, missing on the site: ImageNotFound naming it; the installation's
+        default image missing: DefaultImageNotFound naming none; both before anything is created."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], images_missing=["example-missing"])}
+        spec = {"type": "openstack", "openstack": {"environment": "env1", "glanceImageOverride": "example-missing"}}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(fake_os=missing, platform_spec=spec), k8s=k8s(), result="1",
+                            dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the environment has no image example-missing", out)
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "ImageNotFound")
+        self.assertEqual(H.os_calls(tr)[0]["images"], ["example-missing"])
+        self.assertEqual([t for t in tr if "create" in t], [])
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(fake_os=missing, default_glance_image_override="example-missing"),
+                            k8s=k8s(), result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "DefaultImageNotFound")
+        self.assertNotIn("example-missing", out.split("does not offer the image")[1][:300])
+
     def test_a_missing_default_flavor_names_no_flavor(self):
         """The installation's default flavor missing on the site: refused with the platform team's reason and a
         sentence that names no flavor (the default is the platform's, not the tenant's)."""

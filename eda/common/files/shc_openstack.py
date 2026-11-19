@@ -68,7 +68,8 @@ Actions (request["action"]):
                 the environment's project): the networks of a name as Neutron lists them to that project, each with
                 router:external as the project sees it; unique when only the expected network id is among them (the
                 installer takes the external network by name), external when the project may use it as one.
-                With flavors (names): flavors_missing lists those the project does not see.
+                With flavors (names): flavors_missing lists those the project does not see; with images (names):
+                images_missing likewise.
   router-advertisement  the site's router advertisement service (an optional site component that switches the `nat`
                 token of an EVPN router port, so the site advertises floating IPs on a placed network): state
                 present asks it to hold `nat` on the router's IPv4 interface port on the network, absent to drop
@@ -918,6 +919,12 @@ def network_name_check(req):
     if flavors:
         out["flavors_missing"] = [f for f in dict.fromkeys(flavors)
                                   if conn.compute.find_flavor(f, ignore_missing=True) is None]
+    # the image the cluster's nodes boot from, when one is set (the installer finds it by name with the same
+    # credential, and without it fails after its whole run)
+    images = [i for i in (req.get("images") or []) if isinstance(i, str) and i]
+    if images:
+        out["images_missing"] = [i for i in dict.fromkeys(images)
+                                 if conn.image.find_image(i, ignore_missing=True) is None]
     return out
 
 

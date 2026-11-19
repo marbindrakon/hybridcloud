@@ -141,6 +141,61 @@ class Hostile(unittest.TestCase):
             self.check(I.classify(rnd.choice(["openstack", "aws", "gcp"]), rnd.choice(["UnknownError", "X"]), log,
                                   TENANT))
 
+    def gate(self, name):
+        import json
+        with open(os.path.join(ROOT, "tests", "fixtures", "install-causes", name)) as fh:
+            return json.load(fh)
+
+    def test_gate_capture_quota_of_three_resources(self):
+        """Captured quota stop: three resources in one line, security group rules in the "remaining quota" form."""
+        for a in self.gate("gate-openstack-quota-three-resources.json"):
+            got = I.classify("openstack", a["reason"], a["installLog"])
+            self.assertEqual(got["reason"], "QuotaExceeded")
+            for part in ("Security group rules (56 needed, 48 left)", "Cores (180 needed, limit 128)",
+                         "RAM (MB) (491520 needed, limit 262144)"):
+                self.assertIn(part, got["text"], a["attempt"])
+
+    def test_gate_capture_missing_image(self):
+        """Captured late failure of a missing image: the image setting named when the cluster's spec named it."""
+        for a in self.gate("gate-openstack-missing-image.json"):
+            got = I.classify("openstack", a["reason"], a["installLog"], {"image": "example-missing-image"})
+            self.assertEqual((got["reason"], got["text"]),
+                             ("InstallSettingRefused", 'the site refused the image "example-missing-image": it does '
+                                                       'not exist'))
+            self.assertEqual(I.classify("openstack", a["reason"], a["installLog"], {})["reason"], "InstallFailed")
+
+    def test_gate_capture_bootstrap_then_quota(self):
+        """Captured: attempt 0 timed out in its bootstrap (the general failure, with the installer's own sentence),
+        attempts 1 and 2 were refused by the security group rule quota."""
+        attempts = self.gate("gate-openstack-bootstrap-then-quota.json")
+        first = I.classify("openstack", attempts[0]["reason"], attempts[0]["installLog"])
+        self.assertEqual((first["reason"], first["text"]),
+                         ("InstallFailed", "the installer's bootstrap of the cluster did not complete"))
+        for a in attempts[1:]:
+            got = I.classify("openstack", a["reason"], a["installLog"])
+            self.assertEqual((got["reason"], got["text"]),
+                             ("QuotaExceeded", "the site reports too little quota: Security group rules (56 needed, "
+                                               "48 left)"))
+
+    def test_a_missing_image_is_named_only_when_the_spec_names_it(self):
+        log = "level=warning msg=Failed to generate OpenStack cloud info: Unable to find image with name example-image\n"
+        got = I.classify("openstack", "UnknownError", log, {"image": "example-image"})
+        self.assertEqual((got["reason"], got["text"]),
+                         ("InstallSettingRefused", 'the site refused the image "example-image": it does not exist'))
+        self.assertEqual(I.classify("openstack", "UnknownError", log, {"image": ""})["reason"], "InstallFailed")
+        self.assertEqual(I.classify("openstack", "UnknownError", log, {"image": "other"})["reason"], "InstallFailed")
+        self.assertNotIn("example-image", I.classify("openstack", "UnknownError", log, {})["text"])
+
+    def test_a_bootstrap_that_did_not_complete(self):
+        log = ('level=error msg=Bootstrap failed to complete: Get "https://api.demo.example.org:6443/version": dial tcp '
+               '192.0.2.10:6443: i/o timeout\n')
+        got = I.classify("openstack", "UnknownError", log)
+        self.assertEqual((got["reason"], got["text"]),
+                         ("InstallFailed", "the installer's bootstrap of the cluster did not complete"))
+        # only the installer's own error line: the words elsewhere do not count
+        self.assertEqual(I.classify("openstack", "UnknownError", "level=info msg=Bootstrap failed to complete")["text"],
+                         "the cause is not one the platform recognizes")
+
     def test_a_tenant_value_must_match_whole(self):
         """A value with a trailing newline is not the tenant's value as typed: not shown."""
         got = I.classify("openstack", "", 'compute[0].platform.openstack.type: Not found: "example.large\n"',

@@ -25,11 +25,14 @@ description:
     says whether that is gone (or, for the uninstall job, finished).
   - C(mode=hub) reads the object and the hub's ClusterDeployment and says what the hub holds of the build (unreadable,
     none, deleting, installed, stopped, running): a recorded stop is checked against it.
+  - C(mode=checktime) writes status.install.observedAt (the check time the operator's in-flight rule reads) when the
+    object records a running installation and is still the job's object; a long phase of the job calls it when it
+    starts (mode wait writes it too, at most every few minutes).
   - C(mode=handover) completes the job's event without changing what the object shows (a run that ends with nothing
     to write: the operator publishes again at its next pass), unless the object is not the job's any more.
   - Never copies text of the hub, the installer's log or the site into the status or its result messages.
 options:
-  mode: {description: observe, check, removal, wait, hub or handover., type: str, default: observe, choices: [observe, check, removal, wait, hub, handover]}
+  mode: {description: observe, check, removal, wait, hub or handover., type: str, default: observe, choices: [observe, check, removal, wait, hub, handover, checktime]}
   host: {description: Services cluster API URL., type: str, required: true}
   api_key: {description: Services cluster bearer token., type: str, required: true, no_log: true}
   validate_certs: {description: Verify the services API certificate., type: bool, default: true}
@@ -116,7 +119,8 @@ def _int_or0(value):
 def main():
     module = AnsibleModule(
         argument_spec=dict(
-            mode=dict(type="str", default="observe", choices=["observe", "check", "removal", "wait", "hub", "handover"]),
+            mode=dict(type="str", default="observe",
+                      choices=["observe", "check", "removal", "wait", "hub", "handover", "checktime"]),
             host=dict(type="str", required=True),
             api_key=dict(type="str", required=True, no_log=True),
             validate_certs=dict(type="bool", default=True),
@@ -204,6 +208,30 @@ def main():
                 return False, "the status write failed (%s)" % code
         return False, "the status write conflicted five times"
 
+    def check_time(cur, every_minutes=0):
+        """Write the check time on a running installation (partial: the event is not touched); every_minutes: only
+        when the stored one is at least that old. True when written."""
+        now = datetime.datetime.now(datetime.timezone.utc)
+        block = I.install_check_time((cur or {}).get("status"), now)
+        if not block:
+            return False
+        last = I.parse_time((((cur or {}).get("status") or {}).get("install") or {}).get("observedAt"))
+        if every_minutes and last is not None and (now - last).total_seconds() < every_minutes * 60:
+            return False
+        patch, info = compute_status_patch(cur, {"install": block}, {"action": "reconciling", "event_id":
+                                                                     p["event_id"].strip(), "partial": True})
+        if info.get("superseded") or patch is None:
+            return False
+        patch.pop("metadata", None)
+        code, _ = _get(obj_url + "/status", p["api_key"], p["validate_certs"], p["timeout"], method="PATCH",
+                       data=json.dumps(patch), content_type="application/merge-patch+json")
+        return code in (200, 201)
+
+    if p["mode"] == "checktime":
+        ok = not obj_error and obj is not None and I.same_object(obj, p["uid"], p["event_id"].strip())[0]
+        written = check_time(obj) if ok else False
+        module.exit_json(changed=written, written=written, end=False, outcome="")
+
     if p["mode"] == "handover":
         ok = not obj_error and obj is not None and I.same_object(obj, p["uid"], p["event_id"].strip())[0]
         written, why = write({}, "installing") if ok else (False, "the object is not this job's or cannot be read")
@@ -241,7 +269,17 @@ def main():
     if p["mode"] == "hub":
         cd, hub_error = read_hub("clusterdeployments/%s" % p["build"])
         state = I.hub_state(cd, not hub_error and not obj_error)
-        missing = bool(obj) and I.build_record_missing((obj or {}).get("status"), cd, not hub_error and not obj_error)
+        # "no ClusterDeployment" is believed only from a list of the build's namespace that answers and is empty (a
+        # 404 of the object can also mean the hub does not serve the kind for a moment)
+        listed_empty = False
+        if cd is None and not hub_error:
+            code, body = _get(p["hub_host"].rstrip("/") + "/apis/%s/namespaces/%s/clusterdeployments" % (HIVE, p["build"]),
+                              p["hub_api_key"], p["hub_validate_certs"], p["timeout"])
+            listed_empty = code == 200 and isinstance(body, dict) and not (body.get("items") or [])
+            if not listed_empty:
+                state = "unreadable"
+        missing = bool(obj) and listed_empty and I.build_record_missing((obj or {}).get("status"), cd,
+                                                                        not hub_error and not obj_error)
         module.exit_json(changed=False, end=False, outcome="", hub=state, record_missing=missing,
                          why="the hub's build: %s" % state)
 
@@ -260,6 +298,8 @@ def main():
         found, err = read_url(paths[p["wait_for"]])
         if err:
             module.exit_json(changed=False, end=False, done=False, outcome="", why="the hub could not be read; waiting")
+        # the removal's waits keep the check time fresh (a living job is never taken for a dead one)
+        check_time(obj, every_minutes=4)
         if p["wait_for"] == "uninstall":
             items = [x for x in ((found or {}).get("items") or []) if isinstance(x, dict)]
             done = not items or any(_int_or0((x.get("status") or {}).get("succeeded")) >= 1 for x in items)

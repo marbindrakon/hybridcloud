@@ -11,6 +11,9 @@
       controlPlane: "{{ cb_controller_flavor | default('', true) }}"
       compute: "{{ cb_worker_flavor | default('', true) }}"
 
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
+
 - name: Check ClusterDeployment installation status
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -22,15 +25,15 @@
     namespace: "{{ cb_cluster_name }}"
   register: cd_info
 
+# up to 30 minutes in parts of about five, each with the check time written first (the operator's in-flight rule)
 - name: The cluster's published names (Internal)
-  ansible.builtin.async_status:
-    jid: "{{ cb_dns_alias_job.ansible_job_id }}"
-  register: _cb_dns_alias
-  until: _cb_dns_alias.finished
-  retries: 60
-  delay: 30
-  failed_when: false
-  when: cb_dns_alias_job.ansible_job_id is defined
+  ansible.builtin.include_tasks: aws_published_names_wait.yml
+  loop: "{{ range(6) | list }}"
+  loop_control:
+    label: "part {{ item + 1 }}"
+  when:
+    - cb_dns_alias_job.ansible_job_id is defined
+    - not (_cb_dns_alias.finished | default(false) | bool)
 
 - name: Report the published names
   ansible.builtin.debug:
@@ -125,6 +128,9 @@
             certPolicyController: {enabled: false}
             policyController: {enabled: true}
             searchCollector: {enabled: true}
+
+    - name: Write the check time
+      ansible.builtin.include_tasks: install_check_time.yml
 
     - name: Wait for the cluster to be available in the hub
       kubernetes.core.k8s_info:

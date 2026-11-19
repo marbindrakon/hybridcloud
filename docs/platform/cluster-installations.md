@@ -61,8 +61,18 @@ removal's start; after that the cluster is written Failed (`InstallRemovalFailed
 checks of the OpenStack preflight are left out only for a ClusterDeployment that runs or is installed (a stopped one a
 Retry replaces is a new installation and is checked).
 
+A Retry request made before the stop was written (while the page still said Installing) is recorded as handled by
+the write that first records the stop; only a request made after it starts a new installation. A run that meets a
+removal under way never claims the build's namespace (the removal claims it once the old one is gone), and a
+namespace that is still terminating is never claimed: the run hands over. The OpenStack preflight also refuses an
+image the environment does not offer (`ImageNotFound` when the spec names it, `DefaultImageNotFound` for the
+installation's default). A cluster from before installations were recorded whose installation started and whose
+ClusterDeployment is gone gets its release made again only on a Retry.
+
 A cluster recorded as installed (`status.clusterInstalled`, or stage `Finishing` or `Installed`) whose
-ClusterDeployment the hub does not hold never gets a release or an installation, whoever asks: a new installation
+ClusterDeployment the hub does not hold (read from a list of the build's namespace that answers and is empty; a
+hub that does not answer for the kind is unreadable, not missing) never gets a release or an installation, whoever
+asks: a new installation
 under its name could take the addresses and DNS names of a cluster that may still run on the site. Every run writes
 it Failed with reason `BuildRecordMissing` (no `Stalled`; a Retry checks the same and does the same nothing) until the
 platform team restores the build's record on the hub; only the object's deletion leads to a new installation. The test module `tests/unit/test_install_states.py` holds the table of every recorded
@@ -71,11 +81,13 @@ state against every hub state and kind of request.
   next periodic run of the cluster watches on.
 - Only an installed cluster is written Ready.
 
-The job template has a time limit of 150 minutes. While the stage is `Installing`, the operator treats a cluster's
-request as in flight while the job's last check time is younger than 15 minutes (variable
-`in_flight_observed_stale_minutes` of the namespace operator), so a job that died while it watched is replaced within
-about 25 minutes. In the other stages (a removal of a stopped installation, the steps after the install) the job time
-applies.
+The job template has a time limit of 150 minutes. In every stage a job works in (`Preparing`, `CleaningUp`,
+`Installing`, `Finishing`) the operator treats a cluster's request as in flight only while the later of the job's
+start and its last check time (`status.install.observedAt`) is younger than 15 minutes (variable
+`in_flight_observed_stale_minutes` of the namespace operator). The job writes its check time when each long phase
+starts and at least every five minutes in it (the watch, the removal's waits, the steps after the install), so a living
+job is never replaced and one that died is replaced within about 25 minutes, also when it died before its first check.
+In the other stages the job time applies.
 
 ### Settings
 

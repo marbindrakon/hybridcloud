@@ -215,21 +215,30 @@ class Endings(unittest.TestCase):
         res = observe(po(dict(RUNNING, startedAt=t(400)), conditions=stale), cd(provisioned=False), prov())
         self.assertEqual(stalled(res)["status"], "False", "overdue")
 
-    def test_a_retry_that_arrives_after_the_stop_is_not_swallowed(self):
-        """The job of a Retry published after Hive stopped writes the stop: the request is not recorded as handled, so
-        it still asks for a new installation."""
+    def test_the_first_stop_write_records_the_newest_request(self):
+        """The write that first records a stop records the newest Retry request present then as handled at the stop
+        (also one made while the page still said Installing): only a request made after this write asks for a new
+        installation. A stop already recorded is not recorded again."""
         hub = cd(provisioned=False, stopped=True, failed="UnknownError", restarts=3)
-        hub["status"]["conditions"][-2]["lastTransitionTime"] = t(5)
+        hub["status"]["conditions"][-2]["lastTransitionTime"] = t(15)
         obj = po(RUNNING, lastHandledReconcileRequest="2026-11-18T11:58:00Z")
         obj["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=t(2))
         res = observe(obj, hub, prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
-        self.assertEqual(res["install"]["stoppedRequest"], "")
-        stopped = po(res["install"], lastHandledReconcileRequest="2026-11-18T11:58:00Z")
-        self.assertTrue(I.asked_since_stop(stopped)[0])
-        # a Retry published before the stop was handled by the run that watched it stop
-        obj["status"]["delivery"]["publishedAt"] = t(8)
-        res = observe(obj, hub, prov(attempt=2, stage="failed", reason="UnknownError", log=QUOTA_LOG))
         self.assertEqual(res["install"]["stoppedRequest"], "2026-11-18T11:58:00Z")
+        stopped = po(res["install"], lastHandledReconcileRequest="2026-11-18T11:58:00Z")
+        stopped["status"]["delivery"].update(reason="PlatformOpenshiftReconcileRequested", publishedAt=t(2))
+        self.assertFalse(I.asked_since_stop(stopped)[0], "the request before the stop's write does not ask")
+        # a request after the stop's write asks
+        later = po(res["install"], lastHandledReconcileRequest="2026-11-18T12:00:30Z")
+        self.assertTrue(I.asked_since_stop(later)[0])
+        # an event published after the stop was written asks too (a request the operator does not record)
+        ev = {"reason": "PlatformOpenshiftReconcileRequested", "publishedAt": I.fmt_time(NOW + datetime.timedelta(minutes=1))}
+        self.assertTrue(I.asked_since_stop(stopped, event=ev)[0])
+        # a second observation of the same stop records nothing again
+        again = I.observe(po(res["install"], lastHandledReconcileRequest="2026-11-18T12:00:30Z"), JOB, hub, None,
+                          NOW + datetime.timedelta(minutes=2), SETTINGS)
+        self.assertEqual((again["outcome"], again["write"]), ("stopped", False))
+        self.assertEqual(again["install"]["stoppedRequest"], "2026-11-18T11:58:00Z")
 
     def test_malformed_status_or_hub_data_does_not_raise(self):
         for lf in ({"attempt": 1}, {"attempt": 1, "reason": "QuotaExceeded"}, "text", None):
@@ -632,6 +641,18 @@ class InstallBlocks(unittest.TestCase):
         # the new run starts with the removal: its time bound counts from here
         self.assertEqual(got["startedAt"], I.fmt_time(NOW))
 
+    def test_check_time_only_on_a_running_installation(self):
+        for stage in ("Preparing", "CleaningUp", "Installing", "Finishing"):
+            self.assertEqual(I.install_check_time({"install": {"stage": stage}}, NOW), {"observedAt": I.fmt_time(NOW)})
+        for status in ({"install": {"stage": "Installed"}}, {"install": {"stage": "Stopped"}}, {}, {"clusterInstalled": True}):
+            self.assertIsNone(I.install_check_time(status, NOW))
+
+    def test_a_cluster_from_before_installations_were_recorded_keeps_its_record(self):
+        """install_starting leaves a record without status.install alone when its installation started (the watch
+        writes it from the hub); a new object gets its first installation."""
+        self.assertIsNone(I.install_starting({"installStarted": True}, NOW))
+        self.assertEqual(I.install_starting({}, NOW)["stage"], "Installing")
+
     def test_installed(self):
         got = I.install_installed({"install": {"stage": "Finishing", "run": 2, "endedAt": t(4)}}, NOW)
         self.assertEqual((got["stage"], got["endedAt"]), ("Installed", t(4)))
@@ -640,7 +661,17 @@ class InstallBlocks(unittest.TestCase):
 
     def test_an_older_installed_cluster_gets_no_invented_end(self):
         """A cluster installed before installations were recorded: its end is not known, none is written."""
-        self.assertIsNone(I.install_installed({"clusterInstalled": True}, NOW)["endedAt"])
+        self.assertNotIn("endedAt", I.install_installed({"clusterInstalled": True}, NOW))
+
+    def test_the_end_of_an_installed_cluster(self):
+        """endedAt: as the watch recorded it, else the hub's install time; never written empty (an end already
+        stored is kept by the merge)."""
+        hub = cd(installed=True, provisioned=True)
+        hub["status"]["installedTimestamp"] = t(7)
+        self.assertEqual(I.install_installed({"install": {"stage": "Finishing"}}, NOW, hub)["endedAt"], t(7))
+        self.assertEqual(I.install_installed({"install": {"stage": "Finishing", "endedAt": t(9)}}, NOW, hub)["endedAt"],
+                         t(9))
+        self.assertNotIn("endedAt", I.install_installed({"install": {"stage": "Finishing"}}, NOW))
 
     def test_stopped_seen(self):
         self.assertEqual(I.install_stopped_seen(po(STOPPED, generation=5)),

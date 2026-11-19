@@ -43,6 +43,7 @@ class FakeApi:
         self.gets = []
         self.cd_reads = cd_reads
         self.obj_reads = obj_reads
+        self.list_404 = False
         fake = self
 
         class Handler(BaseHTTPRequestHandler):
@@ -74,6 +75,10 @@ class FakeApi:
                             fake.cd = None
                         fake.cd_reads -= 1
                     return self.send(200, fake.cd) if fake.cd else self.send(404, {})
+                if path == hive + "clusterdeployments":
+                    if fake.list_404:
+                        return self.send(404, {})
+                    return self.send(200, {"items": [fake.cd] if fake.cd else []})
                 if path == hive + "clusterprovisions":
                     return self.send(200, {"items": fake.provisions})
                 return self.send(404, {})
@@ -1150,6 +1155,101 @@ class FifthPass(unittest.TestCase):
                                 tasks=tasks, result="[po_cd_exists | bool, po_cd_live | bool]")
             self.assertEqual(rc, 0, out)
             self.assertEqual(tuple(tr[-1]["result"]), want, hub)
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class GatePass(unittest.TestCase):
+    """The gate's findings: the job's check time in its long phases, the namespace never claimed into a removal, the
+    build record believed missing only from an empty list."""
+
+    def test_the_removals_waits_write_the_check_time(self):
+        obj = po({"stage": "CleaningUp", "run": 2, "startedAt": ago(9), "observedAt": ago(9)}, generation=2)
+        api = FakeApi(obj, None)
+        try:
+            rc, tr, out = run_tasks(api, [{"ansible.builtin.include_tasks":
+                                           "{{ role_path }}/tasks/remove_stopped_build_wait.yml",
+                                           "vars": {"rsw_for": "managedcluster"}}, AFTER])
+        finally:
+            api.close()
+        self.assertEqual(rc, 0, out)
+        self.assertTrue(api.obj["status"]["install"]["observedAt"] > ago(1), "a living removal says so")
+        self.assertNotIn("completedEventId", api.obj["status"]["delivery"], "a check time does not end the event")
+
+    def test_the_check_time_on_a_running_installation_only(self):
+        for install, written in (({"stage": "Preparing", "run": 1}, True), ({"stage": "Finishing", "run": 1}, True),
+                                 ({"stage": "Stopped", "run": 1}, False), (None, False)):
+            api = FakeApi(po(install))
+            try:
+                rc, tr, out = run_tasks(api, [{"ansible.builtin.include_tasks":
+                                               "{{ role_path }}/tasks/install_check_time.yml"}, AFTER])
+            finally:
+                api.close()
+            self.assertEqual((rc, bool(api.patches)), (0, written), install)
+
+    def test_every_long_phase_starts_with_a_check_time(self):
+        import yaml
+        tdir = os.path.join(H.EDA, "rulebooks", "roles", "platformopenshift_provision", "tasks")
+
+        def includes(f):
+            with open(os.path.join(tdir, f)) as fh:
+                return [t.get("ansible.builtin.include_tasks") for t in yaml.safe_load(fh)]
+        for f, before in (("openstack.yml", "openstack_preflight.yml"), ("openstack.yml", "openstack_clusterbuild.yml"),
+                          ("openstack_clusterbuild.yml", "openstack_clusterbuild_monitor.yml"),
+                          ("aws_clusterbuild.yml", "aws_clusterbuild_facts.yml"),
+                          ("aws_clusterbuild.yml", "aws_clusterbuild_deploy.yml"),
+                          ("gcp_clusterbuild.yml", "gcp_clusterbuild_facts.yml"),
+                          ("gcp_clusterbuild.yml", "aws_clusterbuild_deploy.yml")):
+            inc = includes(f)
+            self.assertEqual(inc[inc.index(before) - 1], "install_check_time.yml", (f, before))
+        # the published names (up to 30 minutes) wait in parts of about five, each after a check time
+        with open(os.path.join(tdir, "aws_clusterbuild_postinstall.yml")) as fh:
+            post = yaml.safe_load(fh)
+        wait = next(t for t in post if t.get("name") == "The cluster's published names (Internal)")
+        self.assertEqual(wait["ansible.builtin.include_tasks"], "aws_published_names_wait.yml")
+        with open(os.path.join(tdir, "aws_published_names_wait.yml")) as fh:
+            part = yaml.safe_load(fh)
+        self.assertEqual(part[0]["ansible.builtin.include_tasks"], "install_check_time.yml")
+        self.assertLessEqual(int(part[1]["retries"]) * int(part[1]["delay"]), 300)
+
+    def claim(self, stage, namespace, after_removal=False):
+        obj = po({"stage": stage, "run": 2} if stage else None)
+        api = FakeApi(obj)
+        k8s = {"Namespace//%s" % BUILD: [namespace] if namespace else []}
+        try:
+            v = base_vars(api, po_cr_current={"resources": [obj]}, cl_after_removal=after_removal)
+            rc, tr, out = H.run("platformopenshift_provision", "main.yml", v, k8s=k8s,
+                                tasks=[{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/claim_build.yml"},
+                                       AFTER])
+        finally:
+            api.close()
+        return api, rc, tr, out
+
+    def test_the_namespace_is_never_claimed_into_a_removal(self):
+        # a run that meets a removal (CleaningUp) does not create the namespace: the removal claims it after its wait
+        api, rc, tr, out = self.claim("CleaningUp", None)
+        self.assertEqual((rc, creates(tr), after_reached(tr)), (0, [], True), out)
+        # the removal's own claim does
+        api, rc, tr, out = self.claim("CleaningUp", None, after_removal=True)
+        self.assertEqual(creates(tr), ["/api/v1/namespaces/" + BUILD])
+        # a namespace that still terminates: hand over, nothing created
+        terminating = {"metadata": {"name": BUILD, "deletionTimestamp": ago(1)}}
+        api, rc, tr, out = self.claim("Stopped", terminating)
+        self.assertEqual((rc, creates(tr), after_reached(tr)), (0, [], False), out)
+        self.assertEqual(api.obj["status"]["delivery"]["completedEventId"], "ev-1")
+
+    GUARD = FifthPass.GUARD
+
+    def test_the_build_record_is_missing_only_from_an_empty_list(self):
+        obj = po({"stage": "Installed", "run": 1}, generation=2, buildName=BUILD, clusterInstalled=True)
+        api = FakeApi(obj, None)
+        api.list_404 = True   # the hub does not serve the kind for a moment
+        try:
+            rc, tr, out = run_tasks(api, StoppedRuns.main_tasks(*self.GUARD) + [AFTER],
+                                    platformopenshift_cr={"resources": [obj]}, platformopenshift_cr_name="demo",
+                                    platformopenshift_cr_namespace=NS, platform_spec=obj["spec"])
+        finally:
+            api.close()
+        self.assertEqual((rc, H.patches(tr), after_reached(tr)), (0, [], True), out)
 
 
 class ServicesAnswerNotInStatus(unittest.TestCase):

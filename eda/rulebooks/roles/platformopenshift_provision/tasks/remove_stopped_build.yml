@@ -349,3 +349,4 @@
       ansible.builtin.include_tasks: claim_build.yml
       vars:
         cl_recorded: "{{ cb_app_name }}"
+        cl_after_removal: true

@@ -158,6 +158,9 @@
       po_cr_current.resources[0].status.clusterHealth | default('') == 'Healthy'
     )
 
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
+
 - name: Check the cluster before anything is created
   ansible.builtin.include_tasks: openstack_preflight.yml
   when: >-
@@ -165,6 +168,9 @@
       po_cr_current.resources[0].status.clusterInstalled | default(false) | bool and
       po_cr_current.resources[0].status.clusterHealth | default('') == 'Healthy'
     )
+
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
 
 - name: Run OpenStack cluster build
   ansible.builtin.include_tasks: openstack_clusterbuild.yml
@@ -258,7 +264,7 @@
       provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
       acmAvailable: "{{ cb_acm_available | default('Unknown') }}"
       clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
-      install: "{{ (_po_now | default(po_cr_current)).resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_installed }}"
+      install: "{{ (_po_now | default(po_cr_current)).resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_installed((cd_info | default({}, true)).resources | default([], true) | first | default({}, true)) }}"
       # shc (§11.6 phase C): what provision created, for teardown
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"

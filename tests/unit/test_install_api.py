@@ -215,8 +215,9 @@ class Operator(unittest.TestCase):
             text = fh.read()
         self.assertIn("in_flight_observed_kinds | default(['PlatformOpenshift'])", text)
         self.assertIn("in_flight_observed_stale_minutes | default(15)", text)
-        self.assertIn("observed >= (d.jobStartedAt | string)", text)
-        self.assertIn("((st.get('install') or {}).get('stage') or '') == 'Installing'", text)
+        self.assertNotIn("observed >= (d.jobStartedAt | string)", text, "the later of the two, not the check alone")
+        self.assertIn("in ['Preparing', 'CleaningUp', 'Installing',", text)
+        self.assertIn("observed > started) else started", text)
 
 
 class Template(unittest.TestCase):
@@ -282,17 +283,31 @@ class OperatorRun(unittest.TestCase):
 
     def test_no_observation_by_this_job_uses_the_job_time(self):
         self.assertTrue(self.in_flight({"delivery": self.delivery(30)}))
-        self.assertTrue(self.in_flight({"delivery": self.delivery(30),
-                                        "install": {"stage": "Installing", "observedAt": _ago(40)}}))
+        # no running stage recorded: the job time applies
+        self.assertTrue(self.in_flight({"delivery": self.delivery(30), "install": {"observedAt": _ago(40)}}))
         self.assertFalse(self.in_flight({"delivery": self.delivery(160)}))
 
-    def test_the_check_time_counts_only_while_installing(self):
-        """A removal of a stopped build or the steps after the install write no check time: the job time applies."""
-        for stage in ("CleaningUp", "Finishing", "Preparing"):
+    def test_a_dead_job_is_replaced_whenever_it_died(self):
+        """In every stage a job works in, the event is in flight only while the later of the check time and the job's
+        start is younger than 15 minutes: a job that died before its first check (the check time an earlier job's) is
+        replaced like one that died later; a living job writes at least every five minutes."""
+        for stage in ("Preparing", "CleaningUp", "Installing", "Finishing"):
+            # died 20 minutes after it started, before writing a check time (the stored one is the previous job's)
+            self.assertFalse(self.in_flight({"delivery": self.delivery(20),
+                                             "install": {"stage": stage, "observedAt": _ago(25)}}), stage)
+            # living: its own check 3 minutes ago, started an hour ago
+            self.assertTrue(self.in_flight({"delivery": self.delivery(60),
+                                            "install": {"stage": stage, "observedAt": _ago(3)}}), stage)
+            # just started (no check of its own yet)
+            self.assertTrue(self.in_flight({"delivery": self.delivery(2),
+                                            "install": {"stage": stage, "observedAt": _ago(40)}}), stage)
+            # its last check 20 minutes ago: dead
+            self.assertFalse(self.in_flight({"delivery": self.delivery(30),
+                                             "install": {"stage": stage, "observedAt": _ago(20)}}), stage)
+        # a stage no job works in keeps the job time
+        for stage in ("Stopped", "Installed"):
             self.assertTrue(self.in_flight({"delivery": self.delivery(30),
-                                            "install": {"stage": stage, "observedAt": _ago(20)}}), stage)
-        self.assertFalse(self.in_flight({"delivery": self.delivery(30),
-                                         "install": {"stage": "Installing", "observedAt": _ago(20)}}))
+                                            "install": {"stage": stage, "observedAt": _ago(25)}}), stage)
 
     def test_other_kinds_unchanged(self):
         self.assertTrue(self.in_flight({"delivery": self.delivery(10), "install": {"observedAt": _ago(9)}},

@@ -297,6 +297,19 @@ class RunningInstallationKeepsItsState(unittest.TestCase):
                 self.assertEqual(ready["reason"], "InProgress", (stage, reason))
                 self.assertNotEqual(info["phase"], "Failed", (stage, reason))
 
+    def test_standing_platform_failures_are_kept_on_the_start_writes(self):
+        """BuildRecordMissing and InstallRemovalFailed, written again by every periodic run, stay on the job's start
+        and acknowledgement writes (no "Applying the change." flip), in any stage."""
+        for stage, reason in (("Installed", "BuildRecordMissing"), ("CleaningUp", "InstallRemovalFailed")):
+            o = self.cluster(stage, reason, "failed", "Failed")
+            patch, info = self.ack(o)
+            self.assertEqual((S.find_condition(patch["status"]["conditions"], "Ready")["reason"], info["phase"]),
+                             (reason, "Failed"), stage)
+        legacy = obj({"status": "failed", "clusterInstalled": True,
+                      "conditions": [{"type": "Ready", "status": "False", "reason": "BuildRecordMissing"}]})
+        patch, info = self.ack(legacy)
+        self.assertEqual(S.find_condition(patch["status"]["conditions"], "Ready")["reason"], "BuildRecordMissing")
+
     def test_writes_that_carry_the_installation_or_another_kind_are_unchanged(self):
         o = self.cluster("Installing", "Installing", "reconciling", "Creating")
         patch, _ = self.ack(o, {"status": "reconciling", "reason": "InstallCleanup", "message": "x",

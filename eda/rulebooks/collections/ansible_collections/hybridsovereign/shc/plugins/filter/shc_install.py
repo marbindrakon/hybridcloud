@@ -31,8 +31,9 @@ def shc_install_cleaning(status):
     return I.install_cleaning(_status(status), _now())
 
 
-def shc_install_installed(status):
-    return I.install_installed(_status(status), _now())
+def shc_install_installed(status, cd=None):
+    """status.install once installed; cd: the hub's ClusterDeployment (its install time when the watch recorded none)."""
+    return I.install_installed(_status(status), _now(), cd if isinstance(cd, dict) else None)
 
 
 def shc_install_asked(obj):

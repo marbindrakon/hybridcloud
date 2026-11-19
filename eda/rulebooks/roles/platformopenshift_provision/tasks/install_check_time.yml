@@ -1,0 +1,15 @@
+---
+# The job's sign of life for the operator's in-flight rule: status.install.observedAt is written now when the object
+# records a running installation (Preparing, CleaningUp, Installing, Finishing) and is still this job's. Called when a
+# long phase starts; the watch and the removal's waits write it as they go.
+- name: Write the check time
+  hybridsovereign.shc.install_observe:
+    mode: checktime
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    uid: "{{ po_uid | default('', true) }}"
+    event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+  failed_when: false

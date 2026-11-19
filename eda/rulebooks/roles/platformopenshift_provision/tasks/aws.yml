@@ -163,7 +163,7 @@
       provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
       acmAvailable: "{{ cb_acm_available | default(false) | bool }}"
       clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
-      install: "{{ platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_installed }}"
+      install: "{{ platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_installed((cd_info | default({}, true)).resources | default([], true) | first | default({}, true)) }}"
       conditions:
         - type: Available
           status: "{{ 'True' if cb_cluster_installed | bool else 'False' }}"

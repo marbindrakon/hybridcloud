@@ -162,6 +162,8 @@ _INSTALL_RUNNING = ("CleaningUp", "Installing", "Finishing")
 # the Ready reasons the running installation itself writes (anything else is an earlier run's state)
 _INSTALL_REASONS = ("Installing", "InstallRetrying", "InstallFinishing", "InstallCleanup", "InstallNotStarted",
                     "InstallOverdue")
+# failures the platform team acts on that every periodic run writes again unchanged: kept as well, in any stage
+_INSTALL_STANDING = ("BuildRecordMissing", "InstallRemovalFailed")
 
 
 def keeps_installation(obj, body, new_conditions=None):
@@ -175,6 +177,8 @@ def keeps_installation(obj, body, new_conditions=None):
     status = (obj or {}).get("status") or {}
     install = status.get("install")
     ready = find_condition(status.get("conditions") or [], "Ready") or {}
+    if ready.get("reason") in _INSTALL_STANDING:
+        return True
     return (isinstance(install, dict) and install.get("stage") in _INSTALL_RUNNING
             and ready.get("reason") in _INSTALL_REASONS)
 

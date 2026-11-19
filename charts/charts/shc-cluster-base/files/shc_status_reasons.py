@@ -136,6 +136,7 @@ REASONS = {
     "NotForManagedClusters": _r("T", FAILED, "An address of this cluster lies in a range the platform's management network routes. Use another network or address."),
     "NetworkChoiceRequired": _r("T", FAILED, "This site has no default external network. Choose a network."),
     "ExternalNetworkNotListed": _r("T", FAILED, "The named network is not an external network of this site."),
+    "ImageNotFound": _r("T", FAILED, "The image this cluster asks for does not exist in its environment; the message names it. Choose another image."),
     "FlavorNotFound": _r("T", FAILED, "A flavor this cluster asks for does not exist in its environment; the message names it. Choose another flavor."),
     "NetworkNameNotUnique": _r("T", FAILED, "Your environment sees another network with the name of the cluster's network. Rename or remove the other network."),
     # an OpenShift cluster's installation that stopped (Ready and Stalled)
@@ -159,6 +160,7 @@ REASONS = {
     "InstallOverdue": _r("P", FAILED, "The installation has not finished in the time allowed. The platform keeps checking it."),
     "BuildRecordMissing": _r("P", FAILED, "The platform's record of this cluster's build is missing. Your cluster was not touched; the platform team has to restore the record."),
     "InstallRemovalFailed": _r("P", FAILED, "The stopped installation could not be removed from the site. The platform team has to look at it."),
+    "DefaultImageNotFound": _r("P", FAILED, "The environment lacks the image the platform uses for cluster nodes by default. Name an image it offers, or ask the platform team."),
     "DefaultFlavorNotFound": _r("P", FAILED, "The environment lacks the platform's default flavor for cluster nodes. Name a flavor it offers, or ask the platform team."),
     "InvalidSecret": _r("P", FAILED, "A required credential is not valid. The platform team is looking at it."),
     "CredentialSecretMissing": _r("P", FAILED, "The cluster's credential secret is missing from the platform's secret store. Nothing was changed. The platform team acts."),
