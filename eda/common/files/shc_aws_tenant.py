@@ -205,6 +205,13 @@ def v6_assoc(vpc):
 GONE = ("delete-in-progress", "delete-complete", "delete-failed")
 
 
+
+def public_subnet_of(name, sn_name, subnet):
+    """Whether a subnet is one place-public made for this placement: named "<name>-public-<letter>" with the letter of
+    its own availability zone (never a name that merely starts the same way)."""
+    az = str((subnet or {}).get("AvailabilityZone") or "")
+    return bool(az) and sn_name == "%s-public-%s" % (name, az[-1])
+
 class Tenant:
     def __init__(self, cfg):
         self.cfg = cfg
@@ -715,7 +722,8 @@ class Tenant:
             fail("placement %s is IPv6-only: it has no IPv4 for public subnets" % placement)
         if state == "down":
             for sn_name, s in subnets.items():
-                if (sn_name or "").startswith(name + "-public-"):
+                # exactly the names place-public up gives ("<name>-public-<zone letter>"), in the placement's own VPC
+                if public_subnet_of(name, sn_name, s):
                     for _ in range(30):  # load balancer ENIs go with the cluster's deprovision
                         try:
                             self.ec2.delete_subnet(SubnetId=s["SubnetId"])

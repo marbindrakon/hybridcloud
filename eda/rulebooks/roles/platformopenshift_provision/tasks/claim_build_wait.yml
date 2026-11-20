@@ -1,0 +1,55 @@
+---
+# The wait of claim_build.yml while the build's namespace on the hub is still terminating (an earlier cluster of this
+# name, or the stopped installation, being removed): the cluster says it waits (WaitingForEarlierCluster; the event is
+# completed, the next periodic run checks again) for at most namespaceWaitMinutes from its first wait
+# (status.install.namespaceWaitSince); past that it is refused (EarlierClusterNotRemoved) for the platform team, and a Retry
+# checks again.
+- name: Require the wait's setting
+  ansible.builtin.assert:
+    that:
+      - (platformopenshift_install.namespaceWaitMinutes | default('', true) | string | length) > 0
+    fail_msg: "Set platformopenshift_defaults.install.namespaceWaitMinutes (the installation setting is missing)."
+
+- name: How long the cluster has waited
+  ansible.builtin.set_fact:
+    _cl_wait: >-
+      {{ ((po_cr_current | default(platformopenshift_cr | default({}, true), true)).resources | default([{}], true)
+          | first).status | default({}, true)
+         | hybridsovereign.shc.shc_install_namespace_wait(platformopenshift_install.namespaceWaitMinutes | int) }}
+
+- name: Refuse after the wait's bound
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: EarlierClusterNotRemoved
+    ps_message: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the build name {{ cb_app_name }} is still held by an
+      earlier cluster of this name that the platform has not finished removing; the platform team has to look at
+      it (Retry checks again)
+  when: _cl_wait.over | bool
+
+- name: Say that the cluster waits for the earlier one
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_body:
+      status: pending
+      ready: false
+      reason: WaitingForEarlierCluster
+      message: >-
+        An earlier cluster of this name is still being removed from the platform; the installation starts when
+        that is done.
+      install:
+        namespaceWaitSince: "{{ _cl_wait.since }}"
+      conditions:
+        - type: Ready
+          status: "False"
+          reason: WaitingForEarlierCluster
+          message: >-
+            An earlier cluster of this name is still being removed from the platform; the installation starts
+            when that is done.
+
+- name: End the job, the next run checks again
+  ansible.builtin.meta: end_play

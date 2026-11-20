@@ -33,11 +33,16 @@
   no_log: true
   failed_when: false
 
+# the API's answer goes to the job's log only; the status gets a fixed sentence
+- name: Say what the services API answered
+  ansible.builtin.debug:
+    msg: "{{ (cloudgcp_raw.json | default({}, true)).message | default(cloudgcp_raw.msg | default(''), true) }}"
+  when: (cloudgcp_raw.status | default(-1)) != 200
+
 - name: Fail when the CloudGCP could not be read
   ansible.builtin.fail:
     msg: >-
-      Reading CloudGCP '{{ gcp_env_name }}' failed (HTTP {{ cloudgcp_raw.status | default('?') }}):
-      {{ (cloudgcp_raw.json | default({}, true)).message | default(cloudgcp_raw.msg | default(''), true) }}
+      The Google Cloud environment '{{ gcp_env_name }}' could not be read (HTTP {{ cloudgcp_raw.status | default('?') }}).
   when: (cloudgcp_raw.status | default(-1)) != 200
 
 - name: Fail if CloudGCP not ready
@@ -107,6 +112,14 @@
       eventTime: "{{ event_time }}"
   ignore_errors: true
 
+# only an installed cluster is ever written Ready (the installation watch ended the job otherwise)
+- name: Never write Ready for a cluster that is not installed
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the hub's build {{ cb_app_name }} is not installed; the
+      cluster is not marked ready.
+  when: not (cb_cluster_installed | default(false) | bool)
+
 - name: Update PlatformOpenshift status
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -121,7 +134,8 @@
       observedGeneration: "{{ platformopenshift_generation }}"
       lastReconciledAt: "{{ event_time }}"
       message: >-
-        {{ ('GCP cluster ' ~ cb_ocp_name ~ ' installed (' ~ cb_api_url ~ ')') if cb_cluster_installed | bool
+        {{ ('GCP cluster ' ~ cb_ocp_name ~ ' installed (' ~ cb_api_url ~ ')' ~ cb_names_note | default('', true))
+           if cb_cluster_installed | bool
            else ('GCP cluster build ' ~ cb_app_name ~ ' not installed: ' ~ cb_provision_status | default('Unknown')) }}
       name: "{{ ansible_operator_meta.name }}"
       namespace: "{{ ansible_operator_meta.namespace }}"
@@ -149,6 +163,7 @@
       provisionStatus: "{{ cb_provision_status | default('Unknown') }}"
       acmAvailable: "{{ cb_acm_available | default(false) | bool }}"
       clusterInstalled: "{{ cb_cluster_installed | default(false) | bool }}"
+      install: "{{ platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_installed((cd_info | default({}, true)).resources | default([], true) | first | default({}, true)) }}"
       conditions:
         - type: Available
           status: "{{ 'True' if cb_cluster_installed | bool else 'False' }}"
@@ -190,10 +205,3 @@
   when:
     - cb_cluster_installed | default(false) | bool
     - cb_acm_available | default(false) | bool
-
-- name: Fail the job when the cluster did not install
-  ansible.builtin.fail:
-    msg: >-
-      GCP cluster build {{ cb_app_name }} is not installed ({{ cb_provision_status | default('Unknown') }}); see the
-      ClusterDeployment's provisions in namespace {{ cb_app_name }} on central.
-  when: not (cb_cluster_installed | bool)

@@ -25,11 +25,12 @@
         pn_need_router_attachments: true
         pn_judge_only: true
   rescue:
+    # the platform's sentence of the failed step (shc_failure_message), never the task's own failure text
     - name: Keep why the network could not be read
       ansible.builtin.set_fact:
         rga_error: >-
-          {{ (ansible_failed_result.msg | default('', true)
-              or ('task ' ~ (ansible_failed_task.name | default('?', true)) ~ ' failed')) | string | truncate(600, true, '') }}
+          {{ ansible_failed_task | default({}, true)
+               | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true)) }}
 
 - name: The cluster's infra id
   ansible.builtin.set_fact:
@@ -58,14 +59,16 @@
       conditions:
         - >-
           {{ {'type': 'RouterGateway', 'status': 'False', 'reason': 'Failed',
-              'message': ("The cluster is built and works, but the address of its router's gateway was not added to "
-                          ~ 'its addresses ('
-                          ~ (('the network could not be read: ' ~ rga_error) if rga_error | length > 0
-                             else ('HybridNetwork ' ~ oso_network ~ ': ' ~ (pf.reason | default('', true)) ~ ': '
+              'message': (("The cluster is built and works, but its network could not be read, so the address of its "
+                           ~ "router's gateway was not added to its addresses and the cluster's own calls to the hub "
+                           ~ "leave by the network's own path. " ~ rga_error) if rga_error | length > 0
+                          else ("The cluster is built and works, but the address of its router's gateway was not added "
+                          ~ 'to its addresses ('
+                          ~ (('HybridNetwork ' ~ oso_network ~ ': ' ~ (pf.reason | default('', true)) ~ ': '
                                    ~ (pf.message | default('', true))) if (pf.reason | default('', true)) | length > 0
                              else 'the ClusterDeployment names no infra id')
                           ~ "): the cluster's own calls to the hub are not admitted on the platform's path and leave "
-                          ~ "by the network's own path") | truncate(1000, true, '')} }}
+                          ~ "by the network's own path")) | truncate(1000, true, '')} }}
   when: >-
     rga_error | length > 0 or (pf.reason | default('', true)) | length > 0
     or ((pf.service.hubEndpoints | default([], true)) | length > 0 and rga_infra_id | length == 0)

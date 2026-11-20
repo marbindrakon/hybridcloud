@@ -32,18 +32,19 @@
     cb_external_dns: "{{ platformopenshift_defaults.externalDNS | default([]) }}"
   when: not (cb_platform_path | bool)
 
+# the note goes into the cluster's Preflight condition: it says which resolvers, never their addresses or the site's
+# name (both are in the job's log below)
 - name: Say which resolvers the cluster's machines use
   ansible.builtin.set_fact:
     cb_external_dns_note: >-
-      {{ (('; machines resolve names through ' ~ (cb_external_dns | join(', ')) ~ ', the resolvers of site '
-           ~ cb_external_dns_site ~ ' for its placed networks')
+      {{ ('; machines resolve names through the resolvers the site lists for its placed networks'
           if cb_external_dns | length > 0 else
-          ('; machines use the cloud default resolvers (site ' ~ cb_external_dns_site
-           ~ ' lists no resolvers for its placed networks)'))
+          '; machines use the cloud default resolvers (the site lists no resolvers for its placed networks)')
          if cb_platform_path | bool else '' }}
 
 - name: Show the cluster's resolvers
   ansible.builtin.debug:
     msg: >-
-      externalDNS {{ cb_external_dns | to_json }}{{ cb_external_dns_note if cb_platform_path | bool
+      externalDNS {{ cb_external_dns | to_json }}{{ (' (site ' ~ cb_external_dns_site ~ ')' ~ cb_external_dns_note)
+      if cb_platform_path | bool
       else ' (the installation default for clusters on an external network)' }}

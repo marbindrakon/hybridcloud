@@ -60,6 +60,7 @@
 - name: Judge the network for the cluster
   ansible.builtin.include_tasks: po_call.yml
   vars:
+    shc_step: "Check the cluster's network"
     po_request:
       action: network
       kind: "{{ pn_kind }}"

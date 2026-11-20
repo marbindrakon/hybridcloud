@@ -35,6 +35,100 @@ spec:
           type: object
           required:
             - spec
+          x-kubernetes-validations:
+            # install-time fields: refused while the cluster is installing or installed
+            - rule: >-
+                (!(has(self.status) && has(self.status.clusterInstalled) && self.status.clusterInstalled == true) &&
+                (!has(self.status) || (has(self.status.install) && has(self.status.install.stage) && self.status.install.stage
+                == 'Stopped') || ((!has(self.status.install) || !has(self.status.install.stage) || self.status.install.stage
+                == 'Preparing') && !(has(self.status.installStarted) && self.status.installStarted == true)))) ||
+                (((has(self.spec.openstack) && has(self.spec.openstack.controlPlaneCount)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.controlPlaneCount)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.controlPlaneCount)) || self.spec.openstack.controlPlaneCount ==
+                oldSelf.spec.openstack.controlPlaneCount)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.workerCount)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.workerCount)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.workerCount)) || self.spec.openstack.workerCount ==
+                oldSelf.spec.openstack.workerCount)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.controlPlaneFlavor)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.controlPlaneFlavor)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.controlPlaneFlavor)) || self.spec.openstack.controlPlaneFlavor ==
+                oldSelf.spec.openstack.controlPlaneFlavor)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.workerFlavor)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.workerFlavor)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.workerFlavor)) || self.spec.openstack.workerFlavor ==
+                oldSelf.spec.openstack.workerFlavor)) && ((has(self.spec.openstack) && has(self.spec.openstack.ocpImageSet))
+                == (has(oldSelf.spec.openstack) && has(oldSelf.spec.openstack.ocpImageSet)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.ocpImageSet)) || self.spec.openstack.ocpImageSet ==
+                oldSelf.spec.openstack.ocpImageSet)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.glanceImageOverride)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.glanceImageOverride)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.glanceImageOverride)) || self.spec.openstack.glanceImageOverride ==
+                oldSelf.spec.openstack.glanceImageOverride)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.trustBundle)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.trustBundle)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.trustBundle)) || self.spec.openstack.trustBundle ==
+                oldSelf.spec.openstack.trustBundle)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.pullSecretVaultPath)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.pullSecretVaultPath)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.pullSecretVaultPath)) || self.spec.openstack.pullSecretVaultPath ==
+                oldSelf.spec.openstack.pullSecretVaultPath)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.pullSecretVaultProperty)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.pullSecretVaultProperty)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.pullSecretVaultProperty)) || self.spec.openstack.pullSecretVaultProperty ==
+                oldSelf.spec.openstack.pullSecretVaultProperty)) && ((has(self.spec.openstack) &&
+                has(self.spec.openstack.sshKeyVaultPath)) == (has(oldSelf.spec.openstack) &&
+                has(oldSelf.spec.openstack.sshKeyVaultPath)) && (!(has(self.spec.openstack) &&
+                has(self.spec.openstack.sshKeyVaultPath)) || self.spec.openstack.sshKeyVaultPath ==
+                oldSelf.spec.openstack.sshKeyVaultPath)) && ((has(self.spec.aws) && has(self.spec.aws.publish)) ==
+                (has(oldSelf.spec.aws) && has(oldSelf.spec.aws.publish)) && (!(has(self.spec.aws) &&
+                has(self.spec.aws.publish)) || self.spec.aws.publish == oldSelf.spec.aws.publish)) && ((has(self.spec.aws) &&
+                has(self.spec.aws.clusterType)) == (has(oldSelf.spec.aws) && has(oldSelf.spec.aws.clusterType)) &&
+                (!(has(self.spec.aws) && has(self.spec.aws.clusterType)) || self.spec.aws.clusterType ==
+                oldSelf.spec.aws.clusterType)) && ((has(self.spec.aws) && has(self.spec.aws.controlPlaneCount)) ==
+                (has(oldSelf.spec.aws) && has(oldSelf.spec.aws.controlPlaneCount)) && (!(has(self.spec.aws) &&
+                has(self.spec.aws.controlPlaneCount)) || self.spec.aws.controlPlaneCount ==
+                oldSelf.spec.aws.controlPlaneCount)) && ((has(self.spec.aws) && has(self.spec.aws.controllerFlavor)) ==
+                (has(oldSelf.spec.aws) && has(oldSelf.spec.aws.controllerFlavor)) && (!(has(self.spec.aws) &&
+                has(self.spec.aws.controllerFlavor)) || self.spec.aws.controllerFlavor == oldSelf.spec.aws.controllerFlavor))
+                && ((has(self.spec.aws) && has(self.spec.aws.workerFlavor)) == (has(oldSelf.spec.aws) &&
+                has(oldSelf.spec.aws.workerFlavor)) && (!(has(self.spec.aws) && has(self.spec.aws.workerFlavor)) ||
+                self.spec.aws.workerFlavor == oldSelf.spec.aws.workerFlavor)) && ((has(self.spec.gcp) &&
+                has(self.spec.gcp.publish)) == (has(oldSelf.spec.gcp) && has(oldSelf.spec.gcp.publish)) &&
+                (!(has(self.spec.gcp) && has(self.spec.gcp.publish)) || self.spec.gcp.publish == oldSelf.spec.gcp.publish)) &&
+                ((has(self.spec.gcp) && has(self.spec.gcp.controlPlaneCount)) == (has(oldSelf.spec.gcp) &&
+                has(oldSelf.spec.gcp.controlPlaneCount)) && (!(has(self.spec.gcp) && has(self.spec.gcp.controlPlaneCount)) ||
+                self.spec.gcp.controlPlaneCount == oldSelf.spec.gcp.controlPlaneCount)) && ((has(self.spec.gcp) &&
+                has(self.spec.gcp.controllerFlavor)) == (has(oldSelf.spec.gcp) && has(oldSelf.spec.gcp.controllerFlavor)) &&
+                (!(has(self.spec.gcp) && has(self.spec.gcp.controllerFlavor)) || self.spec.gcp.controllerFlavor ==
+                oldSelf.spec.gcp.controllerFlavor)) && ((has(self.spec.gcp) && has(self.spec.gcp.workerFlavor)) ==
+                (has(oldSelf.spec.gcp) && has(oldSelf.spec.gcp.workerFlavor)) && (!(has(self.spec.gcp) &&
+                has(self.spec.gcp.workerFlavor)) || self.spec.gcp.workerFlavor == oldSelf.spec.gcp.workerFlavor)))
+              message: >-
+                The cluster is being installed or is installed. Sizes, flavors, release and image can be changed
+                before the installation starts or after it has stopped; on AWS and Google Cloud the worker count can
+                also be changed once the cluster is installed.
+              fieldPath: .spec
+              reason: FieldValueForbidden
+            # the worker count on AWS and Google Cloud: applied to an installed cluster, refused while it installs
+            - rule: >-
+                (!(has(self.status) && has(self.status.clusterInstalled) && self.status.clusterInstalled == true) &&
+                (!has(self.status) || (has(self.status.install) && has(self.status.install.stage) && self.status.install.stage
+                == 'Stopped') || ((!has(self.status.install) || !has(self.status.install.stage) || self.status.install.stage
+                == 'Preparing') && !(has(self.status.installStarted) && self.status.installStarted == true)))) ||
+                ((has(self.status) && has(self.status.clusterInstalled) && self.status.clusterInstalled == true) ||
+                (has(self.status) && has(self.status.install) && has(self.status.install.stage) && self.status.install.stage
+                == 'Installed')) || (((has(self.spec.aws) && has(self.spec.aws.workerCount)) == (has(oldSelf.spec.aws) &&
+                has(oldSelf.spec.aws.workerCount)) && (!(has(self.spec.aws) && has(self.spec.aws.workerCount)) ||
+                self.spec.aws.workerCount == oldSelf.spec.aws.workerCount)) && ((has(self.spec.gcp) &&
+                has(self.spec.gcp.workerCount)) == (has(oldSelf.spec.gcp) && has(oldSelf.spec.gcp.workerCount)) &&
+                (!(has(self.spec.gcp) && has(self.spec.gcp.workerCount)) || self.spec.gcp.workerCount ==
+                oldSelf.spec.gcp.workerCount)))
+              message: >-
+                The cluster is being installed. The worker count can be changed once the installation has finished
+                or after it has stopped.
+              fieldPath: .spec
+              reason: FieldValueForbidden
           properties:
             apiVersion:
               type: string
@@ -59,6 +153,38 @@ spec:
                   message: the cluster's network cannot be added, removed or changed
                 - rule: has(self.networking) == has(oldSelf.networking)
                   message: spec.networking cannot be added, removed or changed
+                - rule: >-
+                    has(self.type) == has(oldSelf.type) && (!has(self.type) || self.type == oldSelf.type)
+                  message: spec.type cannot be changed; create a new cluster for another environment type
+                - rule: >-
+                    (has(self.openstack) && has(self.openstack.environment)) == (has(oldSelf.openstack) &&
+                    has(oldSelf.openstack.environment)) && (!(has(self.openstack) && has(self.openstack.environment)) ||
+                    self.openstack.environment == oldSelf.openstack.environment)
+                  message: spec.openstack.environment cannot be changed; create a new cluster
+                - rule: >-
+                    (has(self.aws) && has(self.aws.environment)) == (has(oldSelf.aws) && has(oldSelf.aws.environment)) &&
+                    (!(has(self.aws) && has(self.aws.environment)) || self.aws.environment == oldSelf.aws.environment)
+                  message: spec.aws.environment cannot be changed; create a new cluster
+                - rule: >-
+                    (has(self.aws) && has(self.aws.network)) == (has(oldSelf.aws) && has(oldSelf.aws.network)) && (!(has(self.aws)
+                    && has(self.aws.network)) || self.aws.network == oldSelf.aws.network)
+                  message: spec.aws.network cannot be changed; create a new cluster
+                - rule: >-
+                    (has(self.aws) && has(self.aws.region)) == (has(oldSelf.aws) && has(oldSelf.aws.region)) && (!(has(self.aws)
+                    && has(self.aws.region)) || self.aws.region == oldSelf.aws.region)
+                  message: spec.aws.region cannot be changed; create a new cluster
+                - rule: >-
+                    (has(self.gcp) && has(self.gcp.environment)) == (has(oldSelf.gcp) && has(oldSelf.gcp.environment)) &&
+                    (!(has(self.gcp) && has(self.gcp.environment)) || self.gcp.environment == oldSelf.gcp.environment)
+                  message: spec.gcp.environment cannot be changed; create a new cluster
+                - rule: >-
+                    (has(self.gcp) && has(self.gcp.network)) == (has(oldSelf.gcp) && has(oldSelf.gcp.network)) && (!(has(self.gcp)
+                    && has(self.gcp.network)) || self.gcp.network == oldSelf.gcp.network)
+                  message: spec.gcp.network cannot be changed; create a new cluster
+                - rule: >-
+                    (has(self.gcp) && has(self.gcp.region)) == (has(oldSelf.gcp) && has(oldSelf.gcp.region)) && (!(has(self.gcp)
+                    && has(self.gcp.region)) || self.gcp.region == oldSelf.gcp.region)
+                  message: spec.gcp.region cannot be changed; create a new cluster
                 - rule: >-
                     !has(self.networking) || !has(self.networking.machineNetwork) || !has(self.type)
                     || self.type == 'openstack'
@@ -407,7 +533,109 @@ spec:
                   description: Overall health of the cluster.
                 provisionStatus:
                   type: string
-                  description: Installation status.
+                  description: >-
+                    The installer's own state word for the cluster's build. See status.install for the
+                    installation's stage.
+                install:
+                  type: object
+                  description: >-
+                    The installation of the cluster, written by the platform. Present from the first check of a
+                    new cluster; kept after the installation ends. When the installation stopped, a new Retry now
+                    request (status.lastHandledReconcileRequest) or a change of spec.type or the provider's block
+                    starts the installation again; a change of anything else starts nothing.
+                  properties:
+                    stage:
+                      type: string
+                      enum: [Preparing, CleaningUp, Installing, Finishing, Installed, Stopped]
+                      description: >-
+                        Where the installation is. Preparing: checks, addresses and names. CleaningUp: a stopped
+                        installation is being removed before a new one starts. Installing: the installer is running.
+                        Finishing: the cluster is installed and is being connected to the platform. Installed: done.
+                        Stopped: the installation ended without a cluster; lastFailure says why.
+                    attempt:
+                      type: integer
+                      description: Number of the installer's current or last attempt, starting at 1.
+                    attemptsLimit:
+                      type: integer
+                      description: How many attempts the installer makes before the installation stops.
+                    run:
+                      type: integer
+                      description: >-
+                        How many installations were started for this cluster, starting at 1. Retrying a stopped
+                        installation starts a new one.
+                    startedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the current installation started (RFC 3339): while a stopped one is removed for it
+                        (CleaningUp), when that removal started.
+                    endedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the current installation ended, with a cluster or stopped (RFC 3339), as the hub recorded
+                        it. Empty while it runs, and for a cluster installed before installations were recorded.
+                    observedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the platform last read the state of the installation (RFC 3339). While the stage is
+                        Installing, an old time means the state shown may be out of date.
+                    lastFailure:
+                      type: object
+                      description: >-
+                        The last failed attempt of the current installation. Kept while a later attempt runs;
+                        removed when the installation succeeds or a new one starts.
+                      properties:
+                        attempt:
+                          type: integer
+                          description: The attempt that failed.
+                        reason:
+                          type: string
+                          description: One-word cause in CamelCase, stable enough to match on.
+                        message:
+                          type: string
+                          description: What failed, in plain words. Holds no secrets and no addresses of the platform.
+                        time:
+                          type: string
+                          format: date-time
+                          description: >-
+                            When the attempt failed (RFC 3339), as the hub recorded it; the time of the check that
+                            found it when the hub recorded none.
+                    stoppedGeneration:
+                      type: integer
+                      format: int64
+                      description: >-
+                        The metadata.generation when the installation stopped, or the last one a run on the
+                        stopped installation has seen.
+                    stoppedRequest:
+                      type: string
+                      description: >-
+                        The Retry now request handled when the installation stopped. A request other than this one
+                        starts a new installation.
+                    stoppedSpec:
+                      type: string
+                      description: >-
+                        A digest of spec.type and the installation settings of the provider's block when the
+                        installation stopped. A change of them starts a new installation; a change of anything else
+                        does not.
+                    stoppedAt:
+                      type: string
+                      format: date-time
+                      description: >-
+                        When the stop was written (RFC 3339). A Retry request made after this time starts a new
+                        installation; one made before it does not.
+                    namespaceWaitSince:
+                      type: string
+                      format: date-time
+                      description: >-
+                        Since when this cluster waits for an earlier cluster of the same name to be removed from the
+                        platform (RFC 3339); empty when it does not wait.
+                    stoppedSpecVersion:
+                      type: string
+                      description: >-
+                        Which installation settings stoppedSpec covers. A digest of another version is not compared
+                        (only a Retry starts a new installation) and is renewed by the next run.
                 acmAvailable:
                   type: boolean
                   description: True when the platform's cluster management reaches the cluster.
@@ -649,7 +877,10 @@ spec:
                 conditions:
                   description: >-
                     Standard conditions. Ready says whether the object is usable; the others say
-                    what the platform is waiting for or what failed.
+                    what the platform is waiting for or what failed. Stalled is True when the platform has
+                    stopped trying by itself: a deletion that failed repeatedly, or an installation that stopped.
+                    Its message says what to fix; then use Retry now (on a stopped installation: Retry
+                    installation).
                   type: array
                   items:
                     description: One condition.

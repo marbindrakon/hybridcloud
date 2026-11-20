@@ -35,7 +35,16 @@
     vault_kv_data: {}
   no_log: true
 
+- name: Require published automation clients (the step's sentence)
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when:
+    - shc_step is defined
+    - not (_krt_client_id | length > 0 and _krt_client_secret | length > 0 and keycloak_realm_name | length > 0
+           and _krt_url | length > 0)
+
 - name: Require published automation clients
+  when: shc_step is not defined
   ansible.builtin.assert:
     that:
       - _krt_client_id | length > 0

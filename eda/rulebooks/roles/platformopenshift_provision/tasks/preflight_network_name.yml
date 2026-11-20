@@ -8,7 +8,10 @@
 # must be exactly the chosen one, and it must be external for the project. The site account only lends the site's CA
 # bundle. Inputs: pnn_name, pnn_id (the placed network, or the global external network in effect), pnn_hybrid (true:
 # a placed network, whose policy for the project may still be on its way), pnn_credential (the Vault path of the
-# cluster's credential). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
+# cluster's credential), pnn_flavors (the flavors the cluster asks for; one the project does not see is refused:
+# FlavorNotFound naming it when the cluster's spec names it, pnn_spec_flavors; DefaultFlavorNotFound, naming no flavor,
+# when it is the installation's default), pnn_images / pnn_spec_images (the same for the nodes' image: ImageNotFound,
+# DefaultImageNotFound). Uses cb_oso_project_id, cb_fip_account, cb_app_name. Sets pnn_reason / pnn_message
 # ("" = the name leads to the network alone) and stops through preflight_stop.yml (a wait goes to po_deferred_wait
 # instead when pnn_defer_wait is true and no earlier wait is kept: the caller stops with it later): refuses NetworkNameNotUnique (another network of the name is
 # visible: the tenant renames or removes its own, or the platform team the share), waits WaitingForPlacement (a placed
@@ -27,6 +30,7 @@
     - name: Load the site account (for the site's CA bundle)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
+        shc_step: "Check the network, flavors and image on the site"
         os_account_vault_path: "{{ cb_fip_account }}"
         os_account_tag: "po-netname-{{ cb_app_name }}"
 
@@ -37,6 +41,7 @@
     - name: Load the cluster's credential (the one the installer runs with)
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
+        shc_step: "Check the network, flavors and image on the site"
         os_account_vault_path: "{{ pnn_credential }}"
         os_account_tag: "po-netname-env-{{ cb_app_name }}"
 
@@ -47,12 +52,17 @@
     - name: List them as the environment's project
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
       vars:
+        shc_step: "Check the network, flavors and image on the site"
         os_call_no_log: false
-        os_request:
+        _pnn_request:
           action: network-name-check
           project_id: "{{ cb_oso_project_id }}"
           name: "{{ pnn_name }}"
           network_id: "{{ pnn_id }}"
+          flavors: "{{ pnn_flavors | default([], true) }}"
+        # the image only when one is set (the installer then uploads the release's own)
+        os_request: >-
+          {{ _pnn_request | combine({'images': pnn_images} if (pnn_images | default([], true)) | length > 0 else {}) }}
   always:
     - name: Remove the accounts' temp files
       ansible.builtin.file:
@@ -79,12 +89,67 @@
     pnn_message: >-
       {{ '' if _usable | bool
          else ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': '
-               ~ (('the environment sees ' ~ (_visible | length) ~ ' network(s) named ' ~ pnn_name ~ ' (' ~ _named
-                   ~ ') and the installer takes the network by name; rename or remove the other network of that name, '
-                   ~ 'or ask the platform team about a network shared with the environment') if _others | length > 0
-                  else ('the environment does not see network ' ~ pnn_name ~ ' (' ~ pnn_id ~ ')'
+               ~ (('the environment sees ' ~ (_visible | length) ~ ' networks named ' ~ pnn_name ~ ' ('
+                   ~ (_visible | selectattr('project_id', 'equalto', cb_oso_project_id) | list | length)
+                   ~ ' of them its own) and the installer takes the network by name; rename or remove the other network '
+                   ~ 'of that name, or ask the platform team about a network shared with the environment')
+                  if _others | length > 0
+                  else ('the environment does not see network ' ~ pnn_name
                         ~ (' as an external network' if _visible | length > 0 else '')
                         ~ (' yet' if pnn_hybrid | bool else '')))) }}
+
+# the networks' ids go to the job's log only (a refusal names what the tenant can choose by name)
+- name: The networks of that name, for the job's log
+  ansible.builtin.debug:
+    msg: "network {{ pnn_name }} ({{ pnn_id }}); seen: {{ _pnn_seen | default([]) }}"
+  vars:
+    _pnn_seen: "{{ (os_result.visible | default([], true)) | map(attribute='id') | list }}"
+  when: pnn_reason | trim | length > 0
+
+# a flavor the cluster asks for that the project does not see: the installer would skip its own checks and fail after
+# its whole run (about 50 minutes over three attempts); refused here, before anything is created. A flavor is named to
+# the tenant only when the cluster's spec names it; the installation's default is the platform's (named in no text)
+- name: Refuse a flavor the environment does not have
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    _pnn_named_missing: >-
+      {{ os_result.flavors_missing | default([], true) | select('in', pnn_spec_flavors | default([], true)) | list }}
+    ps_reason: "{{ 'FlavorNotFound' if _pnn_named_missing | length > 0 else 'DefaultFlavorNotFound' }}"
+    ps_message: >-
+      {{ ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': the environment has no flavor '
+          ~ (_pnn_named_missing | join(', ')) ~ '; choose a flavor the environment offers')
+         if _pnn_named_missing | length > 0 else
+         ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': the environment does not offer the flavor the '
+          ~ 'platform uses for cluster nodes by default; name a flavor the environment offers, or ask the platform '
+          ~ 'team') }}
+  when:
+    - pnn_reason | trim | length == 0 or pnn_reason | trim == 'WaitingForPlacement'
+    - (os_result.flavors_missing | default([], true)) | length > 0
+    # a build the hub holds (it runs or is installed, or this run adopted it) is not refused for settings it was not
+    # made with (they are used only by a later installation); a new installation is always checked
+    - not (po_adopted | default(false) | bool)
+    - not (po_cd_live | default(false) | bool)
+
+# an image the cluster asks for that the project does not see: the installer would skip its checks and fail after its
+# whole run; refused here, before anything is created (named to the tenant only when the cluster's spec names it)
+- name: Refuse an image the environment does not have
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    _pnn_named_images: >-
+      {{ os_result.images_missing | default([], true) | select('in', pnn_spec_images | default([], true)) | list }}
+    ps_reason: "{{ 'ImageNotFound' if _pnn_named_images | length > 0 else 'DefaultImageNotFound' }}"
+    ps_message: >-
+      {{ ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': the environment has no image '
+          ~ (_pnn_named_images | join(', ')) ~ '; choose an image the environment offers')
+         if _pnn_named_images | length > 0 else
+         ('PlatformOpenshift ' ~ ansible_operator_meta.name ~ ': the environment does not offer the image the '
+          ~ 'platform uses for cluster nodes by default; name an image the environment offers, or ask the platform '
+          ~ 'team') }}
+  when:
+    - pnn_reason | trim | length == 0 or pnn_reason | trim == 'WaitingForPlacement'
+    - (os_result.images_missing | default([], true)) | length > 0
+    - not (po_adopted | default(false) | bool)
+    - not (po_cd_live | default(false) | bool)
 
 - name: Keep the wait for the caller
   ansible.builtin.set_fact:

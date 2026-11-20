@@ -160,9 +160,18 @@ install). [Status reasons](status-reasons.md) lists every reason and who acts.
 | `NetworkChoiceRequired` | The site has no default external network: choose a network. |
 | `ExternalNetworkNotListed` | The external network named is not one of the site's. |
 | `NetworkNameNotUnique` | The environment sees another network with the same name as the cluster's network, and the installer finds the network by its name. Rename or remove the other network; a network shared with the environment by someone else: ask the platform team. |
+| `FlavorNotFound` | The environment has no flavor of the name the cluster asks for (its control plane or worker flavor, or the installation's default): choose a flavor the environment offers. |
+| `ImageNotFound` | The environment has no image of the name the cluster asks for: choose an image the environment offers. |
 | `WaitingForPlatformAccess` | The platform is connecting to the network; the cluster waits. |
 | `ServiceNotOffered`, `CircuitNotDeployed`, `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. |
 
-A cluster on a network whose install never reaches the cluster ends Failed with a message that the platform could
-not reach the cluster at its API address; the platform team checks the platform's connection to the network and
-that the site advertises floating IPs ([platform access](../platform/platform-access.md)).
+The flavor, image and network-name checks run with the cluster's own user and credential on the site (what the
+installer uses, so the environment's project sees exactly what the installer will), which the platform makes before
+them. A cluster refused by one of these checks therefore already has that user and credential on the site; they cost
+nothing, a corrected cluster uses them, and deleting the cluster removes them.
+
+When the installer of a cluster on a network could not reach the cluster's API, the installation stops and the
+cluster is Failed with a message that says so; the platform team checks the platform's connection to the network and
+that the site advertises floating IPs ([platform access](../platform/platform-access.md)). An installation that
+stops for another reason (quota, a setting, credentials) names that reason instead
+([when a cluster installation stops](status-reasons.md#when-a-cluster-installation-stops)).

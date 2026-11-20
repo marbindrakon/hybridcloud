@@ -14,12 +14,14 @@
     - name: Load the site account
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
+        shc_step: "Release the cluster's floating addresses"
         os_account_vault_path: "{{ cfr_account }}"
         os_account_tag: "po-fips-release-{{ cfr_cr_name }}"
 
     - name: Release the cluster's floating IPs
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
       vars:
+        shc_step: "Release the cluster's floating addresses"
         os_call_no_log: false
         os_request:
           action: cluster-fips

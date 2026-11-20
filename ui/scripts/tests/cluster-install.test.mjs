@@ -1,0 +1,506 @@
+// The installation of an OpenShift cluster on its page (status/install.ts): the callout lines per stage,
+// the warning while a failed attempt is retried, "longer than usual", the stale line, the stopped callout,
+// the retry button's label and confirmation, and which Configuration fields may change in which stage.
+// Objects are shaped as the platform writes status.install; texts come from the en catalogue.
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs';
+import path from 'node:path';
+
+const B = process.env.SHELL_BUNDLE_DIR;
+const ins = await import(path.join(B, 'install.mjs'));
+const dur = await import(path.join(B, 'durations.mjs'));
+const meta = await import(path.join(B, 'specFieldMeta.mjs'));
+const en = JSON.parse(fs.readFileSync(path.join(process.env.UI_ROOT, 'packages/shared/src/i18n/locales/en.json'), 'utf8'));
+
+// i18next's lookup for en: count picks _one / _other; a key missing from the catalogue fails the test
+const get = (k) => k.split('.').reduce((n, p) => (n && typeof n === 'object' ? n[p] : undefined), en);
+function t(key, opts = {}) {
+  let s = get(key);
+  if (typeof opts.count === 'number' && typeof s !== 'string') s = get(`${key}_${opts.count === 1 ? 'one' : 'other'}`);
+  if (typeof s !== 'string') {
+    if (opts.defaultValue === undefined) throw new Error(`missing catalogue key ${key}`);
+    s = opts.defaultValue;
+  }
+  return s.replace(/\{\{\s*(\w+)\s*\}\}/g, (_m, k) => (opts[k] !== undefined ? String(opts[k]) : ''));
+}
+
+const NOW = Date.parse('2026-11-18T12:00:00Z');
+const ago = (sec) => new Date(NOW - sec * 1000).toISOString();
+
+/** A cluster as the platform writes it while it installs (status.install as in the API). */
+function cluster({ phase = 'Creating', install, reason = 'Installing', message, summary, status = {}, spec } = {}) {
+  return {
+    apiVersion: 'hybridsovereign.redhat/v1alpha1',
+    kind: 'PlatformOpenshift',
+    metadata: { name: 'demo', namespace: 'tenant-a', generation: 1 },
+    spec: spec ?? { type: 'openstack', openstack: { environment: 'env-a', controlPlaneCount: 3, workerCount: 3 } },
+    status: {
+      phase,
+      summary: summary ?? 'The cluster is being installed.',
+      conditions: [{ type: 'Ready', status: 'False', reason, ...(message ? { message } : {}) }],
+      ...(install ? { install } : {}),
+      ...status,
+    },
+  };
+}
+
+const installing = (extra = {}) => ({
+  stage: 'Installing', attempt: 1, attemptsLimit: 3, run: 1, startedAt: ago(120), observedAt: ago(10), ...extra,
+});
+
+const QUOTA = 'Attempt 1 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64). Attempt 2 starts shortly.';
+
+test('the estimate reads "Usually 40–60 minutes." from one place', () => {
+  const usual = dur.usualCreateDuration('PlatformOpenshift');
+  assert.equal(dur.usualText(t, usual), 'Usually 40–60 minutes.');
+  assert.equal(dur.usualText(t, dur.usualDuration('PlatformOpenshift', 'Creating')), 'Usually 40–60 minutes.');
+  assert.deepEqual(dur.CLUSTER_INSTALL_MINUTES, { min: 40, max: 60 });
+  // without the catalogue the default text names the same numbers
+  assert.equal(dur.usualText((k, o) => o.defaultValue.replace(/\{\{(\w+)\}\}/g, (_m, x) => o[x]), usual), 'Usually 40–60 minutes.');
+  // other kinds keep their texts
+  assert.equal(dur.usualText(t, dur.usualCreateDuration('HybridNetwork')), 'Usually under a minute.');
+});
+
+test('elapsed time is steady: seconds, then whole minutes, then hours and minutes', () => {
+  const e = (sec) => ins.elapsedText(t, sec * 1000);
+  assert.equal(e(0), '0 seconds');
+  assert.equal(e(1), '1 second');
+  assert.equal(e(40), '40 seconds');
+  assert.equal(e(60), '1 minute');
+  assert.equal(e(12 * 60 + 59), '12 minutes');
+  assert.equal(e(84 * 60), '84 minutes');
+  assert.equal(e(119 * 60 + 59), '119 minutes');
+  assert.equal(e(120 * 60), '2 hours');
+  assert.equal(e(125 * 60), '2 hours 5 minutes');
+  assert.equal(e(6 * 3600 + 60), '6 hours 1 minute');
+});
+
+test('callout lines per stage', () => {
+  const p = (install, phase) => ins.installProgress(t, cluster({ install, phase }), NOW);
+
+  const prep = p({ stage: 'Preparing', run: 1, startedAt: ago(40) });
+  assert.equal(prep.stage, 'Preparing: checking the environment and reserving addresses.');
+  assert.equal(prep.times, 'Started 40 seconds ago.');
+  assert.equal(prep.variant, 'info');
+  assert.equal(prep.showEstimate, true);
+  assert.equal(prep.longer, undefined);
+  assert.equal(prep.stale, undefined);
+
+  const inst = p(installing());
+  assert.equal(inst.stage, 'Installing, attempt 1 of 3.');
+  assert.equal(inst.times, 'Started 2 minutes ago. Last checked 10 seconds ago.');
+  assert.equal(inst.failure, undefined);
+
+  assert.equal(p(installing({ attemptsLimit: undefined })).stage, 'Installing, attempt 1.');
+  assert.equal(p({ stage: 'Installing' }).stage, 'Installing.');
+  assert.equal(p({ stage: 'Installing' }).times, undefined);
+
+  assert.equal(p({ stage: 'CleaningUp', run: 2, observedAt: ago(5) }).stage, 'Removing the stopped installation.');
+  assert.equal(p({ stage: 'CleaningUp', run: 2, observedAt: ago(5) }).times, 'Last checked 5 seconds ago.');
+  assert.equal(
+    p({ stage: 'Finishing', attempt: 1, attemptsLimit: 3, startedAt: ago(38 * 60) }).stage,
+    'Finishing: the cluster is installed; the platform is connecting it.',
+  );
+  // a retried installation that changes the spec reads Updating: the same lines
+  assert.equal(p(installing(), 'Updating').stage, 'Installing, attempt 1 of 3.');
+});
+
+test('no installation lines outside a running installation', () => {
+  const p = (o) => ins.installProgress(t, o, NOW);
+  assert.equal(p(cluster()), null, 'no status.install (a cluster written before this release)');
+  assert.equal(p(cluster({ install: { stage: 'Installed', attempt: 1, attemptsLimit: 3 }, phase: 'Ready' })), null);
+  assert.equal(p(cluster({ install: { stage: 'Stopped', attempt: 3, attemptsLimit: 3 }, phase: 'Failed' })), null);
+  // a Retry request queued on a stopped installation: the stage still says Stopped, the queue line says the rest
+  assert.equal(p(cluster({ install: { stage: 'Stopped' }, phase: 'Creating', reason: 'AwaitingEDA' })), null);
+  assert.equal(p(cluster({ install: installing(), phase: 'Deleting' })), null);
+  assert.equal(p(cluster({ install: installing(), phase: 'Waiting' })), null);
+  assert.equal(p(cluster({ install: { ...installing(), stage: 'Warming' } })), null, 'an unknown stage word');
+  assert.equal(p(cluster({ install: 'Installing' })), null, 'a malformed install');
+});
+
+test('a failed attempt while the installer retries: warning style and the message', () => {
+  const o = cluster({
+    install: installing({ attempt: 2, startedAt: ago(3 * 60), lastFailure: { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30) } }),
+    reason: 'InstallRetrying',
+    message: QUOTA,
+    summary: 'An installation attempt failed; the installer tries again while attempts are left.',
+  });
+  const r = ins.installProgress(t, o, NOW);
+  assert.equal(r.variant, 'warning');
+  assert.equal(r.failure, QUOTA);
+  assert.equal(r.stage, 'Installing, attempt 2 of 3.');
+  assert.equal(r.times, 'Started 3 minutes ago. Last checked 10 seconds ago.');
+  assert.equal(r.showEstimate, true);
+  // the condition without a message: the last failure's own sentence
+  const bare = cluster({ install: installing({ lastFailure: { attempt: 1, message: QUOTA } }), reason: 'InstallRetrying' });
+  assert.equal(ins.installProgress(t, bare, NOW).failure, QUOTA);
+  // a kept last failure under another reason is no warning
+  const kept = cluster({ install: installing({ attempt: 2, lastFailure: { attempt: 1, message: QUOTA } }), reason: 'Installing' });
+  const k = ins.installProgress(t, kept, NOW);
+  assert.equal(k.variant, 'info');
+  assert.equal(k.failure, undefined);
+});
+
+test('past the usual time: "taking longer than usual" instead of the estimate', () => {
+  const at = (sec, extra = {}) => ins.installProgress(t, cluster({ install: installing({ startedAt: ago(sec), ...extra }) }), NOW);
+  const onTime = at(60 * 60);
+  assert.equal(onTime.longer, undefined);
+  assert.equal(onTime.showEstimate, true);
+  const late = at(60 * 60 + 1, { attempt: 2 });
+  assert.equal(late.longer, 'This is taking longer than usual. The installer tries up to 3 times; if it stops, this page says why.');
+  assert.equal(late.showEstimate, false);
+  assert.equal(late.times, 'Started 60 minutes ago. Last checked 10 seconds ago.');
+  assert.equal(at(84 * 60).times, 'Started 84 minutes ago. Last checked 10 seconds ago.');
+  assert.equal(
+    at(90 * 60, { attemptsLimit: undefined }).longer,
+    'This is taking longer than usual. The installer tries again by itself; if it stops, this page says why.',
+  );
+  assert.equal(at(90 * 60, { stage: 'Finishing' }).longer, 'This is taking longer than usual.');
+  // the threshold is the estimate's upper end
+  assert.equal(dur.CLUSTER_INSTALL_MINUTES.max, 60);
+});
+
+test('a last check older than 15 minutes is said plainly', () => {
+  const at = (sec) => ins.installProgress(t, cluster({ install: installing({ observedAt: ago(sec) }) }), NOW);
+  const fresh = at(15 * 60);
+  assert.equal(fresh.stale, undefined);
+  assert.equal(fresh.times, 'Started 2 minutes ago. Last checked 15 minutes ago.');
+  const old = at(20 * 60);
+  assert.equal(old.stale, 'The state shown was last checked 20 minutes ago.');
+  assert.equal(old.times, 'Started 2 minutes ago.', 'the stale line replaces "Last checked"');
+  assert.equal(ins.INSTALL_STALE_AFTER_MINUTES, 15);
+});
+
+test('a stopped installation: title and the line about Retry installation', () => {
+  const stopped = cluster({
+    phase: 'Failed',
+    reason: 'QuotaExceeded',
+    summary: "The environment's quota is too small for this cluster. Make the cluster smaller or have the quota raised, then retry.",
+    install: { stage: 'Stopped', attempt: 3, attemptsLimit: 3, run: 1, startedAt: ago(7 * 60), endedAt: ago(5) },
+  });
+  assert.deepEqual(ins.installStoppedCallout(t, stopped), {
+    title: 'Installation stopped',
+    retryLine:
+      'Retry installation uses the settings on the Configuration tab. To change the network or the address ranges, delete this cluster and create it again.',
+  });
+  // other failures keep the general title
+  assert.equal(ins.installStoppedCallout(t, cluster({ phase: 'Failed', reason: 'ProvisionFailed' })), null);
+  assert.equal(ins.installStoppedCallout(t, cluster({ phase: 'Failed', install: installing() })), null);
+  assert.equal(ins.installStoppedCallout(t, { ...stopped, metadata: { ...stopped.metadata, deletionTimestamp: ago(1) } }), null);
+});
+
+test('past the time allowed while the installer may still run: the platform keeps checking, no Retry installation', () => {
+  const overdue = cluster({
+    phase: 'Failed',
+    reason: 'InstallOverdue',
+    summary: 'The installation has not finished in the time allowed. The platform keeps checking it.',
+    install: installing({ attempt: 2, startedAt: ago(6 * 3600 + 60) }),
+  });
+  // summary and line: what happens next, no promise of a retry that cannot act
+  assert.deepEqual(ins.installStoppedCallout(t, overdue), {
+    title: 'Installation did not finish',
+    retryLine: 'If it finishes, the cluster becomes ready; if the installer stops, you can retry it. You can delete the cluster.',
+  });
+  assert.equal(t(ins.retryLabelKey(overdue)), 'Retry now');
+  assert.equal(ins.installEditState(overdue), 'installing');
+  assert.equal(ins.installProgress(t, overdue, NOW), null, 'no running-installation lines on a Failed cluster');
+  // the reason decides: another failure of a running installation keeps the general callout
+  assert.equal(ins.installStoppedCallout(t, cluster({ phase: 'Failed', reason: 'ProvisionFailed', install: installing() })), null);
+  // a failed preflight (stage Preparing, no Stalled) keeps the general failed callout
+  const flavor = cluster({ phase: 'Failed', reason: 'FlavorNotFound', install: { stage: 'Preparing', run: 1 } });
+  assert.equal(ins.installStoppedCallout(t, flavor), null);
+  assert.equal(t(ins.retryLabelKey(flavor)), 'Retry now');
+  assert.equal(ins.installEditState(flavor), 'open');
+});
+
+test('the retrying message is shown as the platform wrote it, whichever ending it has', () => {
+  for (const ending of ['The next attempt starts shortly.', 'No attempts are left; the installer is about to stop.']) {
+    const msg = `Attempt 3 of 3 failed: the site reports too little quota: Cores (72 needed, limit 64). ${ending}`;
+    const o = cluster({ install: installing({ attempt: 3 }), reason: 'InstallRetrying', message: msg,
+      summary: 'An installation attempt failed; the installer tries again while attempts are left.' });
+    const r = ins.installProgress(t, o, NOW);
+    assert.equal(r.failure, msg);
+    assert.equal(r.variant, 'warning');
+  }
+});
+
+test('the button reads Retry installation on a stopped installation, Retry now otherwise', () => {
+  const label = (o) => t(ins.retryLabelKey(o));
+  assert.equal(label(cluster({ phase: 'Failed', install: { stage: 'Stopped' } })), 'Retry installation');
+  for (const stage of ['Preparing', 'CleaningUp', 'Installing', 'Finishing', 'Installed']) {
+    assert.equal(label(cluster({ install: { stage } })), 'Retry now', stage);
+  }
+  assert.equal(label(cluster()), 'Retry now');
+  assert.equal(label({ kind: 'CloudVirt', metadata: { name: 'v' }, status: { phase: 'Failed' } }), 'Retry now');
+});
+
+test('the confirmation names what happens and the node counts', () => {
+  const c = ins.retryConfirmation(t, { type: 'openstack', openstack: { environment: 'env-a', controlPlaneCount: 3, workerCount: 0 } });
+  assert.deepEqual(c, {
+    title: 'Start the installation again?',
+    body: 'What the stopped installation left on the site is removed first. The cluster keeps its name, addresses and DNS names.',
+    settings: 'Settings: 3 control plane nodes, 0 workers.',
+    confirm: 'Start the installation again',
+  });
+  assert.equal(ins.retryConfirmation(t, { type: 'aws', aws: { controlPlaneCount: 1, workerCount: 1 } }).settings, 'Settings: 1 control plane node, 1 worker.');
+  assert.equal(ins.retryConfirmation(t, { type: 'gcp', gcp: { controlPlaneCount: 3, workerCount: 2 } }).settings, 'Settings: 3 control plane nodes, 2 workers.');
+  assert.equal(
+    ins.retryConfirmation(t, { type: 'openstack', openstack: { environment: 'env-a' } }).settings,
+    'Settings: the default number of control plane nodes, the default number of workers.',
+  );
+  assert.equal(
+    ins.retryConfirmation(t, {}).settings,
+    'Settings: the default number of control plane nodes, the default number of workers.',
+  );
+});
+
+test('install-time fields: open before the installation and when stopped, read-only otherwise', () => {
+  const st = (install, status = {}) => ins.installEditState(cluster({ install, status }));
+  assert.equal(st(undefined), 'open', 'a new cluster before its first check');
+  assert.equal(st({ stage: 'Preparing', run: 1 }), 'open', 'a check refused the cluster: the tenant corrects it');
+  assert.equal(st({ stage: 'Stopped' }), 'stopped');
+  assert.equal(st({ stage: 'Stopped' }, { installStarted: true }), 'stopped');
+  // a cluster recorded as installed is installed whatever the stage says (the API refuses the change)
+  assert.equal(st({ stage: 'Stopped' }, { clusterInstalled: true }), 'installed');
+  assert.equal(st({ stage: 'Preparing' }, { clusterInstalled: true }), 'installed');
+  // a check refused a flavor before anything was built: Failed at stage Preparing, an ordinary change
+  assert.equal(st({ stage: 'Preparing', run: 1 }, { installStarted: false }), 'open');
+  // past the time allowed: automatic retries stopped, the installer may still run; the API refuses the change
+  assert.equal(st({ stage: 'Installing', attempt: 2, attemptsLimit: 3 }), 'installing');
+  for (const stage of ['CleaningUp', 'Installing', 'Finishing']) assert.equal(st({ stage }), 'installing', stage);
+  assert.equal(st({ stage: 'Preparing' }, { installStarted: true }), 'installing');
+  assert.equal(st({ stage: 'Installed' }), 'installed');
+  // clusters from before this release: no status.install
+  assert.equal(st(undefined, { installStarted: true }), 'installing');
+  assert.equal(st(undefined, { clusterInstalled: true }), 'installed');
+  assert.equal(st(undefined, { installStarted: true, clusterInstalled: true }), 'installed');
+  assert.equal(st(undefined, { installStarted: false, clusterInstalled: false }), 'open');
+  // texts of the read-only states and of the stopped note
+  assert.equal(t('install.noteInstalling'), 'The cluster is being installed. These settings can be changed if the installation stops.');
+  assert.equal(t('install.setAtInstallation'), 'Set at installation.');
+  assert.equal(t('install.noteStopped'), 'The installation stopped. Saving a change of the size, flavors, release or image starts a new installation with these settings; other changes start nothing.');
+});
+
+test('the worker count on AWS and Google Cloud: read-only while installing, changeable once installed', () => {
+  for (const p of ['aws.workerCount', 'gcp.workerCount']) {
+    assert.equal(ins.isInstallLocked(p, 'installing'), true, p);
+    assert.equal(ins.isInstallLocked(p, 'installed'), false, p);
+    assert.equal(ins.isInstallLocked(p, 'stopped'), false, p);
+    assert.equal(ins.isInstallLocked(p, 'open'), false, p);
+  }
+  for (const p of ['openstack.workerCount', 'aws.workerFlavor', 'gcp.controllerFlavor']) {
+    assert.equal(ins.isInstallLocked(p, 'installing'), true, p);
+    assert.equal(ins.isInstallLocked(p, 'installed'), true, p);
+    assert.equal(ins.isInstallLocked(p, 'stopped'), false, p);
+  }
+  assert.equal(ins.isInstallLocked('toolRbac.clusterAdminRbac', 'installed'), false);
+});
+
+test('on a stopped cluster only a change of the installation settings asks to start again', () => {
+  const spec = { type: 'openstack', openstack: { environment: 'env-a', controlPlaneCount: 3, workerCount: 3 }, toolRbac: { clusterAdminRbac: ['a'] } };
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, toolRbac: { clusterAdminRbac: ['a', 'b'] } }), false);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, clusterViewerRbac: ['r'] }), false);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, deletionProtection: true }), false);
+  // the order a form keeps the keys in does not count
+  assert.equal(ins.installSettingsChanged(spec, { toolRbac: spec.toolRbac, openstack: { workerCount: 3, controlPlaneCount: 3, environment: 'env-a' }, type: 'openstack' }), false);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, openstack: { ...spec.openstack, workerCount: 0 } }), true);
+  assert.equal(ins.installSettingsChanged(spec, { ...spec, openstack: { ...spec.openstack, workerFlavor: 'example.large' } }), true);
+});
+
+test('the install-time fields are pinned; every changeable provider field of the form is one of them', () => {
+  // the same lists as the API's rule (tests/unit/test_install_api.py compares the two files)
+  assert.deepEqual([...ins.INSTALL_TIME_FIELDS], [
+    'openstack.controlPlaneCount', 'openstack.workerCount', 'openstack.controlPlaneFlavor', 'openstack.workerFlavor',
+    'openstack.ocpImageSet', 'openstack.glanceImageOverride', 'openstack.trustBundle',
+    'openstack.pullSecretVaultPath', 'openstack.pullSecretVaultProperty', 'openstack.sshKeyVaultPath',
+    'aws.publish', 'aws.clusterType', 'aws.controlPlaneCount', 'aws.controllerFlavor', 'aws.workerFlavor',
+    'gcp.publish', 'gcp.controlPlaneCount', 'gcp.controllerFlavor', 'gcp.workerFlavor',
+  ]);
+  assert.deepEqual([...ins.INSTALLED_CHANGEABLE_FIELDS], ['aws.workerCount', 'gcp.workerCount']);
+  const fields = meta.KIND_SPEC_META.PlatformOpenshift.fields;
+  for (const f of fields) {
+    const provider = /^(openstack|aws|gcp)\./.test(f.path);
+    if (provider && !f.immutable) {
+      assert.ok(ins.isInstallTimeField(f.path) || ins.INSTALLED_CHANGEABLE_FIELDS.includes(f.path), `${f.path} is changeable but of no kind`);
+    }
+    if (!provider) assert.equal(ins.isInstallTimeField(f.path), false, `${f.path} is applied to an installed cluster`);
+  }
+  // fixed from creation: read-only in every state
+  for (const p of ['type', 'openstack.environment', 'aws.environment', 'aws.region', 'aws.network', 'gcp.environment', 'gcp.region', 'gcp.network']) {
+    assert.equal(fields.find((f) => f.path === p).immutable, true, p);
+  }
+  for (const p of ['toolRbac.clusterAdminRbac', 'clusterViewerRbac', 'deletionProtection', 'type']) {
+    assert.equal(ins.isInstallTimeField(p), false, p);
+  }
+});
+
+test('the reader keeps well-formed values only', () => {
+  const o = cluster({
+    install: {
+      stage: 'Installing', attempt: '2', attemptsLimit: 3, run: 1, startedAt: ago(60), observedAt: '', endedAt: 7,
+      lastFailure: { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30), extra: 'x' },
+    },
+  });
+  assert.deepEqual(ins.installOf(o), {
+    stage: 'Installing', attempt: 2, attemptsLimit: 3, run: 1, startedAt: ago(60),
+    lastFailure: { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30) },
+  });
+  assert.equal(ins.installOf(cluster()), undefined);
+  assert.equal(ins.isInstallStopped(cluster({ install: { stage: 'Stopped' } })), true);
+  assert.equal(ins.isInstallStopped(null), false);
+});
+
+test('while a failed attempt is retried the attempt line names the next attempt, never the failed one', () => {
+  const failed1 = { attempt: 1, reason: 'QuotaExceeded', message: QUOTA, time: ago(30) };
+  // Hive has not started attempt 2 yet: the record still says attempt 1
+  const o = cluster({ install: installing({ attempt: 1, lastFailure: failed1 }), reason: 'InstallRetrying', message: QUOTA });
+  const r = ins.installProgress(t, o, NOW);
+  assert.equal(r.stage, 'Installing, attempt 2 of 3.');
+  assert.equal(r.failure, QUOTA);
+  // attempt 2 runs
+  assert.equal(ins.installProgress(t, cluster({ install: installing({ attempt: 2, lastFailure: failed1 }),
+    reason: 'InstallRetrying', message: QUOTA }), NOW).stage, 'Installing, attempt 2 of 3.');
+  // the last attempt failed: no attempt line, the failure line says what follows
+  const last = { attempt: 3, message: 'Attempt 3 of 3 failed: x. No attempts are left; the installer is about to stop.' };
+  const l = ins.installProgress(t, cluster({ install: installing({ attempt: 3, lastFailure: last }),
+    reason: 'InstallRetrying', message: last.message }), NOW);
+  assert.equal(l.stage, undefined);
+  assert.equal(l.failure, last.message);
+  // no known limit: no attempt number while one is retried (never "attempt 4")
+  const nolimit = ins.installProgress(t, cluster({ install: installing({ attempt: 3, attemptsLimit: undefined, lastFailure: { attempt: 3, message: 'x' } }),
+    reason: 'InstallRetrying', message: 'x' }), NOW);
+  assert.equal(nolimit.stage, 'Installing.');
+  // a kept failure while no retry is said: the recorded attempt
+  assert.equal(ins.installProgress(t, cluster({ install: installing({ attempt: 1, lastFailure: failed1 }) }), NOW).stage,
+    'Installing, attempt 1 of 3.');
+});
+
+test('the detail page follows its object: fast while it is not settled, 30 s otherwise, slow when missing', () => {
+  const fast = 5000;
+  const slow = 30000;
+  assert.equal(ins.MISSING_POLL_MS, 60000);
+  const stopped = cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 1 }, reason: 'QuotaExceeded' });
+  const ready = cluster({ phase: 'Ready', install: { stage: 'Installed' }, reason: 'Ready' });
+  const cases = [
+    [null, fast, 'not read yet'],
+    [cluster({ install: installing() }), fast, 'Creating'],
+    [cluster({ phase: 'Deleting', install: installing() }), fast, 'Deleting'],
+    [cluster({ phase: 'Updating' }), fast, 'Updating'],
+    [cluster({ phase: 'Waiting' }), fast, 'Waiting'],
+    [stopped, slow, 'a stop nobody asked to retry'],
+    [ready, slow, 'installed and ready'],
+    [{ ...stopped, metadata: { ...stopped.metadata, annotations: { 'ansible.sdk.operatorframework.io/reconcileNow': 'x' } } }, fast, 'a queued retry'],
+    [cluster({ phase: 'Failed', install: installing(), reason: 'InstallOverdue' }), fast, 'an installation recorded as running'],
+    [cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 1 }, reason: 'InstallRetrying' }), fast, 'a retrying reason'],
+  ];
+  for (const [o, want, why] of cases) assert.equal(ins.detailPollMs(o, { now: NOW }), want, why);
+  // fast only before the first answer: after any failed answer (404, 403, 5xx, 401, none) it backs off
+  assert.equal(ins.detailPollMs(null, {}), fast, 'not read yet');
+  assert.equal(ins.detailPollMs(null, { answered: true }), 60000, 'an answer without the object backs off');
+  // an unhandled request: fast for three minutes from when the page saw it, then the ordinary pace
+  const queued = { ...stopped, metadata: { ...stopped.metadata, annotations: { 'ansible.sdk.operatorframework.io/reconcileNow': 'x' } } };
+  assert.equal(ins.detailPollMs(queued, { now: NOW, queuedSince: NOW - 60_000 }), fast);
+  assert.equal(ins.detailPollMs(queued, { now: NOW, queuedSince: NOW - 181_000 }), slow, 'capped');
+  // sent from this page: fast until the stage or the run differs, at most three minutes
+  const sent = ins.sentMark(stopped, NOW);
+  assert.equal(ins.detailPollMs(stopped, { sent, now: NOW + 60_000 }), fast);
+  assert.equal(ins.detailPollMs(stopped, { sent, now: NOW + 181_000 }), slow, 'capped');
+  const moved = cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 2 }, reason: 'QuotaExceeded' });
+  assert.equal(ins.detailPollMs(moved, { sent, now: NOW + 60_000 }), slow, 'a new run: the object moved on');
+});
+
+/** The page's reads over a recorded sequence: the object at each time, the page reading with detailPollMs. */
+function follow(timeline, start, sent, until) {
+  const obj = (t) => timeline.filter(([at]) => at <= t).pop()[1];
+  const reads = [];
+  let t = start;
+  while (t < until) {
+    const o = obj(t);
+    reads.push([t, o]);
+    t += ins.detailPollMs(o, { sent, now: t });
+  }
+  return reads;
+}
+
+test("the gate's sequence: after a Retry or a Save the page shows the removal within one fast interval", () => {
+  const T = (hms) => Date.parse(`2026-11-19T${hms}Z`);
+  const ANN = 'ansible.sdk.operatorframework.io/reconcileNow';
+  const base = cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 1 }, reason: 'QuotaExceeded' });
+  const withReq = (o, handled) => ({ ...o, metadata: { ...o.metadata, annotations: { [ANN]: 'r1' } },
+    status: { ...o.status, ...(handled ? { lastHandledReconcileRequest: 'r1' } : {}) } });
+  const cleaning = (run) => cluster({ phase: 'Creating', install: { stage: 'CleaningUp', run }, reason: 'InstallCleanup' });
+  // Retry confirmed 15:19:36.9; the operator handled it by 15:20:17; the job wrote CleaningUp at 15:20:43
+  const retryAt = T('15:19:36.900');
+  const retry = [[0, base], [retryAt, withReq(base, false)], [T('15:20:17'), withReq(base, true)],
+                 [T('15:20:43'), withReq(cleaning(2), true)]];
+  const reads = follow(retry, retryAt + 500, ins.sentMark(base, retryAt), T('15:23:00'));
+  const seen = reads.find(([, o]) => o.status.install.stage === 'CleaningUp')[0];
+  assert.ok(seen - T('15:20:43') <= 5000, `CleaningUp read ${(seen - T('15:20:43')) / 1000} s after it was written`);
+  // the run stopped again (run 2); a Save at 15:32:05 asked for run 3, written 15:33:30
+  const stop2 = cluster({ phase: 'Failed', install: { stage: 'Stopped', run: 2 }, reason: 'QuotaExceeded' });
+  const saveAt = T('15:32:05');
+  const save = [[0, stop2], [T('15:33:30'), cleaning(3)]];
+  const reads2 = follow(save, saveAt + 500, ins.sentMark(stop2, saveAt), T('15:35:00'));
+  const seen2 = reads2.find(([, o]) => o.status.install.stage === 'CleaningUp')[0];
+  assert.ok(seen2 - T('15:33:30') <= 5000, `CleaningUp read ${(seen2 - T('15:33:30')) / 1000} s after it was written`);
+  // without the mark (a page that did not send it) the same object is read every 30 s: slower, never stuck
+  const reads3 = follow(save, saveAt + 500, null, T('15:35:00'));
+  assert.ok(reads3.find(([, o]) => o.status.install.stage === 'CleaningUp')[0] - T('15:33:30') <= 30000);
+});
+
+test('the page says when it last read the cluster once that is older than 30 seconds', () => {
+  assert.equal(ins.pageReadLine(t, NOW - 20_000, NOW), undefined);
+  assert.equal(ins.pageReadLine(t, NOW - 40_000, NOW), 'This page last read the cluster 40 seconds ago.');
+  assert.equal(ins.pageReadLine(t, NOW - 9 * 60_000, NOW), 'This page last read the cluster 9 minutes ago.');
+  assert.equal(ins.pageReadLine(t, undefined, NOW), undefined);
+});
+
+test('the detail page takes its interval from detailPollMs and marks what it sent', () => {
+  const src = fs.readFileSync(path.join(process.env.UI_ROOT, 'packages/shared/src/components/ResourceDetail.tsx'), 'utf8');
+  const call = src.slice(src.indexOf('useK8sResource<K8sResource>(kind, name, {'), src.indexOf('});', src.indexOf('useK8sResource<K8sResource>(kind, name, {')));
+  assert.match(call, /pollIntervalMs: deleteRequested \? 5000 : pollMs,/);
+  assert.doesNotMatch(call, /pollIntervalMs: \d{5,}/, 'no fixed long interval');
+  assert.match(src, /const nextPollMs = detailPollMs\(resource, \{ sent, now, answered: !!error, queuedSince \}\);/);
+  assert.match(src, /setQueuedSince\(\(q\) => \(isQueued \? \(q \?\? Date\.now\(\)\) : null\)\)/);
+  // the page's clock: the decision and the read-time line follow the time without a new read
+  assert.match(src, /const id = setInterval\(\(\) => setNow\(Date\.now\(\)\), 5000\);/);
+  assert.match(src, /useEffect\(\(\) => setPollMs\(nextPollMs\), \[nextPollMs\]\);/);
+  assert.match(src, /await forceReconcile\(kind, name, namespace\);\s*setSent\(sentMark\(resource, Date\.now\(\)\)\);/);
+  assert.match(src, /if \(installing\) setSent\(sentMark\(resource, Date\.now\(\)\)\);/);
+  assert.match(src, /\{readLine && <p/);
+});
+
+test("the Configuration tab's Save follows saveStep: confirm opens the dialog, only the dialog saves past the check", () => {
+  const src = fs.readFileSync(path.join(process.env.UI_ROOT, 'packages/shared/src/forms/GenericSpecEditor.tsx'), 'utf8');
+  assert.match(src, /const step = dirty \? saveStep\(installState, original, specToSend\(\), check\.passed\) : 'none';/);
+  assert.match(src, /if \(step === 'confirm'\) setConfirmInstall\(true\);\s*else if \(step === 'save'\) void save\(\);/);
+  assert.match(src, /isAriaDisabled=\{saving \|\| !editable \|\| hasInvalid \|\| hasJsonErrors \|\| step === 'none'\}/);
+  assert.match(src, /onClick=\{onSave\}/);
+  assert.match(src, /setConfirmInstall\(false\);\s*void save\(true\);/);
+  assert.match(src, /if \(!check\.passed && !confirmed\) return;/);
+  // the page learns that a confirmed save asked for a new installation (it then follows the object closely)
+  assert.match(src, /onSaved\(confirmed\);/);
+  assert.doesNotMatch(src, /onSaved\(\);/);
+  assert.equal((src.match(/void save\(/g) || []).length, 2, 'save is called from onSave and from the dialog only');
+});
+
+test('every Save that changes an installation setting of a cluster the page believes stopped asks first', () => {
+  const before = { type: 'openstack', openstack: { environment: 'env-a', workerCount: 12 } };
+  const fewer = { type: 'openstack', openstack: { environment: 'env-a', workerCount: 11 } };
+  const access = { ...before, toolRbac: { clusterAdminRbac: ['admins'] } };
+  // the server's check passed, is pending or refused (the object moved on): it still asks
+  for (const passed of [true, false]) {
+    assert.equal(ins.saveStep('stopped', before, fewer, passed), 'confirm');
+    // a second change in the same page (the first is the page's new original)
+    assert.equal(ins.saveStep('stopped', fewer, { ...fewer, openstack: { ...fewer.openstack, workerCount: 10 } }, passed), 'confirm');
+  }
+  assert.equal(ins.saveStep('stopped', before, access, true), 'save', 'access groups start nothing');
+  assert.equal(ins.saveStep('stopped', before, access, false), 'none');
+  assert.equal(ins.saveStep('open', before, fewer, true), 'save');
+  assert.equal(ins.saveStep('open', before, fewer, false), 'none');
+  assert.equal(ins.saveStep('installed', before, access, true), 'save');
+  // a draft typed while the cluster was stopped, the page now believing it installs: it still asks
+  assert.equal(ins.saveStep('installing', before, fewer, true), 'confirm');
+  assert.equal(ins.saveStep('installing', before, access, true), 'save');
+});

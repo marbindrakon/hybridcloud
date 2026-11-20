@@ -1,7 +1,7 @@
 import React from 'react';
 import { Card, CardBody, CardTitle, Label } from '@patternfly/react-core';
 import { useTranslation } from '../i18n';
-import { usualCreateDuration } from '../status/durations';
+import { usualCreateDuration, usualText } from '../status/durations';
 import { kindTerm } from '../i18n/vocabulary';
 
 /** What a create will do, in one short paragraph (Q8, UX-090, UX-045). */
@@ -42,7 +42,7 @@ export function reviewLines(
     }
   }
   const usual = usualCreateDuration(kind);
-  if (usual) lines.push(t(usual.key, { defaultValue: usual.defaultValue }));
+  if (usual) lines.push(usualText(t, usual));
   return lines;
 }
 

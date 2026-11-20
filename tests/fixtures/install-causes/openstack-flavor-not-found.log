@@ -1,0 +1,76 @@
+level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Release Image Architecture is unknown
+level=warning msg=Failed to generate OpenStack cloud info: Unable to find flavor with name example.missing
+level=warning msg=Empty OpenStack cloud info and therefore will skip pre-flight validation.
+level=info msg=Credentials loaded from file "/etc/openstack/clouds.yaml"
+level=info msg=Consuming Install Config from target directory
+level=warning msg=Making control-plane schedulable by setting MastersSchedulable to true for Scheduler cluster settings
+level=info msg=Successfully populated MCS CA cert information: root-ca 2036-11-15T15:38:43Z 2026-11-18T15:38:43Z
+level=info msg=Successfully populated MCS TLS cert information: root-ca 2036-11-15T15:38:43Z 2026-11-18T15:38:43Z
+level=info msg=Adding clusters...
+level=info msg=Manifests created in: cluster-api, manifests and openshift
+level=warning msg=Found override for release image (quay.io/openshift-release-dev/ocp-release@sha256:55a0c0c8f9a285fa468009511dd878d5492436ceb4f0207933b6403d19353876). Please be warned, this is not advised
+level=info msg=Consuming OpenShift Install (Manifests) from target directory
+level=info msg=Consuming Master Machines from target directory
+level=info msg=Consuming Worker Machines from target directory
+level=info msg=Consuming Common Manifests from target directory
+level=info msg=Consuming Openshift Manifests from target directory
+level=info msg=Ignition-Configs created in: . and auth
+level=info msg=Consuming Bootstrap Ignition Config from target directory
+level=info msg=Consuming Master Ignition Config from target directory
+level=info msg=Consuming Worker Ignition Config from target directory
+level=warning msg=Failed to generate OpenStack cloud info: Unable to find flavor with name example.missing
+level=warning msg=Empty OpenStack cloud info and therefore will skip checking quota validation.
+level=info msg=Creating infrastructure resources...
+level=info msg=Started local control plane with envtest
+level=info msg=Stored kubeconfig for envtest in: /output/.clusterapi_output/envtest.kubeconfig
+level=info msg=Running process: Cluster API with args [-v=2 --diagnostics-address=0 --health-addr=127.0.0.1:35209 --webhook-port=38577 --webhook-cert-dir=/tmp/envtest-serving-certs-2174392050 --kubeconfig=/output/.clusterapi_output/envtest.kubeconfig]
+level=info msg=Running process: openstack infrastructure provider with args [-v=2 --diagnostics-address=0 --health-addr=127.0.0.1:46047 --webhook-port=40055 --webhook-cert-dir=/tmp/envtest-serving-certs-2608653732 --kubeconfig=/output/.clusterapi_output/envtest.kubeconfig]
+level=info msg=Running process: openstackorc infrastructure provider with args [-zap-log-level=error -metrics-bind-address=0 -health-probe-bind-address=127.0.0.1:41057 --kubeconfig=/output/.clusterapi_output/envtest.kubeconfig]
+level=info msg=Creating infra manifests...
+level=info msg=Created manifest *v1.Namespace, namespace= name=openshift-cluster-api-guests
+I1118 15:39:15.140373      76 warning_handler.go:65] "cluster.x-k8s.io/v1beta1 Cluster is deprecated; use cluster.x-k8s.io/v1beta2 Cluster" logger="KubeAPIWarningLogger"
+level=info msg=Created manifest *v1beta1.Cluster, namespace=openshift-cluster-api-guests name=q2-2b7pw
+level=info msg=Created manifest *v1beta1.OpenStackCluster, namespace=openshift-cluster-api-guests name=q2-2b7pw
+level=info msg=Created manifest *v1.Secret, namespace=openshift-cluster-api-guests name=q2-2b7pw-cloud-config
+level=info msg=Done creating infra manifests
+level=info msg=Creating kubeconfig entry for capi cluster q2-2b7pw
+level=info msg=Waiting up to 15m0s (until 3:54PM UTC) for network infrastructure to become ready...
+level=info msg=Network infrastructure is ready
+level=info msg=Created manifest *v1beta1.OpenStackMachine, namespace=openshift-cluster-api-guests name=q2-2b7pw-bootstrap
+level=info msg=Created manifest *v1beta1.OpenStackMachine, namespace=openshift-cluster-api-guests name=q2-2b7pw-master-0
+level=info msg=Created manifest *v1beta1.OpenStackMachine, namespace=openshift-cluster-api-guests name=q2-2b7pw-master-1
+level=info msg=Created manifest *v1beta1.OpenStackMachine, namespace=openshift-cluster-api-guests name=q2-2b7pw-master-2
+I1118 15:39:34.200338      76 warning_handler.go:65] "cluster.x-k8s.io/v1beta1 Machine is deprecated; use cluster.x-k8s.io/v1beta2 Machine" logger="KubeAPIWarningLogger"
+level=info msg=Created manifest *v1beta1.Machine, namespace=openshift-cluster-api-guests name=q2-2b7pw-bootstrap
+level=info msg=Created manifest *v1beta1.Machine, namespace=openshift-cluster-api-guests name=q2-2b7pw-master-0
+level=info msg=Created manifest *v1beta1.Machine, namespace=openshift-cluster-api-guests name=q2-2b7pw-master-1
+level=info msg=Created manifest *v1beta1.Machine, namespace=openshift-cluster-api-guests name=q2-2b7pw-master-2
+level=info msg=Created manifest *v1.Secret, namespace=openshift-cluster-api-guests name=q2-2b7pw-bootstrap
+level=info msg=Created manifest *v1.Secret, namespace=openshift-cluster-api-guests name=q2-2b7pw-master
+level=info msg=Waiting up to 15m0s (until 3:54PM UTC) for machines [q2-2b7pw-bootstrap q2-2b7pw-master-0 q2-2b7pw-master-1 q2-2b7pw-master-2] to provision...
+level=info msg=Gathering conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-bootstrap
+level=info msg=Checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-bootstrap
+level=info msg=No conditions found
+level=info msg=Done checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-bootstrap
+level=info msg=Gathering conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-0
+level=info msg=Checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-0
+level=info msg=No conditions found
+level=info msg=Done checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-0
+level=info msg=Gathering conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-1
+level=info msg=Checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-1
+level=info msg=No conditions found
+level=info msg=Done checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-1
+level=info msg=Gathering conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-2
+level=info msg=Checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-2
+level=info msg=No conditions found
+level=info msg=Done checking conditions for apiVersion=infrastructure.cluster.x-k8s.io/v1beta1, kind=OpenStackMachine, namespace=openshift-cluster-api-guests, name=q2-2b7pw-master-2
+level=error msg=Attempted to gather debug logs after installation failure: must provide bootstrap host address
+level=error msg=failed to fetch Cluster: failed to generate asset "Cluster": failed to create cluster: failed to provision control-plane machines: machines are not ready: client rate limiter Wait returned an error: rate: Wait(n=1) would exceed context deadline
+level=info msg=Shutting down local Cluster API controllers...
+level=info msg=Stopped controller: Cluster API
+level=warning msg=process cluster-api-provider-openstack exited with error: signal: killed
+level=info msg=Stopped controller: openstack infrastructure provider
+level=warning msg=process cluster-api-provider-openstackorc exited with error: signal: killed
+level=info msg=Stopped controller: openstackorc infrastructure provider
+level=info msg=Shutting down local Cluster API control plane...
+level=info msg=Local Cluster API system has completed operations

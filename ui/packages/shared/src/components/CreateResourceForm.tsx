@@ -22,7 +22,7 @@ import { ReviewPanel } from '../forms/ReviewPanel';
 import { causeLines, fieldErrorsFrom } from '../forms/apiErrors';
 import { errorText } from '../access/errorText';
 import { pushToast } from './ToastHost';
-import { usualCreateDuration } from '../status/durations';
+import { usualCreateDuration, usualText } from '../status/durations';
 import { createDashboardResource, useK8sResourceList } from '../hooks/k8s';
 import { HybridSovereignKind, K8sResource } from '../types';
 import { PageHeader } from './PageHeader';
@@ -780,7 +780,7 @@ export function CreateResourceForm({
       pushToast({
         variant: 'success',
         title: t('form.created', { kind: kindTerm(t, kind), name }),
-        body: usual ? t(usual.key, { defaultValue: usual.defaultValue }) : undefined,
+        body: usual ? usualText(t, usual) : undefined,
       });
       // Stay with the new object: its page shows the progress (UX-090).
       onSuccess(detailPathFor?.(name) ?? listPath);

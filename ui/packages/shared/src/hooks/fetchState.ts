@@ -54,10 +54,13 @@ export const IN_FLIGHT_POLL_MS = 5000;
 /** Polling while nothing is in flight (only when the page asked for in-flight polling). */
 export const IDLE_POLL_MS = 30000;
 
+/** Polling of a hidden tab: slow, never stopped (what it shows when it is shown again is at most this old). */
+export const HIDDEN_POLL_MS = 60000;
+
 /**
  * Milliseconds until the next refresh, or 0 for none: an explicit interval
  * wins; otherwise in-flight polling uses 5 s while something is in flight and
- * 30 s otherwise. Hidden pages do not poll.
+ * 30 s otherwise. A hidden page polls at most every HIDDEN_POLL_MS.
  */
 export function pollDelayMs(opts: {
   pollIntervalMs?: number;
@@ -65,8 +68,14 @@ export function pollDelayMs(opts: {
   inFlight: boolean;
   hidden?: boolean;
 }): number {
-  if (opts.hidden) return 0;
-  if (opts.pollIntervalMs && opts.pollIntervalMs > 0) return opts.pollIntervalMs;
-  if (!opts.pollWhileInFlight) return 0;
-  return opts.inFlight ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
+  let delay = 0;
+  if (opts.pollIntervalMs && opts.pollIntervalMs > 0) delay = opts.pollIntervalMs;
+  else if (opts.pollWhileInFlight) delay = opts.inFlight ? IN_FLIGHT_POLL_MS : IDLE_POLL_MS;
+  if (!delay) return 0;
+  return opts.hidden ? Math.max(delay, HIDDEN_POLL_MS) : delay;
+}
+
+/** Whether a page reads at once: its tab was hidden and is shown again (it polled slowly while hidden). */
+export function readOnShow(wasHidden: boolean, hidden: boolean, active: boolean): boolean {
+  return active && wasHidden && !hidden;
 }

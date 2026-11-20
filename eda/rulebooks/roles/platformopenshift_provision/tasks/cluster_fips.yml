@@ -14,9 +14,8 @@
       - cf_network_id | default('', true) | length > 0
       - cf_account | default('', true) | length > 0
     fail_msg: >-
-      PlatformOpenshift {{ ansible_operator_meta.name }}: the floating IPs need the environment's project
-      (CloudOSO status.projectId '{{ cf_project_id | default('') }}'), the network's id
-      ('{{ cf_network_id | default('') }}') and the site account of the environment.
+      PlatformOpenshift {{ ansible_operator_meta.name }}: the floating IPs need the environment's project, the
+      network's id and the site account of the environment; one of them is not recorded.
 
 # the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
 - name: The cluster's floating IPs with the site account
@@ -24,12 +23,14 @@
     - name: Load the site account
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
       vars:
+        shc_step: "Reserve the cluster's floating addresses"
         os_account_vault_path: "{{ cf_account }}"
         os_account_tag: "po-fips-{{ cb_app_name }}"
 
     - name: Find or create the cluster's floating IPs
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
       vars:
+        shc_step: "Reserve the cluster's floating addresses"
         os_call_no_log: false
         os_request:
           action: cluster-fips

@@ -2,6 +2,9 @@
 // driven with fake timers the way useK8sResourceList schedules its refreshes.
 import { test, mock } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync as __rf } from 'node:fs';
+import { join as __join } from 'node:path';
+const fs_read = (rel) => __rf(__join(process.env.UI_ROOT, rel), 'utf8');
 import path from 'node:path';
 
 const dir = process.env.SHELL_BUNDLE_DIR;
@@ -100,10 +103,30 @@ test('a new URL never shows the previous URL rows; late answers for an old URL a
   assert.equal(s.error.status, 503);
 });
 
-test('pollDelayMs: explicit interval wins, in-flight 5 s, idle 30 s, hidden or not asked 0', () => {
+test('pollDelayMs: explicit interval wins, in-flight 5 s, idle 30 s, hidden slowly (60 s), not asked 0', () => {
   assert.equal(fs.pollDelayMs({ pollIntervalMs: 7000, pollWhileInFlight: true, inFlight: true }), 7000);
-  assert.equal(fs.pollDelayMs({ pollWhileInFlight: true, inFlight: true }), fs.IN_FLIGHT_POLL_MS);
-  assert.equal(fs.pollDelayMs({ pollWhileInFlight: true, inFlight: false }), fs.IDLE_POLL_MS);
-  assert.equal(fs.pollDelayMs({ pollWhileInFlight: true, inFlight: true, hidden: true }), 0);
+  assert.equal(fs.pollDelayMs({ pollWhileInFlight: true, inFlight: true }), 5000);
+  assert.equal(fs.pollDelayMs({ pollWhileInFlight: true, inFlight: false }), 30000);
+  // a hidden tab keeps reading, slowly, never stops
+  assert.equal(fs.pollDelayMs({ pollWhileInFlight: true, inFlight: true, hidden: true }), 60000);
+  assert.equal(fs.pollDelayMs({ pollIntervalMs: 5000, hidden: true }), 60000);
+  assert.equal(fs.pollDelayMs({ pollIntervalMs: 120000, hidden: true }), 120000);
   assert.equal(fs.pollDelayMs({ inFlight: true }), 0);
+  assert.equal(fs.pollDelayMs({ inFlight: true, hidden: true }), 0);
+});
+
+test('a tab shown again reads at once (once, when it was hidden)', () => {
+  assert.equal(fs.readOnShow(true, false, true), true);
+  assert.equal(fs.readOnShow(false, false, true), false);
+  assert.equal(fs.readOnShow(true, true, true), false);
+  assert.equal(fs.readOnShow(true, false, false), false);
+});
+
+test('both fetch hooks read when a tab is shown again', () => {
+  const src = fs_read('packages/shared/src/hooks/k8s.ts');
+  const fn = (name) => src.slice(src.indexOf(`export function ${name}`), src.indexOf('\n}\n', src.indexOf(`export function ${name}`)));
+  for (const name of ['useK8sResource<', 'useK8sResourceList<']) {
+    assert.match(fn(name), /useRefreshWhenShown\(hidden,/, name);
+  }
+  assert.match(src, /if \(readOnShow\(wasHidden\.current, hidden, active\)\) refresh\(\);/);
 });

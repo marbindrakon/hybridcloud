@@ -218,6 +218,39 @@ class NetworkNameCheck(unittest.TestCase):
         acct.as_configured.assert_called_once_with()
         return out
 
+    def test_flavors_the_project_does_not_see(self):
+        conn = mock.MagicMock()
+        conn.network.networks.side_effect = lambda **f: []
+        conn.session.auth.get_access.return_value = Obj(user_id="u-app", domain_id=None, project_id=PROJECT)
+        conn.compute.find_flavor.side_effect = lambda name, ignore_missing=True: (
+            Obj(id="f-1", name=name) if name == "example.large" else None)
+        acct = mock.Mock()
+        acct.as_configured.return_value = conn
+        with mock.patch.object(S, "Account", return_value=acct):
+            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": "n",
+                                        "network_id": "x", "flavors": ["example.large", "example.missing",
+                                                                       "example.missing"]})
+            self.assertEqual(out["flavors_missing"], ["example.missing"])
+            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": "n",
+                                        "network_id": "x"})
+            self.assertNotIn("flavors_missing", out)
+
+    def test_images_the_project_does_not_see(self):
+        conn = mock.MagicMock()
+        conn.network.networks.side_effect = lambda **f: []
+        conn.session.auth.get_access.return_value = Obj(user_id="u-app", domain_id=None, project_id=PROJECT)
+        conn.image.find_image.side_effect = lambda name, ignore_missing=True: (
+            Obj(id="i-1", name=name) if name == "example-image" else None)
+        acct = mock.Mock()
+        acct.as_configured.return_value = conn
+        with mock.patch.object(S, "Account", return_value=acct):
+            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": "n",
+                                        "network_id": "x", "images": ["example-image", "example-missing", ""]})
+            self.assertEqual(out["images_missing"], ["example-missing"])
+            out = S.network_name_check({"clouds_yaml": "/dev/null", "project_id": PROJECT, "name": "n",
+                                        "network_id": "x"})
+            self.assertNotIn("images_missing", out)
+
     def test_cloud_wide_external_not_shared(self):
         # F1: the site's default `internet` (external for every project through the admin project's policy)
         out = self.check([self.net("net-inet", "internet", self.ADMIN, False, True)], "internet", "net-inet")

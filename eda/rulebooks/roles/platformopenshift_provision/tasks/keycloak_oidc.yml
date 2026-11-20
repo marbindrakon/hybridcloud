@@ -69,6 +69,7 @@
 - name: The names of the cluster's ACM objects
   ansible.builtin.include_tasks: po_call.yml
   vars:
+    shc_step: "Prepare the cluster's sign-in"
     po_request:
       action: acm-names
       buildName: "{{ cluster_name }}"

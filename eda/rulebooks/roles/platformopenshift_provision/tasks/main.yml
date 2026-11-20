@@ -8,6 +8,8 @@
         ansible_operator_meta:
           name: "{{ event_payload.regarding.name }}"
           namespace: "{{ event_payload.regarding.namespace }}"
+        # the installation watch (install_observe.yml) ends this job's watch a window after this time
+        po_job_started_at: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
 
     - name: Resolve services cluster API connection from Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_services_cluster_connection.yml"
@@ -93,6 +95,182 @@
         platform_type: "{{ platformopenshift_cr.resources[0].spec.type | default('') }}"
         platform_spec: "{{ platformopenshift_cr.resources[0].spec }}"
 
+    # A cluster recorded as installed (clusterInstalled, or stage Finishing or Installed) whose build the hub does not
+    # hold: no release is made and no installation started under its name, whoever asked (a new installation could
+    # take the addresses and DNS names of a cluster that may still run on the site). The failure is written for the
+    # platform team, without Stalled; every later run (a Retry too) checks the same and does the same nothing. Only
+    # the object's deletion leads to a new installation.
+    - name: Read what the hub holds of an installed cluster's build
+      hybridsovereign.shc.install_observe:
+        mode: hub
+        host: "{{ services_api_host | trim }}"
+        api_key: "{{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        hub_host: "{{ central_api_host | trim }}"
+        hub_api_key: "{{ central_bearer_token | trim }}"
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        build: "{{ (platformopenshift_cr.resources[0].status | default({}, true)).buildName }}"
+        uid: "{{ po_uid | default('', true) }}"
+        event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+      register: po_installed_hub
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+        - >-
+          (platformopenshift_cr.resources[0].status | default({}, true)).clusterInstalled | default(false) | bool
+          or (((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage
+              | default('')) in ['Finishing', 'Installed']
+
+    - name: An installed cluster whose build the hub does not hold
+      when: po_installed_hub.record_missing | default(false) | bool
+      block:
+        - name: Record that the platform's record of the build is missing
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+          vars:
+            cr_api_version: hybridsovereign.redhat/v1alpha1
+            cr_plural: platformopenshifts
+            cr_name: "{{ platformopenshift_cr_name }}"
+            cr_namespace: "{{ platformopenshift_cr_namespace }}"
+            cr_status_body:
+              status: failed
+              ready: false
+              reason: BuildRecordMissing
+              message: >-
+                The hub holds no record of this cluster's build. Nothing was changed: no installation was started and
+                your cluster was not touched. The platform team has to restore the record.
+              conditions:
+                - type: Ready
+                  status: "False"
+                  reason: BuildRecordMissing
+                  message: >-
+                    The hub holds no record of this cluster's build. Nothing was changed: no installation was started
+                    and your cluster was not touched. The platform team has to restore the record.
+
+        - name: End the job, nothing is installed over an installed cluster
+          ansible.builtin.meta: end_play
+
+    # A recorded stop is a claim about the hub, and the hub wins: every run of a stopped cluster first reads what the
+    # hub holds of its build. Running or installed: the record takes the hub's state and the run goes on to the
+    # provider's steps (the watch, or the installed path); nothing is removed. Being deleted or unreadable: the stop
+    # stays as written and the event is completed (a Retry still open is published again at the operator's next pass).
+    # No ClusterDeployment, or a stopped one: as below.
+    - name: Read what the hub holds of a stopped installation's build
+      hybridsovereign.shc.install_observe:
+        mode: hub
+        host: "{{ services_api_host | trim }}"
+        api_key: "{{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        hub_host: "{{ central_api_host | trim }}"
+        hub_api_key: "{{ central_bearer_token | trim }}"
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        build: "{{ (platformopenshift_cr.resources[0].status | default({}, true)).buildName }}"
+        uid: "{{ po_uid | default('', true) }}"
+        event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+      register: po_stopped_hub
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - ((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage | default('') == 'Stopped'
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+
+    - name: End the job, the object is not this job's any more
+      ansible.builtin.meta: end_play
+      when: po_stopped_hub.end | default(false) | bool
+
+    - name: The hub's build runs or is installed
+      ansible.builtin.include_tasks: install_resume.yml
+      vars:
+        ir_hub: "{{ po_stopped_hub.hub }}"
+        cb_cluster_name: "{{ platformopenshift_cr.resources[0].status.buildName }}"
+      when: (po_stopped_hub.hub | default('')) in ['running', 'installed']
+
+    - name: The hub's build is being removed or cannot be read
+      when: (po_stopped_hub.hub | default('')) in ['deleting', 'unreadable']
+      block:
+        - name: Keep the stop as written
+          ansible.builtin.include_tasks: install_stopped_keep.yml
+          vars:
+            isk_obj: "{{ platformopenshift_cr.resources[0] }}"
+
+        - name: "End the job, the hub's build is {{ po_stopped_hub.hub }}"
+          ansible.builtin.meta: end_play
+
+    # A stopped installation that nobody asked to start again (no Retry, no change of the installation settings: a
+    # change of access groups, viewers or deletion protection): what needs no installation is applied, the stop stays
+    # as written, nothing is built or removed.
+    - name: Decide whether a stopped installation is asked to start again
+      ansible.builtin.set_fact:
+        po_stopped_asked: >-
+          {{ platformopenshift_cr.resources[0]
+             | hybridsovereign.shc.shc_install_asked(platformopenshift_install.retryMarginMinutes | int) }}
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - ((platformopenshift_cr.resources[0].status | default({}, true)).install | default({}, true)).stage | default('') == 'Stopped'
+        - (po_stopped_hub.hub | default('')) not in ['running', 'installed']
+
+    - name: A stopped installation nobody asked to start again
+      when:
+        - po_stopped_asked is defined
+        - not (po_stopped_asked.asked | bool)
+      block:
+        - name: Say why nothing is installed
+          ansible.builtin.debug:
+            msg: "PlatformOpenshift {{ platformopenshift_cr_name }}: {{ po_stopped_asked.why }}; nothing is installed or removed."
+
+        - name: Apply the viewer access of a stopped cluster
+          ansible.builtin.include_tasks: cluster_viewer_rbac.yml
+
+        - name: Keep the stop as written
+          ansible.builtin.include_tasks: install_stopped_keep.yml
+          vars:
+            isk_obj: "{{ platformopenshift_cr.resources[0] }}"
+            isk_renew: true
+
+        - name: End the job, nothing to install
+          ansible.builtin.meta: end_play
+
+    # An installation past the deadline is shown failed (InstallOverdue) and checked at each periodic run with one
+    # observation: it goes on to the provider's steps only when it is installed (they connect it and write Ready); a
+    # stop is written with its cause; otherwise the run ends.
+    # (only when the hub holds a ClusterDeployment: without one the provider's steps make the release again first)
+    - name: Whether the hub holds an overdue installation's build
+      ansible.builtin.include_tasks: install_build_exists.yml
+      vars:
+        cb_cluster_name: "{{ platformopenshift_cr.resources[0].status.buildName }}"
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+        - platformopenshift_cr.resources[0].status | default({}, true)
+          | hybridsovereign.shc.shc_install_overdue(platformopenshift_install.deadlineMinutes | default(0, true) | int)
+
+    - name: Check an installation past the deadline once
+      ansible.builtin.include_tasks: install_observe.yml
+      vars:
+        cb_cluster_name: "{{ platformopenshift_cr.resources[0].status.buildName }}"
+        io_once: true
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length > 0
+        - platformopenshift_cr.resources[0].status | default({}, true)
+          | hybridsovereign.shc.shc_install_overdue(platformopenshift_install.deadlineMinutes | default(0, true) | int)
+        - po_cd_exists | default(false) | bool
+
+    # the first check of a new cluster: its installation is being prepared (checks, addresses, names)
+    - name: Record that the installation is being prepared
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ platformopenshift_cr_name }}"
+        cr_namespace: "{{ platformopenshift_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          install: "{{ platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_preparing }}"
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_preparing) | length > 0
+
     - name: Dispatch to AWS handler
       ansible.builtin.include_tasks: aws.yml
       when: platform_type == "aws"
@@ -120,17 +298,32 @@
         cr_plural: platformopenshifts
         cr_name: "{{ platformopenshift_cr_name }}"
         cr_namespace: "{{ platformopenshift_cr_namespace }}"
-        # a preflight refusal (preflight_stop.yml) or a named failure sets po_fail_reason; the Preflight condition
-        # goes with a refusal
+        # a refusal (preflight_stop.yml: the Preflight condition; the cluster credential) notes po_fail_reason and its
+        # condition, then fails with exactly the condition's sentence: only that failure writes the refusal (reason,
+        # the same sentence in the message and the condition). Nothing a cloud, the hub, the installer or a helper answered is written:
+        # otherwise the message is a fail or assert task's own platform text, else the general sentence naming the
+        # step (shc_failure_message), with reason ProvisionFailed.
+        _po_refusal: "{{ (po_preflight_condition | default({}, true)).message | default('', true) | string }}"
+        _po_refused: >-
+          {{ (po_fail_reason | default('', true) | length > 0)
+             and (ansible_failed_task | default({}, true)
+                  | hybridsovereign.shc.shc_failure_is_refusal(ansible_failed_result | default({}, true), _po_refusal)) }}
         cr_status_body:
           status: failed
-          reason: "{{ po_fail_reason | default('ProvisionFailed', true) }}"
+          reason: "{{ po_fail_reason if _po_refused | bool else 'ProvisionFailed' }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-          message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
-          conditions: "{{ [po_preflight_condition] if (po_preflight_condition | default({}, true)) else [] }}"
+          message: >-
+            {{ ansible_failed_task | default({}, true)
+               | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true),
+                                                         _po_refusal if _po_refused | bool else '', 'provisioning',
+                                                         [platformopenshift_cr_name | default(''), platformopenshift_cr_namespace | default(''), cb_app_name | default(''), po_build_name | default('')]) }}
+          conditions: "{{ [po_preflight_condition] if _po_refused | bool else [] }}"
       ignore_errors: true
-      when: services_api_host is defined and services_bearer_token is defined
+      # a stopped installation was written by the watch (install_observe.yml) with its cause: nothing replaces it
+      when:
+        - services_api_host is defined and services_bearer_token is defined
+        - not (po_install_outcome_written | default(false) | bool)
 
     - name: Re-raise provisioning failure
       ansible.builtin.fail:

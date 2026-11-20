@@ -227,6 +227,52 @@ def issuer_hostpath(issuer):
     return re.sub(r"^https://", "", issuer).rstrip("/")
 
 
+CLUSTER_TAG = re.compile(r"^kubernetes\.io/cluster/([A-Za-z0-9][A-Za-z0-9-]*)$")
+
+
+def infra_id_of_zone(zone_name, want, tags):
+    """The installer's infrastructure id of a cluster, from its private hosted zone: the zone named exactly
+    "<cluster name>.<base domain>." (one per cluster name and domain) carries the tag kubernetes.io/cluster/<id> =
+    owned. None while the installer has not made it, or when it does not say exactly one id."""
+    if zone_name != want:
+        return None
+    ids = {m.group(1) for k, v in (tags or {}).items() for m in [CLUSTER_TAG.match(k)] if m and v == "owned"}
+    return ids.pop() if len(ids) == 1 else None
+
+
+def select_lbs(lbs, tags, infra_id):
+    """The cluster's internal API and ingress load balancers ({kind: lb}): only those tagged exactly
+    kubernetes.io/cluster/<infra_id> (the installer's and the cloud provider's tag of the cluster's own resources)."""
+    if not infra_id:
+        return {}
+    key = "kubernetes.io/cluster/" + infra_id
+    found = {}
+    for l in lbs:
+        t = tags.get(l["LoadBalancerArn"], {})
+        if key not in t:
+            continue
+        if l["LoadBalancerName"].endswith("-int"):
+            kind = "api"
+        elif t.get("kubernetes.io/service-name") == "openshift-ingress/router-default":
+            kind = "apps"
+        else:
+            continue
+        if kind not in found and l["State"]["Code"] in ("active", "provisioning"):
+            found[kind] = l
+    return found
+
+
+def _own_infra_id(r53, name, zn):
+    want = "%s.%s" % (name, zn)
+    for z in r53.list_hosted_zones_by_name(DNSName=want, MaxItems="5")["HostedZones"]:
+        if z["Name"] == want and z["Config"].get("PrivateZone"):
+            tags = r53.list_tags_for_resource(ResourceType="hostedzone", ResourceId=z["Id"].split("/")[-1])
+            got = infra_id_of_zone(z["Name"], want, {t["Key"]: t["Value"] for t in tags["ResourceTagSet"]["Tags"]})
+            if got:
+                return got
+    return None
+
+
 def dns_alias(cfg, state, zone, name, vpc, wait=0):
     """Public aliases of an Internal cluster's load balancers (they resolve to private addresses: the platform and
     the cluster's network reach them; the installer only writes a private zone for Internal clusters)."""
@@ -248,27 +294,19 @@ def dns_alias(cfg, state, zone, name, vpc, wait=0):
                     {"Action": "DELETE", "ResourceRecordSet": rr}]})
                 gone.append(rr["Name"])
         return {"zone": zone, "removed": gone}
-    prefix = "kubernetes.io/cluster/%s-" % name[:21]
     deadline = time.time() + wait
     done = {}
+    infra = None
     while True:
+        infra = infra or _own_infra_id(r53, name, zn)
         lbs = [l for p in elb.get_paginator("describe_load_balancers").paginate() for l in p["LoadBalancers"]
-               if l.get("VpcId") == vpc and l.get("Scheme") == "internal"]
+               if l.get("VpcId") == vpc and l.get("Scheme") == "internal"] if infra else []
         tags = {}
         for i in range(0, len(lbs), 20):
             for d in elb.describe_tags(ResourceArns=[l["LoadBalancerArn"] for l in lbs[i:i + 20]])["TagDescriptions"]:
                 tags[d["ResourceArn"]] = {t["Key"]: t["Value"] for t in d["Tags"]}
-        for l in lbs:
-            t = tags.get(l["LoadBalancerArn"], {})
-            if not any(k.startswith(prefix) for k in t):
-                continue
-            if l["LoadBalancerName"].endswith("-int"):
-                kind = "api"
-            elif t.get("kubernetes.io/service-name") == "openshift-ingress/router-default":
-                kind = "apps"
-            else:
-                continue
-            if kind in done or l["State"]["Code"] not in ("active", "provisioning"):
+        for kind, l in select_lbs(lbs, tags, infra).items():
+            if kind in done:
                 continue
             r53.change_resource_record_sets(HostedZoneId=zid, ChangeBatch={"Changes": [{"Action": "UPSERT", "ResourceRecordSet": {
                 "Name": names[kind], "Type": "A", "AliasTarget": {"HostedZoneId": l["CanonicalHostedZoneId"],
@@ -277,9 +315,9 @@ def dns_alias(cfg, state, zone, name, vpc, wait=0):
         if len(done) == 2 or time.time() >= deadline:
             break
         time.sleep(20)
-    if "api" not in done:
-        fail("the cluster's internal API load balancer did not appear in %s" % vpc, aliases=done)
-    return {"zone": zone, "aliases": done, "complete": len(done) == 2}
+    # not found (yet): said in the result, nothing published that could be another cluster's; the next run tries again
+    return {"zone": zone, "aliases": done, "complete": len(done) == 2, "infraID": infra or "",
+            "missing": sorted({"api", "apps"} - set(done))}
 
 
 class Cluster:
@@ -322,7 +360,8 @@ class Cluster:
     def roles(self):
         out = []
         for page in self.iam.get_paginator("list_roles").paginate(PathPrefix=self.path):
-            out += page["Roles"]
+            # the path is a prefix to IAM: only roles of exactly this cluster's path are its own
+            out += [r for r in page["Roles"] if r.get("Path") == self.path]
         return out
 
     def role_up(self, cr):

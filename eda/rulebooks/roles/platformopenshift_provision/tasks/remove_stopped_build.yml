@@ -1,0 +1,360 @@
+---
+# The removal of a stopped installation before a new one, for the three providers (the only place besides the delete
+# of the object where a build is removed). It runs only when the module's decision allows it (module_utils
+# shc_install.may_remove_build): the hub's build is not installed, it has stopped (or is already being removed, or no
+# ClusterDeployment is left), the object records no installed cluster, and someone asked since the stop (Retry, or a
+# change of the installation settings) or the object records a removal under way (stage CleaningUp: an earlier job
+# decided and recorded it; this job continues it through the same guard). An unreadable hub or object removes nothing.
+# A stopped cluster whose build this job may not remove ends the job here, with the stop kept as written: it never
+# goes on to build.
+# The hub's build is read again right before the first delete. Every wait reads the object as well and ends the job
+# like the watch does (the object gone, another object, being deleted, or a newer request), so a later job or the
+# delete takes over; the object is read once more right before the release is uninstalled and before the build's
+# namespace is claimed again. Hive deprovisions what the stopped attempt built when its ClusterDeployment goes; the
+# cluster keeps its name, addresses, DNS names, credential and Vault paths.
+# Inputs: cb_cluster_name / cb_app_name (the build), po_uid, rsb_obj (the object as read in this run).
+- name: Require the removal's setting
+  ansible.builtin.assert:
+    that:
+      - (platformopenshift_install[item] | default('', true) | string | length) > 0
+    fail_msg: "Set platformopenshift_defaults.install.{{ item }} (the installation setting is missing)."
+  loop: [pendingReleaseMinutes, removalLimitMinutes, retryMarginMinutes]
+
+- name: Set Vault root token from job credential
+  ansible.builtin.set_fact:
+    vault_root_token: "{{ lookup('env', 'VAULT_TOKEN') }}"
+  no_log: true
+
+- name: Write central cluster kubeconfig for Helm
+  ansible.builtin.include_tasks: write_central_helm_kubeconfig.yml
+
+- name: Check existing Helm release
+  ansible.builtin.command:
+    argv:
+      - helm
+      - status
+      - "{{ cb_app_name }}"
+      - --namespace
+      - "{{ cb_cluster_name }}"
+      - --output
+      - json
+      - --kubeconfig
+      - "/tmp/{{ cb_app_name }}-kubeconfig"
+  register: cleanup_helm_status
+  failed_when: false
+  changed_when: false
+
+- name: Set Helm release failed flag for the removal
+  ansible.builtin.set_fact:
+    cb_cleanup_helm_failed: >-
+      {{ cleanup_helm_status.rc == 0 and
+         (cleanup_helm_status.stdout | from_json).info.status | default('') == 'failed' }}
+
+- name: Decide whether the stopped build may be removed
+  vars:
+    _rsb_release: "{{ (cleanup_helm_status.stdout | from_json).info | default({}, true) if cleanup_helm_status.rc == 0 else {} }}"
+  hybridsovereign.shc.install_observe:
+    mode: removal
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    hub_host: "{{ central_api_host | trim }}"
+    hub_api_key: "{{ central_bearer_token | trim }}"
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    build: "{{ cb_cluster_name }}"
+    uid: "{{ po_uid | default('', true) }}"
+    event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+    release_failed: "{{ cb_cleanup_helm_failed | bool }}"
+    release_exists: "{{ cleanup_helm_status.rc == 0 }}"
+    release_status: "{{ _rsb_release.status | default('', true) }}"
+    release_deployed_at: "{{ _rsb_release.last_deployed | default('', true) }}"
+    pending_minutes: "{{ platformopenshift_install.pendingReleaseMinutes | int }}"
+    removal_minutes: "{{ platformopenshift_install.removalLimitMinutes | int }}"
+    retry_margin_minutes: "{{ platformopenshift_install.retryMarginMinutes | int }}"
+  register: rsb_decision
+
+- name: Say why the build is kept or removed
+  ansible.builtin.debug:
+    msg: "Build {{ cb_cluster_name }}: {{ rsb_decision.why }}"
+
+- name: End the job, the object is not this job's any more
+  ansible.builtin.meta: end_play
+  when: rsb_decision.end | default(false) | bool
+
+# an older job's release of the build is still being made (pending, younger than pendingReleaseMinutes, no
+# ClusterDeployment yet): it is left alone; the installation is starting, and the next run watches it
+- name: The hub's release of the build is still being made
+  when: rsb_decision.hub | default('') == 'starting'
+  block:
+    - name: Say that the installation is starting
+      ansible.builtin.include_tasks: install_resume.yml
+      vars:
+        ir_hub: starting
+        ir_message: The installation is starting.
+      when: rsb_decision.stage | default('') in ['Stopped', 'CleaningUp']
+
+    - name: Hand over to the next run
+      ansible.builtin.include_tasks: install_handover.yml
+      vars:
+        ih_why: "{{ rsb_decision.why }}"
+
+# a recorded stop or removal whose build runs or is installed on the hub (it changed since the run's first look): the
+# hub wins, nothing is removed and the job goes on to watch it
+- name: The hub's build runs or is installed
+  ansible.builtin.include_tasks: install_resume.yml
+  vars:
+    ir_hub: "{{ rsb_decision.hub }}"
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') in ['Stopped', 'CleaningUp']
+    - rsb_decision.hub | default('') in ['running', 'installed']
+
+# a stopped cluster whose build may not be removed now (the hub unreadable, nobody asked, a build being deleted): the
+# stop stays as written (the event is completed, so the operator publishes again while a request is open) and
+# nothing is built
+- name: Keep the stop as written
+  ansible.builtin.include_tasks: install_stopped_keep.yml
+  vars:
+    isk_obj: "{{ rsb_obj }}"
+    # the record is renewed only when nobody asked; an open request survives to the next run
+    isk_renew: "{{ not (rsb_decision.asked | default(false) | bool) }}"
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') == 'Stopped'
+    - rsb_decision.hub | default('') not in ['running', 'installed']
+
+- name: End the job, the stopped installation stays as it is
+  ansible.builtin.meta: end_play
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') == 'Stopped'
+    - rsb_decision.hub | default('') not in ['running', 'installed']
+
+# a removal that has waited removalLimitMinutes beside a build Hive does not finish deleting: written as a failure
+# for the platform team (no more hand-overs without end); nothing is removed or installed
+- name: A removal that could not finish in time
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') == 'CleaningUp'
+    - rsb_decision.hub | default('') == 'deleting'
+    - rsb_decision.removal_overdue | default(false) | bool
+  block:
+    - name: Record that the stopped installation could not be removed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_body:
+          status: failed
+          ready: false
+          reason: InstallRemovalFailed
+          message: >-
+            The stopped installation could not be removed from the site in the time allowed; nothing new was
+            installed. The platform team has to look at it.
+          conditions:
+            - type: Ready
+              status: "False"
+              reason: InstallRemovalFailed
+              message: >-
+                The stopped installation could not be removed from the site in the time allowed; nothing new was
+                installed. The platform team has to look at it.
+
+    - name: End the job, the removal could not finish
+      ansible.builtin.meta: end_play
+
+# a removal under way that cannot go on now (the hub unreadable, a build that runs): nothing is removed; the event is
+# completed so the next pass of the operator tries again
+- name: Hand a removal under way over to the next run
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: "{{ rsb_decision.why }}"
+  when:
+    - not (rsb_decision.ok | default(false) | bool)
+    - rsb_decision.stage | default('') == 'CleaningUp'
+    - rsb_decision.hub | default('') not in ['running', 'installed']
+
+- name: Remove the stopped build before a new installation
+  when: rsb_decision.ok | default(false) | bool
+  block:
+    # a removal this job decided starts the next run; one under way (CleaningUp) is continued as recorded
+    - name: Record that the stopped installation is being removed
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_body:
+          status: reconciling
+          ready: false
+          reason: InstallCleanup
+          message: The stopped installation is being removed before the new one starts.
+          install: "{{ rsb_obj.status | default({}, true) | hybridsovereign.shc.shc_install_cleaning }}"
+          conditions:
+            - type: Ready
+              status: "False"
+              reason: InstallCleanup
+              message: The stopped installation is being removed before the new one starts.
+            - type: Stalled
+              status: "False"
+              reason: AsExpected
+              message: ""
+      when: rsb_decision.stage == 'Stopped'
+
+    # a removal under way that a later run continues says so again (not an earlier run's failure)
+    - name: Record that the removal goes on
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: platformopenshifts
+        cr_name: "{{ ansible_operator_meta.name }}"
+        cr_namespace: "{{ ansible_operator_meta.namespace }}"
+        cr_status_body:
+          status: reconciling
+          ready: false
+          reason: InstallCleanup
+          message: The stopped installation is being removed before the new one starts.
+          conditions:
+            - type: Ready
+              status: "False"
+              reason: InstallCleanup
+              message: The stopped installation is being removed before the new one starts.
+            - type: Stalled
+              status: "False"
+              reason: AsExpected
+              message: ""
+      when: rsb_decision.stage == 'CleaningUp'
+
+    # the hub's build read again right before the first delete: installed or unreadable now means nothing is removed
+    - name: Read the hub's build again before the first delete
+      hybridsovereign.shc.install_observe:
+        mode: removal
+        recheck: true
+        host: "{{ services_api_host | trim }}"
+        api_key: "{{ services_bearer_token | trim }}"
+        validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+        hub_host: "{{ central_api_host | trim }}"
+        hub_api_key: "{{ central_bearer_token | trim }}"
+        name: "{{ ansible_operator_meta.name }}"
+        namespace: "{{ ansible_operator_meta.namespace }}"
+        build: "{{ cb_cluster_name }}"
+        uid: "{{ po_uid | default('', true) }}"
+        event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+        release_failed: "{{ cb_cleanup_helm_failed | bool }}"
+        release_exists: "{{ cleanup_helm_status.rc == 0 }}"
+      register: rsb_recheck
+
+    - name: End the job before any delete, the object is not this job's any more
+      ansible.builtin.meta: end_play
+      when: rsb_recheck.end | default(false) | bool
+
+    - name: Stop before any delete when the build may not be removed any more
+      ansible.builtin.fail:
+        msg: "Build {{ cb_cluster_name }} was not removed: {{ rsb_recheck.why }}"
+      when: not (rsb_recheck.ok | default(false) | bool)
+
+    - name: Delete ManagedCluster for clean ACM re-import
+      kubernetes.core.k8s:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
+        validate_certs: false
+        state: absent
+        api_version: cluster.open-cluster-management.io/v1
+        kind: ManagedCluster
+        name: "{{ cb_cluster_name }}"
+      register: rsb_mc_delete
+      ignore_errors: true
+
+    - name: Wait for ManagedCluster deletion
+      ansible.builtin.include_tasks: remove_stopped_build_wait.yml
+      vars:
+        rsw_for: managedcluster
+        rsw_retries: 60
+        rsw_delay: 10
+
+    # Hive's deprovision credentials belong to the Helm release, which this flow uninstalls only after the
+    # ClusterDeployment is gone, so they are still there.
+    - name: Delete ClusterDeployment to trigger Hive deprovision
+      kubernetes.core.k8s:
+        host: "{{ central_api_host }}"
+        api_key: "{{ central_bearer_token }}"
+        validate_certs: false
+        state: absent
+        api_version: hive.openshift.io/v1
+        kind: ClusterDeployment
+        name: "{{ cb_cluster_name }}"
+        namespace: "{{ cb_cluster_name }}"
+      ignore_errors: true
+
+    - name: Wait for ClusterDeployment deletion
+      ansible.builtin.include_tasks: remove_stopped_build_wait.yml
+      vars:
+        rsw_for: clusterdeployment
+        rsw_retries: 120
+        rsw_delay: 15
+
+    - name: Keep whether the ClusterDeployment is gone
+      ansible.builtin.set_fact:
+        rsb_cd_gone: "{{ rsw_result.done | default(false) | bool }}"
+
+    - name: Wait for Hive uninstall job to finish
+      ansible.builtin.include_tasks: remove_stopped_build_wait.yml
+      vars:
+        rsw_for: uninstall
+        rsw_retries: 120
+        rsw_delay: 15
+
+    - name: Fail when the stopped build is still on the hub
+      ansible.builtin.fail:
+        msg: >-
+          The stopped build {{ cb_cluster_name }} could not be removed from the hub in time (its ClusterDeployment is
+          still there); nothing new was installed.
+      when: not (rsb_cd_gone | bool)
+
+    # the object once more right before the release goes: a later job or the delete may have taken over meanwhile
+    - name: Read the object once more before the release is uninstalled
+      ansible.builtin.include_tasks: install_same_object.yml
+      when: cleanup_helm_status.rc == 0
+
+    - name: Uninstall mce-cluster-build Helm release after Hive deprovision
+      ansible.builtin.command:
+        argv:
+          - helm
+          - uninstall
+          - "{{ cb_app_name }}"
+          - --namespace
+          - "{{ cb_cluster_name }}"
+          - --no-hooks
+          - --kubeconfig
+          - "/tmp/{{ cb_app_name }}-kubeconfig"
+      register: cleanup_helm_uninstall
+      failed_when: false
+      changed_when: cleanup_helm_uninstall.rc == 0
+      when: cleanup_helm_status.rc == 0
+
+    # The build's namespace is the platform's own (claim_build.yml makes it on every provider) and is claimed again
+    # below. A namespace being deleted is waited for; one that stands only when a ManagedCluster was removed above (the
+    # hub's cluster management may delete its namespace with it). Without a ManagedCluster (a build that stopped
+    # before it was connected) nothing deletes the namespace, so the removal does not wait for it.
+    - name: Wait for cluster namespace to finish terminating
+      ansible.builtin.include_tasks: remove_stopped_build_wait.yml
+      vars:
+        rsw_for: namespace
+        rsw_retries: 60
+        rsw_delay: 10
+        rsw_nothing_removes: >-
+          {{ not ((rsb_mc_delete.changed | default(true) | bool) or (rsb_mc_delete.failed | default(false) | bool)) }}
+
+    # the build's namespace may have gone with the ManagedCluster: claim it again for this object before the release
+    # makes it, unless the object is not this job's any more (a delete during the removal must not find it again)
+    - name: Read the object once more before the namespace is claimed again
+      ansible.builtin.include_tasks: install_same_object.yml
+
+    - name: Claim the build's namespace again
+      ansible.builtin.include_tasks: claim_build.yml
+      vars:
+        cl_recorded: "{{ cb_app_name }}"
+        cl_after_removal: true

@@ -57,6 +57,9 @@ export const TENANT_STATUS_ALLOW = {
     ['site', ['name', 'console']],
     // OpenStack clusters: the cluster's own user and credential on the site, ids and names only
     ['credential', ['id', 'user', 'userId', 'domain', 'domainId', 'createdAt']],
+    // the installation: stage, attempts, times and the platform's sentence about the last failed attempt
+    ['install', ['stage', 'attempt', 'attemptsLimit', 'run', 'startedAt', 'endedAt', 'observedAt',
+      ['lastFailure', ['attempt', 'reason', 'message', 'time']]]],
   ],
 };
 

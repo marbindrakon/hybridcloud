@@ -18,7 +18,20 @@
       {{ (_po_call.stdout | from_json) if (_po_call.stdout | default('') | trim).startswith('{')
          else {'error': (_po_call.stderr | default('') | trim)[-600:]} }}
 
-- name: "PlatformOpenshift {{ po_request.action }}: fail when the helper failed"
-  ansible.builtin.fail:
+# the helper's text goes to the job's log; the failure is the platform's sentence for the step (shc_step, which both
+# cluster roles set)
+- name: "PlatformOpenshift {{ po_request.action }}: the helper's answer, for the job's log"
+  ansible.builtin.debug:
     msg: "PlatformOpenshift {{ po_request.action }} failed: {{ po_result.error | default('rc ' ~ _po_call.rc) }}"
   when: _po_call.rc != 0 or 'error' in po_result
+
+- name: "PlatformOpenshift {{ po_request.action }}: fail when the helper failed"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | default('', true) | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: _po_call.rc != 0 or 'error' in po_result
+
+# what a decision keeps out of the tenant's text (e.g. the uids of a BuildOwnerMismatch) goes to the job's log
+- name: "PlatformOpenshift {{ po_request.action }}: the detail, for the job's log"
+  ansible.builtin.debug:
+    msg: "{{ po_result.detail }}"
+  when: (po_result.detail | default('', true)) | length > 0

@@ -139,6 +139,7 @@
         - name: The cluster's roles and OIDC provider in its account
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
           vars:
+            shc_step: "Remove the cluster's identity on AWS"
             aws_helper: shc_aws_cluster.py
             aws_config:
               account: "{{ po_aws_account }}"
@@ -153,6 +154,7 @@
         - name: Remove the cluster's published names (Internal)
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
           vars:
+            shc_step: "Remove the cluster's published names"
             aws_helper: shc_aws_cluster.py
             aws_config:
               account: "{{ po_aws_account }}"
@@ -163,29 +165,14 @@
                        "{{ po_domain.split('.', 1)[0] }}"]
           when: po_publish == 'Internal' and po_domain | length > 0
 
-        - name: The placement's public subnets go (External)
-          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
-          vars:
-            aws_helper: shc_aws_tenant.py
-            aws_config:
-              account: "{{ po_aws_account }}"
-              region: "{{ po_aws_region }}"
-              memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
-              entry: automation
-              azs: []
-            aws_args: [place-public, --placement, "{{ po_placement }}", --state, down]
+        - name: The placement's public subnets go (External), unless another cluster uses them
+          ansible.builtin.include_tasks: public_subnets_down.yml
           when: po_publish == 'External' and po_placement | length > 0
 
+        # the static issuer ConfigMap, found by its exact name and the build's label in any namespace: a delete never
+        # needs the installation's issuer setting (unpublish_issuer.yml)
         - name: Unpublish the cluster's issuer (its static issuer ConfigMap on central)
-          kubernetes.core.k8s:
-            host: "{{ central_api_host }}"
-            api_key: "{{ central_bearer_token }}"
-            validate_certs: false
-            state: absent
-            api_version: v1
-            kind: ConfigMap
-            name: "oidc-static-{{ po_build_name }}"
-            namespace: "{{ (aws_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+          ansible.builtin.include_tasks: unpublish_issuer.yml
           when: po_hub_owned | bool
 
     - name: Note the step
@@ -202,6 +189,7 @@
         - name: The cluster's service accounts, custom roles and pool in its project
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
           vars:
+            shc_step: "Remove the cluster's identity on Google Cloud"
             gcp_helper: shc_gcp_cluster.py
             gcp_config: {project: "{{ po_gcp_project }}", region: "{{ po_gcp_region }}"}
             gcp_args: [wif-down, --cluster, "{{ po_build_name }}"]
@@ -210,22 +198,17 @@
         - name: Remove the cluster's published names (Internal)
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
           vars:
+            shc_step: "Remove the cluster's published names"
             gcp_helper: shc_gcp_cluster.py
             gcp_config: {project: "{{ po_gcp_project }}", region: "{{ po_gcp_region }}"}
             gcp_args: [dns-alias, --state, down, --zone, "{{ po_domain.split('.', 1)[1] }}", --name,
                        "{{ po_domain.split('.', 1)[0] }}"]
           when: po_publish == 'Internal' and po_domain | length > 0
 
+        # the static issuer ConfigMap, found by its exact name and the build's label in any namespace: a delete never
+        # needs the installation's issuer setting (unpublish_issuer.yml)
         - name: Unpublish the cluster's issuer (its static issuer ConfigMap on central)
-          kubernetes.core.k8s:
-            host: "{{ central_api_host }}"
-            api_key: "{{ central_bearer_token }}"
-            validate_certs: false
-            state: absent
-            api_version: v1
-            kind: ConfigMap
-            name: "oidc-static-{{ po_build_name }}"
-            namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+          ansible.builtin.include_tasks: unpublish_issuer.yml
           when: po_hub_owned | bool
 
     - name: Note the step
@@ -378,7 +361,12 @@
     - name: Mark PlatformOpenshift delete as failed on services cluster
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
-        _msg: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA teardown failed')) }}"
+        # nothing a cloud, the hub or a helper answered is written: a fail or assert task's own sentence, or the
+        # general sentence naming the step (shc_failure_message)
+        _msg: >-
+          {{ ansible_failed_task | default({}, true)
+             | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true), '', 'deletion',
+                                                       [platformopenshift_cr_name | default(''), platformopenshift_cr_namespace | default(''), cb_app_name | default(''), po_build_name | default('')]) }}
         cr_api_version: hybridsovereign.redhat/v1alpha1
         cr_plural: platformopenshifts
         cr_name: "{{ platformopenshift_cr_name }}"

@@ -22,7 +22,7 @@
     ci_capabilities: {}
     ci_error: ""
 
-- name: Read CloudInfrastructure {{ ci_ref_name | default('') }}
+- name: "Read the CloudInfrastructure: {{ ci_ref_name | default('') }}"
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
     api_key: "{{ services_bearer_token }}"

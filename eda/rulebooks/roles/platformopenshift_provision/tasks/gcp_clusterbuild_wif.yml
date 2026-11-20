@@ -181,7 +181,7 @@
       ansible.builtin.assert:
         that:
           - _cb_imageset.resources | length > 0
-        fail_msg: "ClusterImageSet {{ cb_image_set }} does not exist on central"
+        fail_msg: "The release image set {{ cb_image_set }} does not exist on the hub."
 
     - name: Manifests directory
       ansible.builtin.file:
@@ -192,6 +192,7 @@
     - name: The project's workload identity pool, the operators' service accounts and their credentials manifests
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
       vars:
+        shc_step: "Prepare the cluster's identity on Google Cloud"
         gcp_helper: shc_gcp_cluster.py
         gcp_config: "{{ cb_gcp_cfg }}"
         gcp_args: [wif-up, --cluster, "{{ cb_app_name }}", --issuer, "{{ cb_issuer }}",
@@ -205,6 +206,7 @@
     - name: Hive's credential configuration for the project
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
       vars:
+        shc_step: "Prepare the installer's credentials on Google Cloud"
         gcp_helper: shc_gcp_cluster.py
         gcp_config: "{{ cb_gcp_cfg }}"
         gcp_args: [hive-creds, --build, "{{ cb_app_name }}"]

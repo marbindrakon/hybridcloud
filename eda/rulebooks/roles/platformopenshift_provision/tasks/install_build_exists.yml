@@ -1,0 +1,33 @@
+---
+# Whether the hub holds a ClusterDeployment of the build: what the release step and the checks a new installation
+# needs depend on (an installation recorded as running with no ClusterDeployment is repaired, not waited for). A hub
+# that cannot be read counts as holding one (no check is skipped on an unknown, and no release is made against it).
+# Input: cb_cluster_name. Sets po_cd_exists, po_hub_unreadable, po_cd_live (a ClusterDeployment that runs or is
+# installed: not stopped, not being deleted).
+- name: Read the hub's ClusterDeployment of the build
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: hive.openshift.io/v1
+    kind: ClusterDeployment
+    name: "{{ cb_cluster_name }}"
+    namespace: "{{ cb_cluster_name }}"
+  register: _ibe_cd
+  failed_when: false
+  # a few tries: one failed read does not decide a run
+  until: _ibe_cd.resources is defined
+  retries: 3
+  delay: 5
+
+- name: Keep whether the build exists on the hub
+  ansible.builtin.set_fact:
+    po_cd_exists: >-
+      {{ _ibe_cd.resources is not defined or (_ibe_cd.resources | default([], true) | length) > 0 }}
+    po_hub_unreadable: "{{ _ibe_cd.resources is not defined }}"
+    po_cd_live: >-
+      {{ (_ibe_cd.resources | default([], true) | length) > 0
+         and ((_ibe_cd.resources | first).metadata.deletionTimestamp is not defined)
+         and ((_ibe_cd.resources | first).status | default({}, true)).conditions | default([], true)
+             | selectattr('type', 'equalto', 'ProvisionStopped') | selectattr('status', 'equalto', 'True')
+             | list | length == 0 }}

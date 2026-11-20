@@ -9,7 +9,15 @@ import type { Phase } from './phase';
 export interface UsualDuration {
   key: string;
   defaultValue: string;
+  /** values the text names (kept with the numbers the pages compare against) */
+  params?: Record<string, number>;
 }
+
+/**
+ * How long a cluster installation usually takes, in minutes. The estimate text names both ends;
+ * past the upper end the cluster page says the installation takes longer than usual.
+ */
+export const CLUSTER_INSTALL_MINUTES = { min: 40, max: 60 } as const;
 
 const CREATE: Record<string, UsualDuration> = {
   Entity: { key: 'durations.entity', defaultValue: 'Usually 3–5 minutes.' },
@@ -22,7 +30,11 @@ const CREATE: Record<string, UsualDuration> = {
   CloudOSO: { key: 'durations.environment', defaultValue: 'Usually 2–10 minutes.' },
   CloudAWS: { key: 'durations.publicCloud', defaultValue: 'Usually 4–10 minutes the first time.' },
   CloudGCP: { key: 'durations.publicCloud', defaultValue: 'Usually 4–10 minutes the first time.' },
-  PlatformOpenshift: { key: 'durations.cluster', defaultValue: 'Usually about an hour.' },
+  PlatformOpenshift: {
+    key: 'durations.cluster',
+    defaultValue: 'Usually {{min}}–{{max}} minutes.',
+    params: { min: CLUSTER_INSTALL_MINUTES.min, max: CLUSTER_INSTALL_MINUTES.max },
+  },
   Rbac: { key: 'durations.queueCycle', defaultValue: 'Usually within one queue cycle (a minute or two).' },
   Team: { key: 'durations.queueCycle', defaultValue: 'Usually within one queue cycle (a minute or two).' },
   Project: { key: 'durations.queueCycle', defaultValue: 'Usually within one queue cycle (a minute or two).' },
@@ -51,4 +63,9 @@ export function usualDuration(kind: string, phase: Phase): UsualDuration | undef
 /** The usual create duration of a kind (Review panels). */
 export function usualCreateDuration(kind: string): UsualDuration | undefined {
   return CREATE[kind];
+}
+
+/** The text of a usual duration, with the values it names. */
+export function usualText(t: (key: string, opts?: Record<string, unknown>) => string, usual: UsualDuration): string {
+  return t(usual.key, { defaultValue: usual.defaultValue, ...(usual.params ?? {}) });
 }

@@ -55,6 +55,41 @@ def short_id(text, limit, prefix=""):
     return out
 
 
+# Google's limits for the names this helper builds (the build name is at most 40 characters of [a-z0-9-])
+POOL_ID_MAX = 32            # workload identity pool id: 4-32 of [a-z0-9-]
+POOL_DISPLAY_NAME_MAX = 32  # workload identity pool display name
+SA_ID_MAX = 30              # service account id: 6-30 of [a-z0-9-], starts with a letter
+SA_DISPLAY_NAME_MAX = 100   # service account display name
+ROLE_ID_MAX = 64            # custom role id: 3-64 of [a-zA-Z0-9_.]
+ROLE_TITLE_MAX = 100        # custom role title
+
+
+def labelled_name(cluster, ns, name, limit):
+    """"<cluster> <ns>/<name>" in at most `limit` characters: the build name stays whole (it is what the platform
+    finds the cluster's objects by), the CredentialsRequest's namespace/name is cut to the room left."""
+    room = limit - len(cluster) - 1
+    if room <= 0:
+        return cluster[:limit]
+    return "%s %s" % (cluster, ("%s/%s" % (ns, name))[:room])
+
+
+def pool_id(cluster):
+    return short_id(cluster, POOL_ID_MAX, "shc-")
+
+
+def sa_account_id(cluster, ns, name):
+    return short_id("%s-%s-%s" % (cluster, ns, name), SA_ID_MAX)
+
+
+def role_id(cluster, ns, name):
+    """One custom role per request: several requests share the secret name "cloud-credentials" (ingress,
+    cloud-network-config-controller), so the id carries the namespace."""
+    rid = re.sub(r"[^a-zA-Z0-9_.]", "_", "shc_%s_%s_%s" % (cluster, ns, name))
+    if len(rid) > ROLE_ID_MAX:
+        rid = rid[:ROLE_ID_MAX - 7] + "_" + hashlib.sha256(rid.encode()).hexdigest()[:6]
+    return rid
+
+
 def external_account(audience, sa_email, token_file, project=None):
     doc = {"type": "external_account", "audience": audience,
            "subject_token_type": "urn:ietf:params:oauth:token-type:jwt", "token_url": STS,
@@ -76,7 +111,7 @@ class Cluster:
         self.changed = []
         p = g.http("GET", "%s/projects/%s" % (g.CRM, self.project), token=self.tok)
         self.number = (p.get("name") or "").split("/")[-1]
-        self.pool_id = short_id(cluster, 32, "shc-")
+        self.pool_id = pool_id(cluster)
         self.pool = "%s/projects/%s/locations/global/workloadIdentityPools/%s" % (IAM, self.project, self.pool_id)
         self.provider = self.pool + "/providers/oidc"
         self.audience = "//iam.googleapis.com/projects/%s/locations/global/workloadIdentityPools/%s/providers/oidc" % (self.number, self.pool_id)
@@ -95,7 +130,7 @@ class Cluster:
                     break
         if not pool:
             g.http("POST", "%s/projects/%s/locations/global/workloadIdentityPools?workloadIdentityPoolId=%s" % (IAM, self.project, self.pool_id),
-                   {"displayName": self.cluster[:32], "description": "OpenShift cluster %s (SHC)" % self.cluster}, token=self.tok)
+                   {"displayName": self.cluster[:POOL_DISPLAY_NAME_MAX], "description": "OpenShift cluster %s (SHC)" % self.cluster}, token=self.tok)
             self.changed.append("pool " + self.pool_id)
             for _ in range(30):
                 time.sleep(5)
@@ -125,7 +160,7 @@ class Cluster:
         sa = g.http("GET", "%s/projects/%s/serviceAccounts/%s" % (IAM, self.project, email), token=self.tok, ok404=True)
         if not sa:
             g.http("POST", "%s/projects/%s/serviceAccounts" % (IAM, self.project), {
-                "accountId": account_id, "serviceAccount": {"displayName": "%s %s/%s" % (self.cluster, ref["namespace"], ref["name"])[:100],
+                "accountId": account_id, "serviceAccount": {"displayName": labelled_name(self.cluster, ref["namespace"], ref["name"], SA_DISPLAY_NAME_MAX),
                                                             "description": "shc-cluster=" + self.cluster}}, token=self.tok)
             self.changed.append("service account " + account_id)
             time.sleep(3)
@@ -166,7 +201,7 @@ class Cluster:
             self.changed.append("custom role undeleted " + role_id)
         if not r:
             g.http("POST", "%s/projects/%s/roles" % (IAM, self.project), {"roleId": role_id, "role": {
-                "title": title[:100], "includedPermissions": sorted(permissions), "stage": "GA"}}, token=self.tok)
+                "title": title[:ROLE_TITLE_MAX], "includedPermissions": sorted(permissions), "stage": "GA"}}, token=self.tok)
             self.changed.append("custom role " + role_id)
         elif sorted(r.get("includedPermissions", [])) != sorted(permissions):
             g.http("PATCH", "%s/%s?updateMask=includedPermissions" % (IAM, name), {"includedPermissions": sorted(permissions)}, token=self.tok)
@@ -206,18 +241,15 @@ class Cluster:
             sas = spec.get("serviceAccountNames") or []
             if not sas:
                 fail("CredentialsRequest without serviceAccountNames", name=cr["metadata"]["name"])
-            account_id = short_id("%s-%s-%s" % (self.cluster, ref["namespace"], ref["name"]), 30)
+            account_id = sa_account_id(self.cluster, ref["namespace"], ref["name"])
             email = self.ensure_sa(account_id, ref)
             want.add(email)
             ps = spec["providerSpec"]
             roles = list(ps.get("predefinedRoles") or [])
             if ps.get("permissions"):
-                # one custom role per request: several requests share the secret name "cloud-credentials" (ingress,
-                # cloud-network-config-controller), so the id carries the namespace (ids are [a-zA-Z0-9_.]{3,64})
-                rid = re.sub(r"[^a-zA-Z0-9_.]", "_", "shc_%s_%s_%s" % (self.cluster, ref["namespace"], ref["name"]))
-                if len(rid) > 64:
-                    rid = rid[:57] + "_" + hashlib.sha256(rid.encode()).hexdigest()[:6]
-                roles.append(self.custom_role_up(rid, ps["permissions"], "%s %s/%s" % (self.cluster, ref["namespace"], ref["name"])))
+                rid = role_id(self.cluster, ref["namespace"], ref["name"])
+                roles.append(self.custom_role_up(rid, ps["permissions"],
+                                                 labelled_name(self.cluster, ref["namespace"], ref["name"], ROLE_TITLE_MAX)))
             if self.project_policy_add("serviceAccount:" + email, roles):
                 self.changed.append("roles for " + account_id)
             self.sa_binding_up(email, ["system:serviceaccount:%s:%s" % (ref["namespace"], sa) for sa in sas])
@@ -245,7 +277,7 @@ class Cluster:
             g.http("DELETE", "%s/projects/%s/serviceAccounts/%s" % (IAM, self.project, sa["email"]), token=self.tok)
             self.changed.append("removed service account " + sa["email"].split("@")[0])
         for r in g.list_all("%s/projects/%s/roles" % (IAM, self.project), "roles", self.tok, {"showDeleted": "false"}):
-            if r["name"].rsplit("/", 1)[1].startswith("shc_%s_" % re.sub(r"[^a-zA-Z0-9_.]", "_", self.cluster)):
+            if owns_role(self.cluster, r):
                 g.http("DELETE", "%s/%s" % (IAM, r["name"]), token=self.tok)
                 self.changed.append("removed custom role " + r["name"].rsplit("/", 1)[1])
         pool = g.http("GET", self.pool, token=self.tok, ok404=True)
@@ -261,6 +293,51 @@ def hive_creds(cfg, build):
         hub["projectNumber"], hub.get("hivePool", "shc-central"), hub.get("hiveProvider", "central"))
     sa = "%s@%s.iam.gserviceaccount.com" % (cfg.get("memberServiceAccount", "shc-automation"), cfg["project"])
     return {"osServiceAccount.json": json.dumps(external_account(audience, sa, POD_TOKEN, cfg["project"]), indent=1)}
+
+
+def owns_role(cluster, role):
+    """Whether a custom role (as listed: name, title) is this cluster's: its id has the cluster's head and its title
+    starts with the whole build name and a space, so a cluster whose build name starts another's never takes it."""
+    rid = str(role.get("name") or "").rsplit("/", 1)[-1]
+    head = "shc_%s_" % re.sub(r"[^a-zA-Z0-9_.]", "_", cluster)
+    return rid.startswith(head) and str(role.get("title") or "").startswith(cluster + " ")
+
+
+PRIVATE_ZONE_SUFFIX = "-private-zone"
+
+
+def infra_id_of_zones(zones, name, zn):
+    """The installer's infrastructure id of a cluster, from its private managed zone: the private zone whose DNS
+    name is exactly "<cluster name>.<base domain>." is named "<infra id>-private-zone". None while there is none, or
+    when there is not exactly one."""
+    want = "%s.%s" % (name, zn)
+    ids = {z["name"][:-len(PRIVATE_ZONE_SUFFIX)] for z in zones
+           if z.get("dnsName") == want and z.get("visibility") == "private"
+           and str(z.get("name") or "").endswith(PRIVATE_ZONE_SUFFIX)}
+    return ids.pop() if len(ids) == 1 else None
+
+
+def select_rules(rules, infra_id, network, instances_of):
+    """The cluster's internal API and ingress forwarding rules ({kind: rule}): the API rule is exactly
+    "<infra id>-api-internal"; an ingress rule (the cloud provider's, named after the Service, not the cluster) is the
+    cluster's only when every instance behind it is one of the cluster's own ("<infra id>-master-..." or
+    "<infra id>-worker-..."). instances_of(rule): the names of the instances behind a rule."""
+    if not infra_id:
+        return {}
+    own = re.compile(r"^%s-(master|worker)-" % re.escape(infra_id))
+    mine = [r for r in rules if r.get("loadBalancingScheme") == "INTERNAL" and r.get("IPAddress")
+            and (not network or (r.get("network") or "").endswith("/networks/" + network))]
+    found = {}
+    for r in mine:
+        if r.get("name") == infra_id + "-api-internal":
+            found.setdefault("api", r)
+    for r in mine:
+        if "apps" in found or "openshift-ingress/router-default" not in (r.get("description") or ""):
+            continue
+        names = instances_of(r)
+        if names and all(own.match(n) for n in names):
+            found["apps"] = r
+    return found
 
 
 def dns_alias(cfg, state, zone, name, network, wait=0):
@@ -288,21 +365,23 @@ def dns_alias(cfg, state, zone, name, network, wait=0):
                 g.http("POST", zurl + "/changes", {"deletions": [rr]}, token=tok)
                 gone.append(n)
         return {"zone": zone, "removed": gone}
+    def instances_of(rule):
+        names = []
+        bs = g.http("GET", rule["backendService"], token=tok) if rule.get("backendService") else {}
+        for be in (bs or {}).get("backends") or []:
+            listed = g.http("POST", be["group"] + "/listInstances", {}, token=tok) or {}
+            names += [str(x.get("instance") or "").rsplit("/", 1)[-1] for x in listed.get("items") or []]
+        return names
+
     deadline = time.time() + wait
     done = {}
+    infra = None
     while True:
-        rules = g.list_all(base + "/regions/%s/forwardingRules" % cfg["region"], "items", tok)
-        for r in rules:
-            if r.get("loadBalancingScheme") != "INTERNAL" or not r.get("IPAddress"):
-                continue
-            if network and not (r.get("network") or "").endswith("/networks/" + network):
-                continue
-            if r["name"].endswith("-api-internal"):
-                kind = "api"
-            elif "openshift-ingress/router-default" in (r.get("description") or ""):
-                kind = "apps"
-            else:
-                continue
+        if not infra:
+            infra = infra_id_of_zones(g.list_all("%s/projects/%s/managedZones" % (DNS, cfg["project"]), "managedZones",
+                                                 tok), name, zn)
+        rules = g.list_all(base + "/regions/%s/forwardingRules" % cfg["region"], "items", tok) if infra else []
+        for kind, r in select_rules(rules, infra, network, instances_of).items():
             if kind in done:
                 continue
             cur = have(names[kind])
@@ -315,9 +394,9 @@ def dns_alias(cfg, state, zone, name, network, wait=0):
         if len(done) == 2 or time.time() >= deadline:
             break
         time.sleep(20)
-    if "api" not in done:
-        fail("the cluster's internal API load balancer did not appear in %s" % (network or cfg["region"]), aliases=done)
-    return {"zone": zone, "aliases": done, "complete": len(done) == 2}
+    # not found (yet): said in the result, nothing published that could be another cluster's; the next run tries again
+    return {"zone": zone, "aliases": done, "complete": len(done) == 2, "infraID": infra or "",
+            "missing": sorted({"api", "apps"} - set(done))}
 
 
 def main():

@@ -3,7 +3,7 @@
   ansible.builtin.assert:
     that:
       - cb_slug | length == 5
-    fail_msg: "CloudOSO slug must be exactly 5 characters. Got: '{{ cb_slug }}'"
+    fail_msg: "The environment's short name for its DNS names must be exactly 5 characters."
   when: not (use_designate_dns | default(false) | bool)
 
 # The pull secret and SSH key are read with the platform's Vault token and end up in a cluster the tenant
@@ -25,13 +25,33 @@
     msg: "Ignored (chosen by the platform): {{ cb_ignored_spec_fields | join(', ') }}"
   when: cb_ignored_spec_fields | length > 0
 
+# where an installation is about to start (no build of it on the hub), each role that will have nodes needs a
+# flavor: the spec's, else the installation's default, which has no fallback
+- name: Fail without the installation's default flavors
+  vars:
+    _ocb_missing: >-
+      {{ (['controlPlaneFlavor'] if (oso_control_plane_flavor | default('', true) | length) == 0 else [])
+         + (['workerFlavor'] if (oso_worker_flavor | default('', true) | length) == 0
+                                and (oso_worker_count | default(0, true) | int) > 0 else []) }}
+  ansible.builtin.fail:
+    msg: >-
+      Set platformopenshift_defaults.{{ _ocb_missing | first }} (the installation's default flavor for an OpenShift
+      cluster's {{ 'control plane' if (_ocb_missing | first) == 'controlPlaneFlavor' else 'worker' }} nodes, used when
+      the cluster's spec names none).
+  when:
+    - _ocb_missing | length > 0
+    - not (po_cd_live | default(false) | bool)
+    - not (po_adopted | default(false) | bool)
+
 - name: Derive cluster identifiers
   vars:
     _os: "{{ platform_spec.openstack | default({}, true) }}"
   ansible.builtin.set_fact:
     cb_image_set: "{{ platform_spec.openstack.ocpImageSet | default(default_ocp_image_set, true) }}"
     cb_controller_flavor: "{{ oso_control_plane_flavor }}"
-    cb_worker_flavor: "{{ oso_worker_flavor }}"
+    # a cluster without workers whose spec and defaults name no worker flavor: its (empty) worker pool takes the
+    # control plane's flavor, which the installer accepts for a pool of no machines
+    cb_worker_flavor: "{{ oso_worker_flavor if (oso_worker_flavor | default('', true) | length) > 0 else oso_control_plane_flavor }}"
     cb_control_plane_count: "{{ oso_control_plane_count }}"
     cb_worker_count: "{{ oso_worker_count }}"
     cb_pull_secret_vault: >-
@@ -70,16 +90,20 @@
     that:
       - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
     fail_msg: >-
-      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
-      (got '{{ mce_cluster_build_chart | trim }}').
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart: the
+      setting is missing or is not an OCI address.
 
 # shc (DESIGN cnet §4.2): the build name, the network choice, the floating IPs and (hybrid network) the cluster's
 # prefixes, each recorded before the next step uses it
 - name: The cluster's recorded build and addresses
   ansible.builtin.include_tasks: openstack_cluster_addresses.yml
 
-- name: Clean up failed or stale Hive cluster build before reprovisioning
-  ansible.builtin.include_tasks: cleanup_stale_clusterbuild.yml
+# a stopped installation is removed only when someone asked for a new one (remove_stopped_build.yml); never a build
+# that is installing or installed
+- name: Remove a stopped installation before a new one
+  ansible.builtin.include_tasks: remove_stopped_build.yml
+  vars:
+    rsb_obj: "{{ po_cr_current.resources[0] }}"
 
 - name: Create Route53 records for the cluster
   when: not (use_designate_dns | default(false) | bool)
@@ -154,8 +178,7 @@
       - cb_pull_secret_raw | string | length > 0
       - cb_ssh_public_key | length > 0
     fail_msg: >-
-      Vault {{ cb_pull_secret_vault }} (property {{ cb_pull_secret_vault_property }}) or
-      {{ cb_ssh_key_vault }} (ssh_public_key) is missing.
+      The installation's pull secret or SSH key is missing in Vault (platformopenshift_defaults names where).
 
 - name: Normalize pull secret to valid JSON
   ansible.builtin.command:
@@ -196,8 +219,21 @@
     vault_kv_write_data:
       install-config.yaml: "{{ cb_install_config }}"
 
+- name: Read the cluster's installation as it stands now
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _po_now
+
 # shc (§11.6 phase C): record the DNS records and Vault paths as soon as they exist, so a build
 # that fails later still tears down cleanly (and the orphan check doesn't flag a running install).
+# A new installation is announced ("The installation is starting."); a run on an installation that already runs or is
+# done records only these fields (a partial write: the watch's last message stays).
 - name: Record DNS records and Vault paths on the status
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -205,18 +241,22 @@
     cr_plural: platformopenshifts
     cr_name: "{{ ansible_operator_meta.name }}"
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
-    cr_status_body:
-      status: reconciling
-      ready: false
-      message: "OpenStack cluster build {{ cb_cluster_name }} in progress"
-      # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
-      installStarted: true
+    _po_install_start: "{{ _po_now.resources[0].status | default({}, true) | hybridsovereign.shc.shc_install_starting }}"
+    _po_status_fields:
+      install: "{{ _po_install_start }}"
       dns:
         provider: "{{ 'designate' if (use_designate_dns | bool) else 'route53' }}"
         accountVaultPath: null
         projectId: "{{ designate_project_id if (use_designate_dns | bool) else '' }}"
         records: "{{ cb_dns_records | default([]) }}"
       vaultPaths: null
+    cr_status_partial: "{{ (_po_install_start | length) == 0 }}"
+    # the install starts with the Helm release below: from here on a refusal never gives the floating IPs back
+    cr_status_body: >-
+      {{ _po_status_fields | combine({'installStarted': true})
+         | combine({'status': 'reconciling', 'ready': false, 'reason': 'Installing',
+                                      'message': 'The installation is starting.'}
+                                     if (_po_install_start | length) > 0 else {}) }}
 
 # the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
 - name: Wake the network now the install starts
@@ -309,12 +349,113 @@
   changed_when: false
   when: cb_helm_release_exists | bool
 
-- name: Set values changed flag
+- name: Whether the hub holds the build
+  ansible.builtin.include_tasks: install_build_exists.yml
+
+- name: Whether the installation started before installations were recorded
+  vars:
+    _cb_rec: "{{ (_po_now.resources | default([{}], true) | first).status | default({}, true) }}"
   ansible.builtin.set_fact:
+    po_legacy_started: >-
+      {{ (_cb_rec.install | default({}, true)) | length == 0 and (_cb_rec.installStarted | default(false) | bool)
+         and not (_cb_rec.clusterInstalled | default(false) | bool) }}
+
+# while an installation runs on the hub (a ClusterDeployment exists, recorded Installing or Finishing, or adopted by
+# this run) the release is not changed: the running build is the one that was installed; settings changed meanwhile
+# are used only by a later installation. Without a ClusterDeployment the release is made again (a failed or
+# abandoned release is repaired; one that keeps failing is written as a stop), unless an older job is still making it
+# (pending, younger than pendingReleaseMinutes): then the run hands over. Nothing is released against a hub that
+# cannot be read (the watch then waits for it)
+- name: Set values changed flag
+  vars:
+    _cb_st: "{{ (_po_now.resources | default([{}], true) | first).status | default({}, true) }}"
+    # an installation recorded as running: stage Installing or Finishing, or a cluster from before installations were
+    # recorded whose installation started and did not end (po_legacy_started)
+    _cb_running: >-
+      {{ (po_cd_exists | bool) and ((po_adopted | default(false) | bool)
+         or ((_cb_st.install | default({}, true)).stage | default('')) in ['Installing', 'Finishing']
+         or (po_legacy_started | default(false) | bool)) }}
+    # a cluster recorded as installed whose build the hub does not hold: never a release under its name
+    _cb_record_missing: >-
+      {{ not (po_cd_exists | bool) and not (po_hub_unreadable | default(false) | bool)
+         and ((_cb_st.clusterInstalled | default(false) | bool)
+              or ((_cb_st.install | default({}, true)).stage | default('')) in ['Finishing', 'Installed']) }}
+    # a cluster from before installations were recorded, started and not installed, whose build the hub does not
+    # hold: its release is made again only when someone asks (a Retry), never by a periodic run
+    _cb_legacy_waits: >-
+      {{ (po_legacy_started | default(false) | bool) and not (po_cd_exists | bool)
+         and not (po_hub_unreadable | default(false) | bool)
+         and not (((event_payload.reason | default('', true)) if (event_payload is defined and event_payload is mapping)
+                   else '') | string is search('ReconcileRequested$')) }}
+  ansible.builtin.set_fact:
+    cb_record_missing: "{{ _cb_record_missing | bool }}"
+    cb_legacy_waits: "{{ _cb_legacy_waits | bool }}"
     cb_values_changed: >-
-      {{ not (cb_helm_release_exists | bool) or
-         (cb_helm_release_failed | bool) or
-         (values_diff_result.stdout | default('true') | trim == 'true') }}
+      {{ not (po_hub_unreadable | default(false) | bool) and not (_cb_record_missing | bool)
+         and not (_cb_legacy_waits | bool) and
+         (not (cb_helm_release_exists | bool) or not (po_cd_exists | bool) or
+          (not (_cb_running | bool) and
+           ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true')))) }}
+    cb_release_young: >-
+      {{ not (po_cd_exists | bool) and (cb_helm_release_exists | bool) and not (_cb_record_missing | bool)
+         and not (_cb_legacy_waits | bool)
+         and ((helm_release_status.stdout | default('{}', true) | from_json).info | default({}, true)
+              | hybridsovereign.shc.shc_install_release_young(platformopenshift_install.pendingReleaseMinutes | int)) }}
+
+- name: Fail when an installed cluster's build is missing on the hub
+  ansible.builtin.fail:
+    msg: >-
+      The hub holds no record of the build of installed cluster {{ ansible_operator_meta.name }}; nothing was released.
+      The platform team has to restore the record.
+  when: cb_record_missing | bool
+
+- name: Hand over a cluster from before installations were recorded whose build is gone
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub holds no build of this cluster, whose installation started before installations were recorded; a Retry makes its release again
+  when: cb_legacy_waits | bool
+
+# the hub could not be read (after a few tries): the run ends and completes its event; the next period goes on
+- name: Hand over when the hub cannot be read
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub could not be read; the next run makes the release
+  when: po_hub_unreadable | default(false) | bool
+
+- name: An older job is still making the release
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub's release of the build is still being made; the installation is starting
+  when: cb_release_young | bool
+
+# an installation recorded as running whose release is made again (no ClusterDeployment): it starts anew, and its
+# time (the deadline included) counts from now
+- name: Record the new start of an installation made again
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      install:
+        startedAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        attempt: null
+        lastFailure: null
+  when:
+    - cb_values_changed | bool
+    - not (po_cd_exists | bool)
+    - >-
+      ((((_po_now.resources | default([{}], true) | first).status | default({}, true)).install
+        | default({}, true)).stage | default('')) == 'Installing'
+
+# the object may have been deleted, replaced or given a newer request since the job's last status write
+- name: Check right before the release that the object is still this job's
+  ansible.builtin.include_tasks: install_same_object.yml
+  vars:
+    # the spec this job read is the one it installs
+    iso_generation: "{{ platformopenshift_generation }}"
 
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
@@ -343,6 +484,15 @@
   register: helm_deploy_result
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
+  failed_when: false
+  # one more try after a passing failure (a hub admission timeout, another release operation finishing)
+  until: (helm_deploy_result.rc | default(0) | int) == 0
+  retries: 1
+  delay: 30
+
+- name: A failed release of the build
+  ansible.builtin.include_tasks: install_release_failed.yml
+  when: (helm_deploy_result.rc | default(0) | int) != 0
 
 - name: Clean up temp values and registry files
   ansible.builtin.file:
@@ -353,28 +503,23 @@
     - "/tmp/{{ cb_app_name }}-registry.json"
   changed_when: false
 
-- name: Monitor cluster deployment and push secrets
+# the watch ends the job unless the cluster is installed (install_observe.yml)
+- name: Watch the installation
+  ansible.builtin.include_tasks: install_observe.yml
+  vars:
+    io_network_path: "{{ cb_platform_path | bool }}"
+    io_tenant_values:
+      controlPlane: "{{ cb_controller_flavor }}"
+      compute: "{{ cb_worker_flavor }}"
+      # the image is named to the tenant only when the cluster's spec names it (an installation default is the
+      # platform's)
+      image: "{{ (platform_spec.openstack | default({}, true)).glanceImageOverride | default('', true) }}"
+
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
+
+- name: Read the installed cluster and push its secrets
   ansible.builtin.include_tasks: openstack_clusterbuild_monitor.yml
-
-# DESIGN cnet §4.5: on a hybrid network an install the hub never sees complete is most likely a network cause; say so
-- name: Name the network causes of an install the platform could not follow
-  ansible.builtin.set_fact:
-    po_fail_reason: EDAFailed
-  when:
-    - cb_platform_path | bool
-    - not (cb_hive_complete | default(false) | bool)
-    - cd_info is failed
-
-- name: Fail the build of a cluster on a hybrid network that did not install
-  ansible.builtin.fail:
-    msg: >-
-      The platform could not reach the cluster at {{ cb_api_vip }}. Clusters on a network need the platform's
-      connection to the network and a site that advertises floating IPs; the platform team can check both
-      (documentation: Platform access).
-  when:
-    - cb_platform_path | bool
-    - not (cb_hive_complete | default(false) | bool)
-    - cd_info is failed
 
 - name: The cluster router's gateway address joins the cluster's prefixes
   ansible.builtin.include_tasks: router_gateway.yml

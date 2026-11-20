@@ -179,7 +179,7 @@
       ansible.builtin.assert:
         that:
           - _cb_imageset.resources | length > 0
-        fail_msg: "ClusterImageSet {{ cb_image_set }} does not exist on central"
+        fail_msg: "The release image set {{ cb_image_set }} does not exist on the hub."
 
     - name: Manifests directory
       ansible.builtin.file:
@@ -190,6 +190,7 @@
     - name: The account's OIDC provider, the operators' roles and their credentials manifests
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
       vars:
+        shc_step: "Prepare the cluster's identity on AWS"
         aws_helper: shc_aws_cluster.py
         aws_config: "{{ cb_aws_cfg }}"
         aws_args: [sts-up, --cluster, "{{ cb_app_name }}", --issuer, "{{ cb_issuer }}",

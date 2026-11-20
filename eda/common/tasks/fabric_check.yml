@@ -17,7 +17,19 @@
       {{ (_fab_check.stdout | from_json) if (_fab_check.stdout | default('') | trim).startswith('{')
          else {'error': (_fab_check.stderr | default('') | trim)[-600:]} }}
 
+# With shc_step set (the cluster roles set it), the failure is the platform's sentence for the step and the helper's
+# text goes to the job's log only.
+- name: "Fabric {{ fab_check.action }}: the helper's answer, for the job's log"
+  ansible.builtin.debug:
+    msg: "Fabric {{ fab_check.action }} failed: {{ fab_check_result.error | default('rc ' ~ _fab_check.rc) }}"
+  when: (_fab_check.rc != 0 or 'error' in fab_check_result) and shc_step is defined
+
+- name: "Fabric {{ fab_check.action }}: fail with the step's sentence"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: (_fab_check.rc != 0 or 'error' in fab_check_result) and shc_step is defined
+
 - name: "Fabric {{ fab_check.action }}: fail when the helper failed"
   ansible.builtin.fail:
     msg: "Fabric {{ fab_check.action }} failed: {{ fab_check_result.error | default('rc ' ~ _fab_check.rc) }}"
-  when: _fab_check.rc != 0 or 'error' in fab_check_result
+  when: (_fab_check.rc != 0 or 'error' in fab_check_result) and shc_step is not defined

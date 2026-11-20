@@ -1,6 +1,9 @@
 ---
 # shc (design/P8-PLAN.md §12): facts, the cluster's STS preparation (signing key, published issuer, IAM roles and
 # credentials manifests), the Hive build on central, then its outcome.
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
+
 - name: Include clusterbuild fact derivation
   ansible.builtin.include_tasks: aws_clusterbuild_facts.yml
 
@@ -22,6 +25,9 @@
 
 - name: Include the cluster's STS preparation
   ansible.builtin.include_tasks: aws_clusterbuild_sts.yml
+
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
 
 - name: Include clusterbuild deploy
   ansible.builtin.include_tasks: aws_clusterbuild_deploy.yml

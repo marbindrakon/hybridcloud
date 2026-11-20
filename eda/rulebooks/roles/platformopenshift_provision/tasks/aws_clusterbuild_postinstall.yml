@@ -1,6 +1,19 @@
 ---
 # shc (design/P8-PLAN.md §12): Hive's outcome; the admin kubeconfig and password to Vault (PushSecrets in the build's
 # namespace). The cluster's DNS records live in the environment's zone, written and removed by the installer.
+# the watch ends the job unless the cluster is installed (install_observe.yml)
+- name: Watch the installation
+  ansible.builtin.include_tasks: install_observe.yml
+  vars:
+    io_network_path: >-
+      {{ (cb_network | default(aws_network | default(gcp_network | default('', true), true), true)) | length > 0 }}
+    io_tenant_values:
+      controlPlane: "{{ cb_controller_flavor | default('', true) }}"
+      compute: "{{ cb_worker_flavor | default('', true) }}"
+
+- name: Write the check time
+  ansible.builtin.include_tasks: install_check_time.yml
+
 - name: Check ClusterDeployment installation status
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -11,38 +24,70 @@
     name: "{{ cb_cluster_name }}"
     namespace: "{{ cb_cluster_name }}"
   register: cd_info
-  until: >-
-    cd_info.resources | default([]) | length > 0
-    and (
-      cd_info.resources[0].spec.installed | default(false) | bool
-      or (
-        cd_info.resources[0].status.conditions | default([])
-        | selectattr('type', 'equalto', 'Provisioned')
-        | map(attribute='status') | first | default('') | trim == 'True'
-      )
-    )
-  retries: "{{ platformopenshift_hive_poll_retries | default(120) }}"
-  delay: "{{ platformopenshift_hive_poll_delay_seconds | default(60) }}"
-  ignore_errors: true
 
+# the names published while it installed: a short look at the job that publishes them; when it has not published both,
+# one more try now with a short wait (the cluster's own load balancers exist once it is installed). Names that cannot
+# be published (the cluster's own resources not found) are said in the job's result and in the status message; the
+# next periodic run tries again. Never a long wait in one run.
 - name: The cluster's published names (Internal)
   ansible.builtin.async_status:
     jid: "{{ cb_dns_alias_job.ansible_job_id }}"
   register: _cb_dns_alias
   until: _cb_dns_alias.finished
-  retries: 60
-  delay: 30
+  retries: 4
+  delay: 15
   failed_when: false
   when: cb_dns_alias_job.ansible_job_id is defined
 
+- name: The names the job published
+  ansible.builtin.set_fact:
+    _cb_alias_result: >-
+      {{ ((_cb_dns_alias.stdout | default('', true) | trim) or '{}') | from_json
+         if (_cb_dns_alias.finished | default(false) | bool) else {} }}
+  when: cb_dns_alias_job.ansible_job_id is defined
+
+- name: Publish the cluster's names now (Internal)
+  ansible.builtin.command:
+    argv: "{{ cb_dns_alias_cmd[:-1] + ['120'] }}"
+  register: _cb_dns_alias_now
+  changed_when: false
+  failed_when: false
+  when:
+    - cb_dns_alias_job.ansible_job_id is defined
+    - not ((_cb_alias_result.result | default({}, true)).complete | default(false) | bool)
+
+- name: Whether the cluster's names are published
+  ansible.builtin.set_fact:
+    _cb_alias_result: >-
+      {{ (((_cb_dns_alias_now.stdout | default('', true) | trim).splitlines() | last | default('{}', true)) | from_json)
+         if (_cb_dns_alias_now.stdout | default('', true) | trim).startswith('{') else _cb_alias_result }}
+  when: _cb_dns_alias_now.stdout is defined
+
 - name: Report the published names
   ansible.builtin.debug:
-    msg: "{{ (_cb_dns_alias.stdout | default('{}', true)) | from_json }}"
+    msg: >-
+      {{ _cb_alias_result | default({}, true) }}{{ '' if cb_names_published | bool else
+         " -- the cluster's names are not published yet: its own load balancers were not found; the next run tries
+         again" }}
+  vars:
+    cb_names_published: "{{ (_cb_alias_result.result | default({}, true)).complete | default(false) | bool }}"
   when: cb_dns_alias_job.ansible_job_id is defined
+
+- name: Say in the status whether the names are published
+  ansible.builtin.set_fact:
+    cb_names_note: >-
+      {{ '' if (cb_dns_alias_job.ansible_job_id is not defined
+                or ((_cb_alias_result | default({}, true)).result | default({}, true)).complete | default(false) | bool)
+         else "; its names are not published yet, the platform tries again at its next periodic run" }}
 
 - name: Set cluster installed flag
   ansible.builtin.set_fact:
-    cb_cluster_installed: "{{ cd_info.resources | default([]) | length > 0 and (cd_info.resources[0].spec.installed | default(false) | bool) }}"
+    # installed as the installation watch reads it: spec.installed, or the Provisioned condition True
+    cb_cluster_installed: >-
+      {{ cd_info.resources | default([]) | length > 0
+         and (cd_info.resources[0].spec.installed | default(false) | bool
+              or (cd_info.resources[0].status.conditions | default([]) | selectattr('type', 'equalto', 'Provisioned')
+                  | map(attribute='status') | first | default('') | string | trim) == 'True') }}
     cb_admin_kubeconfig_secret: "{{ (cd_info.resources[0].spec.clusterMetadata.adminKubeconfigSecretRef.name | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
     cb_admin_password_secret: "{{ (cd_info.resources[0].spec.clusterMetadata.adminPasswordSecretRef.name | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
     cb_console_url: "{{ (cd_info.resources[0].status.webConsoleURL | default('')) if (cd_info.resources | default([]) | length > 0) else '' }}"
@@ -52,6 +97,7 @@
       {{ (cd_info.resources[0].status.conditions | default([])
           | selectattr('type', 'equalto', 'Provisioned')
           | map(attribute='reason') | first | default('Unknown'))
+         | regex_replace('(?s)^(?![A-Za-z]{2,40}$).*$', 'Unknown')
          if (cd_info.resources | default([]) | length > 0) else 'Unknown' }}
     cb_provisioned_status: >-
       {{ (cd_info.resources[0].status.conditions | default([])
@@ -123,6 +169,9 @@
             certPolicyController: {enabled: false}
             policyController: {enabled: true}
             searchCollector: {enabled: true}
+
+    - name: Write the check time
+      ansible.builtin.include_tasks: install_check_time.yml
 
     - name: Wait for the cluster to be available in the hub
       kubernetes.core.k8s_info:

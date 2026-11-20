@@ -28,12 +28,15 @@ import { RefreshFailedAlert } from './ResourceListTable';
 import { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind } from './PlacementTabs';
 import { WayInPanel } from './WayInPanel';
 import { DeleteConfirmModal } from './DeleteConfirmModal';
+import { RetryInstallationModal } from './RetryInstallationModal';
 import { GatedButton } from '../access/GatedButton';
 import { ForbiddenState } from '../access/ForbiddenState';
 import { errorText } from '../access/errorText';
 import { useTranslation } from '../i18n';
 import { displayText, fieldLabel, inText, kindTerm } from '../i18n/vocabulary';
 import { condStatus, phaseOf, requestMessage, retryQueued } from '../status/phase';
+import { detailPollMs, isInstallStopped, pageReadLine, retryLabelKey, sentMark, type SentMark } from '../status/install';
+import { IN_FLIGHT_POLL_MS } from '../hooks/fetchState';
 import { formatRelativeTime } from '../list/listColumns';
 import {
   COMMON_STATUS_KEYS,
@@ -240,7 +243,8 @@ function SpecEditor(props: {
   kind: HybridSovereignKind;
   namespace: string;
   item: K8sResource;
-  onSaved: () => void;
+  /** installing: the save asked for a new installation (the page follows the object closely for a while) */
+  onSaved: (installing?: boolean) => void;
   readOnly?: boolean;
   audience?: 'admin' | 'tenant';
 }): React.ReactElement {
@@ -272,15 +276,26 @@ export function ResourceDetail({
   const [retrySent, setRetrySent] = useState(false);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  /** Retry installation asks first: it starts a new installation of a stopped cluster. */
+  const [confirmRetry, setConfirmRetry] = useState(false);
   /** A delete was requested here: keep polling until the object is gone (UX-061). */
   const [deleteRequested, setDeleteRequested] = useState(false);
   const kindLabel = kindTerm(t, kind);
 
+  // The page follows its object (detailPollMs): fast while it is not settled, after a Retry or an installing Save
+  // sent from here until the installation moved on, slowly otherwise. The interval is decided from the object last
+  // read; a clock tick keeps the decision and the page's own read time current.
+  const [pollMs, setPollMs] = useState(IN_FLIGHT_POLL_MS);
+  const [sent, setSent] = useState<SentMark | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  useEffect(() => {
+    const id = setInterval(() => setNow(Date.now()), 5000);
+    return () => clearInterval(id);
+  }, []);
   const { resource, loading, error, refreshError, loadedAt, refresh } = useK8sResource<K8sResource>(kind, name, {
     namespace,
-    pollWhileInFlight: true,
     // After a delete request the object may not show deletionTimestamp yet: poll fast regardless.
-    pollIntervalMs: deleteRequested ? 5000 : undefined,
+    pollIntervalMs: deleteRequested ? 5000 : pollMs,
   });
 
   // The object went away after a delete requested from this page: say so and go to the parent.
@@ -321,12 +336,20 @@ export function ResourceDetail({
   }, [resource, shown, namespace, kind, t]);
 
   const queued = retrySent || (resource ? retryQueued(resource) : false);
+  // a request not handled yet is followed fast for a while from when this page first saw it
+  const isQueued = !!resource && retryQueued(resource);
+  const [queuedSince, setQueuedSince] = useState<number | null>(null);
+  useEffect(() => setQueuedSince((q) => (isQueued ? (q ?? Date.now()) : null)), [isQueued]);
+  const nextPollMs = detailPollMs(resource, { sent, now, answered: !!error, queuedSince });
+  useEffect(() => setPollMs(nextPollMs), [nextPollMs]);
+  const readLine = kind === 'PlatformOpenshift' && resource ? pageReadLine(t, loadedAt, now) : undefined;
   const handleRetry = async () => {
     if (retrying || queued || !namespace || !name) return;
     setRetrying(true);
     setActionError(null);
     try {
       await forceReconcile(kind, name, namespace);
+      setSent(sentMark(resource, Date.now()));
       setRetrySent(true);
       setTimeout(() => setRetrySent(false), 10000);
       refresh();
@@ -387,6 +410,9 @@ export function ResourceDetail({
   const since = resource.status?.phaseSince;
   const sinceRel = since ? formatRelativeTime(since) : undefined;
   const isDeleting = phase === 'Deleting' || deleteRequested;
+  // a cluster whose installation stopped: the button starts a new installation, after a confirmation
+  const retryInstall = kind === 'PlatformOpenshift' && isInstallStopped(resource);
+  const retryLabel = kind === 'PlatformOpenshift' ? t(retryLabelKey(resource)) : t('detail.retryNow');
 
   return (
     <div className="sc-detail">
@@ -413,9 +439,9 @@ export function ResourceDetail({
                 icon={retrying ? <Spinner size="md" /> : <RedoIcon />}
                 enabled={!retrying && !queued}
                 disabledReason={queued ? t('detail.retryQueued') : undefined}
-                onClick={() => void handleRetry()}
+                onClick={() => (retryInstall ? setConfirmRetry(true) : void handleRetry())}
               >
-                {queued ? t('detail.retryQueued') : t('detail.retryNow')}
+                {queued ? t('detail.retryQueued') : retryLabel}
               </GatedButton>
             )}
             <Button variant="secondary" icon={<SyncAltIcon />} onClick={refresh}>
@@ -453,6 +479,7 @@ export function ResourceDetail({
       </div>
 
       <StatusCallout kind={kind} item={resource} />
+      {readLine && <p className="sc-text-muted sc-mb">{readLine}</p>}
 
       {refreshError && <RefreshFailedAlert error={refreshError} loadedAt={loadedAt} onRetry={refresh} />}
 
@@ -495,7 +522,10 @@ export function ResourceDetail({
               kind={kind}
               namespace={namespace}
               item={resource}
-              onSaved={refresh}
+              onSaved={(installing?: boolean) => {
+                if (installing) setSent(sentMark(resource, Date.now()));
+                refresh();
+              }}
               readOnly={readOnly || isDeleting}
               audience={audience}
             />
@@ -512,6 +542,17 @@ export function ResourceDetail({
           </div>
         </Tab>
       </Tabs>
+
+      <RetryInstallationModal
+        isOpen={confirmRetry}
+        spec={resource.spec}
+        busy={retrying}
+        onConfirm={() => {
+          setConfirmRetry(false);
+          void handleRetry();
+        }}
+        onCancel={() => setConfirmRetry(false)}
+      />
 
       <DeleteConfirmModal
         isOpen={confirmDelete}

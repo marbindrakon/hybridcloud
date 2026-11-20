@@ -31,8 +31,8 @@
     cb_pull_secret_vault: "{{ default_pull_secret_vault_path }}"
     cb_pull_secret_vault_property: "{{ default_pull_secret_vault_property }}"
     cb_ssh_key_vault: "{{ default_ssh_key_vault_path }}"
-    cb_issuer_base: "{{ (gcp_real.clusterIssuer | default({})).baseURL | default('https://oidc.shc.signal9.gg') }}"
-    cb_issuer_namespace: "{{ (gcp_real.clusterIssuer | default({})).namespace | default('shc-oidc') }}"
+    cb_issuer_base: "{{ (gcp_real.clusterIssuer | default({}, true)).baseURL | default('', true) | string | trim }}"
+    cb_issuer_namespace: "{{ (gcp_real.clusterIssuer | default({}, true)).namespace | default('', true) | string | trim }}"
     cb_member_sa: "{{ gcp_real.memberServiceAccount | default('shc-automation') }}"
     # the machine network: the placement's subnet (on a network) or the cluster's own (preflight_own_network.yml)
     cb_machine_cidr: ""
@@ -77,6 +77,16 @@
       - "{{ cb_vault_cluster_path }}/admin-kubeconfig"
       - "{{ cb_vault_cluster_path }}/admin-password"
 
+# the issuer of the cluster's service account tokens is the installation's: no default
+- name: Require the cluster issuer settings
+  ansible.builtin.assert:
+    that:
+      - cb_issuer_base is match('https://[^/]+')
+      - cb_issuer_namespace | length > 0
+    fail_msg: >-
+      Set clusterIssuer.baseURL (an https address) and clusterIssuer.namespace in the Google Cloud realization (GCP_REALIZATION): the
+      installation setting is missing.
+
 - name: Refuse a build name that can't serve as namespace, issuer path and pool id
   ansible.builtin.assert:
     that:
@@ -84,13 +94,13 @@
       - cb_app_name | length <= 40
       - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
     fail_msg: >-
-      Build name {{ cb_app_name }} (shc-gcp-<entity>-<name>-<digest>) must be at most 40 characters of [a-z0-9-]; shorten the
-      PlatformOpenshift name.
+      The cluster's build name {{ cb_app_name }} must be at most 40 characters of a-z, 0-9 and hyphens, and the
+      cluster's name a DNS label; create the cluster with a shorter name.
 
 - name: Fail without a cluster-build chart
   ansible.builtin.assert:
     that:
       - (mce_cluster_build_chart | trim) is match('oci://[^/]+/')
     fail_msg: >-
-      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart
-      (got '{{ mce_cluster_build_chart | trim }}').
+      Set platformopenshift_defaults.mceClusterBuildChart (or env OCI_HOST) for the mce-cluster-build chart: the
+      setting is missing or is not an OCI address.

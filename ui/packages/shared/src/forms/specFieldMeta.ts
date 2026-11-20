@@ -205,8 +205,8 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'openstack.network', labelKey: 'clusterNet.network', widget: 'text', immutable: true, omitWhenEmpty: true, visibleWhen: poOpenstack },
       { path: 'openstack.externalNetwork', labelKey: 'fields.externalNetwork', widget: 'text', immutable: true, omitWhenEmpty: true, visibleWhen: poOpenstack },
       { path: 'aws.environment', labelKey: 'fields.cloudAwsEnv', widget: 'text', immutable: true, visibleWhen: poAws },
-      { path: 'aws.region', labelKey: 'fields.region', widget: 'text', visibleWhen: poAws },
-      { path: 'aws.network', labelKey: 'fields.network', widget: 'text', visibleWhen: poAws, omitWhenEmpty: true },
+      { path: 'aws.region', labelKey: 'fields.region', widget: 'text', immutable: true, visibleWhen: poAws },
+      { path: 'aws.network', labelKey: 'fields.network', widget: 'text', immutable: true, visibleWhen: poAws, omitWhenEmpty: true },
       {
         path: 'aws.publish',
         labelKey: 'fields.publish',
@@ -232,8 +232,8 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
       { path: 'aws.controllerFlavor', labelKey: 'fields.controllerFlavor', widget: 'text', visibleWhen: poAws },
       { path: 'aws.workerFlavor', labelKey: 'fields.workerFlavor', widget: 'text', visibleWhen: poAws },
       { path: 'gcp.environment', labelKey: 'fields.cloudGcpEnv', widget: 'text', immutable: true, visibleWhen: poGcp },
-      { path: 'gcp.region', labelKey: 'fields.region', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
-      { path: 'gcp.network', labelKey: 'fields.network', widget: 'text', visibleWhen: poGcp, omitWhenEmpty: true },
+      { path: 'gcp.region', labelKey: 'fields.region', widget: 'text', immutable: true, visibleWhen: poGcp, omitWhenEmpty: true },
+      { path: 'gcp.network', labelKey: 'fields.network', widget: 'text', immutable: true, visibleWhen: poGcp, omitWhenEmpty: true },
       {
         path: 'gcp.publish',
         labelKey: 'fields.publish',

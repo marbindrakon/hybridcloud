@@ -16,12 +16,14 @@
         - name: Load the site account
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
           vars:
+            shc_step: "Read the cluster's router on the site"
             os_account_vault_path: "{{ cb_fip_account }}"
             os_account_tag: "po-router-{{ cb_app_name }}"
 
         - name: Read the cluster's router
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
           vars:
+            shc_step: "Read the cluster's router on the site"
             os_call_no_log: false
             os_request:
               action: project-routers
@@ -37,6 +39,7 @@
     - name: The router's gateway address
       ansible.builtin.include_tasks: po_call.yml
       vars:
+        shc_step: "Read the cluster's router on the site"
         po_request:
           action: router-gateway
           tag: "openshiftClusterID={{ rg_infra_id }}"
@@ -71,11 +74,12 @@
         - not (pp_outcome.done | bool)
         - not (pp_outcome.wait | bool)
   rescue:
+    # the platform's sentence of the failed step (shc_failure_message), never the task's own failure text
     - name: Keep why the gateway address could not be added
       ansible.builtin.set_fact:
         rg_error: >-
-          {{ (ansible_failed_result.msg | default('', true)
-              or ('task ' ~ (ansible_failed_task.name | default('?', true)) ~ ' failed')) | string | truncate(600, true, '') }}
+          {{ ansible_failed_task | default({}, true)
+               | hybridsovereign.shc.shc_failure_message(ansible_failed_result | default({}, true)) }}
 
     # a failure after the record: the floating IPs stay the cluster's prefixes and the gateway goes (best effort; the
     # condition below says it was not added either way)
@@ -103,8 +107,7 @@
     _waits: "{{ not (_failed | bool) and rg_address | length > 0 and (pp_outcome.wait | default(false) | bool) }}"
     _refused: "{{ not (_failed | bool) and rg_address | length > 0 and not (_carried | bool) and not (_waits | bool) }}"
     _cause: >-
-      {{ ('it could not be read: ' ~ rg_error) if _failed | bool
-         else ((pp_outcome.message | default('', true)) if _refused | bool
+      {{ ((pp_outcome.message | default('', true)) if _refused | bool
          else (rg_note if rg_note | length > 0 else 'no gateway address')) }}
     _reason: >-
       {{ 'AsExpected' if _carried | bool
@@ -116,9 +119,12 @@
            ~ "the cluster's own calls to the hub take the platform's path") if _carried | bool
           else (('Gateway ' ~ rg_address ~ ' is recorded and not carried yet: ' ~ (pp_outcome.message | default('', true)))
                 if _waits | bool
+          else (("The cluster is built and works, but the address of its router's gateway could not be read, so it "
+                 ~ "was not added to its addresses and the cluster's own calls to the hub leave by the network's own "
+                 ~ "path. " ~ rg_error) if _failed | bool
           else ("The cluster is built and works, but the address of its router's gateway was not added to its "
                 ~ 'addresses (' ~ _cause | trim ~ "): the cluster's own calls to the hub are not admitted on the "
-                ~ "platform's path and leave by the network's own path"))) | string | truncate(1000, true, '') }}
+                ~ "platform's path and leave by the network's own path")))) | string | truncate(1000, true, '') }}
   # one expression: the status stays the string "True"/"False" (on ansible-core 2.16 a template that renders True alone
   # becomes a boolean)
   ansible.builtin.set_fact:

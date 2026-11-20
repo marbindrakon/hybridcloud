@@ -425,6 +425,10 @@ controller_templates:
     instance_groups: "{{ shc_cloud_job_instance_groups }}"
     # shc: clusters build side by side (one job per PlatformOpenshift; the rulebook runs in parallel)
     allow_simultaneous: true
+    # a job that hangs is ended here (150 minutes, the operator's in-flight time for the kind,
+    # operator/roles/_common/tasks/skip_if_event_in_flight.yml); a job watches an installation for at most the
+    # role's watchWindowMinutes (120) and then hands over to the next run
+    timeout: 9000
     credentials:
       - sovereign-vault-admin-credential
   - name: platformopenshift-teardown

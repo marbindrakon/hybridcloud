@@ -35,9 +35,12 @@ where the platform wrote one. `oc explain networkplacement.status` describes eac
 
 ## Retry now
 
-The platform retries failed work by itself. When you have fixed what a failure named (or want an
-object processed again at once), use **Retry now** on the object's page. While the request is
-open the page shows **Retry queued**.
+The platform retries failed work by itself, except an OpenShift cluster installation that stopped
+(see [When a cluster installation stops](#when-a-cluster-installation-stops)) and a deletion that
+failed many times: those wait for you. When you have fixed what a failure named (or want an object
+processed again at once), use **Retry now** on the object's page. While the request is open the
+page shows **Retry queued**. On an OpenShift cluster whose installation stopped, the button reads
+**Retry installation** and starts the installation again.
 
 On the command line, write the current time into the annotation
 `ansible.sdk.operatorframework.io/reconcileNow`:
@@ -52,6 +55,58 @@ Every new value is a new request. The platform records the value it handled in
 while the two differ. Always write a new value (the current time): setting the same value again
 does nothing. The older form `reconcileNow="true"` still works; the platform removes that
 annotation once it has handled it.
+
+## When a cluster installation stops
+
+An OpenShift cluster shows how its installation goes in `status.install`: the **stage**
+(`Preparing`, `Installing`, `Finishing`, `Installed`; `CleaningUp` and `Stopped` below), the
+installer's **attempt** out of the attempts it makes (`attempt`, `attemptsLimit`), when the
+installation started (`startedAt`) and when the platform last checked it (`observedAt`). When an
+attempt fails while the installer still has attempts left, the cluster stays **Creating** with reason
+`InstallRetrying`, and `status.install.lastFailure` says what failed, for example *Attempt 1 of 3
+failed: the site reports too little quota: Cores (72 needed, limit 64).* You can act on it at
+once.
+
+When the installer stops (after its last attempt, or earlier for a cause it does not retry), the
+installation **stops**: the cluster is **Failed**, its `Stalled` condition is True with the cause
+as reason (`QuotaExceeded`, `InstallSettingRefused`, `InstallCredentialsRefused`,
+`InstallNotStarted` or `InstallFailed`), and the message says what failed. Nothing reinstalls by
+itself: the cluster stays Failed until you act. The messages hold only what the platform can read
+reliably (resource names and numbers, the flavor or instance type you set); the platform team can
+read the installer's full log.
+
+Clusters that install at the same time in one environment share its quota. An installation that
+starts while another one is building can pass its own quota check and still fail part-way, when the
+other one takes what it needed (security group rules are a common case); the page then shows the
+stop and its cause, for example `QuotaExceeded` with the resource that ran out. Install one cluster
+at a time in an environment with a small quota, or have the quota raised.
+
+When the installation has not finished in the time the platform allows (reason `InstallOverdue`),
+the cluster is shown **Failed** too, but the installer may still be working: the platform keeps
+checking it. If it finishes, the cluster becomes ready; if the installer stops, the cluster shows
+the stop with its cause and you can retry it. You can delete the cluster at any time.
+
+What you can do:
+
+- **Retry installation** (the button, or Retry now on the command line). It starts a new
+  installation with the settings the cluster has now: what the stopped installation left on the
+  site is removed first (stage `CleaningUp`), then the installer starts again (`run` counts the
+  installations). The cluster keeps its name, its addresses and its DNS names.
+- **Change a setting and save.** On a stopped cluster you can change the node counts, the
+  flavors or instance types, the release and the image; saving starts a new installation with
+  them, the same way. Change what the reason names, for example fewer or smaller nodes for
+  `QuotaExceeded`, or have the environment's quota raised. A change of anything else (access
+  groups, viewers, deletion protection) is applied as far as it can be without an installation
+  and starts nothing.
+- **Delete the cluster and create it again** for what cannot change on a cluster: its
+  environment type, its environment, its region, its network and its address ranges.
+
+While a cluster is being installed, and once it is installed, the platform refuses a change of
+those installation settings ("The cluster is being installed or is installed. ..."). On AWS and
+Google Cloud the worker count is the exception once the cluster is installed: a change scales the
+cluster's workers (it is refused only while the cluster is being installed). Access groups and
+deletion protection can always change. A retry never touches an installation that is running or a
+cluster that is installed.
 
 ## Deleting
 
@@ -105,6 +160,10 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `Deleting` | Being deleted. | Nobody: it continues by itself |
 | `DeletionRequested` | Being deleted. | Nobody: it continues by itself |
 | `InProgress` | Applying the change. | Nobody: it continues by itself |
+| `InstallCleanup` | A stopped installation is being removed before the new one starts. | Nobody: it continues by itself |
+| `InstallFinishing` | The cluster is installed; the platform is connecting it. | Nobody: it continues by itself |
+| `InstallRetrying` | An installation attempt failed; the installer tries again while attempts are left. | Nobody: it continues by itself |
+| `Installing` | The cluster is being installed. | Nobody: it continues by itself |
 | `JobRunning` | Applying the change. | Nobody: it continues by itself |
 | `NotReady` | Not ready yet. | Nobody: it continues by itself |
 | `Published` | Queued; the change starts shortly. | Nobody: it continues by itself |
@@ -129,6 +188,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `WaitingForCluster` | Waiting for a cluster: name the OpenShift cluster to deploy onto. | You (the tenant) |
 | `WaitingForDependencies` | Waiting for the objects this one depends on. | Nobody: it continues by itself |
 | `WaitingForDependents` | Waiting for the objects that depend on this one to be deleted. | Nobody: it continues by itself |
+| `WaitingForEarlierCluster` | An earlier cluster of this name is still being removed; the installation starts when that is done. | Nobody: it continues by itself |
 | `WaitingForFabric` | Waiting for the network fabric to be ready. | Nobody: it continues by itself |
 | `WaitingForGateway` | Waiting for the site connection to be ready. | Nobody: it continues by itself |
 | `WaitingForGroup` | An access group has no group in the sign-in directory yet. | Nobody: it continues by itself |
@@ -165,6 +225,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `AttachmentNotSupported` | This attachment is not supported on the chosen site. | You (the tenant) |
 | `BearerNotFound` | The provider edge has no bearer of that name. Ask the platform team for the bearer names. | You (the tenant) |
 | `BuildOwnerMismatch` | The cluster's build on the platform is marked for another copy of this cluster (a restored copy). The platform team checks it. | The platform team |
+| `BuildRecordMissing` | The platform's record of this cluster's build is missing. Your cluster was not touched; the platform team has to restore the record. | The platform team |
 | `CeKindNotAccepted` | The bearer does not accept this kind of router. Choose another bearer or ask the platform team. | You (the tenant) |
 | `CircuitNotDeployed` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `ClaimMissing` | Members of the granted access groups cannot sign in yet. The platform team is looking at it. | The platform team |
@@ -175,8 +236,11 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `CredentialSecretMissing` | The cluster's credential secret is missing from the platform's secret store. Nothing was changed. The platform team acts. | The platform team |
 | `CredentialsInvalid` | The site credentials were refused. The platform team is looking at it. | The platform team |
 | `CredentialsMissing` | The site credentials are missing. The platform team is looking at it. | The platform team |
+| `DefaultFlavorNotFound` | The environment lacks the platform's default flavor for cluster nodes. Name a flavor it offers, or ask the platform team. | The platform team |
+| `DefaultImageNotFound` | The environment lacks the image the platform uses for cluster nodes by default. Name an image it offers, or ask the platform team. | The platform team |
 | `DnsProjectNotFound` | The DNS project does not exist. The platform team is looking at it. | The platform team |
 | `EDAFailed` | Could not be completed; see the reason. | The platform team |
+| `EarlierClusterNotRemoved` | An earlier cluster of this name was not removed from the platform in time. The platform team is looking at it. | The platform team |
 | `EntityNotAllowed` | This site is not available to this tenant. | You (the tenant) |
 | `EnvironmentNameTaken` | This environment name is already in use. Choose another name. | You (the tenant) |
 | `ExternalNetworkNotFound` | The site's external network was not found. The platform team is looking at it. | The platform team |
@@ -185,11 +249,19 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `FabricMismatch` | The network and the site belong to different fabrics. | You (the tenant) |
 | `Failed` | Could not be completed; see the reason. | The platform team |
 | `FamilyUnavailable` | This address family or IPv6 option is not offered here. The message says whether the site or the network lacks it. | You (the tenant) |
+| `FlavorNotFound` | A flavor this cluster asks for does not exist in its environment; the message names it. Choose another flavor. | You (the tenant) |
 | `GrantRefused` | The site refused a role for an access group. The platform team is looking at it. | The platform team |
 | `GroupDomainNotFound` | The site has no domain of the declared group domain. The platform team is looking at it. | The platform team |
 | `HubEndpointNotAdmitted` | The platform's connection for clusters on networks is not ready. Ask the platform team. | The platform team |
 | `IPv6ModeInUse` | The network's IPv6 mode can't change while it has placements; remove them or create a new network. | You (the tenant) |
 | `IdentityProviderNotFound` | The site has no identity provider of the declared name. The platform team is looking at it. | The platform team |
+| `ImageNotFound` | The image this cluster asks for does not exist in its environment; the message names it. Choose another image. | You (the tenant) |
+| `InstallCredentialsRefused` | The site refused the installer's credentials. Retry once the platform team has fixed them, or delete the cluster. | The platform team |
+| `InstallFailed` | The installation failed and was stopped. You can retry it; the platform team can see why it failed. | The platform team |
+| `InstallNotStarted` | The installation could not be started on the platform. The message says what happens next. | The platform team |
+| `InstallOverdue` | The installation has not finished in the time allowed. The platform keeps checking it. | The platform team |
+| `InstallRemovalFailed` | The stopped installation could not be removed from the site. The platform team has to look at it. | The platform team |
+| `InstallSettingRefused` | The installer refused a setting of this cluster; the message names it. Change it and retry, or delete the cluster and create it again. | You (the tenant) |
 | `InvalidSecret` | A required credential is not valid. The platform team is looking at it. | The platform team |
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
@@ -223,6 +295,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `ProjectDomainNotFound` | The referenced project or domain does not exist. | You (the tenant) |
 | `ProvisionFailed` | Creating or updating did not complete. The platform team is looking at it. | The platform team |
 | `PublishFailed` | The request could not be queued. The platform team is looking at it. | The platform team |
+| `QuotaExceeded` | The environment's quota is too small for this cluster. Make the cluster smaller or have the quota raised, then retry. | You (the tenant) |
 | `RegionNotSupported` | This region is not supported. | You (the tenant) |
 | `RoleRefused` | The site refused a role for the cluster's user. The platform team is looking at it. | The platform team |
 | `RouterAdvertisementFailed` | The site did not confirm that floating IPs on this network are reachable from outside it. The platform team has to fix this. | The platform team |

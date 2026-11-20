@@ -1,0 +1,35 @@
+---
+# The cluster's static issuer on central (the provision's ConfigMap oidc-static-<build>, labelled with the build's
+# name): found by its exact name and that label in any namespace, so the delete needs no installation setting. None
+# found: said in the job's result (nothing else of the cluster depends on it). Input: po_build_name.
+- name: The cluster's static issuer
+  kubernetes.core.k8s_info:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    api_version: v1
+    kind: ConfigMap
+    field_selectors: ["metadata.name=oidc-static-{{ po_build_name }}"]
+    label_selectors: ["shc.signal9.gg/oidc-name={{ po_build_name }}"]
+  register: _ui_found
+
+- name: Remove it
+  kubernetes.core.k8s:
+    host: "{{ central_api_host }}"
+    api_key: "{{ central_bearer_token }}"
+    validate_certs: false
+    state: absent
+    api_version: v1
+    kind: ConfigMap
+    name: "{{ item.metadata.name }}"
+    namespace: "{{ item.metadata.namespace }}"
+  loop: >-
+    {{ _ui_found.resources | default([], true)
+       | selectattr('metadata.name', 'equalto', 'oidc-static-' ~ po_build_name) | list }}
+  loop_control:
+    label: "{{ item.metadata.namespace }}/{{ item.metadata.name }}"
+
+- name: Say that no issuer was found
+  ansible.builtin.debug:
+    msg: "No static issuer oidc-static-{{ po_build_name }} was found on central; nothing to unpublish."
+  when: (_ui_found.resources | default([], true)) | length == 0

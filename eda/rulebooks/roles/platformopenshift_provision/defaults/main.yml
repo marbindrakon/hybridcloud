@@ -1,4 +1,10 @@
 ---
+# What the platform was doing, in plain words, when a call to a cloud, a site, the hub or a helper fails: the shared
+# call tasks (common/tasks/*_call.yml, openstack_account.yml, fabric_check.yml, central_create.yml) then fail
+# with the platform's sentence for the step and write what was answered to the job's log only. A step sets its
+# own words where it includes them.
+shc_step: Provision the cluster
+shc_step_what: provisioning
 platformopenshift_operator_namespace: sovereign-cloud
 eda_central_work_namespace: sovereign-cloud-jobs
 # Central API for the ACM policy calls in keycloak_oidc.yml / cluster_rbac.yml: the connection the
@@ -31,8 +37,10 @@ platformopenshift_allowed_pull_secret_properties: "{{ platformopenshift_defaults
 default_ocp_image_set: "{{ platformopenshift_defaults.ocpImageSet | default('img4.21.9-x86-64-appsub') }}"
 default_control_plane_count: "{{ platformopenshift_defaults.controlPlaneCount | default(3) }}"
 default_worker_count: "{{ platformopenshift_defaults.workerCount | default(3) }}"
-default_control_plane_flavor: "{{ platformopenshift_defaults.controlPlaneFlavor | default('b1.xlarge') }}"
-default_worker_flavor: "{{ platformopenshift_defaults.workerFlavor | default('b1.large') }}"
+# the flavors of an OpenStack cluster's nodes when its spec names none: no fallback (a site's flavor names are its own);
+# a cluster that needs one that is not set fails with the setting's name (openstack.yml)
+default_control_plane_flavor: "{{ platformopenshift_defaults.controlPlaneFlavor | default('', true) }}"
+default_worker_flavor: "{{ platformopenshift_defaults.workerFlavor | default('', true) }}"
 # Empty: the installer uploads the release's own RHCOS image into the project.
 default_glance_image_override: "{{ platformopenshift_defaults.glanceImage | default('') }}"
 
@@ -62,3 +70,33 @@ platformopenshift_networking: >-
 # service routing domain before it reports WaitingForPlatformAccess (and re-checks on the reconcile period).
 platformopenshift_service_wait_retries: 30
 platformopenshift_service_wait_delay: 20
+
+# The watch of a cluster's installation (platformopenshift_defaults key install; each number has its place here):
+# observeIntervalSeconds  how often the job looks at the installation on the hub
+# watchWindowMinutes      how long one job watches; then it writes "still installing" and the next run watches on
+#                         (below the provision template's time limit, aap-config/controller/job_templates.yml)
+# deadlineMinutes         an installation neither finished nor stopped after this long is shown failed
+#                         (InstallOverdue); each periodic run then checks it once
+# pendingReleaseMinutes   a pending release of a build with no ClusterDeployment younger than this is an older job's
+#                         release being made: a Retry leaves it alone (older: removed like a failed one)
+# removalLimitMinutes     a removal of a stopped installation that waits this long (from its start) beside a build Hive
+#                         does not finish deleting is written as failed (InstallRemovalFailed) for the platform team
+# namespaceWaitMinutes    a cluster whose build's namespace on the hub is still held by an earlier cluster of the same
+#                         name (terminating) waits this long from its first wait (WaitingForEarlierCluster), then is
+#                         refused (EarlierClusterNotRemoved) for the platform team
+# retryMarginMinutes      a Retry request on a stopped installation asks for a new one when its own time is after the
+#                         stop was written, or when it was published more than this long after the write
+# checkWriteMinutes       the check time (status.install.observedAt) is written at least this often while nothing
+#                         changes; the operator's in-flight check reads it (operator/roles/_common/tasks/
+#                         skip_if_event_in_flight.yml)
+platformopenshift_install_defaults:
+  observeIntervalSeconds: 30
+  watchWindowMinutes: 120
+  deadlineMinutes: 360
+  checkWriteMinutes: 5
+  pendingReleaseMinutes: 10
+  removalLimitMinutes: 60
+  namespaceWaitMinutes: 30
+  retryMarginMinutes: 1
+platformopenshift_install: >-
+  {{ platformopenshift_install_defaults | combine(platformopenshift_defaults.install | default({}, true)) }}

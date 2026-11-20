@@ -219,13 +219,14 @@ class NetworkJudge(unittest.TestCase):
         self.assertEqual(judge(fabric=fabric(ranges=("203.0.113.0/24",)))["reason"], "OutsideAttachableRanges")
 
     def test_a_service_the_fabric_does_not_realize(self):
-        # Review R4 M2: the fabric's status says which setting; the preflight names it
+        # the fabric's status says which setting (on the fabric, for the platform team); the cluster gets its reason
         f = fabric()
         f["status"]["realization"]["service"].update(enabled=False, reason="InvalidSpec",
                                                      message="realization service.vrf.table 254 must be ...")
         r = judge(fabric=f)
         self.assertEqual(r["reason"], "ServiceNotOffered")
-        self.assertIn("service.vrf.table", r["message"])
+        self.assertIn("InvalidSpec", r["message"])
+        self.assertNotIn("service.vrf.table", r["message"], "no text of the fabric's status in the cluster's")
 
     def test_no_service_range_is_not_offered(self):
         # a fabric with the service on and no service range (its status from before the range, or refused): a new
@@ -310,7 +311,8 @@ class External(unittest.TestCase):
     def test_refusals(self):
         self.assertEqual(self.ext(nets=[n for n in SITE_NETS if not n["default"]])["reason"], "NetworkChoiceRequired")
         self.assertEqual(self.ext("lab-internal")["reason"], "ExternalNetworkNotListed")
-        self.assertIn("lab-internal is not an external network of site site1", self.ext("lab-internal")["message"])
+        self.assertIn("lab-internal is not an external network of the site", self.ext("lab-internal")["message"])
+        self.assertNotIn("site1", self.ext("lab-internal")["message"], "no site name in a refusal")
         self.assertEqual(self.ext("dmz", nets=SITE_NETS + [dict(SITE_NETS[1], id="ext-9")])["reason"],
                          "ExternalNetworkNotListed")
         self.assertEqual(self.ext("v6only")["reason"], "PlacementHasNoIPv4")
@@ -508,7 +510,95 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertFalse([t for t in tr if "patch" in t])
         # the only OpenStack call is the read of the network's name (Review R2 M3)
         self.assertEqual(H.os_calls(tr), [{"action": "network-name-check", "project_id": "proj-1", "name": "shc-n1",
-                                           "network_id": "net-1"}])
+                                           "network_id": "net-1", "flavors": []}])
+
+    def test_flavors_checked_with_the_network_name(self):
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.xlarge", oso_worker_flavor="example.large",
+                                  oso_worker_count="3")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr)[0]["flavors"], ["example.xlarge", "example.large"])
+        # no workers: the workers' flavor is not asked for
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.xlarge", oso_worker_flavor="example.large",
+                                  oso_worker_count="0")
+        self.assertEqual(H.os_calls(tr)[0]["flavors"], ["example.xlarge"])
+
+    def test_a_missing_flavor_is_refused_before_anything(self):
+        """A flavor the cluster's spec names is named to the tenant (FlavorNotFound)."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.missing"])}
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                  fake_os=missing, platform_spec={"type": "openstack", "openstack": {
+                                      "environment": "env1", "controlPlaneFlavor": "example.missing"}})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the environment has no flavor example.missing", out)
+        self.assertEqual([t for t in tr if "create" in t], [])
+
+    def test_a_build_that_runs_is_not_refused_for_settings_it_was_not_made_with(self):
+        """A flavor changed while the record said Stopped, on a build the hub shows running or installed (adopted):
+        the preflight does not refuse it; the setting is used only by a later installation."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.missing"])}
+        spec = {"type": "openstack", "openstack": {"environment": "env1", "controlPlaneFlavor": "example.missing"}}
+        for extra in ({"po_cd_live": True}, {"po_adopted": True}):
+            rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                      fake_os=missing, platform_spec=spec, **extra)
+            self.assertEqual(rc, 0, out)
+            self.assertNotIn("has no flavor", out)
+        # a stopped ClusterDeployment a Retry is about to replace: the retry is a new installation, it is checked
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                  fake_os=missing, platform_spec=spec, po_cd_exists=True, po_cd_live=False)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("has no flavor example.missing", out)
+        # a record that says Installing with no build on the hub is a new installation: it is checked
+        rc, tr, out = self.run_op(k8s(), oso_control_plane_flavor="example.missing", oso_worker_count="0",
+                                  fake_os=missing, platform_spec=spec, po_cd_exists=False,
+                                  po_cr_current={"resources": [{"status": {"install": {"stage": "Installing"}}}]})
+        self.assertNotEqual(rc, 0)
+        self.assertIn("has no flavor example.missing", out)
+
+    def test_a_missing_image_is_refused_before_anything(self):
+        """The image the cluster's spec names, missing on the site: ImageNotFound naming it; the installation's
+        default image missing: DefaultImageNotFound naming none; both before anything is created."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], images_missing=["example-missing"])}
+        spec = {"type": "openstack", "openstack": {"environment": "env1", "glanceImageOverride": "example-missing"}}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(fake_os=missing, platform_spec=spec), k8s=k8s(), result="1",
+                            dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the environment has no image example-missing", out)
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "ImageNotFound")
+        self.assertEqual(H.os_calls(tr)[0]["images"], ["example-missing"])
+        self.assertEqual([t for t in tr if "create" in t], [])
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(fake_os=missing, default_glance_image_override="example-missing"),
+                            k8s=k8s(), result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "DefaultImageNotFound")
+        self.assertNotIn("example-missing", out.split("does not offer the image")[1][:300])
+
+    def test_a_missing_default_flavor_names_no_flavor(self):
+        """The installation's default flavor missing on the site: refused with the platform team's reason and a
+        sentence that names no flavor (the default is the platform's, not the tenant's)."""
+        missing = {"network-name-check": dict(NAME_OK["network-name-check"], flavors_missing=["example.default"])}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(oso_control_plane_flavor="example.default", oso_worker_count="0",
+                                              fake_os=missing),
+                            k8s=k8s(), result="po_fail_reason | default('')", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("does not offer the flavor the platform uses for cluster nodes by default", out)
+        self.assertNotIn("example.default", out.split("does not offer")[1][:300])
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "DefaultFlavorNotFound")
+        self.assertEqual([t for t in tr if "create" in t], [])
+        # a spec-named flavor missing beside the default: the spec's is named
+        both = {"network-name-check": dict(NAME_OK["network-name-check"],
+                                           flavors_missing=["example.default", "example.mine"])}
+        rc, tr, out = H.run("platformopenshift_provision", "openstack_preflight.yml",
+                            os_preflight_vars(oso_control_plane_flavor="example.default", oso_worker_flavor="example.mine",
+                                              oso_worker_count="2", fake_os=both,
+                                              platform_spec={"type": "openstack", "openstack": {
+                                                  "environment": "env1", "workerFlavor": "example.mine"}}),
+                            k8s=k8s(), result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertIn("the environment has no flavor example.mine;", out)
+        self.assertEqual(json.loads(H.LAST_VARS)["po_fail_reason"], "FlavorNotFound")
 
     def test_external_default(self):
         rc, tr, out = self.run_op(k8s(extra={f"CloudInfrastructure/{PLAT}/site1": SITE, f"TenantProfile/{NS}/shc": TPROFILE}),
@@ -560,7 +650,7 @@ class OpenstackPreflightFile(unittest.TestCase):
                                       "unique": False, "external": True}}
         rc, tr, out = self.run_op(k8s(), fake_os=two)
         self.assertNotEqual(rc, 0)
-        self.assertIn("sees 2 network(s) named shc-n1 (net-1; net-9, your own)", out)
+        self.assertIn("sees 2 networks named shc-n1 (1 of them its own)", out)
         # the name is checked after the address ranges (a read) and the build name, with the cluster's own credential
         self.assertFalse([t for t in tr if "patch" in t or "create" in t])
         # a placed network the project does not see yet: wait
@@ -576,7 +666,7 @@ class OpenstackPreflightFile(unittest.TestCase):
         self.assertEqual(H.os_calls(tr)[0]["network_id"], "ext-1")
         rc, tr, out = self.run_op(ext, oso_network="", fake_os=none)
         self.assertNotEqual(rc, 0)
-        self.assertIn("does not see network public (ext-1)", out)
+        self.assertIn("does not see network public", out)
 
     def test_name_listed_with_the_installers_credential(self):
         # gate F1: the site's cloud-wide external network `internet` (external, not shared, owned by the admin project,
@@ -600,7 +690,7 @@ class OpenstackPreflightFile(unittest.TestCase):
                                                     "external": False}], "unique": True, "external": False}}
         rc, tr, out = self.run_op(ext, oso_network="", fake_os=seen)
         self.assertNotEqual(rc, 0)
-        self.assertIn("does not see network public (ext-1) as an external network", out)
+        self.assertIn("does not see network public as an external network", out)
         rc, tr, out = self.run_op(k8s(), fake_os={"network-name-check": dict(
             seen["network-name-check"], visible=[{"id": "net-1", "project_id": "proj-platform", "external": False}])})
         self.assertEqual(rc, 0, out)
@@ -628,7 +718,7 @@ class OpenstackPreflightFile(unittest.TestCase):
                                       "unique": False, "external": False}}
         rc, tr, out = self.run_op(k8s(places=[placement(ra_state="pending")]), fake_os=two)
         self.assertNotEqual(rc, 0)
-        self.assertIn("sees 2 network(s) named shc-n1", out)
+        self.assertIn("sees 2 networks named shc-n1", out)
         # nothing refuses: the wait is recorded once, after every check ran, and nothing after it runs
         rc, tr, out = self.run_op(k8s(places=[placement(ready=False)]))
         self.assertEqual(rc, 0, out)
@@ -761,8 +851,8 @@ class OpenstackAddressesFile(unittest.TestCase):
         rc, tr, out = self.run_a(k8s(fab=other), pf=pf, po_cr_current={"resources": [{"status": {
             "clusterInstalled": True, "platformPrefixes": ["192.0.2.15/32", "192.0.2.16/32"], "buildName": "shc-oso-acme-c1"}}]})
         self.assertNotEqual(rc, 0)
-        self.assertIn("Floating IP 192.0.2.15 lies in 192.0.2.0/28, which the platform already reaches for another "
-                      "network. The cluster keeps", out)
+        self.assertIn("Floating IP 192.0.2.15 lies in a range the platform already reaches for another network. The "
+                      "cluster keeps", out)
         self.assertNotIn("new addresses are chosen", out)
         self.assertNotIn("os:cluster-fips/absent", self.steps(tr))
         self.assertFalse([p for p in H.patches(tr) if "platformPrefixes" in p["body"] and p["body"]["platformPrefixes"] is None])
@@ -821,7 +911,8 @@ ACCOUNT_FILE_FAKES = {
     os_account_clouds_yaml: "/tmp/eda-{{ os_account_tag }}-clouds.yaml"
     os_account_cacert: ""
 """,
-    "openstack_call.yml": "- ansible.builtin.fail:\n    msg: the cloud did not answer\n",
+    # the call fails the way the real one does in the cluster roles: the platform's sentence for the step
+    "openstack_call.yml": "- ansible.builtin.fail:\n    msg: \"{{ shc_step | hybridsovereign.shc.shc_step_failed }}\"\n",
 }
 
 
@@ -836,7 +927,7 @@ class AccountFilesGoOnFailure(unittest.TestCase):
                 os.unlink(path)
         rc, tr, out = H.run("platformopenshift_provision", task_file, dict(BASE, **kw), fakes=ACCOUNT_FILE_FAKES)
         self.assertNotEqual(rc, 0)
-        self.assertIn("the cloud did not answer", out)
+        self.assertIn("failed; the platform team can see why in the job's log", out)
         for path in paths:
             self.assertFalse(os.path.exists(path), f"{task_file} left {path}")
 
@@ -954,19 +1045,25 @@ class RouterGatewayFile(unittest.TestCase):
         self.assertEqual(self.prefixes(tr), [])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn("it could not be read: the cloud did not answer", msg)
-        self.assertIn("calls to the hub are not admitted on the platform's path", msg)
+        # one sentence after another, the step's own at the end
+        self.assertTrue(msg.endswith('path. The step "Read the cluster\'s router on the site" failed; the platform team '
+                                     "can see why in the job's log."), msg)
+        self.assertNotIn("(The step", msg)
+        self.assertIn("calls to the hub leave by the network's own path", msg)
         self.assertEqual(tr[-1], {"result": ""})
 
     def test_a_failure_after_the_record_takes_the_gateway_out(self):
         # the network's wake fails after the three prefixes were recorded
-        rc, tr, out = self.run_rg(fabric(), fakes={"nudge_cr.yml": "- ansible.builtin.fail:\n    msg: services API down\n"})
+        # a step that is not the platform's own fail task fails with another system's text (here a path naming a host)
+        rc, tr, out = self.run_rg(fabric(), fakes={"nudge_cr.yml": "- name: Wake the network\n  ansible.builtin.slurp:\n"
+                                                                    "    src: /nonexistent/api.services.platform.example\n"})
         self.assertEqual(rc, 0, out)
         self.assertEqual(self.prefixes(tr), [["192.0.2.15/32", "192.0.2.16/32", "10.68.0.193/32"],
                                              ["192.0.2.15/32", "192.0.2.16/32"]])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn("services API down", msg)
+        self.assertNotIn("platform.example", msg, "no text of another system in the condition")
+        self.assertIn('The step "Wake the network" failed; the platform team can see why in the job\'s log', msg)
 
 
 CD_INFO = {"resources": [{"spec": {"installed": True, "clusterMetadata": {"infraID": INFRA}}}]}
@@ -1020,7 +1117,10 @@ class RouterGatewayAgain(unittest.TestCase):
         self.assertFalse(os.path.exists(f"/tmp/eda-po-router-{tag}-clouds.yaml"))
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn("it could not be read: the cloud did not answer", msg)
+        # one sentence after another, the step's own at the end
+        self.assertTrue(msg.endswith('path. The step "Read the cluster\'s router on the site" failed; the platform team '
+                                     "can see why in the job's log."), msg)
+        self.assertNotIn("(The step", msg)
         self.assertEqual(self.prefixes(tr), [])
         self.assertFalse([p for p in H.patches(tr) if not p["partial"]])
 
@@ -1039,7 +1139,8 @@ class RouterGatewayAgain(unittest.TestCase):
         self.assertEqual(H.os_calls(tr), [])
         st, reason, msg = self.condition(tr)
         self.assertEqual((st, reason), ("False", "Failed"))
-        self.assertIn("the network could not be read: Set fabric_platform_namespace", msg)
+        self.assertIn("its network could not be read", msg)
+        self.assertIn("Set fabric_platform_namespace", msg)
 
     def test_no_hub_endpoints_nothing_happens(self):
         # the hub's API outside the service range (reached by the network's own path): nothing to add
@@ -1243,7 +1344,8 @@ class TeardownRelease(unittest.TestCase):
         oso = dict(OSO, status={"cloudInfrastructure": "site1"})
         rc, tr, out = self.run_r({f"CloudOSO/{NS}/env1": oso, f"CloudInfrastructure/sovereign-cloud/site1": SITE})
         self.assertNotEqual(rc, 0)
-        self.assertIn("Cannot release the cluster's floating IPs fip-a, fip-i", out)
+        self.assertIn("Cannot release the cluster's floating IPs: its OpenStack environment", out)
+        self.assertNotIn("fip-a", out.split("Cannot release")[-1][:200], "no address id in the failure")
 
 
 # ---- renders --------------------------------------------------------------------------------------------------------
@@ -1472,8 +1574,11 @@ class HubOwner(unittest.TestCase):
         for claim in (True, False):
             r = self.owner(self.ns("uid-other"), recorded=self.B, claim=claim)
             self.assertEqual((r["owned"], r["adopt"], r["reason"]), (False, False, "BuildOwnerMismatch"))
-            for word in (self.B, "uid-other", "uid-c1", P.OWNER_LABEL):
-                self.assertIn(word, r["message"])
+            self.assertIn(self.B, r["message"])
+            self.assertIn("marked as another cluster object's", r["message"])
+            for word in ("uid-other", "uid-c1"):
+                self.assertNotIn(word, r["message"], "no uid in the refusal")
+                self.assertIn(word, r["detail"], "the uids go to the job's log")
 
     def test_unmarked_namespace_only_for_its_recorded_build(self):
         r = self.owner(self.ns(), recorded=self.B, claim=True)
@@ -1532,8 +1637,8 @@ class ClaimBuild(unittest.TestCase):
         self.assertFalse(H.os_calls(tr))
         self.assertFalse([t for t in tr if "k8s" in t])
         self.assertNotIn({"buildName": None}, [p["body"] for p in H.patches(tr)])
-        self.assertIn(f"namespace {self.B} on the hub carries hybridsovereign.redhat/platformopenshift-uid=uid-old, but "
-                      "this PlatformOpenshift has uid uid-c1", out)
+        self.assertIn(f"namespace {self.B} on the hub is marked as another cluster object's, although this cluster "
+                      "recorded that build", out)
         stop = [t for t in walk(load(os.path.join(TASKS, "claim_build.yml")))
                 if t.get("ansible.builtin.include_tasks") == "preflight_stop.yml"]
         self.assertEqual(stop[0]["vars"]["ps_reason"], "BuildOwnerMismatch")
@@ -1555,12 +1660,12 @@ class ClaimBuild(unittest.TestCase):
         self.assertFalse(H.os_calls(tr))
 
     def test_the_stale_build_cleanup_runs_only_after_the_claim(self):
-        # Review R2, unconfirmed item 4: cleanup_stale_clusterbuild.yml deletes the ManagedCluster and the
+        # Review R2, unconfirmed item 4: remove_stopped_build.yml deletes the ManagedCluster and the
         # ClusterDeployment of the build name; it runs after openstack_cluster_addresses.yml (whose claim refuses a
-        # build name another object holds), so it only ever cleans this cluster's own failed build
+        # build name another object holds), so it only ever removes this cluster's own stopped build
         names = [t.get("name") for t in load(os.path.join(TASKS, "openstack_clusterbuild.yml"))]
         self.assertLess(names.index("The cluster's recorded build and addresses"),
-                        names.index("Clean up failed or stale Hive cluster build before reprovisioning"))
+                        names.index("Remove a stopped installation before a new one"))
         addr = [t.get("name") for t in load(os.path.join(TASKS, "openstack_cluster_addresses.yml"))]
         self.assertLess(addr.index("Claim the build on the hub"), addr.index("The cluster's floating IPs"))
 
@@ -1639,8 +1744,10 @@ class TeardownOwnsOnlyItsBuild(unittest.TestCase):
         self.assertEqual([e["reason"] for e in ev], ["BuildOwnerMismatch"])
         self.assertEqual((ev[0]["type"], ev[0]["regarding"]["name"], ev[0]["regarding"]["uid"]),
                          ("Warning", "corp-prod", "uid-y"))
-        for word in (b, "uid-x", "uid-y", "Nothing"):
+        for word in (b, "Nothing", "marked as another cluster object's"):
             self.assertIn(word, ev[0]["note"])
+        for word in ("uid-x", "uid-y"):
+            self.assertNotIn(word, ev[0]["note"], "no uid in the event")
         rc, tr, out = self.teardown({"reason": "WaitingForPlacement"})
         self.assertEqual(rc, 0, out)
         ev = self.events(tr)
@@ -1815,7 +1922,8 @@ class ClusterResolvers(unittest.TestCase):
         dns, note = self.build(by_site={"site1": ["192.0.2.53", " 203.0.113.53 ", "2001:db8::53", "192.0.2.53"],
                                         "site2": ["192.0.2.99"]})
         self.assertEqual(dns, ["192.0.2.53", "203.0.113.53"])   # IPv4 only, the site's, never the installation's
-        self.assertIn("192.0.2.53, 203.0.113.53, the resolvers of site site1", note)
+        self.assertEqual(note, "; machines resolve names through the resolvers the site lists for its placed networks")
+        self.assertNotIn("192.0.2.53", note, "no address of the site in the tenant's condition")
 
     def test_network_takes_the_placements_site(self):
         dns, _ = self.build(by_site={"site1": ["192.0.2.53"], "site2": ["192.0.2.99"]}, placement_site="site2")
@@ -1827,7 +1935,8 @@ class ClusterResolvers(unittest.TestCase):
         for by_site in ({}, {"site1": []}, {"site1": ["2001:db8::53"]}, {"site2": ["192.0.2.99"]}):
             dns, note = self.build(by_site=by_site)
             self.assertEqual(dns, [], by_site)                 # the cloud's DHCP default, as on the placement's subnets
-            self.assertIn("cloud default resolvers (site site1 lists no resolvers", note, by_site)
+            self.assertIn("cloud default resolvers (the site lists no resolvers", note, by_site)
+            self.assertNotIn("site1", note, by_site)
 
     def test_external_network_keeps_the_installation_default(self):
         dns, note = self.build(platform_path=False, by_site={"site1": ["192.0.2.53"]})
@@ -1844,11 +1953,13 @@ class ClusterResolvers(unittest.TestCase):
 
     def test_the_preflight_message_names_them(self):
         rc, tr, out = H.run("platformopenshift_provision", "openstack_cluster_addresses.yml",
-                            addr_vars(cb_external_dns_note="; machines resolve names through 192.0.2.53"),
+                            addr_vars(cb_external_dns_note="; machines resolve names through the resolvers the site "
+                                                           "lists for its placed networks"),
                             k8s=k8s(fab=CARRIED), result="1")
         self.assertEqual(rc, 0, out)
         msg = H.patches(tr)[-1]["body"]["conditions"][0]["message"]
-        self.assertTrue(msg.endswith("reached by the platform; machines resolve names through 192.0.2.53"), msg)
+        self.assertTrue(msg.endswith("reached by the platform; machines resolve names through the resolvers the site "
+                                     "lists for its placed networks"), msg)
 
 
 class ClusterResolversWiring(unittest.TestCase):

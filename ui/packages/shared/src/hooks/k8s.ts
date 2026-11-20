@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   API_VERSION_FULL,
   HybridSovereignKind,
@@ -7,7 +7,7 @@ import {
 } from '../types';
 import { usePermissions } from './permissions';
 import { errorFromFetchFailure, errorFromResponse, K8sApiErrorContext, parseWarningHeaders } from './errors';
-import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs } from './fetchState';
+import { applyFetchOutcome, FetchState, initialFetchState, pollDelayMs, readOnShow } from './fetchState';
 import { isInFlight, phaseOf } from '../status/phase';
 
 export type K8sApiStyle = 'raw' | 'dashboard';
@@ -535,6 +535,15 @@ function useDocumentHidden(): boolean {
   return hidden;
 }
 
+/** A tab shown again reads at once (a hidden tab does not poll, so what it shows may be old). */
+function useRefreshWhenShown(hidden: boolean, active: boolean, refresh: () => void): void {
+  const wasHidden = useRef(hidden);
+  useEffect(() => {
+    if (readOnShow(wasHidden.current, hidden, active)) refresh();
+    wasHidden.current = hidden;
+  }, [hidden, active, refresh]);
+}
+
 /**
  * Schedules the next refresh once the current request has finished, so
  * requests never overlap; a changed delay or a manual refresh reschedules.
@@ -594,6 +603,7 @@ export function useK8sResourceList<T extends K8sResource>(
   const current = state.key === url ? state : initialFetchState<T[]>(url);
   const items = (current.data ?? NO_ITEMS) as T[];
   const hidden = useDocumentHidden();
+  useRefreshWhenShown(hidden, enabled, refresh);
   const inFlight = !!pollWhileInFlight && items.some((i) => isInFlight(phaseOf(i)));
   const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
   useNextRefresh(delay, enabled && !loading, refresh);
@@ -651,6 +661,7 @@ export function useK8sResource<T extends K8sResource>(
   const current = state.key === url ? state : initialFetchState<T>(url);
   const resource = current.data ?? null;
   const hidden = useDocumentHidden();
+  useRefreshWhenShown(hidden, enabled && !!name, refresh);
   const inFlight = !!pollWhileInFlight && !!resource && isInFlight(phaseOf(resource));
   const delay = pollDelayMs({ pollIntervalMs, pollWhileInFlight, inFlight, hidden });
   useNextRefresh(delay, enabled && !!name && !loading, refresh);

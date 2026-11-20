@@ -6,6 +6,7 @@
 - name: The names of the cluster's ACM objects
   ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/po_call.yml"
   vars:
+    shc_step: "Remove the cluster's sign-in and access policies"
     po_request:
       action: acm-names
       buildName: "{{ po_build_name }}"

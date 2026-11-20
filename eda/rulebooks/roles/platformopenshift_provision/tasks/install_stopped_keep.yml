@@ -1,0 +1,32 @@
+---
+# A run on a stopped installation that starts nothing: the stop stays as the watch wrote it. The Ready condition is
+# written again from the Stalled condition (the job's start had marked the object as running) and the event is
+# completed. With isk_renew (nobody asked: a change outside the installation settings, or a record of another
+# version) the generation and the digest of the settings are recorded as seen, so the operator waits again. Without
+# it (the hub could not be read, its build is being deleted, the removal may not run now) nothing of the record is
+# renewed: a Retry or a change of the settings still asks, and the operator publishes again at its next pass.
+# Inputs: isk_obj (the object as read in this run), isk_renew (default false).
+- name: Keep the stop as written
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    _isk_stalled: >-
+      {{ ((isk_obj.status | default({}, true)).conditions | default([], true)
+          | selectattr('type', 'equalto', 'Stalled') | list + [{}]) | first }}
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    _isk_body:
+      status: failed
+      ready: false
+      reason: "{{ _isk_stalled.reason | default('InstallFailed', true) }}"
+      message: "{{ _isk_stalled.message | default('', true) }}"
+      conditions:
+        - type: Ready
+          status: "False"
+          reason: "{{ _isk_stalled.reason | default('InstallFailed', true) }}"
+          message: "{{ _isk_stalled.message | default('', true) }}"
+    cr_status_body: >-
+      {{ _isk_body | combine({'observedGeneration': (isk_obj.metadata | default({}, true)).generation | default(0, true) | int,
+                              'install': isk_obj | hybridsovereign.shc.shc_install_stopped_seen}
+                             if (isk_renew | default(false) | bool) else {}) }}

@@ -1,0 +1,30 @@
+---
+# One wait of the removal of a stopped build (remove_stopped_build.yml): every round reads the cluster object and the
+# hub object named by rsw_for (managedcluster, clusterdeployment, uninstall, namespace) with the module
+# hybridsovereign.shc.install_observe (mode wait). The job ends here, like the watch, when the object is gone, is
+# another object, is being deleted or carries a newer request; the wait ends when the hub object is gone (the uninstall
+# job: finished) or after rsw_retries rounds of rsw_delay seconds. Sets rsw_result.
+- name: "Wait for the {{ rsw_for }} of the stopped build"
+  hybridsovereign.shc.install_observe:
+    mode: wait
+    wait_for: "{{ rsw_for }}"
+    nothing_removes: "{{ rsw_nothing_removes | default(false) | bool }}"
+    host: "{{ services_api_host | trim }}"
+    api_key: "{{ services_bearer_token | trim }}"
+    validate_certs: "{{ services_validate_certs | default(true) | bool }}"
+    hub_host: "{{ central_api_host | trim }}"
+    hub_api_key: "{{ central_bearer_token | trim }}"
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+    build: "{{ cb_cluster_name }}"
+    uid: "{{ po_uid | default('', true) }}"
+    event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
+  register: rsw_result
+  until: (rsw_result.end | default(false) | bool) or (rsw_result.done | default(false) | bool)
+  retries: "{{ rsw_retries }}"
+  delay: "{{ rsw_delay }}"
+  failed_when: false
+
+- name: "End the job during the wait for the {{ rsw_for }}: {{ rsw_result.why | default('') }}"
+  ansible.builtin.meta: end_play
+  when: rsw_result.end | default(false) | bool

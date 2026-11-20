@@ -29,8 +29,7 @@
       - cb_pull_secret_raw | string | length > 0
       - cb_ssh_public_key | length > 0
     fail_msg: >-
-      Vault {{ cb_pull_secret_vault }} (property {{ cb_pull_secret_vault_property }}) or
-      {{ cb_ssh_key_vault }} (ssh_public_key) is missing.
+      The installation's pull secret or SSH key is missing in Vault (platformopenshift_defaults names where).
 
 - name: Normalize pull secret to valid JSON
   ansible.builtin.command:
@@ -87,6 +86,13 @@
     mode: "0600"
   no_log: true
 
+# a stopped installation is removed only when someone asked for a new one (remove_stopped_build.yml); never a build
+# that is installing or installed
+- name: Remove a stopped installation before a new one
+  ansible.builtin.include_tasks: remove_stopped_build.yml
+  vars:
+    rsb_obj: "{{ platformopenshift_cr.resources[0] }}"
+
 - name: Check existing Helm release
   ansible.builtin.command:
     argv: [helm, status, "{{ cb_app_name }}", --namespace, "{{ cb_cluster_name }}", --output, json,
@@ -126,15 +132,120 @@
   changed_when: false
   when: cb_helm_release_exists | bool
 
-- name: Set values changed flag
+- name: Whether the hub holds the build
+  ansible.builtin.include_tasks: install_build_exists.yml
+
+- name: Whether the installation started before installations were recorded
+  vars:
+    _cb_rec: "{{ (platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true) }}"
   ansible.builtin.set_fact:
+    po_legacy_started: >-
+      {{ (_cb_rec.install | default({}, true)) | length == 0 and (_cb_rec.installStarted | default(false) | bool)
+         and not (_cb_rec.clusterInstalled | default(false) | bool) }}
+
+# while an installation runs on the hub (a ClusterDeployment exists, recorded Installing or Finishing, or adopted by
+# this run) the release is not changed: the running build is the one that was installed; settings changed meanwhile
+# are used only by a later installation. Without a ClusterDeployment the release is made again (a failed or
+# abandoned release is repaired; one that keeps failing is written as a stop), unless an older job is still making it
+# (pending, younger than pendingReleaseMinutes): then the run hands over. Nothing is released against a hub that
+# cannot be read (the watch then waits for it)
+- name: Set values changed flag
+  vars:
+    _cb_st: "{{ (platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true) }}"
+    # an installation recorded as running: stage Installing or Finishing, or a cluster from before installations were
+    # recorded whose installation started and did not end (po_legacy_started)
+    _cb_running: >-
+      {{ (po_cd_exists | bool) and ((po_adopted | default(false) | bool)
+         or ((_cb_st.install | default({}, true)).stage | default('')) in ['Installing', 'Finishing']
+         or (po_legacy_started | default(false) | bool)) }}
+    # a cluster recorded as installed whose build the hub does not hold: never a release under its name
+    _cb_record_missing: >-
+      {{ not (po_cd_exists | bool) and not (po_hub_unreadable | default(false) | bool)
+         and ((_cb_st.clusterInstalled | default(false) | bool)
+              or ((_cb_st.install | default({}, true)).stage | default('')) in ['Finishing', 'Installed']) }}
+    # a cluster from before installations were recorded, started and not installed, whose build the hub does not
+    # hold: its release is made again only when someone asks (a Retry), never by a periodic run
+    _cb_legacy_waits: >-
+      {{ (po_legacy_started | default(false) | bool) and not (po_cd_exists | bool)
+         and not (po_hub_unreadable | default(false) | bool)
+         and not (((event_payload.reason | default('', true)) if (event_payload is defined and event_payload is mapping)
+                   else '') | string is search('ReconcileRequested$')) }}
+  ansible.builtin.set_fact:
+    cb_record_missing: "{{ _cb_record_missing | bool }}"
+    cb_legacy_waits: "{{ _cb_legacy_waits | bool }}"
     cb_values_changed: >-
-      {{ not (cb_helm_release_exists | bool) or
-         (cb_helm_release_failed | bool) or
-         (values_diff_result.stdout | default('true') | trim == 'true') }}
+      {{ not (po_hub_unreadable | default(false) | bool) and not (_cb_record_missing | bool)
+         and not (_cb_legacy_waits | bool) and
+         (not (cb_helm_release_exists | bool) or not (po_cd_exists | bool) or
+          (not (_cb_running | bool) and
+           ((cb_helm_release_failed | bool) or (values_diff_result.stdout | default('true') | trim == 'true')))) }}
+    cb_release_young: >-
+      {{ not (po_cd_exists | bool) and (cb_helm_release_exists | bool) and not (_cb_record_missing | bool)
+         and not (_cb_legacy_waits | bool)
+         and ((helm_release_status.stdout | default('{}', true) | from_json).info | default({}, true)
+              | hybridsovereign.shc.shc_install_release_young(platformopenshift_install.pendingReleaseMinutes | int)) }}
+
+- name: Fail when an installed cluster's build is missing on the hub
+  ansible.builtin.fail:
+    msg: >-
+      The hub holds no record of the build of installed cluster {{ ansible_operator_meta.name }}; nothing was released.
+      The platform team has to restore the record.
+  when: cb_record_missing | bool
+
+- name: Hand over a cluster from before installations were recorded whose build is gone
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub holds no build of this cluster, whose installation started before installations were recorded; a Retry makes its release again
+  when: cb_legacy_waits | bool
+
+# the hub could not be read (after a few tries): the run ends and completes its event; the next period goes on
+- name: Hand over when the hub cannot be read
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub could not be read; the next run makes the release
+  when: po_hub_unreadable | default(false) | bool
+
+- name: An older job is still making the release
+  ansible.builtin.include_tasks: install_handover.yml
+  vars:
+    ih_why: the hub's release of the build is still being made; the installation is starting
+  when: cb_release_young | bool
+
+# an installation recorded as running whose release is made again (no ClusterDeployment): it starts anew, and its
+# time (the deadline included) counts from now
+- name: Record the new start of an installation made again
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ ansible_operator_meta.name }}"
+    cr_namespace: "{{ ansible_operator_meta.namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      install:
+        startedAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%SZ') }}"
+        attempt: null
+        lastFailure: null
+  when:
+    - cb_values_changed | bool
+    - not (po_cd_exists | bool)
+    - >-
+      ((((platformopenshift_cr.resources | default([{}], true) | first).status | default({}, true)).install
+        | default({}, true)).stage | default('')) == 'Installing'
 
 # the install starts with the Helm release below: from here on a refused prefix never withdraws the cluster's subnet
 # (cloud_internal_reach.yml)
+- name: Read the cluster's installation as it stands now
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    name: "{{ ansible_operator_meta.name }}"
+    namespace: "{{ ansible_operator_meta.namespace }}"
+  register: _po_now
+
 - name: Record that the install starts
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
@@ -145,6 +256,7 @@
     cr_status_partial: true
     cr_status_body:
       installStarted: true
+      install: "{{ (_po_now.resources | default([{}], true) | first).status | default({}, true) | hybridsovereign.shc.shc_install_starting }}"
 
 # the network marks the cluster's rows installed, so the fabric's limit keeps the slot for good (Review R4 NM1)
 - name: Wake the network now the install starts
@@ -154,6 +266,13 @@
   when: >-
     (cb_network | default(aws_network | default(''))) | length > 0
     and (cb_publish | default(aws_publish | default('External'))) == 'Internal'
+
+# the object may have been deleted, replaced or given a newer request since the job's last status write
+- name: Check right before the release that the object is still this job's
+  ansible.builtin.include_tasks: install_same_object.yml
+  vars:
+    # the spec this job read is the one it installs
+    iso_generation: "{{ platformopenshift_generation }}"
 
 - name: Deploy mce-cluster-build chart
   ansible.builtin.command:
@@ -182,16 +301,30 @@
   register: helm_deploy_result
   when: cb_values_changed | bool
   changed_when: "'has been upgraded' in helm_deploy_result.stdout or 'Installing it now' in helm_deploy_result.stdout"
+  failed_when: false
+  # one more try after a passing failure (a hub admission timeout, another release operation finishing)
+  until: (helm_deploy_result.rc | default(0) | int) == 0
+  retries: 1
+  delay: 30
+
+- name: A failed release of the build
+  ansible.builtin.include_tasks: install_release_failed.yml
+  when: (helm_deploy_result.rc | default(0) | int) != 0
 
 # Internal: the installer writes only a private zone; the platform (Hive's installer on central, ACM) and the network
 # resolve the cluster through public aliases of its internal load balancers, published as soon as they exist
-- name: Publish the cluster's names while it installs (Internal)
-  ansible.builtin.command:
-    argv: >-
+# the helper finds the cluster's own load balancers by its infrastructure id (from its private zone), exactly
+- name: The command that publishes the cluster's names (Internal)
+  ansible.builtin.set_fact:
+    cb_dns_alias_cmd: >-
       {{ cb_dns_alias_argv | default([
            'python3', role_path ~ '/../../../common/files/shc_aws_cluster.py', '--config', cb_aws_cfg | default({}) | to_json,
            'dns-alias', '--state', 'up', '--zone', aws_domain | default(''), '--name', cb_ocp_name, '--vpc', cb_vpc_id,
            '--wait-seconds', '6600']) }}
+
+- name: Publish the cluster's names while it installs (Internal)
+  ansible.builtin.command:
+    argv: "{{ cb_dns_alias_cmd }}"
   async: 7000
   poll: 0
   register: cb_dns_alias_job
