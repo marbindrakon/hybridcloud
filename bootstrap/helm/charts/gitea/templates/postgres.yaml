@@ -13,6 +13,16 @@ spec:
   instances:
     - name: pgha
       replicas: {{ .Values.crunchy.instances | default 2 }}
+      # One replica per node, so one node going down never takes every copy of the database with it.
+      # With a single schedulable node the skew is always 0 and all replicas still start there.
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: DoNotSchedule
+          labelSelector:
+            matchLabels:
+              postgres-operator.crunchydata.com/cluster: {{ .Values.crunchy.name | default "gitea-pgcluster" }}
+              postgres-operator.crunchydata.com/instance-set: pgha
       dataVolumeClaimSpec:
         accessModes:
           - ReadWriteOnce

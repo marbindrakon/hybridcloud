@@ -160,7 +160,7 @@ sovereignNamespacesServices:
 # ─── RHBK Central (Keycloak) ─────────────────────────────────────────────────
 rhbk:
   enabled: true
-  chartVersion: "0.10.2"
+  chartVersion: "0.10.2-shc.2"  # 0.10.2-shc.2: database replicas spread one per node
   syncWave: "20"
   destinationNamespace: central-rhbk
   values:
@@ -2918,7 +2918,7 @@ gitea:
 # This is separate from the services-cluster Gitea (managed by the 'gitea' app above).
 giteaCentral:
   enabled: true
-  chartVersion: "0.4.6-shc.2"
+  chartVersion: "0.4.6-shc.3"  # 0.4.6-shc.3: database replicas spread one per node
   syncWave: "18"
   values:
     gitea:
