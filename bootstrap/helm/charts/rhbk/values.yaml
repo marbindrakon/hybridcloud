@@ -27,12 +27,25 @@ keycloak:
     passwordSecret:
       name: keycloak-db-secret
       key: password
+    # Properties appended to the database's JDBC URL (Keycloak's db-url-properties), with their leading separator.
+    # auto: with the chart's own database (crunchy.enabled) "?targetServerType=primary", so the driver accepts only
+    # the primary: after a fail-over a connection to the former primary, now read-only, is refused and opened again
+    # instead of failing every write. With another database nothing is added. Empty: nothing is added.
+    urlProperties: auto
+    # The longest a database connection lives (Keycloak's db-pool-max-lifetime: 10m, 600 for seconds, or PT10M). A
+    # connection is closed when it is returned after this time and a new one is opened when needed, so a connection
+    # that went stale, for whatever reason, is replaced within this time. Empty: connections live until they fail.
+    poolMaxLifetime: 10m
     crunchy:
       enabled: false
       name: rhbk-pgcluster
       instances: 2
       storage: 10Gi
       backupStorage: 10Gi
+      # Patroni's fail-safe mode on the database (failsafe_mode): while the primary cannot reach the Kubernetes API
+      # but still reaches every other member, it stays primary instead of making itself read-only. Off by default;
+      # turning it on changes how every fail-over of this database is decided.
+      patroniFailsafe: false
       # Backups of the database (schedules are cron, UTC). A full backup on fullSchedule and a differential one on
       # differentialSchedule (empty: none; it must not fall on the full backup's day and minute). retentionFull full
       # backups are kept, with the differential ones and the write-ahead log that follow them: the database can be

@@ -62,4 +62,33 @@ spec:
       value: "true"
     - name: hostname-strict
       value: "false"
+    {{- if .Values.keycloak.db.enabled }}
+    {{- $db := .Values.keycloak.db }}
+    {{- /* auto: with the chart's own database the driver accepts only the primary, so a connection opened while the
+         primary's service still leads to a server that went read-only is refused, and the pool tries again. */}}
+    {{- $props := "auto" }}
+    {{- if and (hasKey $db "urlProperties") (not (kindIs "invalid" $db.urlProperties)) }}{{ $props = toString $db.urlProperties }}{{ end }}
+    {{- if eq $props "auto" }}
+    {{- $props = "" }}
+    {{- if and ($db.crunchy).enabled (eq (toString $db.vendor) "postgres") }}{{ $props = "?targetServerType=primary" }}{{ end }}
+    {{- end }}
+    {{- if $props }}
+    {{- if not (or (hasPrefix "?" $props) (hasPrefix "&" $props) (hasPrefix ";" $props)) }}
+    {{- fail (printf "keycloak.db.urlProperties must start with the separator the database's JDBC URL expects (? for PostgreSQL), got %q" $props) }}
+    {{- end }}
+    - name: db-url-properties
+      value: {{ $props | quote }}
+    {{- end }}
+    {{- /* A connection is closed when it is returned after this long and replaced as needed: no connection, however
+         it went stale, outlives it. */}}
+    {{- $life := "10m" }}
+    {{- if and (hasKey $db "poolMaxLifetime") (not (kindIs "invalid" $db.poolMaxLifetime)) }}{{ $life = toString $db.poolMaxLifetime }}{{ end }}
+    {{- if $life }}
+    {{- if not (regexMatch "^([0-9]+(ms|s|m|h|d)?|P[0-9A-Z.]+)$" $life) }}
+    {{- fail (printf "keycloak.db.poolMaxLifetime must be a duration such as 10m, 600 (seconds) or PT10M, got %q" $life) }}
+    {{- end }}
+    - name: db-pool-max-lifetime
+      value: {{ $life | quote }}
+    {{- end }}
+    {{- end }}
 {{- end }}

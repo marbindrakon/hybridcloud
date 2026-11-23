@@ -10,6 +10,12 @@ metadata:
     argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
 spec:
   postgresVersion: 16
+  {{- if .Values.keycloak.db.crunchy.patroniFailsafe }}
+  # The primary stays primary while it cannot reach the Kubernetes API but every other member still answers it.
+  patroni:
+    dynamicConfiguration:
+      failsafe_mode: true
+  {{- end }}
   instances:
     - name: pgha
       replicas: {{ .Values.keycloak.db.crunchy.instances | default 2 }}

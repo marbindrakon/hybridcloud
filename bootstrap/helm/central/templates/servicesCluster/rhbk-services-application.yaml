@@ -27,13 +27,9 @@ spec:
     server: {{ .Values.servicesCluster.server | quote }}
     namespace: {{ .Values.rhbkServices.destinationNamespace }}
 
-  # The Keycloak's host name (spec.hostname) is the installation's: a change of rhbkServices.values.keycloak.hostname
-  # must reach the Keycloak, so it is not ignored (with RespectIgnoreDifferences an ignored field is never applied).
-  ignoreDifferences:
-    - group: k8s.keycloak.org
-      kind: Keycloak
-      jsonPointers:
-        - /spec/additionalOptions
+  # No field of the Keycloak is ignored: with RespectIgnoreDifferences an ignored field is never applied, and the
+  # host name (spec.hostname) and the server options (spec.additionalOptions, which carry the database connection
+  # settings) must reach the Keycloak when the values change.
 
   syncPolicy:
     automated:
