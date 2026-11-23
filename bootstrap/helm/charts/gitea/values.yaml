@@ -114,3 +114,10 @@ crunchy:
   instances: 2
   storage: 10Gi
   backupStorage: 10Gi
+  # Backups of the database: a full backup and differential backups on a schedule (cron, UTC), and how many
+  # full backups are kept. Older backups and the write-ahead log they need expire with each backup; the
+  # backup volume must hold the kept backups and the log between them.
+  backup:
+    retentionFull: 2
+    fullSchedule: "30 1 * * 0"
+    differentialSchedule: "30 1 * * 1-6"

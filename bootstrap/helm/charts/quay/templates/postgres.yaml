@@ -21,8 +21,21 @@ spec:
             storage: {{ .Values.crunchy.storage | default "20Gi" }}
   backups:
     pgbackrest:
+      # Backups run on a schedule and old ones expire. Without a schedule the repository keeps every write-ahead
+      # log since the first backup, fills, and the database stops when it can no longer archive.
+      global:
+        repo1-retention-full: {{ ((.Values.crunchy.backup).retentionFull | default 2) | quote }}
+        repo1-retention-full-type: count
+      # A full backup on demand: annotate the PostgresCluster with postgres-operator.crunchydata.com/pgbackrest-backup
+      manual:
+        repoName: repo1
+        options:
+          - --type=full
       repos:
         - name: repo1
+          schedules:
+            full: {{ ((.Values.crunchy.backup).fullSchedule | default "40 1 * * 0") | quote }}
+            differential: {{ ((.Values.crunchy.backup).differentialSchedule | default "40 1 * * 1-6") | quote }}
           volume:
             volumeClaimSpec:
               accessModes:
