@@ -131,7 +131,7 @@ class Connections(unittest.TestCase):
         self.assertEqual(cr["spec"]["additionalOptions"][6], {"name": "example-number", "value": "3"})
 
     def test_further_options_cannot_set_the_charts_own(self):
-        for name in ("http-enabled", "hostname-strict", "db-url-properties", "db-pool-max-lifetime"):
+        for name in ("http-enabled", "hostname-strict", "db-url-properties", "db-pool-max-lifetime", "db-url"):
             with self.subTest(option=name):
                 p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB,
                                                           "additionalOptions": [{"name": name, "value": "x"}]}))
@@ -142,6 +142,43 @@ class Connections(unittest.TestCase):
                 p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": bad}))
                 self.assertNotEqual(p.returncode, 0)
                 self.assertIn("keycloak.additionalOptions", p.stderr)
+
+    def test_further_options_render_whole_numbers_and_switches_as_text(self):
+        values = dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": [
+            {"name": "example-large", "value": 10000000}, {"name": "example-switch", "value": True},
+            {"name": "example-text", "value": "2.5"}]})
+        p, docs = render_values(values)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        got = options(docs)
+        self.assertEqual((got["example-large"], got["example-switch"], got["example-text"]),
+                         ("10000000", "true", "2.5"))
+
+    def test_a_malformed_further_option_is_refused_with_its_name(self):
+        name = "example-option"
+        cases = [
+            ([{"name": name, "value": None}], "the value must be a text, a whole number or true or false, not null"),
+            ([{"name": name, "value": {"a": 1}}], "the value must be a text, a whole number or true or false, not map"),
+            ([{"name": name, "value": ["a"]}], "the value must be a text, a whole number or true or false, not slice"),
+            ([{"name": name, "value": 2.5}], "a number must be whole"),
+            ([{"name": name, "value": "x", "secret": {"name": "s", "key": "k"}}], "a value or a secret, not both"),
+            ([{"name": name, "secret": "s"}], "secret must be {name, key}"),
+            ([{"name": name, "secret": {"name": "s"}}], "secret must be {name, key}"),
+            ([{"name": name, "secret": {"key": "k"}}], "secret must be {name, key}"),
+            ([{"name": name, "secret": {"name": "", "key": "k"}}], "secret must be {name, key}"),
+            ([{"name": name, "secret": {"name": "s", "key": "k", "other": "x"}}], "secret must be {name, key}"),
+            ([{"name": name, "secret": None}], "secret must be {name, key}"),
+            ([{"name": name}], "needs a value or a secret"),
+            ([{"name": name, "value": "a"}, {"name": name, "value": "b"}], "the option is listed twice"),
+        ]
+        for bad, text in cases:
+            with self.subTest(entry=bad):
+                p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": bad}))
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("keycloak.additionalOptions[%s]: %s" % (name, text), p.stderr)
+        for bad in ([{"name": ""}], [{"name": 3, "value": "x"}], ["log-level"]):
+            with self.subTest(entry=bad):
+                p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": bad}))
+                self.assertIn("keycloak.additionalOptions: each entry needs a name", p.stderr)
 
     def test_failsafe_is_off_unless_switched_on(self):
         self.assertNotIn("patroni", cluster(self.ok(OWN_DB))["spec"])

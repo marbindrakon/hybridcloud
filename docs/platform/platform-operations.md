@@ -67,8 +67,10 @@ without these settings; and the Keycloak's readiness probe does not test a write
 writes succeed.
 
 Further server options of an installation go into `keycloak.additionalOptions`, entries `{name, value}` or
-`{name, secret: {name, key}}`, rendered after the chart's own; the options the chart sets itself (`http-enabled`,
-`hostname-strict`, `db-url-properties`, `db-pool-max-lifetime`) are refused there.
+`{name, secret: {name, key}}`, each name once, rendered after the chart's own. A value is a text, a whole number or
+true or false; null, a map, a list or a fraction is refused (write a fraction as a text), and so is an entry with
+both a value and a secret. The options the chart sets itself (`http-enabled`, `hostname-strict`,
+`db-url-properties`, `db-pool-max-lifetime`) and `db-url` are refused there. Every refusal names the option.
 
 The two options are server options (`spec.additionalOptions` of the Keycloak), applied by the Keycloak operator as
 environment variables of the Keycloak's pods: a change of either rolls the pods. The central chart's Applications
