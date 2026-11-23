@@ -263,18 +263,19 @@ ops:
         incr: 50
       # a database with a backup repository volume but no scheduled full backup, for this long
       notScheduledFor: 6h
-    # An aggregated API (an APIService served by a pod) unavailable: namespace deletes hang meanwhile. Fires when it
-    # was unavailable for more than unavailableFraction of the last `window` (so an API that flaps is caught too).
+    # An aggregated API (an APIService served by a pod) unavailable: namespace deletes hang meanwhile. Fires while it
+    # has been unavailable for `for`, or while it was unavailable for at least unavailableFraction of the last
+    # flapWindow (an API that keeps dropping out), held for `for`.
     aggregatedAPIs:
       enabled: false
       names: ".+"                                    # regular expression of the APIService names watched
-      window: 10m
+      for: 10m
+      flapWindow: 1h
       unavailableFraction: 0.5
-      for: 5m                                        # ... held this long
     # The event activations of the automation platform (files/eda_activations.py), on the cluster that runs it:
-    # an activation that is enabled but not running is disabled and enabled again, at most maxRepairsPerHour times
-    # an hour each; the repair count is kept in the ConfigMap eda-activations-state of ops.namespace. Only activations
-    # with restart policy `always` are watched. A second CronJob (eda-api-check) reports an event-automation API that
+    # a watched activation (enabled, restart policy `always`) that does not run is restarted (one call), at most
+    # maxRepairsPerHour times an hour each; the count is kept in the ConfigMap eda-activations-state of ops.namespace.
+    # A disabled activation is never touched. A second CronJob (eda-api-check) reports an event-automation API that
     # does not answer (while it does, the activation alert stays quiet: one fault, one alert).
     edaActivations:
       enabled: false
@@ -285,23 +286,23 @@ ops:
       url: ""                       # the platform gateway's base URL (https), e.g. https://automation.example.com
       automationNamespace: ""       # the namespace where the platform runs the activation Jobs
       # Secret in ops.namespace with key token (a bearer token), or keys username and password. The account needs to
-      # view, enable and disable the activations (the organization's Operator role).
+      # view and restart the activations (docs/platform/platform-alerts.md names the role).
       credentialSecret: ""
       caConfigMap: ""               # ConfigMap in ops.namespace with key ca.crt when the gateway's CA is private
       maxRepairsPerHour: 3
-      maxRepairsPerDay: 6           # more repairs of one activation in a day: reported although each one worked
+      maxRepairsPerDay: 6           # more restarts of one activation in a day: reported although each one worked
       allowNoActivations: false     # an empty activations list is reported (an account that sees none) unless true
-      notRunningMinutes: 4          # not running on two runs this far apart before a repair
+      notRunningMinutes: 4          # not running on two runs this far apart before a restart
       transitionalMinutes: 10       # pending, starting or stopping this long counts as not running
-      stopTimeoutSeconds: 90
       startTimeoutSeconds: 180
-      # status messages of an activation that cannot run as it is (reported, never repaired)
+      # status messages of an activation that cannot run as it is (reported, never restarted)
       cannotRunPatterns: ["pull failed", "container request is not valid"]
       # remove the older Job when one activation has two running Jobs and its latest instance runs (also grants
       # deleting Jobs in automationNamespace)
       removeStaleJobs: false
       alertFor: 10m
-      staleMinutes: 60              # no successful run for this long, or the CronJob suspended: alerted
+      staleMinutes: 60              # no successful run for this long, or the CronJob suspended: alerted (keep it
+                                    # well above the schedule's interval)
     # A write to each listed Keycloak's database (files/identity_write_probe.py): in a dedicated realm, a client's
     # service account updates its own user through the Admin API. Turn it on per Keycloak;
     # docs/platform/platform-alerts.md says what to create.

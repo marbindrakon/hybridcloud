@@ -28,6 +28,18 @@ or (max by (namespace, cronjob) (kube_cronjob_spec_suspend{ {{- $sel -}} }) == 1
 or ({{ include "shc-cluster-base.cronJobStale" . }})
 {{- end }}
 
+{{- /* the API check down in a way that silences the activation alert: failing on every evaluation of the last 3
+minutes (a healthy run in flight is scheduled-but-not-yet-succeeded for a moment only), never succeeded, or stale. Not
+when suspended: a suspended API check must not hide the activation alert. . = (list selector minutes) */}}
+{{- define "shc-cluster-base.apiCheckDown" -}}
+{{- $sel := index . 0 -}}
+(min_over_time((max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
+  - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }))[3m:]) > 0)
+or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
+  unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- $sel -}} })
+or (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }) > {{ mul (index . 1) 60 }})
+{{- end }}
+
 {{- define "shc-cluster-base.platformHealthEnabled" -}}
 {{- $p := .Values.ops.platformHealth | default dict -}}
 {{- range $k := list "volumes" "databaseBackups" "aggregatedAPIs" "edaActivations" "identityWriteProbe" -}}
@@ -72,7 +84,7 @@ or ({{ include "shc-cluster-base.cronJobStale" . }})
         {{ $rox }}
       for: 1h
       labels:
-        severity: critical
+        severity: warning
       annotations:
         summary: "Volume {{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "persistentvolumeclaim" }} fills within {{ .fullWithinDays }} days at its present rate"
         description: "The volume is over {{ .fillsSoonMinPercent }} % used and at the rate of the last {{ .rateWindow }} full within {{ .fullWithinDays }} days. Find what grows on it (for a database: its write-ahead log waiting for a backup repository that is full or failing) before it is full."
@@ -124,13 +136,14 @@ or ({{ include "shc-cluster-base.cronJobStale" . }})
   rules:
     - alert: ShcAggregatedAPIUnavailable
       expr: >-
-        max by (name) (avg_over_time(aggregator_unavailable_apiservice{name=~"{{ .names }}"}[{{ .window }}])) > {{ .unavailableFraction }}
+        (max by (name) (aggregator_unavailable_apiservice{name=~"{{ .names }}"}) == 1)
+        or (max by (name) (avg_over_time(aggregator_unavailable_apiservice{name=~"{{ .names }}"}[{{ .flapWindow }}])) >= {{ .unavailableFraction }})
       for: {{ .for }}
       labels:
         severity: critical
       annotations:
         summary: "Aggregated API {{ include "shc-cluster-base.label" "name" }} is unavailable"
-        description: "The API server could not reach the service behind this APIService for most of the last {{ .window }}. Meanwhile namespace deletes do not finish, and so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer."
+        description: "The API server cannot reach the service behind this APIService: for {{ .for }} without a break, or for at least {{ mul (float64 .unavailableFraction | mulf 100 | int) 1 }} % of the last {{ .flapWindow }}. Meanwhile namespace deletes do not finish, and so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer."
 {{- end }}{{ end }}
 {{- with $p.edaActivations }}{{ if .enabled }}
 {{- $act := list (printf "%s, cronjob=\"eda-activations\"" $ns) .staleMinutes }}
@@ -142,13 +155,13 @@ or ({{ include "shc-cluster-base.cronJobStale" . }})
       expr: >-
         ({{ include "shc-cluster-base.checkDown" $act | nindent 10 | trim }})
         unless on (namespace)
-        ({{ include "shc-cluster-base.checkDown" $api | nindent 10 | trim }})
+        ({{ include "shc-cluster-base.apiCheckDown" $api | nindent 10 | trim }})
       for: {{ .alertFor }}
       labels:
         severity: critical
       annotations:
         summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: an event activation is not running after repair, cannot run, or has two pods, or the check itself did not complete"
-        description: "The activation check found activations it could not bring back within its repair limit, that cannot run as they are, that were repaired too often in a day, or that run twice; or it could not do its own work (its repair count unreadable or not saved, the activation Jobs or an activation's instances unreadable), has not succeeded for {{ .staleMinutes }} minutes, or is suspended. Its findings: oc -n {{ include "shc-cluster-base.label" "namespace" }} get jobs, then oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-activations Job>. The ConfigMap eda-activations-state shows each activation's repairs and gaveUp. Fix the cause (the image, the project, the credential), then enable the activation again; of two Jobs of one activation, remove the older."
+        description: "The activation check found activations it could not bring back within its restart limit, that the platform refuses to restart, that cannot run as they are, that were restarted too often in a day, or that run twice; or it could not do its own work (its restart count unreadable, not saved, or written by another run; the activation Jobs or an activation's instances unreadable), has not succeeded for {{ .staleMinutes }} minutes, or is suspended. Its findings: oc -n {{ include "shc-cluster-base.label" "namespace" }} get jobs, then oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-activations Job>. The ConfigMap eda-activations-state shows each activation's restarts and gaveUp (the platform refused its restart). Fix the cause (the image, the project, the credential); the check restarts it on its next run when the hour allows. Of two Jobs of one activation, remove the older."
     - alert: ShcAutomationAPIUnavailable
       expr: >-
         {{ include "shc-cluster-base.checkDown" $api | nindent 8 | trim }}

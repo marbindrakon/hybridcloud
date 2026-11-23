@@ -86,12 +86,15 @@ class Render(unittest.TestCase):
         rules = health_rules(render("--set", P + "volumes.enabled=true", "--set", P + "volumes.warningPercent=70",
                                     "--set", P + "volumes.namespaces=platform-.*",
                                     "--set", P + "volumes.fillsSoonMinPercent=60",
-                                    "--set", P + "aggregatedAPIs.enabled=true", "--set", P + "aggregatedAPIs.window=20m",
+                                    "--set", P + "aggregatedAPIs.enabled=true", "--set", P + "aggregatedAPIs.flapWindow=20m",
                                     "--set", P + "aggregatedAPIs.unavailableFraction=0.3"))
         self.assertIn("> 70 <= 90", rules["ShcVolumeFilling"]["expr"])
         self.assertIn('namespace=~"platform-.*"', rules["ShcVolumeFilling"]["expr"])
         self.assertIn("* 100) > 60)", rules["ShcVolumeFillsSoon"]["expr"])
-        self.assertIn("[20m])) > 0.3", rules["ShcAggregatedAPIUnavailable"]["expr"])
+        self.assertIn("[20m])) >= 0.3", rules["ShcAggregatedAPIUnavailable"]["expr"])
+        # a trend alone is a warning; critical only when the volume is over the critical threshold
+        self.assertEqual(rules["ShcVolumeFillsSoon"]["labels"]["severity"], "warning")
+        self.assertEqual(rules["ShcVolumeAlmostFull"]["labels"]["severity"], "critical")
 
     def test_activation_check(self):
         k = by_key(render(*EDA))
@@ -270,23 +273,24 @@ def tests(rules):
                                                     "Database backup platform-db/app-pg-repo1-diff: no successful run "
                                                     "for 2d 4h 0m 0s")]),
          ]},
-        # aggregated APIs: one unavailable for 15 minutes, then back; one unavailable 4 of every 5 minutes (fires);
-        # one with a one-minute blip every 10 minutes (never)
+        # aggregated APIs: unavailable from minute 20 on (fires at minute 30, while still down); a new APIService
+        # unavailable for its first 4 minutes (quiet); one unavailable every other minute for an hour (fires)
         {"interval": "1m",
-         "input_series": [{"series": 'aggregator_unavailable_apiservice{name="v1.example.io",instance="a"}',
-                           "values": "0x10 1x15 0x20"},
-                          {"series": 'aggregator_unavailable_apiservice{name="v1.example.io",instance="b"}',
-                           "values": "0x45"},
-                          {"series": 'aggregator_unavailable_apiservice{name="v1.flap.io",instance="a"}',
-                           "values": " ".join(["1 1 1 1 0"] * 9)},
-                          {"series": 'aggregator_unavailable_apiservice{name="v1.blip.io",instance="a"}',
-                           "values": " ".join(["1 0 0 0 0 0 0 0 0 0"] * 5)}],
+         "input_series": [{"series": 'aggregator_unavailable_apiservice{name="v1.down.io",instance="a"}',
+                           "values": "0x20 1x60"},
+                          {"series": 'aggregator_unavailable_apiservice{name="v1.down.io",instance="b"}',
+                           "values": "0x80"},
+                          {"series": 'aggregator_unavailable_apiservice{name="v1.new.io",instance="a"}',
+                           "values": "_x30 1x3 0x46"},
+                          {"series": 'aggregator_unavailable_apiservice{name="v1.half.io",instance="a"}',
+                           "values": " ".join(["1 0"] * 41)}],
          "alert_rule_test": [
-             a("ShcAggregatedAPIUnavailable", "10m", [({"name": "v1.flap.io"}, "Aggregated API v1.flap.io is unavailable")]),
-             a("ShcAggregatedAPIUnavailable", "24m", [({"name": "v1.example.io"},
-                                                       "Aggregated API v1.example.io is unavailable"),
-                                                      ({"name": "v1.flap.io"}, "Aggregated API v1.flap.io is unavailable")]),
-             a("ShcAggregatedAPIUnavailable", "40m", [({"name": "v1.flap.io"}, "Aggregated API v1.flap.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "28m", [({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "31m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
+                                                      ({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "45m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
+                                                      ({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "5m", []),
          ]},
         # the checks: the activation check failing alone fires after 10 minutes; once the API check fails too, only the
         # API alert holds (one fault, one alert); the identity probe that never succeeded fires; the generic job alert
@@ -310,6 +314,25 @@ def tests(rules):
                                       "description": "The most recent run of CronJob etcd-backup did not succeed. "
                                                      "The failed pod's termination message or its log says why."}}]},
              {"eval_time": "90m", "alertname": "ShcBackupJobNeverSucceeded", "exp_alerts": []},
+         ]},
+        # the activation check failing while the API check is healthy but caught in flight once a cycle (scheduled, not
+        # yet succeeded): the activation alert still fires; with the API check suspended it fires too
+        {"interval": "1m",
+         "input_series": cron(ops, "eda-activations", "0+60x60", "0x60")
+                         + cron(ops, "eda-api-check", "0 0 0 0 0 300 300 300 300 300 600 600 600 600 600 900 900 900 900 900 1200 1200 1200 1200 1200 1500 1500 1500 1500 1500 1800 1800 1800 1800 1800 2100 2100 2100 2100 2100 2400 2400 2400 2400 2400 2700 2700 2700 2700 2700 3000 3000 3000 3000 3000 3300 3300 3300 3300 3300 3600", "0 0 0 0 0 0 300 300 300 300 300 600 600 600 600 600 900 900 900 900 900 1200 1200 1200 1200 1200 1500 1500 1500 1500 1500 1800 1800 1800 1800 1800 2100 2100 2100 2100 2100 2400 2400 2400 2400 2400 2700 2700 2700 2700 2700 3000 3000 3000 3000 3000 3300 3300 3300 3300 3300"),
+         "alert_rule_test": [
+             a("ShcEventActivationsNotRunning", "15m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcEventActivationsNotRunning", "40m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcAutomationAPIUnavailable", "40m", []),
+         ]},
+        {"interval": "1m",
+         "input_series": cron(ops, "eda-activations", "0+60x40", "0x40")
+                         + cron(ops, "eda-api-check", "0+60x40", "0+60x40")
+                         + [{"series": 'kube_cronjob_spec_suspend{namespace="%s",cronjob="eda-api-check"}' % ops,
+                             "values": "1x40"}],
+         "alert_rule_test": [
+             a("ShcEventActivationsNotRunning", "15m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcAutomationAPIUnavailable", "15m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
          ]},
         # staleness: a check that is suspended (its last run fine) fires; one whose last success is more than an hour
         # old fires, even with no failed run; a fresh install (the CronJob exists, nothing ran yet) stays quiet
