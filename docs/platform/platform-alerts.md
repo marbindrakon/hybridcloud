@@ -75,15 +75,20 @@ activation (only with `removeStaleJobs: true` it deletes the older of two Jobs o
   restarts it again when the hour allows.
 - Every restart is counted in the ConfigMap `eda-activations-state` in `ops.namespace` before it is made, for every
   activation of a run before the first call. If the count cannot be stored, nothing is restarted and the run reports.
-  If it cannot be read, nothing is restarted. If another run wrote it meanwhile (two runs at once), the run stops
-  without acting further and reports. A restart that was counted but not made (the activation changed in between)
-  is taken off the count again.
+  If it cannot be read, or holds a state of the wrong shape, nothing is restarted and the run reports (a person
+  repairs or deletes the ConfigMap). If another run wrote it meanwhile (two runs at once), the run stops without
+  acting further and reports. A restart that was counted but not made (the activation changed in between) is taken
+  off the count again. Each restart is stamped with the time its count is written. An activation missing from one
+  read of the list keeps its count for a day; one listed twice in a read is judged once.
 - More than `maxRepairsPerDay` (6) restarts of one activation within a day are reported although each one worked,
   so that an activation that keeps dying is looked at. The report holds until fewer than that are within the last
   24 hours, also after the activation runs steadily again.
 - A restart the platform refuses as invalid or not allowed (400, 403) gives up on that activation: reported on
   every run, not restarted again until it is seen running or is disabled. Any other failed restart counts as an
   attempt and is reported.
+- A run ends at the Job's deadline of 10 minutes. When many activations stop at once and the platform answers
+  slowly, a run can reach it: the restarts it made are counted, those it counted but did not reach stay counted, and
+  the rest continue on the next run. At the start of its restarts the run logs how many it will make and which.
 
 **What it reports** (the run then exits with an error, which raises `ShcEventActivationsNotRunning`): an activation
 at the cap, refused, or not running after its restart; one restarted too often in a day; one that cannot run as it

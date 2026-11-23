@@ -25,14 +25,16 @@ Modes:
                    failure of the activation waits for this check's next run.
 
                    Exit 0: nothing needs a person and the run was complete. Exit 1: something was reported, a
-                   restart did not bring the activation back, another run holds the count, or a read or write the
-                   run needed failed (including the activations list).
+                   restart did not bring the activation back, another run holds the count, the stored count has the
+                   wrong shape (nothing is restarted then), or a read or write the run needed failed (including the
+                   activations list). A run cut by its deadline (a storm of restarts) continues on the next run; the
+                   restarts it counted but did not reach stay counted.
   api              one authenticated read of the activations list. Exit 0 when it answers, 1 when it does not
                    answer, answers an error, or refuses the credential.
 
 The only calls to the platform are GETs and POST .../restart/. The decisions are pure functions (decide, still_due,
-job_findings, stale_jobs, prune_state); run_check does the reads and writes they ask for. Standard library only
-(the job image's Python 3.9 or later). https only, redirects not followed, a next-page link only on the same origin.
+job_findings, stale_jobs, prune_state, state_fault); run_check does the reads and writes they ask for. Standard
+library only (the job image's Python 3.9 or later). https only, redirects not followed, a next-page link only on the same origin.
 
 Configuration: a JSON file (--config); see DEFAULTS. The credential comes from files in credentialDir: `token` (sent
 as a bearer token), or `username` and `password` (basic authentication). It never appears in any output.
@@ -247,25 +249,62 @@ def stale_jobs(activation, instance, jobs_of_activation):
     return [j[1] for j in sorted(running) if j[0] < latest]
 
 
-def prune_state(state, activation_ids):
-    """The state without activations that no longer exist."""
+def prune_state(state, activation_ids, now):
+    """The state without activations that are not in the list, except those restarted within the last day: an
+    activation missing from one read of the list keeps its count."""
     keep = {str(i) for i in activation_ids}
-    return {k: v for k, v in (state or {}).items() if k in keep}
+    return {k: v for k, v in (state or {}).items() if k in keep or in_window((v or {}).get("repairs"), now, DAY)}
+
+
+def is_number(x):
+    return isinstance(x, (int, float)) and not isinstance(x, bool)
+
+
+def state_fault(state):
+    """What is wrong with the shape of a stored state, or None. A record is a map with optional keys repairs (a list
+    of unix seconds), notRunningSince (unix seconds or null), gaveUp (true or false) and name."""
+    for key, rec in state.items():
+        if not isinstance(rec, dict):
+            return "the record of activation %s is not a map" % key
+        repairs = rec.get("repairs")
+        if repairs is not None and (not isinstance(repairs, list) or not all(is_number(t) for t in repairs)):
+            return "the record of activation %s has repairs that are not a list of times" % key
+        since = rec.get("notRunningSince")
+        if since is not None and not is_number(since):
+            return "the record of activation %s has a notRunningSince that is not a time" % key
+        if not isinstance(rec.get("gaveUp", False), bool):
+            return "the record of activation %s has a gaveUp that is not true or false" % key
+    return None
 
 
 def summarize(lines):
     """The termination message: one line per finding, at most 4000 bytes."""
-    text = "\n".join(line for line in lines if line) or "every watched activation runs"
+    text = "\n".join(line for line in lines if line) or "nothing needs a person (the counts line says what was seen)"
     return redact(text)[:4000]
 
 
 # ---- I/O --------------------------------------------------------------------------------------------------------
+
+WHOLE_NUMBERS = {"requestTimeoutSeconds": 1, "maxRepairsPerHour": 1, "maxRepairsPerDay": 1, "notRunningMinutes": 0,
+                 "transitionalMinutes": 0, "startTimeoutSeconds": 1, "pollSeconds": 0}
+SWITCHES = ("removeStaleJobs", "allowNoActivations")
+
 
 def load_config(path):
     cfg = dict(DEFAULTS)
     if path:
         with open(path) as f:
             cfg.update(json.load(f) or {})
+    for key, least in WHOLE_NUMBERS.items():
+        v = cfg.get(key)
+        if not isinstance(v, int) or isinstance(v, bool) or v < least:
+            raise SystemExit("setting %s must be a whole number of at least %d" % (key, least))
+    for key in SWITCHES:
+        if not isinstance(cfg.get(key), bool):
+            raise SystemExit("setting %s must be true or false" % key)
+    patterns = cfg.get("cannotRunPatterns")
+    if not isinstance(patterns, list) or not all(isinstance(p, str) for p in patterns):
+        raise SystemExit("setting cannotRunPatterns must be a list of texts")
     return cfg
 
 
@@ -500,6 +539,9 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
     # the count first: a run that started after another one wrote it sees that write
     try:
         state, version = kube.read_state(cfg["stateNamespace"], cfg["stateConfigMap"])
+        fault = state_fault(state)
+        if fault:
+            raise ApiError("the ConfigMap %s holds a state of the wrong shape: %s" % (cfg["stateConfigMap"], fault))
         state_ok = True
     except ApiError as e:
         state, version, state_ok = {}, None, False
@@ -520,10 +562,15 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
         jobs = None
         problem("the activation Jobs in %s cannot be listed: %s" % (cfg["automationNamespace"], e))
 
-    new_state, due, not_watched, refs = {}, [], [], {}
+    new_state, due, not_watched, refs, watched_ids = {}, [], [], {}, set()
     for a in items:
         aid, name = int(a["id"]), a.get("name") or str(a.get("id"))
+        if aid in refs:
+            say("skip activation %s (id %d): listed twice in one read of the list; judged once" % (name, aid))
+            continue
         ref = refs[aid] = "activation %s (id %d)" % (name, aid)
+        if watched(a):
+            watched_ids.add(aid)
         old = state.get(str(aid))
         if a.get("is_enabled"):
             counts["enabled"] += 1
@@ -582,19 +629,21 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
     ids = [a["id"] for a in items]
     try:
         if due and not dry_run:
-            version = restart_due(eda, kube, cfg, now, due, refs, new_state, ids, version, counts, problem, say,
+            version = restart_due(eda, kube, cfg, now, due, refs, state, new_state, ids, version, counts, problem, say,
                                   clock, sleep)
         elif due:
             for aid, a, why in due:
                 say("would restart %s: %s" % (refs[aid], why))
         for key, rec in new_state.items():
+            if int(key) not in watched_ids:
+                continue   # a disabled or unwatched activation is never reported
             day = len(rec.get("repairs") or [])
             if day > cfg["maxRepairsPerDay"]:
                 problem("%s: RepairedTooOften: %d restarts in the last day (more than %d); find why it stops"
                         % (refs.get(int(key), key), day, cfg["maxRepairsPerDay"]))
         if state_ok and not dry_run and version is not False:
             try:
-                store(kube, cfg, prune_state(new_state, ids), version)
+                store(kube, cfg, prune_state(dict(state, **new_state), ids, now), version)
             except ApiError as e:
                 problem("the restart count could not be saved: %s" % e)
     except Conflict:
@@ -602,18 +651,22 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
     return counts, report
 
 
-def restart_due(eda, kube, cfg, now, due, refs, new_state, ids, version, counts, problem, say, clock, sleep):
+def restart_due(eda, kube, cfg, now, due, refs, state, new_state, ids, version, counts, problem, say, clock, sleep):
     """The restarts of one run. Returns the state's resourceVersion for the final write, or False when the final
     write must not happen (nothing was restarted because the count could not be stored)."""
+    # each restart is stamped with the time of the write that counts it, so a slow run does not date its restarts
+    # back to its start
+    stamp = max(now, int(clock()))
     planned = dict(new_state)
     for aid, a, why in due:
         rec = dict(new_state[str(aid)])
-        rec["repairs"] = list(rec.get("repairs") or []) + [now]
-        rec["notRunningSince"] = now
+        rec["repairs"] = list(rec.get("repairs") or []) + [stamp]
+        rec["notRunningSince"] = stamp
         planned[str(aid)] = rec
+    say("restarts due in this run: %d (%s)" % (len(due), ", ".join(refs[aid] for aid, _, _ in due)))
     # every restart of the batch counted durably before the first call
     try:
-        version = store(kube, cfg, prune_state(planned, ids), version)
+        version = store(kube, cfg, prune_state(dict(state, **planned), ids, stamp), version)
     except ApiError as e:
         problem("the restart count could not be saved, so nothing was restarted: %s" % e)
         return False
@@ -631,7 +684,7 @@ def restart_due(eda, kube, cfg, now, due, refs, new_state, ids, version, counts,
                 ref, "enabled" if fresh.get("is_enabled") else "disabled", fresh.get("status")))
             continue   # not made: the final write takes its count back
         new_state[str(aid)] = planned[str(aid)]
-        hour = len(in_window(planned[str(aid)]["repairs"], now, HOUR))
+        hour = len(in_window(planned[str(aid)]["repairs"], stamp, HOUR))
         say("restart %s: %s (restart %d of at most %d this hour)" % (ref, why, hour, cfg["maxRepairsPerHour"]))
         try:
             eda.restart(aid)

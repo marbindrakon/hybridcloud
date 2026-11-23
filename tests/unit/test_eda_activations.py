@@ -48,10 +48,10 @@ def inst(iid, status="running", message=""):
 
 
 class Clock:
-    """A clock that moves on 5 s each time it is read, so every wait in the check ends."""
+    """A clock that reads `start` first and moves on 5 s each time it is read, so every wait in the check ends."""
 
-    def __init__(self):
-        self.t = 0
+    def __init__(self, start=NOW):
+        self.t = start - 5
 
     def __call__(self):
         self.t += 5
@@ -93,6 +93,9 @@ class Decide(unittest.TestCase):
         # at the cap it is restarted again once the hour allows
         (act(status="failed"), inst(10, "failed"),
          {"notRunningSince": NOW - 300, "repairs": [NOW - 7000, NOW - 6000, NOW - 5000]}, E.RESTART),
+        # the clock stepped back: restarts stamped "in the future" still count
+        (act(status="failed"), inst(10, "failed"),
+         {"notRunningSince": OLD, "repairs": [NOW + 600, NOW + 1200, NOW + 1800]}, E.LIMIT),
         # a restart the platform refused: left alone, reported
         (act(status="error"), None, {"notRunningSince": OLD, "gaveUp": True, "repairs": []}, E.GAVE_UP),
     ]
@@ -173,10 +176,12 @@ class FakeEda:
     (a first read), reread (a read just before a restart), restart, refused (403), disable-between (a person
     disables the first subject between the reads)."""
 
-    def __init__(self, items, instances=None, never_runs=(), invalid=(), log=None, fail=None, kill=None):
+    def __init__(self, items, instances=None, never_runs=(), invalid=(), log=None, fail=None, kill=None,
+                 stays_pending=(), duplicate=None, missing=None):
         self.items = {a["id"]: dict(a) for a in items}
         self.instances = {k: list(v) for k, v in (instances or {}).items()}
-        self.never_runs, self.invalid = set(never_runs), set(invalid)
+        self.never_runs, self.invalid, self.stays_pending = set(never_runs), set(invalid), set(stays_pending)
+        self.duplicate, self.missing = duplicate, missing
         self.log = log if log is not None else []
         self.fail, self.kill = fail, kill
         self.list_reads = 0
@@ -191,7 +196,10 @@ class FakeEda:
         self.log.append(("GET", "list"))
         if self.fail == ("list" if self.list_reads == 1 else "wait"):
             raise boom("GET /api/eda/v1/activations/")
-        return [dict(a) for a in self.items.values()]
+        out = [dict(a) for a in self.items.values() if a["id"] != self.missing]
+        if self.duplicate is not None:
+            out.append(dict(self.items[self.duplicate]))
+        return out
 
     def detail(self, aid):
         self.log.append(("GET", aid))
@@ -213,7 +221,7 @@ class FakeEda:
             raise boom("POST restart", status=403)
         if aid in self.invalid:
             raise E.ApiError("POST restart: answered 400 (the decision environment does not exist)", status=400)
-        a["status"] = "failed" if aid in self.never_runs else "running"
+        a["status"] = "failed" if aid in self.never_runs else "pending" if aid in self.stays_pending else "running"
         nid = max([i["id"] for i in self.instances.get(aid, [])] + [0]) + 1
         self.instances.setdefault(aid, []).append(inst(nid, a["status"]))
 
@@ -225,8 +233,10 @@ class FakeKube:
     """The state ConfigMap (committed = what a later run reads) and the Jobs list. fail_writes: which writes of a run
     fail (1 = the first); conflict_writes: which answer 409."""
 
-    def __init__(self, jobs=(), state=None, unreadable=False, log=None, fail_writes=(), conflict_writes=()):
+    def __init__(self, jobs=(), state=None, unreadable=False, log=None, fail_writes=(), conflict_writes=(),
+                 jobs_fail=False):
         self.job_items = [{"metadata": {"name": n}, "status": {"active": a}} for n, a in jobs]
+        self.jobs_fail = jobs_fail
         self.committed = copy.deepcopy(state)
         self.unreadable = unreadable
         self.log = log if log is not None else []
@@ -236,6 +246,8 @@ class FakeKube:
         self.deleted = []
 
     def jobs(self, ns):
+        if self.jobs_fail:
+            raise boom("GET jobs", status=403)
         return self.job_items
 
     def delete_job(self, ns, name):
@@ -259,8 +271,9 @@ class FakeKube:
         return "v%d" % self.writes
 
 
-def run(eda, kube, cfg=None, dry_run=False, now=NOW):
+def run(eda, kube, cfg=None, dry_run=False, now=NOW, clock=None):
     lines = []
+    eda.log.append(("run", now))
     eda.list_reads = 0
     eda.restarting = False
     kube.writes = 0
@@ -271,7 +284,7 @@ def run(eda, kube, cfg=None, dry_run=False, now=NOW):
         return orig(*a, **k)
     E.restart_due = phase
     try:
-        counts, report = E.run_check(eda, kube, dict(CFG, **(cfg or {})), now, dry_run, clock=Clock(),
+        counts, report = E.run_check(eda, kube, dict(CFG, **(cfg or {})), now, dry_run, clock=clock or Clock(now),
                                      sleep=lambda s: None, out=lines.append)
     finally:
         E.restart_due = orig
@@ -292,7 +305,7 @@ class Check(unittest.TestCase):
     def test_state_is_read_before_the_list(self):
         log = []
         run(FakeEda([act()], {1: [inst(1)]}, log=log), FakeKube(log=log))
-        self.assertEqual(log[0], ("read-state",))
+        self.assertEqual([e for e in log if e[0] != "run"][0], ("read-state",))
 
     def test_waits_then_restarts_in_one_batch(self):
         items = [act(1, "a", "failed", message="Activation has reached the maximum number of restarts"),
@@ -457,6 +470,109 @@ class Check(unittest.TestCase):
         run(eda, kube, dry_run=True)
         self.assertEqual((eda.calls, kube.writes), ([], 0))
 
+    def test_the_newest_instance_is_the_highest_id_in_any_order(self):
+        # the platform lists the instances newest first
+        self.assertEqual(E.latest_instance({"instances": [inst(30), inst(20, "failed")]})["id"], 30)
+        self.assertEqual(E.latest_instance({"instances": [inst(20, "failed"), inst(30)]})["id"], 30)
+        eda = FakeEda([act(5, "steady")], {5: [inst(30), inst(20, "failed")]})
+        counts, report, _ = run(eda, FakeKube(state={"5": {"notRunningSince": OLD}}))
+        self.assertEqual((eda.calls, report, counts["running"]), ([], [], 1))
+
+    def test_a_restart_that_leaves_it_pending_is_reported_and_waits_its_grace(self):
+        eda = FakeEda([act(4, "x", "failed")], stays_pending={4})
+        kube = FakeKube(state={"4": {"notRunningSince": OLD}})
+        counts, report, _ = run(eda, kube)
+        self.assertEqual(eda.calls, [("restart", 4)])
+        self.assertIn("NotRunningAfterRestart: pending", report[0])          # the run exits 1
+        self.assertEqual(counts["restarted"], 0)
+        counts, report, _ = later(eda, kube, 5)
+        self.assertEqual((len(eda.calls), report, counts["waiting"]), (1, [], 1))
+        later(eda, kube, 11)
+        self.assertEqual(len(eda.calls), 2)
+
+    def test_an_unreadable_detail_keeps_the_count(self):
+        at_cap = [NOW - 3000, NOW - 2000, NOW - 1000]
+        eda = FakeEda([act(4, "x", "failed")], fail="detail")
+        kube = FakeKube(state={"4": {"notRunningSince": OLD, "repairs": list(at_cap)}})
+        counts, report, _ = run(eda, kube)
+        self.assertIn("its instances cannot be read", report[0])
+        self.assertEqual(kube.committed["4"]["repairs"], at_cap)
+        eda.fail = None
+        counts, report, _ = later(eda, kube, 5)
+        self.assertEqual(eda.calls, [])
+        self.assertIn("RepairLimitReached", report[0])
+
+    def test_unreadable_jobs_are_reported(self):
+        eda = FakeEda([act(1)], {1: [inst(1)]})
+        counts, report, _ = run(eda, FakeKube(jobs_fail=True))
+        self.assertEqual(len(report), 1)
+        self.assertIn("the activation Jobs in automation cannot be listed", report[0])
+
+    def test_a_clock_stepped_back_keeps_the_cap(self):
+        eda = FakeEda([act(4, "x", "failed")])
+        kube = FakeKube(state={"4": {"notRunningSince": OLD, "repairs": [NOW + 600, NOW + 1200, NOW + 1800]}})
+        counts, report, _ = run(eda, kube)
+        self.assertEqual(eda.calls, [])
+        self.assertIn("RepairLimitReached", report[0])
+
+    def test_records_of_activations_gone_from_the_list(self):
+        # gone without a restart in the last day: dropped; restarted within the last day: kept (it may be missing
+        # from one read only)
+        kube = FakeKube(state={"7": {"repairs": [NOW - 90000]}, "8": {"repairs": [NOW - 1000]}, "9": {}})
+        run(FakeEda([act(1)], {1: [inst(1)]}), kube)
+        self.assertEqual(sorted(kube.committed), ["1", "8"])
+
+    def test_an_activation_listed_twice_is_restarted_once(self):
+        eda = FakeEda([act(4, "x", "failed")], duplicate=4)
+        kube = FakeKube(state={"4": {"notRunningSince": OLD}})
+        counts, report, lines = run(eda, kube)
+        self.assertEqual((eda.calls, report), ([("restart", 4)], []))
+        self.assertEqual(len(kube.committed["4"]["repairs"]), 1)
+        self.assertIn("skip activation x (id 4): listed twice in one read of the list; judged once", lines)
+
+    def test_an_activation_missing_from_one_read_keeps_its_count(self):
+        at_cap = [NOW - 3000, NOW - 2000, NOW - 1000]
+        eda = FakeEda([act(4, "x", "failed"), act(5, "y")], {5: [inst(1)]}, missing=4)
+        kube = FakeKube(state={"4": {"notRunningSince": OLD, "repairs": list(at_cap)}})
+        run(eda, kube)
+        self.assertEqual(kube.committed["4"]["repairs"], at_cap)
+        eda.missing = None
+        counts, report, _ = later(eda, kube, 5)
+        self.assertEqual(eda.calls, [])
+        self.assertIn("RepairLimitReached", report[0])
+
+    def test_a_disabled_activation_is_not_reported_for_its_restarts_in_a_day(self):
+        many = [NOW - 3600 * i for i in range(2, 9)]
+        for a in (act(9, "off", "failed", enabled=False), act(9, "one-shot", "completed", policy="never")):
+            with self.subTest(a["name"]):
+                counts, report, _ = run(FakeEda([a]), FakeKube(state={"9": {"repairs": list(many)}}))
+                self.assertEqual(report, [])
+
+    def test_restarts_are_stamped_when_they_are_counted(self):
+        # a slow run: its reads took 400 s before the count was written
+        eda = FakeEda([act(4, "x", "failed")])
+        kube = FakeKube(state={"4": {"notRunningSince": OLD}})
+        run(eda, kube, clock=Clock(NOW + 400))
+        self.assertEqual(kube.committed["4"]["repairs"], [NOW + 400])
+
+    def test_the_run_says_how_many_restarts_it_will_make(self):
+        eda = FakeEda([act(4, "x", "failed"), act(5, "y", "error")])
+        kube = FakeKube(state={"4": {"notRunningSince": OLD}, "5": {"notRunningSince": OLD}})
+        _, _, lines = run(eda, kube)
+        due = [line for line in lines if line.startswith("restarts due in this run")]
+        self.assertEqual(due, ["restarts due in this run: 2 (activation x (id 4), activation y (id 5))"])
+        self.assertLess(lines.index(due[0]), min(i for i, line in enumerate(lines) if line.startswith("restart ")))
+
+    def test_a_state_of_the_wrong_shape_is_reported_and_nothing_restarted(self):
+        for bad in ({"4": []}, {"4": "x"}, {"4": {"repairs": "x"}}, {"4": {"repairs": [NOW, "a"]}},
+                    {"4": {"repairs": [True]}}, {"4": {"notRunningSince": "x"}}, {"4": {"gaveUp": "yes"}}):
+            with self.subTest(bad=bad):
+                eda = FakeEda([act(4, "x", "failed")])
+                kube = FakeKube(state=bad)
+                counts, report, _ = run(eda, kube, {"notRunningMinutes": 0})
+                self.assertEqual((eda.calls, kube.writes), ([], 0))
+                self.assertIn("holds a state of the wrong shape", report[0])
+
     def test_writes_carry_the_version_read(self):
         kube = FakeKube(state={"4": {"notRunningSince": OLD}})
         run(FakeEda([act(4, "x", "failed")]), kube)
@@ -562,14 +678,23 @@ class Enumeration(unittest.TestCase):
             kube.fail_writes, kube.conflict_writes = set(), set()
             try:
                 _, report2, lines2 = later(eda, kube, 5)
+                outcome["report"] = report2
                 if TOKEN in "\n".join(lines2 + report2):
                     bad("the credential is in the output of the second run")
+                # exit status of the second run: non-zero exactly when a person is needed, including an activation
+                # whose restart the platform refused in the first run
+                want2 = person or (fail == "refused" and acting)
+                if bool(report2) != want2:
+                    bad("second run exit %s, expected %s" % ("non-zero" if report2 else "zero",
+                                                             "non-zero" if want2 else "zero"))
             except Exception as e:  # noqa: BLE001
                 bad("the second run raised %r" % e)
             # invariants over both runs
-            stored = copy.deepcopy(state)
+            stored, run_now = copy.deepcopy(state), NOW
             for e in log:
-                if e[0] == "write":
+                if e[0] == "run":
+                    run_now = e[1]
+                elif e[0] == "write":
                     stored = e[1]
                 elif e[0] == "restart":
                     aid, enabled_then, policy = e[1], e[2], e[3]
@@ -577,7 +702,8 @@ class Enumeration(unittest.TestCase):
                         bad("restart of a disabled activation %d" % aid)
                     if policy != "always":
                         bad("restart of an unwatched activation %d" % aid)
-                    if not any(t >= NOW for t in (stored.get(str(aid)) or {}).get("repairs") or []):
+                    # the restart's own stamp: one made in this run, not one an earlier run stored
+                    if not any(t >= run_now for t in (stored.get(str(aid)) or {}).get("repairs") or []):
                         bad("restart of %d without its count stored first" % aid)
                 elif e[0] not in ("GET", "read-state"):
                     bad("a call other than GET and restart: %s" % (e,))
@@ -640,6 +766,8 @@ class Main(unittest.TestCase):
         self.fake = FakeEda([act(1, "a", "failed"), act(2, "b")], {1: [inst(4, "failed")], 2: [inst(5)]})
         self.state = {"1": {"notRunningSince": 1}}
         self.paged = False
+        self.page2_answer = None
+        self.restart_answer = None
         self.eda_answer = None
         self.put_versions = []
 
@@ -649,6 +777,8 @@ class Main(unittest.TestCase):
             if method == "GET" and path.startswith("/api/eda/v1/activations/?"):
                 items = self.fake.activations()
                 if self.paged:
+                    if "page=2" in path and self.page2_answer:
+                        return self.page2_answer
                     if "page=2" in path:
                         return 200, {"count": 2, "next": None, "results": items[1:]}
                     return 200, {"count": 2, "next": "/api/eda/v1/activations/?page_size=200&page=2",
@@ -659,6 +789,8 @@ class Main(unittest.TestCase):
             if method == "GET":
                 return 200, self.fake.detail(aid)
             if method == "POST" and parts[5] == "restart":
+                if self.restart_answer:
+                    return self.restart_answer
                 try:
                     self.fake.restart(aid)
                 except E.ApiError as e:
@@ -721,6 +853,40 @@ class Main(unittest.TestCase):
         self.state = {"2": {"notRunningSince": 1}}
         rc, out = self.capture(["--config", self.config()])
         self.assertIn("restarted activation b (id 2)", out)
+
+    def test_a_broken_second_page_is_a_failed_read(self):
+        self.paged = True
+        for answer in ((500, {"detail": "upstream"}), (200, {"detail": "not a page"}), (200, b"<html></html>")):
+            with self.subTest(answer=answer):
+                self.page2_answer = answer
+                rc, out = self.capture(["--config", self.config()])
+                self.assertEqual(rc, 1)
+                self.assertIn("not checked: the activations list does not answer", out)
+                self.assertEqual([m for m, _, _ in self.eda.seen if m != "GET"], [])
+
+    def test_a_restart_answered_404_is_not_a_restart(self):
+        self.restart_answer = (404, {"detail": "Not found."})
+        rc, out = self.capture(["--config", self.config()])
+        self.assertEqual(rc, 1)
+        self.assertIn("the restart failed (counted as an attempt)", out)
+        self.assertIn("answered 404", out)
+        self.assertNotIn("restarted activation a", out)
+
+    def test_a_state_of_the_wrong_shape_exits_1_without_a_traceback(self):
+        self.state = {"1": ["not", "a", "map"]}
+        rc, out = self.capture(["--config", self.config()])
+        self.assertEqual(rc, 1)
+        self.assertIn("holds a state of the wrong shape", out)
+        self.assertEqual([m for m, _, _ in self.eda.seen if m != "GET"], [])
+
+    def test_settings_of_the_wrong_type_name_the_setting(self):
+        for key, value in (("maxRepairsPerHour", "3"), ("maxRepairsPerHour", None), ("maxRepairsPerDay", 2.5),
+                           ("startTimeoutSeconds", 0), ("notRunningMinutes", True), ("removeStaleJobs", "false"),
+                           ("allowNoActivations", None), ("cannotRunPatterns", "pull failed")):
+            with self.subTest(key=key, value=value):
+                with self.assertRaises(SystemExit) as cm:
+                    E.main(["--config", self.config(**{key: value})], transport=E.make_transport())
+                self.assertIn("setting %s must be" % key, str(cm.exception))
 
     def test_a_body_that_is_not_json_is_reported(self):
         self.eda_answer = (200, b"<html>maintenance</html>")
