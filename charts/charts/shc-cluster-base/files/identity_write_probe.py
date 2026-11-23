@@ -62,6 +62,17 @@ def reason(raw):
     return (" (%s)" % "; ".join(parts)) if parts else ""
 
 
+def parse(raw, code, what):
+    """A JSON object from an answer, or a Failure that says the answer was not one."""
+    try:
+        doc = json.loads(raw)
+    except ValueError:
+        doc = None
+    if not isinstance(doc, dict):
+        raise Failure(code, "%s answered with a body that is not a JSON object" % what)
+    return doc
+
+
 def with_value(rep, attribute, value):
     """The user representation with one field set (the read-only metadata the API returns left out)."""
     rep = {k: v for k, v in (rep or {}).items() if k != "userProfileMetadata"}
@@ -154,9 +165,8 @@ def probe(kc, cfg, secret, stamp):
                               "client_secret": secret})
     if code != 200:
         raise Failure(2, "the token request answered %d%s" % (code, reason(raw)))
-    try:
-        token = json.loads(raw)["access_token"]
-    except (ValueError, KeyError, TypeError):
+    token = parse(raw, 2, "the token request").get("access_token")
+    if not isinstance(token, str) or not token:
         raise Failure(2, "the token request answered without an access token")
     SECRETS.add(token)
     user_id = token_subject(token)
@@ -167,13 +177,14 @@ def probe(kc, cfg, secret, stamp):
     if code != 200:
         raise Failure(2, "reading its own user answered %d%s" % (code, reason(raw)))
     value = "write check %s" % stamp
-    code, raw = kc.call("PUT", user_url, body=with_value(json.loads(raw), cfg["attribute"], value), token=token)
+    own = parse(raw, 2, "reading its own user")
+    code, raw = kc.call("PUT", user_url, body=with_value(own, cfg["attribute"], value), token=token)
     if code not in (200, 204):
         raise Failure(1, "the write of %s was refused: %d%s" % (cfg["attribute"], code, reason(raw)))
     code, raw = kc.call("GET", user_url + "?userProfileMetadata=false", token=token)
     if code != 200:
         raise Failure(1, "reading its own user after the write answered %d%s" % (code, reason(raw)))
-    if value_of(json.loads(raw), cfg["attribute"]) != value:
+    if value_of(parse(raw, 1, "reading its own user after the write"), cfg["attribute"]) != value:
         raise Failure(1, "the write of %s was answered but does not read back" % cfg["attribute"])
     return value
 

@@ -37,6 +37,7 @@ class FakeKeycloak:
     def __init__(self, write="ok", token=TOKEN, echo=False, redirect=False):
         self.write, self.token, self.echo, self.redirect = write, token, echo, redirect
         self.refuse = False
+        self.html = False
         self.user = {"id": USER_ID, "username": "service-account-write-check", "attributes": {}}
         self.seen = []
         outer = self
@@ -77,6 +78,12 @@ class FakeKeycloak:
                 if self.path == "/admin/realms/probe/users/%s?userProfileMetadata=false" % USER_ID:
                     if not self.authorized():
                         return self._send(401)
+                    if outer.html:
+                        raw = b"<html>maintenance</html>"
+                        self.send_response(200)
+                        self.send_header("Content-Length", str(len(raw)))
+                        self.end_headers()
+                        return self.wfile.write(raw)
                     return self._send(200, dict(outer.user, userProfileMetadata={"attributes": []}))
                 self._send(404)
 
@@ -173,6 +180,13 @@ class Probe(unittest.TestCase):
         rc, out = self.run_probe(kc)
         self.assertEqual(rc, 2)
         self.assertIn("Invalid client credentials ***", out)
+
+    def test_a_body_that_is_not_json_is_reported(self):
+        kc = self.keycloak()
+        kc.html = True
+        rc, out = self.run_probe(kc)
+        self.assertEqual(rc, 2)
+        self.assertIn("reading its own user answered with a body that is not a JSON object", out)
 
     def test_token_without_subject(self):
         rc, out = self.run_probe(self.keycloak(token=jwt({"azp": "write-check"})))
