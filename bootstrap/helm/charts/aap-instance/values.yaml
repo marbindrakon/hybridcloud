@@ -20,6 +20,17 @@ controller:
 eda:
   enabled: true
   replicas: 1
+  # Settings of the Event-Driven Ansible server, passed to its custom resource as extra_settings (each an item
+  # {setting, value}; the server reads them as environment variables, so a setting's name carries the EDA_ prefix).
+  # Nothing is set by default. For example, how often a failing activation is restarted before the platform gives
+  # up on it (the platform's default is 5, counted over the activation's life until it is disabled and enabled):
+  #   extraSettings:
+  #     - setting: EDA_ACTIVATION_MAX_RESTARTS_ON_FAILURE
+  #       value: "100"
+  # A setting the server does not know is ignored without an error: check the effect after a change.
+  # That the platform operator passes these to the server next to its own settings is not proven for every
+  # operator version: try a setting on a test instance first.
+  extraSettings: []
   rbac:
     enabled: true
 
@@ -44,3 +55,13 @@ postgres:
     retentionDifferential: 2
     fullSchedule: "0 1 * * 0"
     differentialSchedule: "0 1 * * 1-6"
+    # The waiting archive (pgBackRest archive-push-queue-max). When write-ahead log cannot be archived, for
+    # example because the backup volume is full or unreachable, the segments wait in the data volume. Past this size
+    # they are dropped and the database's log says "dropped WAL file ... because archive queue exceeded ...": the
+    # database keeps running instead of filling its data volume and stopping, but it can no longer be restored to a
+    # moment between the drop and the next completed backup. auto: a quarter of storage (storage must then be a whole
+    # number of Mi, Gi or Ti); a size such as 4GiB or 2560MiB; empty: no limit (the data volume fills and the
+    # database stops).
+    # 0 is refused, as is more than 4PiB; a plain number is bytes. On a data volume more than three quarters
+    # full the default is more than the free space: then set a size below the free space.
+    archivePushQueueMax: auto

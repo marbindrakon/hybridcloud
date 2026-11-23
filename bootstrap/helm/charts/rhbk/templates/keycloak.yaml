@@ -62,4 +62,57 @@ spec:
       value: "true"
     - name: hostname-strict
       value: "false"
+    {{- if .Values.keycloak.db.enabled }}
+    {{- $db := .Values.keycloak.db }}
+    {{- /* auto: with the chart's own database the driver accepts only the primary, so a connection opened while the
+         primary's service still leads to a server that went read-only is refused, and the pool tries again. */}}
+    {{- $props := "auto" }}
+    {{- if and (hasKey $db "urlProperties") (not (kindIs "invalid" $db.urlProperties)) }}{{ $props = toString $db.urlProperties }}{{ end }}
+    {{- if eq $props "auto" }}
+    {{- $props = "" }}
+    {{- if and ($db.crunchy).enabled (eq (toString $db.vendor) "postgres") }}{{ $props = "?targetServerType=primary" }}{{ end }}
+    {{- end }}
+    {{- if $props }}
+    {{- if not (or (hasPrefix "?" $props) (hasPrefix "&" $props) (hasPrefix ";" $props)) }}
+    {{- fail (printf "keycloak.db.urlProperties must start with the separator the database's JDBC URL expects (? for PostgreSQL), got %q" $props) }}
+    {{- end }}
+    - name: db-url-properties
+      value: {{ $props | quote }}
+    {{- end }}
+    {{- /* A connection is closed when it is returned after this long and replaced as needed: no connection, however
+         it went stale, outlives it. */}}
+    {{- $life := "10m" }}
+    {{- if and (hasKey $db "poolMaxLifetime") (not (kindIs "invalid" $db.poolMaxLifetime)) }}{{ $life = toString $db.poolMaxLifetime }}{{ end }}
+    {{- if $life }}
+    {{- $iso := and (regexMatch "^P([0-9]+D)?(T([0-9]+H)?([0-9]+M)?([0-9]+([.][0-9]+)?S)?)?$" $life) (ne $life "P") (not (hasSuffix "T" $life)) }}
+    {{- if not (or (regexMatch "^[0-9]+(ms|s|m|h|d)?$" $life) $iso) }}
+    {{- fail (printf "keycloak.db.poolMaxLifetime must be a duration such as 10m, 600 (seconds) or PT10M, got %q" $life) }}
+    {{- end }}
+    - name: db-pool-max-lifetime
+      value: {{ $life | quote }}
+    {{- end }}
+    {{- end }}
+    {{- /* The installation's own options, after the chart's. An option the chart sets itself is refused here: it has
+         a value of its own (or is fixed by the chart). */}}
+    {{- $reserved := list "http-enabled" "hostname-strict" "db-url-properties" "db-pool-max-lifetime" }}
+    {{- $extra := .Values.keycloak.additionalOptions | default list }}
+    {{- if not (kindIs "slice" $extra) }}
+    {{- fail "keycloak.additionalOptions must be a list of {name, value} or {name, secret: {name, key}} entries" }}
+    {{- end }}
+    {{- range $extra }}
+    {{- if not (and (kindIs "map" .) .name (or (hasKey . "value") (hasKey . "secret"))) }}
+    {{- fail "keycloak.additionalOptions: each entry needs a name and a value or a secret" }}
+    {{- end }}
+    {{- if has (toString .name) $reserved }}
+    {{- fail (printf "keycloak.additionalOptions: %s is set by the chart; use its own value (keycloak.db.urlProperties, keycloak.db.poolMaxLifetime) or leave it" .name) }}
+    {{- end }}
+    - name: {{ .name | quote }}
+      {{- if hasKey . "secret" }}
+      secret:
+        name: {{ required "keycloak.additionalOptions: a secret needs a name" .secret.name | quote }}
+        key: {{ required "keycloak.additionalOptions: a secret needs a key" .secret.key | quote }}
+      {{- else }}
+      value: {{ .value | toString | quote }}
+      {{- end }}
+    {{- end }}
 {{- end }}

@@ -119,7 +119,6 @@ gitea:
   adminEmail: "admin@sovereign.local"
 
 pullSecretNamespaces:
-  - argocd-schema-fix
   - central-vault
   - gitea
   - aap
@@ -144,10 +143,3 @@ vmware:
   # Optional: PEM-encoded CA certificate for self-signed vCenter TLS.
   # If empty, insecure connection is used (acceptable in lab; document deviation in prod).
   cacert: ""
-
-# ─── ArgoCD OpenAPI schema compatibility shim ────────────────────────────────
-argocdSchemaFix:
-  # Deploys a minimal HTTPS server that injects the tilde-encoded UserPermissionStatus
-  # definition into the aggregated OpenAPI v2 spec, working around a kube-openapi ~1
-  # resolution bug in ArgoCD when MCE/RHACM is installed on the same cluster.
-  image: "/hybrid-sovereign/ansible-runner:latest"

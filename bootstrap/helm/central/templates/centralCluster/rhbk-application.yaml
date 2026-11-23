@@ -26,12 +26,13 @@ spec:
     server: https://kubernetes.default.svc
     namespace: {{ .Values.rhbk.destinationNamespace }}
 
+  # The server options (spec.additionalOptions) are not ignored: they carry the database connection settings, and
+  # with RespectIgnoreDifferences an ignored field is never applied.
   ignoreDifferences:
     {{- include "sovereign-central.esoIgnoreDifferences" . | nindent 4 }}
     - group: k8s.keycloak.org
       kind: Keycloak
       jsonPointers:
-        - /spec/additionalOptions
         - /spec/hostname
 
   syncPolicy:
