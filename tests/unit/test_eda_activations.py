@@ -524,11 +524,29 @@ class Check(unittest.TestCase):
         self.assertIn("RepairLimitReached", report[0])
 
     def test_records_of_activations_gone_from_the_list(self):
-        # gone without a restart in the last day: dropped; restarted within the last day: kept (it may be missing
-        # from one read only)
-        kube = FakeKube(state={"7": {"repairs": [NOW - 90000]}, "8": {"repairs": [NOW - 1000]}, "9": {}})
+        # missing for a day without a restart in it: dropped; restarted within the last day, or missing for less
+        # than a day: kept, with since when it is missing
+        kube = FakeKube(state={"7": {"repairs": [NOW - 90000], "absentSince": NOW - 90000},
+                               "8": {"repairs": [NOW - 1000], "absentSince": NOW - 90000},
+                               "9": {"notRunningSince": NOW - 600},
+                               "10": {"absentSince": NOW - 3600}})
         run(FakeEda([act(1)], {1: [inst(1)]}), kube)
-        self.assertEqual(sorted(kube.committed), ["1", "8"])
+        self.assertEqual(sorted(kube.committed), ["1", "10", "8", "9"])
+        self.assertEqual((kube.committed["9"]["absentSince"], kube.committed["10"]["absentSince"]),
+                         (NOW, NOW - 3600))
+
+    def test_an_activation_missing_from_every_other_read_is_still_restarted(self):
+        eda = FakeEda([act(4, "x", "failed"), act(5, "y")], {5: [inst(1)]})
+        kube = FakeKube()
+        counts, report, _ = run(eda, kube)                   # first seen not running: waits
+        self.assertEqual(counts["waiting"], 1)
+        eda.missing = 4
+        later(eda, kube, 5)                                  # missing from this read: its record is kept
+        self.assertEqual(kube.committed["4"]["notRunningSince"], NOW)
+        eda.missing = None
+        counts, report, _ = later(eda, kube, 10)             # listed again, its grace long over: restarted
+        self.assertEqual((eda.calls, report), ([("restart", 4)], []))
+        self.assertNotIn("absentSince", kube.committed["4"])
 
     def test_an_activation_listed_twice_is_restarted_once(self):
         eda = FakeEda([act(4, "x", "failed")], duplicate=4)
@@ -573,7 +591,8 @@ class Check(unittest.TestCase):
 
     def test_a_state_of_the_wrong_shape_is_reported_and_nothing_restarted(self):
         for bad in ({"4": []}, {"4": "x"}, {"4": {"repairs": "x"}}, {"4": {"repairs": [NOW, "a"]}},
-                    {"4": {"repairs": [True]}}, {"4": {"notRunningSince": "x"}}, {"4": {"gaveUp": "yes"}}):
+                    {"4": {"repairs": [True]}}, {"4": {"notRunningSince": "x"}}, {"4": {"gaveUp": "yes"}},
+                    {"4": {"absentSince": "x"}}):
             with self.subTest(bad=bad):
                 eda = FakeEda([act(4, "x", "failed")])
                 kube = FakeKube(state=bad)

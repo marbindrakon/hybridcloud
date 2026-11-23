@@ -77,10 +77,12 @@ activation (only with `removeStaleJobs: true` it deletes the older of two Jobs o
 - Every restart is counted in the ConfigMap `eda-activations-state` in `ops.namespace` before it is made, for every
   activation of a run before the first call. If the count cannot be stored, nothing is restarted and the run reports.
   If it cannot be read, or holds a state of the wrong shape, nothing is restarted and the run reports (a person
-  repairs or deletes the ConfigMap). If another run wrote it meanwhile (two runs at once), the run stops without
+  repairs or deletes the ConfigMap; deleted, the counts start again, so each activation can be restarted up to the
+  cap again within the same hour). If another run wrote it meanwhile (two runs at once), the run stops without
   acting further and reports. A restart that was counted but not made (the activation changed in between) is taken
-  off the count again. Each restart is stamped with the time its count is written. An activation missing from one
-  read of the list keeps its count for a day; one listed twice in a read is judged once.
+  off the count again. Each restart is stamped with the time its count is written. An activation missing from a
+  read of the list keeps its record (its count, and since when it does not run) until it has been missing for a
+  day; one listed twice in a read is judged once.
 - More than `maxRepairsPerDay` (6) restarts of one activation within a day are reported although each one worked,
   so that an activation that keeps dying is looked at. The report holds until fewer than that are within the last
   24 hours, also after the activation runs steadily again.

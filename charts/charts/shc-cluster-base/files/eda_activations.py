@@ -258,10 +258,22 @@ def stale_jobs(activation, instance, jobs_of_activation):
 
 
 def prune_state(state, activation_ids, now):
-    """The state without activations that are not in the list, except those restarted within the last day: an
-    activation missing from one read of the list keeps its count."""
+    """The state for the activations in the list, and for those missing from it until they have been missing for a
+    day (absentSince) or restarted within the last day: an activation missing from some reads of the list keeps its
+    count and since when it does not run, so it is still restarted or reported when it is listed again."""
     keep = {str(i) for i in activation_ids}
-    return {k: v for k, v in (state or {}).items() if k in keep or in_window((v or {}).get("repairs"), now, DAY)}
+    out = {}
+    for k, v in (state or {}).items():
+        if k in keep:
+            out[k] = v
+            continue
+        rec = dict(v or {})
+        since = rec.get("absentSince")
+        since = now if since is None else since
+        if now - since < DAY or in_window(rec.get("repairs"), now, DAY):
+            rec["absentSince"] = since
+            out[k] = rec
+    return out
 
 
 def is_number(x):
@@ -270,7 +282,7 @@ def is_number(x):
 
 def state_fault(state):
     """What is wrong with the shape of a stored state, or None. A record is a map with optional keys repairs (a list
-    of unix seconds), notRunningSince (unix seconds or null), gaveUp (true or false) and name."""
+    of unix seconds), notRunningSince and absentSince (unix seconds or null), gaveUp (true or false) and name."""
     for key, rec in state.items():
         if not isinstance(rec, dict):
             return "the record of activation %s is not a map" % key
@@ -280,6 +292,9 @@ def state_fault(state):
         since = rec.get("notRunningSince")
         if since is not None and not is_number(since):
             return "the record of activation %s has a notRunningSince that is not a time" % key
+        absent = rec.get("absentSince")
+        if absent is not None and not is_number(absent):
+            return "the record of activation %s has an absentSince that is not a time" % key
         if not isinstance(rec.get("gaveUp", False), bool):
             return "the record of activation %s has a gaveUp that is not true or false" % key
     return None
@@ -589,7 +604,7 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
             except ApiError as e:
                 problem("%s: its instances cannot be read: %s" % (ref, e))
                 if old is not None:
-                    new_state[str(aid)] = old
+                    new_state[str(aid)] = {k: v for k, v in old.items() if k != "absentSince"}
                 counts["reported"] += 1
                 continue
         verdict, why, rec = decide(a, instance, old, now, cfg)
