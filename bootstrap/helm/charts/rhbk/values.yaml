@@ -70,8 +70,9 @@ keycloak:
         archivePushQueueMax: auto
   # Further Keycloak server options (spec.additionalOptions), after the chart's own: entries {name, value} or
   # {name, secret: {name, key}} as the Keycloak resource takes them, each name once. A value is a text, a whole
-  # number or true or false (rendered as text); null, a map, a list or a fraction is refused. The options the chart
-  # sets itself (http-enabled, hostname-strict, db-url-properties, db-pool-max-lifetime) and db-url are refused here.
+  # number up to 2^53 or true or false (rendered as text); null, a map, a list or a fraction is refused. The options
+  # the chart sets itself (http-enabled, hostname-strict, db-url-properties, db-pool-max-lifetime) are refused here,
+  # and so are db, db-username, db-password and every option starting with db-url (the database fields set them).
   # The list is applied whole: an option set by hand on the Keycloak object and not listed here is removed at the
   # next sync.
   additionalOptions: []

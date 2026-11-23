@@ -131,7 +131,8 @@ class Connections(unittest.TestCase):
         self.assertEqual(cr["spec"]["additionalOptions"][6], {"name": "example-number", "value": "3"})
 
     def test_further_options_cannot_set_the_charts_own(self):
-        for name in ("http-enabled", "hostname-strict", "db-url-properties", "db-pool-max-lifetime", "db-url"):
+        for name in ("http-enabled", "hostname-strict", "db-url-properties", "db-pool-max-lifetime", "db-url",
+                     "db-url-host", "db-url-database", "db-url-port", "db", "db-username", "db-password"):
             with self.subTest(option=name):
                 p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB,
                                                           "additionalOptions": [{"name": name, "value": "x"}]}))
@@ -146,12 +147,14 @@ class Connections(unittest.TestCase):
     def test_further_options_render_whole_numbers_and_switches_as_text(self):
         values = dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": [
             {"name": "example-large", "value": 10000000}, {"name": "example-switch", "value": True},
+            {"name": "example-limit", "value": 2 ** 53}, {"name": "example-pool", "value": "db-pool-min-size"},
+            {"name": "db-pool-min-size", "value": 2},
             {"name": "example-text", "value": "2.5"}]})
         p, docs = render_values(values)
         self.assertEqual(p.returncode, 0, p.stderr)
         got = options(docs)
-        self.assertEqual((got["example-large"], got["example-switch"], got["example-text"]),
-                         ("10000000", "true", "2.5"))
+        self.assertEqual((got["example-large"], got["example-switch"], got["example-text"], got["example-limit"],
+                          got["db-pool-min-size"]), ("10000000", "true", "2.5", str(2 ** 53), "2"))
 
     def test_a_malformed_further_option_is_refused_with_its_name(self):
         name = "example-option"
@@ -160,6 +163,8 @@ class Connections(unittest.TestCase):
             ([{"name": name, "value": {"a": 1}}], "the value must be a text, a whole number or true or false, not map"),
             ([{"name": name, "value": ["a"]}], "the value must be a text, a whole number or true or false, not slice"),
             ([{"name": name, "value": 2.5}], "a number must be whole"),
+            ([{"name": name, "value": 2 ** 60}], "a number above 2^53 is not exact"),
+            ([{"name": name, "value": -(2 ** 60)}], "a number above 2^53 is not exact"),
             ([{"name": name, "value": "x", "secret": {"name": "s", "key": "k"}}], "a value or a secret, not both"),
             ([{"name": name, "secret": "s"}], "secret must be {name, key}"),
             ([{"name": name, "secret": {"name": "s"}}], "secret must be {name, key}"),

@@ -93,10 +93,10 @@ spec:
     {{- end }}
     {{- end }}
     {{- /* The installation's own options, after the chart's. An option the chart sets itself is refused here: it has
-         a value of its own (or is fixed by the chart); so is db-url, which would replace the database the chart
-         connects to. Each entry is checked here, with its name, because the operator would take a malformed one
+         a value of its own (or is fixed by the chart); so are db, db-username, db-password and every option that
+         starts with db-url, which the Keycloak resource's own database fields set. Each entry is checked here, with its name, because the operator would take a malformed one
          as an empty or garbled option. */}}
-    {{- $reserved := list "http-enabled" "hostname-strict" "db-url-properties" "db-pool-max-lifetime" "db-url" }}
+    {{- $reserved := list "http-enabled" "hostname-strict" "db-url-properties" "db-pool-max-lifetime" "db" "db-username" "db-password" }}
     {{- $extra := .Values.keycloak.additionalOptions | default list }}
     {{- if not (kindIs "slice" $extra) }}
     {{- fail "keycloak.additionalOptions must be a list of {name, value} or {name, secret: {name, key}} entries" }}
@@ -111,7 +111,7 @@ spec:
     {{- fail (printf "%s: the option is listed twice" $opt) }}
     {{- end }}
     {{- $_ := set $seen .name true }}
-    {{- if has .name $reserved }}
+    {{- if or (has .name $reserved) (hasPrefix "db-url" .name) }}
     {{- fail (printf "keycloak.additionalOptions: %s is set by the chart; use its own value (keycloak.db.urlProperties, keycloak.db.poolMaxLifetime, the database settings) or leave it" .name) }}
     {{- end }}
     {{- if and (hasKey . "value") (hasKey . "secret") }}
@@ -133,6 +133,9 @@ spec:
       {{- $v := .value }}
       {{- if or (kindIs "invalid" $v) (kindIs "map" $v) (kindIs "slice" $v) }}
       {{- fail (printf "%s: the value must be a text, a whole number or true or false, not %s" $opt (ternary "null" (kindOf $v) (kindIs "invalid" $v))) }}
+      {{- end }}
+      {{- if and (or (kindIs "float64" $v) (kindIs "int64" $v) (kindIs "int" $v)) (or (gt (float64 $v) 9007199254740992.0) (lt (float64 $v) -9007199254740992.0)) }}
+      {{- fail (printf "%s: a number above 2^53 is not exact; write it as a text" $opt) }}
       {{- end }}
       {{- if kindIs "float64" $v }}
       {{- if ne $v (float64 (int64 $v)) }}

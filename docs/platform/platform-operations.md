@@ -66,17 +66,19 @@ What it does not cover: a request that is running on a connection when the prima
 without these settings; and the Keycloak's readiness probe does not test a write, so ready does not prove that
 writes succeed.
 
-Further server options of an installation go into `keycloak.additionalOptions`, entries `{name, value}` or
-`{name, secret: {name, key}}`, each name once, rendered after the chart's own. A value is a text, a whole number or
-true or false; null, a map, a list or a fraction is refused (write a fraction as a text), and so is an entry with
-both a value and a secret. The options the chart sets itself (`http-enabled`, `hostname-strict`,
-`db-url-properties`, `db-pool-max-lifetime`) and `db-url` are refused there. Every refusal names the option.
-
 The two options are server options (`spec.additionalOptions` of the Keycloak), applied by the Keycloak operator as
 environment variables of the Keycloak's pods: a change of either rolls the pods. The central chart's Applications
 of the two Keycloaks no longer ignore that field, so a changed option reaches the Keycloak. Argo CD applies the
 list as a whole: **before upgrading, move any option set by hand on a Keycloak object into
 `keycloak.additionalOptions`**, or the first sync removes it and the Keycloak's pods roll without it.
+
+Further server options of an installation go into `keycloak.additionalOptions`, entries `{name, value}` or
+`{name, secret: {name, key}}`, each name once, rendered after the chart's own. A value is a text, a whole number or
+true or false; null, a map, a list or a fraction is refused (write a fraction as a text), and so is an entry with
+both a value and a secret. The options the chart sets itself (`http-enabled`, `hostname-strict`,
+`db-url-properties`, `db-pool-max-lifetime`) are refused there, and so are `db`, `db-username`, `db-password` and
+every option that starts with `db-url` (the Keycloak resource's own database fields set them). A whole number above
+2^53 is not exact and is refused too (write it as a text). Every refusal names the option.
 
 ## Databases and their backups
 
