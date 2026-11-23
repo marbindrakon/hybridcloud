@@ -200,6 +200,8 @@ eda_rulebook_activations:
     organization: Default
     restart_policy: always
     enabled: false  # shc: openstack-migration is disabled (no de-openstack-migration image)
+    # the module ignores enabled for the state: only state disabled keeps it off (and disables it if it runs)
+    state: disabled
     eda_credentials:
       - sovereign-aap-controller-credential
       - sovereign-kafka-consumer-credential

@@ -30,6 +30,13 @@ class RestartPolicy(unittest.TestCase):
         names = [a["name"] for a in self.activations]
         self.assertEqual(len(names), len(set(names)))
 
+    def test_an_activation_meant_to_be_off_says_state_disabled(self):
+        # the rulebook_activation module starts every activation whose state is not disabled, whatever enabled says
+        wrong = [a["name"] for a in self.activations
+                 if a.get("enabled") is False and a.get("state") != "disabled"]
+        self.assertEqual(wrong, [])
+        self.assertEqual([a["name"] for a in self.activations if a.get("state") not in (None, "disabled")], [])
+
     def test_every_rulebook_exists(self):
         missing = [a["rulebook"] for a in self.activations
                    if not os.path.exists(os.path.join(ROOT, "eda", "rulebooks", a["rulebook"]))]
