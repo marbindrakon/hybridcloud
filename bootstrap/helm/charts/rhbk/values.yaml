@@ -33,6 +33,18 @@ keycloak:
       instances: 2
       storage: 10Gi
       backupStorage: 10Gi
+      # Backups of the database (schedules are cron, UTC). A full backup on fullSchedule and a differential one on
+      # differentialSchedule (empty: none; it must not fall on the full backup's day and minute). retentionFull full
+      # backups are kept, with the differential ones and the write-ahead log that follow them: the database can be
+      # restored to any moment since the oldest kept full backup, about retentionFull times the full interval back.
+      # Of the differential backups the newest retentionDifferential are kept. Older ones expire when a backup
+      # completes. Size the backup volume for retentionFull + 1 full backups, retentionDifferential differential
+      # ones, and the write-ahead log of retentionFull + 1 full intervals.
+      backup:
+        retentionFull: 2
+        retentionDifferential: 2
+        fullSchedule: "20 1 * * 0"
+        differentialSchedule: "20 1 * * 1-6"
   tls:
     enabled: false
     secretName: keycloak-tls-secret

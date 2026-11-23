@@ -2,7 +2,7 @@ apiVersion: v2
 name: gitea
 description: Gitea self-hosted Git service via Helm subchart
 type: application
-version: 0.4.6-shc.3
+version: 0.4.6-shc.4
 appVersion: "28.1"
 dependencies:
   - name: gitea
