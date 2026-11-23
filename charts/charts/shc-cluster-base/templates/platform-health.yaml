@@ -1,0 +1,252 @@
+{{- /*
+The platform's own health (ops.platformHealth; every switch off by default, each renders only its own part): alert
+rules in the cluster's monitoring for volumes, database backups, aggregated APIs and the Alertmanager's receivers,
+and two checks where no metric exists: the event activations of the automation platform (eda-activations, which
+also repairs, and eda-api-check) and a write to each listed Keycloak (identity-write-probe-<name>). A check's failed
+run is its alert; its pod's termination message says what it found.
+*/}}
+{{- if and (or .Values.layers.base .Values.layers.ops) .Values.ops.enabled }}
+{{- $o := .Values.ops }}
+{{- $p := $o.platformHealth | default dict }}
+{{- $ns := $o.namespace }}
+{{- $restricted := dict "allowPrivilegeEscalation" false "capabilities" (dict "drop" (list "ALL")) "runAsNonRoot" true "seccompProfile" (dict "type" "RuntimeDefault") }}
+{{- if include "shc-cluster-base.platformHealthEnabled" . }}
+---
+apiVersion: monitoring.coreos.com/v1
+kind: PrometheusRule
+metadata:
+  name: shc-platform-health
+  namespace: {{ $ns }}
+  annotations:
+    argocd.argoproj.io/sync-options: SkipDryRunOnMissingResource=true
+spec:
+  groups:
+{{ include "shc-cluster-base.platformHealthRules" . | indent 4 }}
+{{- end }}
+
+{{- with $p.edaActivations }}{{ if .enabled }}
+{{- $e := . }}
+{{- $an := required "ops.platformHealth.edaActivations.automationNamespace is required" .automationNamespace }}
+{{- $cfg := dict "url" (required "ops.platformHealth.edaActivations.url is required" .url) "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" .maxRepairsPerHour "notRunningMinutes" .notRunningMinutes "transitionalMinutes" .transitionalMinutes "stopTimeoutSeconds" .stopTimeoutSeconds "startTimeoutSeconds" .startTimeoutSeconds "cannotRunPatterns" .cannotRunPatterns "removeStaleJobs" .removeStaleJobs "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
+{{- $secret := required "ops.platformHealth.edaActivations.credentialSecret is required" .credentialSecret }}
+{{- $hash := printf "%s%s" ($.Files.Get "files/eda_activations.py") (toJson $cfg) | sha256sum | trunc 16 }}
+---
+# The activation check: reads the activations through the platform's API (the credential in Secret {{ $secret }}),
+# keeps its repair count in the ConfigMap eda-activations-state, and lists the activation Jobs in {{ $an }}.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: eda-activations
+  namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: eda-activations-state
+  namespace: {{ $ns }}
+rules:
+  # create cannot be limited to a name; the check creates only eda-activations-state
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [eda-activations-state]
+    verbs: [get, update]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: eda-activations-state
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: eda-activations-state
+subjects:
+  - kind: ServiceAccount
+    name: eda-activations
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shc-ops-eda-activations
+  namespace: {{ $an }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: {{ ternary (list "list" "delete") (list "list") (.removeStaleJobs | default false) | toJson }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shc-ops-eda-activations
+  namespace: {{ $an }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: shc-ops-eda-activations
+subjects:
+  - kind: ServiceAccount
+    name: eda-activations
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: eda-activations
+  namespace: {{ $ns }}
+data:
+  eda_activations.py: |
+    {{- $.Files.Get "files/eda_activations.py" | nindent 4 }}
+  config.json: |
+    {{- toPrettyJson $cfg | nindent 4 }}
+{{- range $job := list (list "eda-activations" "check" .schedule 600) (list "eda-api-check" "api" .apiCheckSchedule 120) }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: {{ index $job 0 }}
+  namespace: {{ $ns }}
+spec:
+  schedule: {{ index $job 2 | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ index $job 3 }}
+      template:
+        metadata:
+          annotations:
+            shc/config-hash: {{ $hash | quote }}
+        spec:
+          {{- if eq (index $job 1) "check" }}
+          serviceAccountName: eda-activations
+          {{- else }}
+          automountServiceAccountToken: false
+          {{- end }}
+          restartPolicy: Never
+          containers:
+            - name: check
+              image: {{ required "ops.platformHealth.edaActivations.image is required" $e.image }}
+              command: [python3, /etc/eda-activations/eda_activations.py, --config, /etc/eda-activations/config.json,
+                        --mode, {{ index $job 1 }}]
+              terminationMessagePolicy: FallbackToLogsOnError
+              resources: {requests: {cpu: 10m, memory: 48Mi}, limits: {memory: 128Mi}}
+              securityContext:
+                {{- toYaml $restricted | nindent 16 }}
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/eda-activations
+                  readOnly: true
+                - name: credential
+                  mountPath: /etc/eda-credential
+                  readOnly: true
+                {{- if $e.caConfigMap }}
+                - name: ca
+                  mountPath: /etc/eda-ca
+                  readOnly: true
+                {{- end }}
+          volumes:
+            - name: config
+              configMap:
+                name: eda-activations
+            - name: credential
+              secret:
+                secretName: {{ $secret }}
+            {{- if $e.caConfigMap }}
+            - name: ca
+              configMap:
+                name: {{ $e.caConfigMap }}
+            {{- end }}
+{{- end }}
+{{- end }}{{ end }}
+
+{{- with $p.identityWriteProbe }}{{ if .enabled }}
+{{- $w := . }}
+{{- if not .keycloaks }}{{ fail "ops.platformHealth.identityWriteProbe.keycloaks needs at least one Keycloak when the probe is on" }}{{ end }}
+{{- $configs := dict }}
+{{- range $k := .keycloaks }}
+{{- $name := required "ops.platformHealth.identityWriteProbe.keycloaks[].name is required" $k.name }}
+{{- if or (gt (len $name) 31) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $name)) }}{{ fail (printf "ops.platformHealth.identityWriteProbe.keycloaks[].name %q: lower-case letters, digits and '-', at most 31 characters" $name) }}{{ end }}
+{{- $_ := set $configs $name (dict "url" (required (printf "ops.platformHealth.identityWriteProbe.keycloaks[%s].url is required" $name) $k.url) "realm" (required (printf "ops.platformHealth.identityWriteProbe.keycloaks[%s].realm is required" $name) $k.realm) "clientId" (required (printf "ops.platformHealth.identityWriteProbe.keycloaks[%s].clientId is required" $name) $k.clientId) "attribute" ($k.attribute | default "lastName") "credentialDir" "/etc/identity-credential" "caFile" (ternary "/etc/identity-ca/ca.crt" "" (not (empty $k.caConfigMap)))) }}
+{{- end }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: identity-write-probe
+  namespace: {{ $ns }}
+data:
+  identity_write_probe.py: |
+    {{- $.Files.Get "files/identity_write_probe.py" | nindent 4 }}
+  {{- range $name, $c := $configs }}
+  {{ $name }}.json: |
+    {{- toPrettyJson $c | nindent 4 }}
+  {{- end }}
+{{- range $k := .keycloaks }}
+---
+# Write check of Keycloak {{ $k.name }}: a dedicated user writes its own profile; the credential is in Secret
+# {{ $k.credentialSecret }}. No Kubernetes API access.
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: identity-write-probe-{{ $k.name }}
+  namespace: {{ $ns }}
+spec:
+  schedule: {{ $w.schedule | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: 120
+      template:
+        metadata:
+          annotations:
+            shc/config-hash: {{ printf "%s%s" ($.Files.Get "files/identity_write_probe.py") (toJson (get $configs $k.name)) | sha256sum | trunc 16 | quote }}
+        spec:
+          automountServiceAccountToken: false
+          restartPolicy: Never
+          containers:
+            - name: probe
+              image: {{ required "ops.platformHealth.identityWriteProbe.image is required" $w.image }}
+              command: [python3, /etc/identity-write-probe/identity_write_probe.py,
+                        --config, /etc/identity-write-probe/{{ $k.name }}.json]
+              terminationMessagePolicy: FallbackToLogsOnError
+              resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 96Mi}}
+              securityContext:
+                {{- toYaml $restricted | nindent 16 }}
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/identity-write-probe
+                  readOnly: true
+                - name: credential
+                  mountPath: /etc/identity-credential
+                  readOnly: true
+                {{- if $k.caConfigMap }}
+                - name: ca
+                  mountPath: /etc/identity-ca
+                  readOnly: true
+                {{- end }}
+          volumes:
+            - name: config
+              configMap:
+                name: identity-write-probe
+            - name: credential
+              secret:
+                secretName: {{ required (printf "ops.platformHealth.identityWriteProbe.keycloaks[%s].credentialSecret is required" $k.name) $k.credentialSecret }}
+            {{- if $k.caConfigMap }}
+            - name: ca
+              configMap:
+                name: {{ $k.caConfigMap }}
+            {{- end }}
+{{- end }}
+{{- end }}{{ end }}
+{{- end }}
