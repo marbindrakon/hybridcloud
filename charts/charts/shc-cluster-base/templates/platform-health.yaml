@@ -38,7 +38,8 @@ spec:
 {{- range $patterns }}{{ if not (kindIs "string" .) }}{{ fail "ops.platformHealth.edaActivations.cannotRunPatterns must be a list of texts" }}{{ end }}{{ end }}
 {{- $removeStale := include "shc-cluster-base.switch" (list "ops.platformHealth.edaActivations.removeStaleJobs" .removeStaleJobs) | eq "true" }}
 {{- $allowNone := include "shc-cluster-base.switch" (list "ops.platformHealth.edaActivations.allowNoActivations" .allowNoActivations) | eq "true" }}
-{{- $cfg := dict "url" $url "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" $n.maxRepairsPerHour "maxRepairsPerDay" $n.maxRepairsPerDay "allowNoActivations" $allowNone "notRunningMinutes" $n.notRunningMinutes "transitionalMinutes" $n.transitionalMinutes "startTimeoutSeconds" $n.startTimeoutSeconds "cannotRunPatterns" $patterns "removeStaleJobs" $removeStale "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
+{{- $deadline := 600 }}
+{{- $cfg := dict "runDeadlineSeconds" $deadline "url" $url "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" $n.maxRepairsPerHour "maxRepairsPerDay" $n.maxRepairsPerDay "allowNoActivations" $allowNone "notRunningMinutes" $n.notRunningMinutes "transitionalMinutes" $n.transitionalMinutes "startTimeoutSeconds" $n.startTimeoutSeconds "cannotRunPatterns" $patterns "removeStaleJobs" $removeStale "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
 {{- $secret := required "ops.platformHealth.edaActivations.credentialSecret is required" .credentialSecret }}
 {{- $hash := printf "%s%s" ($.Files.Get "files/eda_activations.py") (toJson $cfg) | sha256sum | trunc 16 }}
 ---
@@ -113,7 +114,7 @@ data:
     {{- $.Files.Get "files/eda_activations.py" | nindent 4 }}
   config.json: |
     {{- toPrettyJson $cfg | nindent 4 }}
-{{- range $job := list (list "eda-activations" "check" .schedule 600) (list "eda-api-check" "api" .apiCheckSchedule 120) }}
+{{- range $job := list (list "eda-activations" "check" .schedule $deadline) (list "eda-api-check" "api" .apiCheckSchedule 120) }}
 ---
 apiVersion: batch/v1
 kind: CronJob

@@ -71,8 +71,9 @@ left to the platform. After the restarts it waits up to `startTimeoutSeconds` (1
 activation (only with `removeStaleJobs: true` it deletes the older of two Jobs of one activation, see below).
 
 **Its limits.**
-- At most `maxRepairsPerHour` (3) restarts per activation in any hour. At the cap it reports the activation and
-  restarts it again when the hour allows.
+- At most `maxRepairsPerHour` (3) restarts per activation in any hour. The check counts them over an hour plus the
+  Job's deadline (70 minutes), because a restart in a slow run is made up to the deadline after it is counted. At
+  the cap it reports the activation and restarts it again when that window allows.
 - Every restart is counted in the ConfigMap `eda-activations-state` in `ops.namespace` before it is made, for every
   activation of a run before the first call. If the count cannot be stored, nothing is restarted and the run reports.
   If it cannot be read, or holds a state of the wrong shape, nothing is restarted and the run reports (a person

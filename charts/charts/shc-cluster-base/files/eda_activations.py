@@ -11,7 +11,8 @@ Modes:
                    from when the check first saw it not running or last restarted it. Just before the call the
                    activation is read again; it is restarted only if it is still enabled and still due.
 
-                   Bounded: at most maxRepairsPerHour restarts per activation in any hour; at the cap it is reported
+                   Bounded: at most maxRepairsPerHour restarts per activation in any hour (counted over an hour plus
+                   runDeadlineSeconds, as a call can follow its count by up to the deadline); at the cap it is reported
                    and restarted again when the hour allows. More than maxRepairsPerDay in a day is reported
                    although each restart worked. Every restart is counted in a ConfigMap (stateConfigMap) before
                    it is made; if the count cannot be stored, nothing is restarted. A restart the platform refuses
@@ -67,6 +68,7 @@ DEFAULTS = {
     "notRunningMinutes": 4,         # not running this long (seen on an earlier run, or since a restart)
     "transitionalMinutes": 10,      # pending, starting or stopping this long counts as not running
     "startTimeoutSeconds": 180,
+    "runDeadlineSeconds": 0,        # the Job's deadline (the chart passes it): added to the hour of the cap
     "pollSeconds": 5,
     "cannotRunPatterns": ["pull failed", "container request is not valid"],
     "removeStaleJobs": False,
@@ -77,6 +79,12 @@ DEFAULTS = {
 }
 
 HOUR = 3600
+
+
+def cap_window(cfg):
+    """The window of the hourly cap: an hour plus the Job's deadline. A restart is stamped when its count is written
+    and made up to a deadline later in a slow run, so over this window no hour holds more than the cap of calls."""
+    return HOUR + cfg["runDeadlineSeconds"]
 DAY = 86400
 WATCHED_POLICY = "always"
 RUNNING = "running"
@@ -158,7 +166,7 @@ def decide(activation, instance, record, now, cfg):
     record = record or {}
     rec = {"name": activation.get("name"), "repairs": in_window(record.get("repairs"), now, DAY),
            "notRunningSince": record.get("notRunningSince"), "gaveUp": bool(record.get("gaveUp"))}
-    hour = in_window(rec["repairs"], now, HOUR)
+    hour = in_window(rec["repairs"], now, cap_window(cfg))
     status = str(activation.get("status") or "")
     if not activation.get("is_enabled"):
         rec.update(notRunningSince=None, gaveUp=False)
@@ -286,7 +294,7 @@ def summarize(lines):
 # ---- I/O --------------------------------------------------------------------------------------------------------
 
 WHOLE_NUMBERS = {"requestTimeoutSeconds": 1, "maxRepairsPerHour": 1, "maxRepairsPerDay": 1, "notRunningMinutes": 0,
-                 "transitionalMinutes": 0, "startTimeoutSeconds": 1, "pollSeconds": 0}
+                 "transitionalMinutes": 0, "startTimeoutSeconds": 1, "pollSeconds": 0, "runDeadlineSeconds": 0}
 SWITCHES = ("removeStaleJobs", "allowNoActivations")
 
 
@@ -684,7 +692,7 @@ def restart_due(eda, kube, cfg, now, due, refs, state, new_state, ids, version, 
                 ref, "enabled" if fresh.get("is_enabled") else "disabled", fresh.get("status")))
             continue   # not made: the final write takes its count back
         new_state[str(aid)] = planned[str(aid)]
-        hour = len(in_window(planned[str(aid)]["repairs"], stamp, HOUR))
+        hour = len(in_window(planned[str(aid)]["repairs"], stamp, cap_window(cfg)))
         say("restart %s: %s (restart %d of at most %d this hour)" % (ref, why, hour, cfg["maxRepairsPerHour"]))
         try:
             eda.restart(aid)

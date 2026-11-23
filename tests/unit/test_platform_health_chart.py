@@ -102,7 +102,10 @@ class Render(unittest.TestCase):
         self.assertEqual((cfg["url"], cfg["automationNamespace"], cfg["stateNamespace"], cfg["maxRepairsPerHour"],
                           cfg["maxRepairsPerDay"], cfg["allowNoActivations"], cfg["removeStaleJobs"], cfg["caFile"]),
                          ("https://automation.example.com", "automation", "shc-ops", 3, 6, False, False, ""))
-        check = k[("CronJob", "eda-activations", "shc-ops")]["spec"]["jobTemplate"]["spec"]["template"]["spec"]
+        job = k[("CronJob", "eda-activations", "shc-ops")]["spec"]["jobTemplate"]["spec"]
+        # the cap's window is an hour plus the Job's deadline: the script gets the deadline the Job has
+        self.assertEqual(cfg["runDeadlineSeconds"], job["activeDeadlineSeconds"])
+        check = job["template"]["spec"]
         self.assertEqual(check["serviceAccountName"], "eda-activations")
         c = check["containers"][0]
         self.assertEqual(c["command"][-2:], ["--mode", "check"])

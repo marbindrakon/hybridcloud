@@ -35,7 +35,7 @@ NOW = 1_800_000_000
 TOKEN = "s3cret-token-value"
 E.SECRETS.add(TOKEN)
 CFG = dict(E.DEFAULTS, url="https://eda.example.com", automationNamespace="automation", stateNamespace="ops",
-           pollSeconds=0, startTimeoutSeconds=60)
+           pollSeconds=0, startTimeoutSeconds=60, runDeadlineSeconds=600)
 OLD = NOW - 7200
 
 
@@ -91,6 +91,10 @@ class Decide(unittest.TestCase):
          E.RESTART),
         (act(status="failed"), inst(10, "failed"),
          {"notRunningSince": NOW - 300, "repairs": [NOW - 3000, NOW - 2000, NOW - 1000]}, E.LIMIT),
+        # a restart counted 65 minutes ago is still within the window (an hour plus the Job's deadline): a call of a
+        # slow run can follow its count by up to the deadline
+        (act(status="failed"), inst(10, "failed"),
+         {"notRunningSince": NOW - 300, "repairs": [NOW - 3900, NOW - 2000, NOW - 1000]}, E.LIMIT),
         # at the cap it is restarted again once the hour allows
         (act(status="failed"), inst(10, "failed"),
          {"notRunningSince": NOW - 300, "repairs": [NOW - 7000, NOW - 6000, NOW - 5000]}, E.RESTART),
@@ -389,7 +393,10 @@ class Check(unittest.TestCase):
         reports = [later(eda, kube, 5 * i)[1] for i in range(12)]
         self.assertEqual(len(eda.calls), 3)
         self.assertIn("RepairLimitReached", reports[-1][0])
-        later(eda, kube, 65)
+        # the first restart (minute 0) leaves the window an hour plus the Job's deadline later
+        later(eda, kube, 69)
+        self.assertEqual(len(eda.calls), 3)
+        later(eda, kube, 70)
         self.assertEqual(len(eda.calls), 4)
 
     def test_restarted_too_often_in_a_day_holds_for_the_window(self):
