@@ -197,7 +197,7 @@ rhbk:
 # ─── RHBK Services (Keycloak) ────────────────────────────────────────────────
 rhbkServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.10.2-shc.1"  # 0.10.2-shc.1: the chart's own routes (keycloak.routes, keycloak.ingress)
+  chartVersion: "0.10.2-shc.2"  # 0.10.2-shc.2: database replicas spread one per node, as central since 11-20; 0.10.2-shc.1: the chart's own routes (keycloak.routes, keycloak.ingress)
   syncWave: "20"
   destinationNamespace: services-rhbk
   values:
