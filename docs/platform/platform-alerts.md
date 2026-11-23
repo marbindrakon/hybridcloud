@@ -40,6 +40,11 @@ the same namespace. The operations layer must be rendered on the cluster (`layer
 The generic job alerts of the operations layer (`ShcBackupJobFailed` and the like) leave the checks' CronJobs out,
 so a failed check raises one alert.
 
+A check reports by ending its run with an error. Argo CD reads a CronJob whose latest run failed as degraded, so
+while a check reports, the Argo CD application that carries the operations layer shows `Degraded`, and it shows
+`Healthy` again after the check's next run that succeeds. That is the same fact as the alert, seen in a second
+place, not a fault of the deployment: read the alert and the check's log first.
+
 ### Volumes and backups: settings
 
 - `volumes.namespaces` and `volumes.excludeNamespaces` are regular expressions. The default watches every
