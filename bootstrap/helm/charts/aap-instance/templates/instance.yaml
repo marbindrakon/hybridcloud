@@ -36,6 +36,16 @@ spec:
   {{- if .Values.eda.enabled }}
   eda:
     replicas: {{ .Values.eda.replicas | default 1 }}
+    {{- with .Values.eda.extraSettings }}
+    extra_settings:
+      {{- range . }}
+      {{- if not (and (kindIs "map" .) .setting (hasKey . "value")) }}
+      {{- fail "eda.extraSettings: each item needs a setting and a value" }}
+      {{- end }}
+      - setting: {{ .setting | quote }}
+        value: {{ .value | toString | quote }}
+      {{- end }}
+    {{- end }}
   {{- end }}
   hub:
     disabled: true

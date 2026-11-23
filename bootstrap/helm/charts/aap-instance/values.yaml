@@ -20,6 +20,15 @@ controller:
 eda:
   enabled: true
   replicas: 1
+  # Settings of the Event-Driven Ansible server, passed to its custom resource as extra_settings (each an item
+  # {setting, value}; the server reads them as environment variables, so a setting's name carries the EDA_ prefix).
+  # Nothing is set by default. For example, how often a failing activation is restarted before the platform gives
+  # up on it (the platform's default is 5, counted over the activation's life until it is disabled and enabled):
+  #   extraSettings:
+  #     - setting: EDA_ACTIVATION_MAX_RESTARTS_ON_FAILURE
+  #       value: "100"
+  # A setting the server does not know is ignored without an error: check the effect after a change.
+  extraSettings: []
   rbac:
     enabled: true
 
