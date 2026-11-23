@@ -14,11 +14,14 @@ or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -
   unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- . -}} })
 {{- end }}
 
-{{- /* a check CronJob that has not succeeded for `minutes`, or is suspended; . = (list selector minutes). Silent on a
-fresh install until its first run has succeeded or failed (the failing clause covers a first run that fails). */}}
+{{- /* a check CronJob that has not succeeded for `minutes`, whose next scheduled run has been due for longer than
+`minutes` (never scheduled, or no longer scheduled), or is suspended; . = (list selector minutes). Silent on a fresh
+install until its first run is that far overdue, or has succeeded or failed (the failing clause covers a first run
+that fails). */}}
 {{- define "shc-cluster-base.cronJobStale" -}}
 {{- $sel := index . 0 -}}
 (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }) > {{ mul (index . 1) 60 }})
+or (time() - max by (namespace, cronjob) (kube_cronjob_next_schedule_time{ {{- $sel -}} }) > {{ mul (index . 1) 60 }})
 or (max by (namespace, cronjob) (kube_cronjob_spec_suspend{ {{- $sel -}} }) == 1)
 {{- end }}
 
@@ -28,16 +31,15 @@ or (max by (namespace, cronjob) (kube_cronjob_spec_suspend{ {{- $sel -}} }) == 1
 or ({{ include "shc-cluster-base.cronJobStale" . }})
 {{- end }}
 
-{{- /* the API check down in a way that silences the activation alert: failing on every evaluation of the last 3
-minutes (a healthy run in flight is scheduled-but-not-yet-succeeded for a moment only), never succeeded, or stale. Not
-when suspended: a suspended API check must not hide the activation alert. . = (list selector minutes) */}}
+{{- /* the API check down in a way that silences the activation alert: failing on every evaluation of the last 8
+minutes (longer than one interval of a 5-minute schedule, so a check that fails every other run, or a healthy run in
+flight, never silences), or scheduled but never succeeded. Not when it is suspended or no longer runs: an API check
+that does not run must not hide the activation alert. . = selector */}}
 {{- define "shc-cluster-base.apiCheckDown" -}}
-{{- $sel := index . 0 -}}
-(min_over_time((max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
-  - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }))[3m:]) > 0)
-or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
-  unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- $sel -}} })
-or (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }) > {{ mul (index . 1) 60 }})
+(min_over_time((max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -}} })
+  - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- . -}} }))[8m:]) > 0)
+or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -}} })
+  unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- . -}} })
 {{- end }}
 
 {{- define "shc-cluster-base.platformHealthEnabled" -}}
@@ -137,13 +139,14 @@ or (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_ti
     - alert: ShcAggregatedAPIUnavailable
       expr: >-
         (max by (name) (aggregator_unavailable_apiservice{name=~"{{ .names }}"}) == 1)
-        or (max by (name) (avg_over_time(aggregator_unavailable_apiservice{name=~"{{ .names }}"}[{{ .flapWindow }}])) >= {{ .unavailableFraction }})
+        or ((max by (name) (avg_over_time(aggregator_unavailable_apiservice{name=~"{{ .names }}"}[{{ .flapWindow }}])) >= {{ .unavailableFraction }})
+          and on (name) max by (name) (aggregator_unavailable_apiservice{name=~"{{ .names }}"} offset {{ .flapWindow }}))
       for: {{ .for }}
       labels:
         severity: critical
       annotations:
         summary: "Aggregated API {{ include "shc-cluster-base.label" "name" }} is unavailable"
-        description: "The API server cannot reach the service behind this APIService: for {{ .for }} without a break, or for at least {{ mul (float64 .unavailableFraction | mulf 100 | int) 1 }} % of the last {{ .flapWindow }}. Meanwhile namespace deletes do not finish, and so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer."
+        description: "The API server cannot reach the service behind this APIService: for {{ .for }} without a break, or for at least {{ mul (float64 .unavailableFraction | mulf 100 | int) 1 }} % of the last {{ .flapWindow }} (an APIService that existed for the whole of it). Meanwhile namespace deletes do not finish, and so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer."
 {{- end }}{{ end }}
 {{- with $p.edaActivations }}{{ if .enabled }}
 {{- $act := list (printf "%s, cronjob=\"eda-activations\"" $ns) .staleMinutes }}
@@ -155,13 +158,13 @@ or (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_ti
       expr: >-
         ({{ include "shc-cluster-base.checkDown" $act | nindent 10 | trim }})
         unless on (namespace)
-        ({{ include "shc-cluster-base.apiCheckDown" $api | nindent 10 | trim }})
+        ({{ include "shc-cluster-base.apiCheckDown" (index $api 0) | nindent 10 | trim }})
       for: {{ .alertFor }}
       labels:
         severity: critical
       annotations:
         summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: an event activation is not running after repair, cannot run, or has two pods, or the check itself did not complete"
-        description: "The activation check found activations it could not bring back within its restart limit, that the platform refuses to restart, that cannot run as they are, that were restarted too often in a day, or that run twice; or it could not do its own work (its restart count unreadable, not saved, or written by another run; the activation Jobs or an activation's instances unreadable), has not succeeded for {{ .staleMinutes }} minutes, or is suspended. Its findings: oc -n {{ include "shc-cluster-base.label" "namespace" }} get jobs, then oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-activations Job>. The ConfigMap eda-activations-state shows each activation's restarts and gaveUp (the platform refused its restart). Fix the cause (the image, the project, the credential); the check restarts it on its next run when the hour allows. Of two Jobs of one activation, remove the older."
+        description: "The activation check found activations it could not bring back within its restart limit, that the platform refuses to restart, that cannot run as they are, that were restarted too often in a day, or that run twice; or it could not do its own work (its restart count unreadable, not saved, or written by another run; the activation Jobs or an activation's instances unreadable), has not succeeded for {{ .staleMinutes }} minutes, has not been scheduled for {{ .staleMinutes }} minutes past its due time, or is suspended. Its findings: oc -n {{ include "shc-cluster-base.label" "namespace" }} get jobs, then oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-activations Job>. The ConfigMap eda-activations-state shows each activation's restarts and gaveUp (the platform refused its restart). Fix the cause (the image, the project, the credential); the check restarts it on its next run when the hour allows. Of two Jobs of one activation, remove the older."
     - alert: ShcAutomationAPIUnavailable
       expr: >-
         {{ include "shc-cluster-base.checkDown" $api | nindent 8 | trim }}
@@ -170,7 +173,7 @@ or (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_ti
         severity: critical
       annotations:
         summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: the automation platform's event-automation API does not answer"
-        description: "The API did not answer, answered an error, or refused the check's credential (or the check has not succeeded for {{ .staleMinutes }} minutes, or is suspended), so events are not handled and activations are neither checked nor repaired. Check the platform gateway, the automation platform's pods and its database; oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-api-check Job> says what the API answered."
+        description: "The API did not answer, answered an error, or refused the check's credential (or the check has not succeeded for {{ .staleMinutes }} minutes, has not been scheduled for {{ .staleMinutes }} minutes past its due time, or is suspended), so events are not handled and activations are neither checked nor repaired. Check the platform gateway, the automation platform's pods and its database; oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-api-check Job> says what the API answered."
 {{- end }}{{ end }}
 {{- with $p.identityWriteProbe }}{{ if .enabled }}
 {{- $kc := list (printf "%s, cronjob=~\"identity-write-probe-.+\"" $ns) .staleMinutes }}
@@ -184,6 +187,6 @@ or (time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_ti
         severity: critical
       annotations:
         summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: the identity write check failed"
-        description: "The Keycloak refused or lost a write to its database, or the check could not get a token, or the Keycloak did not answer, or the check has not succeeded for {{ .staleMinutes }} minutes or is suspended; oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest Job of this CronJob> says which. Sign-ins can still work while every change fails. If writes stay refused after a database fail-over, restart the Keycloak's pods so they connect to the new primary."
+        description: "The Keycloak refused or lost a write to its database, or the check could not get a token, or the Keycloak did not answer, or the check has not succeeded for {{ .staleMinutes }} minutes, has not been scheduled for {{ .staleMinutes }} minutes past its due time, or is suspended; oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest Job of this CronJob> says which. Sign-ins can still work while every change fails. If writes stay refused after a database fail-over, restart the Keycloak's pods so they connect to the new primary."
 {{- end }}{{ end }}
 {{- end }}

@@ -178,6 +178,19 @@ def cron(ns, name, sched, success=None):
     return out
 
 
+def alternating(minutes):
+    """(schedule, success) value strings of a 5-minute CronJob whose every other run fails: run k is scheduled at
+    minute 5k; an even one succeeds a minute later, an odd one never does."""
+    sched, success, last = [], [], 0
+    for m in range(minutes + 1):
+        k = m // 5
+        sched.append(str(300 * k))
+        if k % 2 == 0 and m >= 5 * k + 1:
+            last = 300 * k
+        success.append(str(last))
+    return " ".join(sched), " ".join(success)
+
+
 def kubelet(ns, pvc, used, cap="100x120", avail=None):
     out = [{"series": 'kubelet_volume_stats_used_bytes{namespace="%s",persistentvolumeclaim="%s",node="n1"}' % (ns, pvc),
             "values": used},
@@ -273,24 +286,34 @@ def tests(rules):
                                                     "Database backup platform-db/app-pg-repo1-diff: no successful run "
                                                     "for 2d 4h 0m 0s")]),
          ]},
-        # aggregated APIs: unavailable from minute 20 on (fires at minute 30, while still down); a new APIService
-        # unavailable for its first 4 minutes (quiet); one unavailable every other minute for an hour (fires)
+        # aggregated APIs, each with an hour of history unless new: unavailable from minute 80 on (fires at minute 90,
+        # while still down); a new APIService that is not ready for its first 6 minutes (quiet: the share of the
+        # window counts only for an APIService that existed for the whole window); one unavailable every other minute
+        # from minute 60 (fires once half of a whole window was unavailable); a 45-minute outage (held after the
+        # recovery while at least half of the last hour was unavailable: about 30 minutes)
         {"interval": "1m",
          "input_series": [{"series": 'aggregator_unavailable_apiservice{name="v1.down.io",instance="a"}',
-                           "values": "0x20 1x60"},
+                           "values": "0x80 1x80"},
                           {"series": 'aggregator_unavailable_apiservice{name="v1.down.io",instance="b"}',
-                           "values": "0x80"},
+                           "values": "0x160"},
                           {"series": 'aggregator_unavailable_apiservice{name="v1.new.io",instance="a"}',
-                           "values": "_x30 1x3 0x46"},
+                           "values": "_x90 1x5 0x64"},
                           {"series": 'aggregator_unavailable_apiservice{name="v1.half.io",instance="a"}',
-                           "values": " ".join(["1 0"] * 41)}],
+                           "values": "0x60 " + " ".join(["1 0"] * 50)},
+                          {"series": 'aggregator_unavailable_apiservice{name="v1.outage.io",instance="a"}',
+                           "values": "0x60 1x44 0x55"}],
          "alert_rule_test": [
-             a("ShcAggregatedAPIUnavailable", "28m", [({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
-             a("ShcAggregatedAPIUnavailable", "31m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
-                                                      ({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
-             a("ShcAggregatedAPIUnavailable", "45m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
-                                                      ({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
              a("ShcAggregatedAPIUnavailable", "5m", []),
+             a("ShcAggregatedAPIUnavailable", "88m", [({"name": "v1.outage.io"}, "Aggregated API v1.outage.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "92m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
+                                                      ({"name": "v1.outage.io"}, "Aggregated API v1.outage.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "101m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
+                                                       ({"name": "v1.outage.io"}, "Aggregated API v1.outage.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "130m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
+                                                       ({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable"),
+                                                       ({"name": "v1.outage.io"}, "Aggregated API v1.outage.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "140m", [({"name": "v1.down.io"}, "Aggregated API v1.down.io is unavailable"),
+                                                       ({"name": "v1.half.io"}, "Aggregated API v1.half.io is unavailable")]),
          ]},
         # the checks: the activation check failing alone fires after 10 minutes; once the API check fails too, only the
         # API alert holds (one fault, one alert); the identity probe that never succeeded fires; the generic job alert
@@ -325,14 +348,60 @@ def tests(rules):
              a("ShcEventActivationsNotRunning", "40m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
              a("ShcAutomationAPIUnavailable", "40m", []),
          ]},
+        # the API check suspended from the start (no run since): the activation alert is not hidden, also past the
+        # stale window, and the API alert speaks for the suspended check
         {"interval": "1m",
-         "input_series": cron(ops, "eda-activations", "0+60x40", "0x40")
-                         + cron(ops, "eda-api-check", "0+60x40", "0+60x40")
+         "input_series": cron(ops, "eda-activations", "0+60x100", "0x100")
+                         + cron(ops, "eda-api-check", "0x100", "0x100")
                          + [{"series": 'kube_cronjob_spec_suspend{namespace="%s",cronjob="eda-api-check"}' % ops,
-                             "values": "1x40"}],
+                             "values": "1x100"}],
          "alert_rule_test": [
              a("ShcEventActivationsNotRunning", "15m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcEventActivationsNotRunning", "90m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
              a("ShcAutomationAPIUnavailable", "15m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
+             a("ShcAutomationAPIUnavailable", "90m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
+         ]},
+        # the API check failing every other run (every 5 minutes) while the activation check fails every run: the API
+        # alert never holds its 10 minutes, so the activation alert must speak
+        {"interval": "1m",
+         "input_series": cron(ops, "eda-activations", "0+60x200", "0x200")
+                         + cron(ops, "eda-api-check", *alternating(200)),
+         "alert_rule_test": [
+             a("ShcEventActivationsNotRunning", "15m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcEventActivationsNotRunning", "33m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcEventActivationsNotRunning", "199m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcAutomationAPIUnavailable", "199m", []),
+         ]},
+        # a check CronJob never scheduled: quiet until its first run is overdue by the stale window, then fires; one
+        # whose first run is not due yet stays quiet; a suspended one that never ran speaks through the suspended
+        # clause; the activation check never scheduled fires too
+        {"interval": "1m",
+         "input_series": [{"series": 'kube_cronjob_next_schedule_time{namespace="%s",cronjob="identity-write-probe-never"}'
+                                     % ops, "values": "300x100"},
+                          {"series": 'kube_cronjob_next_schedule_time{namespace="%s",cronjob="identity-write-probe-later"}'
+                                     % ops, "values": "6000x100"},
+                          {"series": 'kube_cronjob_next_schedule_time{namespace="%s",cronjob="identity-write-probe-off"}'
+                                     % ops, "values": "300x100"},
+                          {"series": 'kube_cronjob_spec_suspend{namespace="%s",cronjob="identity-write-probe-off"}' % ops,
+                           "values": "1x100"},
+                          {"series": 'kube_cronjob_next_schedule_time{namespace="%s",cronjob="eda-activations"}' % ops,
+                           "values": "300x100"}]
+                         + [{"series": 'kube_cronjob_%s{namespace="%s",cronjob="%s"}' % (m, ops, c), "values": v}
+                            for c in ("identity-write-probe-never", "identity-write-probe-later",
+                                      "identity-write-probe-off", "eda-activations")
+                            for m, v in (("info", "1x100"), ("status_active", "0x100"))],
+         "alert_rule_test": [
+             a("ShcIdentityWriteCheckFailed", "4m", []),
+             a("ShcIdentityWriteCheckFailed", "20m", [({"namespace": ops, "cronjob": "identity-write-probe-off"},
+                                                      KCS % "off")]),
+             a("ShcIdentityWriteCheckFailed", "60m", [({"namespace": ops, "cronjob": "identity-write-probe-off"},
+                                                      KCS % "off")]),
+             a("ShcIdentityWriteCheckFailed", "80m", [({"namespace": ops, "cronjob": "identity-write-probe-never"},
+                                                      KCS % "never"),
+                                                     ({"namespace": ops, "cronjob": "identity-write-probe-off"},
+                                                      KCS % "off")]),
+             a("ShcEventActivationsNotRunning", "60m", []),
+             a("ShcEventActivationsNotRunning", "80m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
          ]},
         # staleness: a check that is suspended (its last run fine) fires; one whose last success is more than an hour
         # old fires, even with no failed run; a fresh install (the CronJob exists, nothing ran yet) stays quiet

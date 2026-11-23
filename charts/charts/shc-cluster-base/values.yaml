@@ -265,7 +265,8 @@ ops:
       notScheduledFor: 6h
     # An aggregated API (an APIService served by a pod) unavailable: namespace deletes hang meanwhile. Fires while it
     # has been unavailable for `for`, or while it was unavailable for at least unavailableFraction of the last
-    # flapWindow (an API that keeps dropping out), held for `for`.
+    # flapWindow (an API that keeps dropping out; only once the APIService has existed for a whole flapWindow), held
+    # for `for`.
     aggregatedAPIs:
       enabled: false
       names: ".+"                                    # regular expression of the APIService names watched
