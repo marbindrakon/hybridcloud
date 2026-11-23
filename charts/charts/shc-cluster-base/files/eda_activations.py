@@ -2,31 +2,37 @@
 """Check of the automation platform's event activations, run as a CronJob outside the platform.
 
 Modes:
-  check (default)  list the activations through the event-automation API and bring back the watched ones (restart
-                   policy `always`) that are enabled but not running: disable, wait until stopped, enable, wait
-                   until running. Activations with another restart policy are not watched (listed once per run in
-                   the log). Bounded: at most maxRepairsPerHour repairs per activation in any hour; past that it is
-                   reported and left alone until it is seen running with no repair in the last hour. One repaired
-                   more than maxRepairsPerDay times in a day is reported even though each repair worked.
-                   Reported, never repaired: an activation that cannot run (its status message matches
-                   cannotRunPatterns, or the platform refuses to enable it as invalid), the platform's workers
-                   offline, a status this check does not know, two running activation Jobs for one activation (the
-                   older one is removed only with removeStaleJobs), an empty list (unless allowNoActivations).
+  check (default)  list the activations through the event-automation API and restart the watched ones that do not
+                   run. Watched: enabled, with restart policy `always`. A disabled activation is never touched and
+                   never reported, whoever disabled it; one with another restart policy is named once per run in
+                   the log. A watched activation is restarted (one call, POST .../restart/) when, for longer than
+                   its grace, its status is not running, or its status is running while its newest instance is not
+                   (the platform lost track of it). Pending, starting and stopping get the longer grace, counted
+                   from when the check first saw it not running or last restarted it. Just before the call the
+                   activation is read again; it is restarted only if it is still enabled and still due.
 
-                   The repair count lives in a ConfigMap (stateConfigMap). Before anything is disabled or enabled,
-                   the counted repair and the mark "disabled by this check" are written there; if that write fails,
-                   nothing is touched. So whatever stops a run midway (an API error, a timeout, the pod killed), an
-                   activation this check disabled is either enabled again by the same run or marked, and the next
-                   run enables it. An activation disabled by anyone else is never enabled.
+                   Bounded: at most maxRepairsPerHour restarts per activation in any hour; at the cap it is reported
+                   and restarted again when the hour allows. More than maxRepairsPerDay in a day is reported
+                   although each restart worked. Every restart is counted in a ConfigMap (stateConfigMap) before
+                   it is made; if the count cannot be stored, nothing is restarted. A restart the platform refuses
+                   as invalid or forbidden (400, 403) gives up on that activation until it runs again or is
+                   disabled; it is reported each run. Reported, never restarted: an activation that cannot run (its
+                   status message matches cannotRunPatterns), the platform's workers offline, a status this check
+                   does not know, two running Jobs for one watched activation (the older one is removed only with
+                   removeStaleJobs), an empty list (unless allowNoActivations).
 
-                   Exit 0: nothing needs a person and the run was complete. Exit 1: something was reported, a repair
-                   did not complete, or a read or write the run needed failed (including the activations list).
+                   A restart does not reset the platform's own failure budget: once that is used up, each further
+                   failure of the activation waits for this check's next run.
+
+                   Exit 0: nothing needs a person and the run was complete. Exit 1: something was reported, a
+                   restart did not bring the activation back, another run holds the count, or a read or write the
+                   run needed failed (including the activations list).
   api              one authenticated read of the activations list. Exit 0 when it answers, 1 when it does not
                    answer, answers an error, or refuses the credential.
 
-The decisions are pure functions (decide, plan_actions, job_findings, stale_jobs, prune_state); run_check does the
-reads and writes they ask for. Standard library only (the job image's Python 3.9 or later). Only https is used,
-redirects are not followed, and a next-page link must stay on the same origin.
+The only calls to the platform are GETs and POST .../restart/. The decisions are pure functions (decide, still_due,
+job_findings, stale_jobs, prune_state); run_check does the reads and writes they ask for. Standard library only
+(the job image's Python 3.9 or later). https only, redirects not followed, a next-page link only on the same origin.
 
 Configuration: a JSON file (--config); see DEFAULTS. The credential comes from files in credentialDir: `token` (sent
 as a bearer token), or `username` and `password` (basic authentication). It never appears in any output.
@@ -55,10 +61,9 @@ DEFAULTS = {
     "stateConfigMap": "eda-activations-state",
     "stateNamespace": "",           # the check's own namespace (the CronJob's)
     "maxRepairsPerHour": 3,
-    "maxRepairsPerDay": 6,          # more repairs than this in a day: reported although each repair worked
-    "notRunningMinutes": 4,         # not running this long (seen on an earlier run, or since a repair) before a repair
+    "maxRepairsPerDay": 6,          # more restarts than this in a day: reported although each one worked
+    "notRunningMinutes": 4,         # not running this long (seen on an earlier run, or since a restart)
     "transitionalMinutes": 10,      # pending, starting or stopping this long counts as not running
-    "stopTimeoutSeconds": 90,
     "startTimeoutSeconds": 180,
     "pollSeconds": 5,
     "cannotRunPatterns": ["pull failed", "container request is not valid"],
@@ -75,8 +80,6 @@ WATCHED_POLICY = "always"
 RUNNING = "running"
 TRANSITIONAL = {"pending", "starting", "stopping"}
 NOT_RUNNING = {"failed", "stopped", "completed", "unresponsive", "error"}
-# the platform refuses an enable (409) while the activation is in one of these
-ENABLE_BLOCKED = {"starting", "stopping", "deleting", "running", "unresponsive"}
 JOB_NAME = re.compile(r"^activation-job-(\d+)-(\d+)$")
 
 # verdicts
@@ -85,14 +88,13 @@ DISABLED = "Disabled"
 NOT_WATCHED = "NotWatched"
 DELETING = "Deleting"
 WAITING = "Waiting"
-REPAIR = "Repair"
-ENABLE = "EnableAgain"
+RESTART = "Restart"
 CANNOT_RUN = "CannotRun"
 LIMIT = "RepairLimitReached"
-LEFT_DISABLED = "LeftDisabled"
+GAVE_UP = "RestartRefused"
 WORKERS_OFFLINE = "WorkersOffline"
 UNKNOWN = "UnknownStatus"
-PROBLEMS = {CANNOT_RUN, LIMIT, LEFT_DISABLED, WORKERS_OFFLINE, UNKNOWN}
+PROBLEMS = {CANNOT_RUN, LIMIT, GAVE_UP, WORKERS_OFFLINE, UNKNOWN}
 
 # values never to show (the credential); every line this check prints or reports passes redact()
 SECRETS = set()
@@ -137,51 +139,43 @@ def in_window(times, now, window):
 
 
 def watched(activation):
-    return str(activation.get("restart_policy") or "") == WATCHED_POLICY
+    return bool(activation.get("is_enabled")) and str(activation.get("restart_policy") or "") == WATCHED_POLICY
+
+
+def lost_track(activation, instance):
+    """Status running while the newest instance is not running."""
+    return activation.get("status") == RUNNING and instance is not None and instance.get("status") != RUNNING
 
 
 def decide(activation, instance, record, now, cfg):
     """One activation's verdict: (verdict, reason, new_record).
 
-    activation: an item of the activations list; instance: its latest instance (or None); record: what the state
-    holds for it ({repairs: [unix seconds, last day], notRunningSince, gaveUp, disabledByCheck}); now: unix seconds.
+    activation: an item of the activations list; instance: its newest instance (or None); record: what the state
+    holds for it ({repairs: [unix seconds, last day], notRunningSince, gaveUp}); now: unix seconds.
     """
     record = record or {}
     rec = {"name": activation.get("name"), "repairs": in_window(record.get("repairs"), now, DAY),
-           "notRunningSince": record.get("notRunningSince"), "gaveUp": bool(record.get("gaveUp")),
-           "disabledByCheck": bool(record.get("disabledByCheck"))}
+           "notRunningSince": record.get("notRunningSince"), "gaveUp": bool(record.get("gaveUp"))}
     hour = in_window(rec["repairs"], now, HOUR)
-    cap = cfg["maxRepairsPerHour"]
     status = str(activation.get("status") or "")
     if not activation.get("is_enabled"):
-        if rec["disabledByCheck"]:
-            # this check disabled it and its enable did not go through: never leave it disabled silently
-            if rec["gaveUp"] or len(hour) >= cap:
-                rec["gaveUp"] = True
-                return LEFT_DISABLED, "left disabled by this check's repair and the platform did not take the " \
-                                      "enable again; enable it after fixing the cause", rec
-            return ENABLE, "left disabled by this check's earlier repair", rec
-        # disabled by a person (or by something else): not ours
         rec.update(notRunningSince=None, gaveUp=False)
         return DISABLED, "disabled", rec
-    rec["disabledByCheck"] = False
     if not watched(activation):
         rec.update(notRunningSince=None, gaveUp=False)
         return NOT_WATCHED, "restart policy %s" % (activation.get("restart_policy") or "unset"), rec
     if status == "deleting":
         return DELETING, "being deleted", rec
     if status == "workers offline":
-        return WORKERS_OFFLINE, "the platform's activation workers are offline; nothing to repair here", rec
-    inst_status = str((instance or {}).get("status") or "")
-    if status == RUNNING and (instance is None or inst_status == RUNNING):
+        return WORKERS_OFFLINE, "the platform's activation workers are offline; nothing to restart here", rec
+    if status == RUNNING and not lost_track(activation, instance):
         rec["notRunningSince"] = None
-        if rec["gaveUp"] and not hour:
-            rec["gaveUp"] = False
+        rec["gaveUp"] = False
         return OK, "running", rec
     if status != RUNNING and status not in TRANSITIONAL and status not in NOT_RUNNING:
-        return UNKNOWN, "status %r is not one this check knows; not repaired" % status, rec
+        return UNKNOWN, "status %r is not one this check knows; not restarted" % status, rec
     if status == RUNNING:
-        why = "status running but its latest instance %s is %s" % (instance.get("id"), inst_status or "unknown")
+        why = "status running but its newest instance %s is %s" % (instance.get("id"), instance.get("status"))
     else:
         why = "status %s" % status
         msg = str(activation.get("status_message") or "").strip()
@@ -189,39 +183,33 @@ def decide(activation, instance, record, now, cfg):
             why += ": " + msg[:200]
     pattern = cannot_run(activation, instance, cfg["cannotRunPatterns"])
     if pattern:
-        return CANNOT_RUN, "%s (matches %r: fix the cause, then enable it)" % (why, pattern), rec
+        return CANNOT_RUN, "%s (matches %r: fix the cause; it runs again once restarted)" % (why, pattern), rec
     if rec["gaveUp"]:
-        return LIMIT, "%s; the repairs did not bring it back, left alone until it runs" % why, rec
+        return GAVE_UP, "%s; the platform refused its restart, left alone until it runs or is disabled" % why, rec
     if not rec["notRunningSince"]:
         rec["notRunningSince"] = now
     grace = cfg["transitionalMinutes"] if status in TRANSITIONAL else cfg["notRunningMinutes"]
     waited = (now - rec["notRunningSince"]) / 60
     if waited < grace:
-        return WAITING, "%s; not running for %.0f min, repaired after %s min" % (why, waited, grace), rec
-    if len(hour) >= cap:
-        rec["gaveUp"] = True
-        return LIMIT, "%s; %d repairs in the last hour did not bring it back, left alone until it runs" % (
-            why, len(hour)), rec
-    return REPAIR, why, rec
+        return WAITING, "%s; not running for %.0f min, restarted after %s min" % (why, waited, grace), rec
+    if len(hour) >= cfg["maxRepairsPerHour"]:
+        return LIMIT, "%s; %d restarts in the last hour, restarted again when the hour allows" % (why, len(hour)), rec
+    return RESTART, why, rec
 
 
-def still_due(verdict, fresh):
-    """Whether an action decided on an earlier read still applies to the activation as it reads now."""
-    if fresh is None:
+def still_due(first, fresh, instance):
+    """Whether an activation decided on the first read is still due to be restarted as it reads now."""
+    if fresh is None or not watched(fresh):
         return False
-    if verdict == ENABLE:
-        return not fresh.get("is_enabled")
-    return bool(fresh.get("is_enabled")) and watched(fresh) and fresh.get("status") not in (RUNNING, "deleting")
-
-
-def mark_before_acting(rec, verdict, now):
-    """The record written before the action: the repair counted, the grace restarted from now (a slow start is not
-    pushed back again on the next run), and the activation marked as disabled by this check."""
-    rec = dict(rec)
-    rec["repairs"] = list(rec.get("repairs") or []) + [now]
-    rec["notRunningSince"] = now
-    rec["disabledByCheck"] = True
-    return rec
+    status = fresh.get("status")
+    if status == RUNNING:
+        return lost_track(fresh, instance)
+    if status in NOT_RUNNING:
+        return True
+    if status in TRANSITIONAL:
+        # the platform is working on one that was not transitional before: leave it to the platform
+        return first.get("status") in TRANSITIONAL
+    return False
 
 
 def parse_jobs(jobs):
@@ -260,7 +248,7 @@ def stale_jobs(activation, instance, jobs_of_activation):
 
 
 def prune_state(state, activation_ids):
-    """The state without activations that no longer exist (a record of an existing activation is always kept)."""
+    """The state without activations that no longer exist."""
     keep = {str(i) for i in activation_ids}
     return {k: v for k, v in (state or {}).items() if k in keep}
 
@@ -386,6 +374,8 @@ def error_text(raw):
 
 
 class Eda:
+    """The event-automation API: reads, and the one action this check takes (restart)."""
+
     def __init__(self, http, api_path):
         self.http = http
         self.p = api_path.rstrip("/")
@@ -406,13 +396,13 @@ class Eda:
         return out
 
     def detail(self, aid):
-        return self.http.call("GET", "%s/activations/%d/" % (self.p, aid))
+        doc = self.http.call("GET", "%s/activations/%d/" % (self.p, aid))
+        if not isinstance(doc, dict):
+            raise ApiError("GET %s/activations/%d/: the answer is not an activation" % (self.p, aid))
+        return doc
 
-    def disable(self, aid):
-        self.http.call("POST", "%s/activations/%d/disable/" % (self.p, aid), body={}, ok=(200, 202, 204))
-
-    def enable(self, aid):
-        self.http.call("POST", "%s/activations/%d/enable/" % (self.p, aid), body={}, ok=(200, 202, 204))
+    def restart(self, aid):
+        self.http.call("POST", "%s/activations/%d/restart/" % (self.p, aid), body={}, ok=(200, 202, 204))
 
 
 class Kube:
@@ -457,7 +447,7 @@ class Kube:
         return state, cm["metadata"].get("resourceVersion")
 
     def write_state(self, ns, name, state, version):
-        """Writes the state against the version read (a conflicting write fails); returns the new version."""
+        """Writes the state against the version read (409 when another run wrote since); returns the new version."""
         body = {"apiVersion": "v1", "kind": "ConfigMap",
                 "metadata": {"name": name, "namespace": ns,
                              "labels": {"app.kubernetes.io/name": "eda-activations"}},
@@ -470,22 +460,35 @@ class Kube:
         return ((doc or {}).get("metadata") or {}).get("resourceVersion")
 
 
-def wait_for(eda, ids, done, timeout, poll, clock, sleep):
-    """Poll the activations list until done(status) holds for every id or the timeout passes: {id: last status}."""
-    deadline = clock() + timeout
+class Conflict(Exception):
+    """Another run wrote the count since this run read it."""
+
+
+def store(kube, cfg, state, version):
+    try:
+        return kube.write_state(cfg["stateNamespace"], cfg["stateConfigMap"], state, version)
+    except ApiError as e:
+        if e.status == 409:
+            raise Conflict()
+        raise
+
+
+def wait_running(eda, ids, cfg, clock, sleep):
+    """Poll the activations list until every id runs or the timeout passes: {id: last status}."""
+    deadline = clock() + cfg["startTimeoutSeconds"]
     while True:
         by_id = {int(a["id"]): a for a in eda.activations()}
         last = {i: str((by_id.get(i) or {}).get("status") or "absent") for i in ids}
-        if all(done(s) for s in last.values()) or clock() >= deadline:
+        if all(s == RUNNING for s in last.values()) or clock() >= deadline:
             return last
-        sleep(poll)
+        sleep(cfg["pollSeconds"])
 
 
 def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, out=print):
-    """One check. Returns (counts, report lines); a non-empty report means exit 1. Raises ApiError when the
+    """One check. Returns (counts, report lines); a non-empty report means exit 1. Raises ApiError only when the
     activations list itself does not answer (nothing was judged or touched then)."""
-    counts = {"activations": 0, "enabled": 0, "running": 0, "waiting": 0, "notWatched": 0, "repaired": 0,
-              "notRunningAfterRepair": 0, "reported": 0, "twoJobs": 0, "staleJobsRemoved": 0}
+    counts = {"activations": 0, "enabled": 0, "running": 0, "waiting": 0, "notWatched": 0, "restarted": 0,
+              "notRunningAfterRestart": 0, "reported": 0, "twoJobs": 0, "staleJobsRemoved": 0}
     report = []
 
     def say(line):
@@ -494,20 +497,22 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
     def problem(line):
         report.append(redact(line))
 
-    items = eda.activations()
-    counts["activations"] = len(items)
-    if not items and not cfg["allowNoActivations"]:
-        problem("the activations list is empty: the credential's account may not see them "
-                "(allowNoActivations is off); nothing was judged or changed")
-        return counts, report
-
+    # the count first: a run that started after another one wrote it sees that write
     try:
         state, version = kube.read_state(cfg["stateNamespace"], cfg["stateConfigMap"])
         state_ok = True
     except ApiError as e:
         state, version, state_ok = {}, None, False
-        problem("the repair count (ConfigMap %s) cannot be read, so nothing is repaired: %s"
+        problem("the restart count (ConfigMap %s) cannot be read, so nothing is restarted: %s"
                 % (cfg["stateConfigMap"], e))
+
+    items = eda.activations()
+    counts["activations"] = len(items)
+    if not items:
+        if not cfg["allowNoActivations"]:
+            problem("the activations list is empty: the credential's account may not see them "
+                    "(allowNoActivations is off); nothing was judged or changed")
+        return counts, report   # an empty list never prunes the counts
 
     try:
         jobs = parse_jobs(kube.jobs(cfg["automationNamespace"]))
@@ -515,8 +520,7 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
         jobs = None
         problem("the activation Jobs in %s cannot be listed: %s" % (cfg["automationNamespace"], e))
 
-    new_state, due, not_watched = {}, [], []
-    refs = {}
+    new_state, due, not_watched, refs = {}, [], [], {}
     for a in items:
         aid, name = int(a["id"]), a.get("name") or str(a.get("id"))
         ref = refs[aid] = "activation %s (id %d)" % (name, aid)
@@ -524,7 +528,7 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
         if a.get("is_enabled"):
             counts["enabled"] += 1
         instance = None
-        if a.get("is_enabled") and watched(a) and a.get("status") != "deleting":
+        if watched(a) and a.get("status") != "deleting":
             try:
                 instance = latest_instance(eda.detail(aid))
             except ApiError as e:
@@ -543,16 +547,16 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
         elif verdict == WAITING:
             counts["waiting"] += 1
             say("wait %s: %s" % (ref, why))
-        elif verdict in (REPAIR, ENABLE):
+        elif verdict == RESTART:
             if state_ok:
-                due.append((aid, verdict, why))
+                due.append((aid, a, why))
             else:
                 counts["reported"] += 1
-                problem("%s: %s (%s), not done: the repair count is unknown" % (ref, verdict, why))
+                problem("%s: not running (%s), not restarted: the restart count is unknown" % (ref, why))
         elif verdict in PROBLEMS:
             counts["reported"] += 1
             problem("%s: %s: %s" % (ref, verdict, why))
-        if jobs is not None:
+        if jobs is not None and watched(a):
             two = job_findings(a, jobs.get(aid))
             if two:
                 counts["twoJobs"] += 1
@@ -576,97 +580,83 @@ def run_check(eda, kube, cfg, now, dry_run, clock=time.time, sleep=time.sleep, o
         say("not watched (restart policy other than %s): %s" % (WATCHED_POLICY, ", ".join(sorted(not_watched))))
 
     ids = [a["id"] for a in items]
-    if due and not dry_run:
-        acted = act(eda, kube, cfg, now, due, refs, new_state, ids, version, counts, problem, say, clock, sleep)
-        version = acted
-    elif due:
-        for aid, verdict, why in due:
-            say("would %s %s: %s" % ("repair" if verdict == REPAIR else "enable", refs[aid], why))
-
-    for key, rec in new_state.items():
-        day = len(rec.get("repairs") or [])
-        if day > cfg["maxRepairsPerDay"]:
-            problem("%s: RepairedTooOften: %d repairs in the last day (more than %d); find why it stops"
-                    % (refs.get(int(key), key), day, cfg["maxRepairsPerDay"]))
-
-    if state_ok and not dry_run and version is not False:
-        try:
-            kube.write_state(cfg["stateNamespace"], cfg["stateConfigMap"], prune_state(new_state, ids), version)
-        except ApiError as e:
-            problem("the repair count could not be saved: %s" % e)
+    try:
+        if due and not dry_run:
+            version = restart_due(eda, kube, cfg, now, due, refs, new_state, ids, version, counts, problem, say,
+                                  clock, sleep)
+        elif due:
+            for aid, a, why in due:
+                say("would restart %s: %s" % (refs[aid], why))
+        for key, rec in new_state.items():
+            day = len(rec.get("repairs") or [])
+            if day > cfg["maxRepairsPerDay"]:
+                problem("%s: RepairedTooOften: %d restarts in the last day (more than %d); find why it stops"
+                        % (refs.get(int(key), key), day, cfg["maxRepairsPerDay"]))
+        if state_ok and not dry_run and version is not False:
+            try:
+                store(kube, cfg, prune_state(new_state, ids), version)
+            except ApiError as e:
+                problem("the restart count could not be saved: %s" % e)
+    except Conflict:
+        problem("another run of this check wrote the restart count meanwhile; this run stopped without acting further")
     return counts, report
 
 
-def act(eda, kube, cfg, now, due, refs, new_state, ids, version, counts, problem, say, clock, sleep):
-    """The repairs of one run. Returns the state's resourceVersion for the final write, or False when the final
-    write must not happen (the record written before acting stands)."""
-    # the activations as they are now (the list was read before up to one detail read per activation)
+def restart_due(eda, kube, cfg, now, due, refs, new_state, ids, version, counts, problem, say, clock, sleep):
+    """The restarts of one run. Returns the state's resourceVersion for the final write, or False when the final
+    write must not happen (nothing was restarted because the count could not be stored)."""
+    planned = dict(new_state)
+    for aid, a, why in due:
+        rec = dict(new_state[str(aid)])
+        rec["repairs"] = list(rec.get("repairs") or []) + [now]
+        rec["notRunningSince"] = now
+        planned[str(aid)] = rec
+    # every restart of the batch counted durably before the first call
     try:
-        fresh = {int(a["id"]): a for a in eda.activations()}
+        version = store(kube, cfg, prune_state(planned, ids), version)
     except ApiError as e:
-        problem("the activations could not be read again before the repairs, so nothing was repaired: %s" % e)
-        return version
-    todo = []
-    for aid, verdict, why in due:
-        if still_due(verdict, fresh.get(aid)):
-            todo.append((aid, verdict, why))
-        else:
-            say("skip %s: it changed since it was read (%s)" % (refs[aid], (fresh.get(aid) or {}).get("status")))
-    if not todo:
-        return version
-    for aid, verdict, why in todo:
-        hour = len(in_window(new_state[str(aid)]["repairs"], now, HOUR))
-        say("repair %s: %s (repair %d of at most %d this hour)" % (refs[aid], why, hour + 1, cfg["maxRepairsPerHour"]))
-        new_state[str(aid)] = mark_before_acting(new_state[str(aid)], verdict, now)
-    # durable before any change: the count, and the mark that tells the next run to enable it again
-    try:
-        version = kube.write_state(cfg["stateNamespace"], cfg["stateConfigMap"], prune_state(new_state, ids), version)
-    except ApiError as e:
-        problem("the repair count could not be saved before the repairs, so nothing was repaired: %s" % e)
+        problem("the restart count could not be saved, so nothing was restarted: %s" % e)
         return False
-
-    for aid, verdict, why in todo:
-        if verdict == REPAIR:
-            try:
-                eda.disable(aid)
-            except ApiError as e:
-                problem("%s: the disable was refused (the enable is still tried): %s" % (refs[aid], e))
-    stopped = {}
-    try:
-        stopped = wait_for(eda, [t[0] for t in todo], lambda s: s not in ENABLE_BLOCKED, cfg["stopTimeoutSeconds"],
-                           cfg["pollSeconds"], clock, sleep)
-    except ApiError as e:
-        problem("waiting for the disabled activations to stop failed (the enables are still tried): %s" % e)
-    enabled = []
-    for aid, verdict, why in todo:
-        rec = new_state[str(aid)]
+    restarted = []
+    for aid, a, why in due:
+        ref = refs[aid]
         try:
-            eda.enable(aid)
-            enabled.append(aid)
-            rec["disabledByCheck"] = False
+            fresh = eda.detail(aid)
+            fresh_instance = latest_instance(fresh)
         except ApiError as e:
-            counts["notRunningAfterRepair"] += 1
-            if e.status == 400:
-                rec["gaveUp"] = True
-                problem("%s: CannotRun: the platform refuses to enable it, so it stays disabled until a person "
-                        "enables it: %s" % (refs[aid], e))
-            else:
-                problem("%s: NotRunningAfterRepair: the enable was refused (status %s), so it stays disabled "
-                        "until the next run enables it: %s" % (refs[aid], stopped.get(aid, "unknown"), e))
-    if enabled:
+            problem("%s: it could not be read again before its restart, not restarted: %s" % (ref, e))
+            continue   # not made: the final write takes its count back (if that write fails, it stays over)
+        if not still_due(a, fresh, fresh_instance):
+            say("skip %s: it changed since it was read (%s, %s)" % (
+                ref, "enabled" if fresh.get("is_enabled") else "disabled", fresh.get("status")))
+            continue   # not made: the final write takes its count back
+        new_state[str(aid)] = planned[str(aid)]
+        hour = len(in_window(planned[str(aid)]["repairs"], now, HOUR))
+        say("restart %s: %s (restart %d of at most %d this hour)" % (ref, why, hour, cfg["maxRepairsPerHour"]))
         try:
-            started = wait_for(eda, enabled, lambda s: s == RUNNING, cfg["startTimeoutSeconds"],
-                               cfg["pollSeconds"], clock, sleep)
+            eda.restart(aid)
+            restarted.append(aid)
+        except ApiError as e:
+            if e.status in (400, 403):
+                new_state[str(aid)]["gaveUp"] = True
+                problem("%s: RestartRefused: the platform refuses to restart it (invalid, disabled, or not allowed "
+                        "to this account); left alone until it runs or is disabled: %s" % (ref, e))
+            else:
+                problem("%s: the restart failed (counted as an attempt): %s" % (ref, e))
+    if restarted:
+        try:
+            started = wait_running(eda, restarted, cfg, clock, sleep)
         except ApiError as e:
             started = {}
-            problem("waiting for the enabled activations to run failed: %s" % e)
-        for aid in enabled:
+            problem("waiting for the restarted activations to run failed: %s" % e)
+        for aid in restarted:
             if started.get(aid) == RUNNING:
-                counts["repaired"] += 1
-                say("repaired %s: running again" % refs[aid])
+                counts["restarted"] += 1
+                new_state[str(aid)]["notRunningSince"] = None
+                say("restarted %s: running again" % refs[aid])
             else:
-                counts["notRunningAfterRepair"] += 1
-                problem("%s: NotRunningAfterRepair: %s %d s after the enable" % (
+                counts["notRunningAfterRestart"] += 1
+                problem("%s: NotRunningAfterRestart: %s %d s after the restart" % (
                     refs[aid], started.get(aid, "unknown"), cfg["startTimeoutSeconds"]))
     return version
 

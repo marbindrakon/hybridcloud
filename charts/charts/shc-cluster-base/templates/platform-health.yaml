@@ -26,7 +26,7 @@ spec:
 {{- with $p.edaActivations }}{{ if .enabled }}
 {{- $e := . }}
 {{- $an := required "ops.platformHealth.edaActivations.automationNamespace is required" .automationNamespace }}
-{{- $cfg := dict "url" (required "ops.platformHealth.edaActivations.url is required" .url) "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" .maxRepairsPerHour "maxRepairsPerDay" .maxRepairsPerDay "allowNoActivations" (.allowNoActivations | default false) "notRunningMinutes" .notRunningMinutes "transitionalMinutes" .transitionalMinutes "stopTimeoutSeconds" .stopTimeoutSeconds "startTimeoutSeconds" .startTimeoutSeconds "cannotRunPatterns" .cannotRunPatterns "removeStaleJobs" .removeStaleJobs "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
+{{- $cfg := dict "url" (required "ops.platformHealth.edaActivations.url is required" .url) "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" .maxRepairsPerHour "maxRepairsPerDay" .maxRepairsPerDay "allowNoActivations" (.allowNoActivations | default false) "notRunningMinutes" .notRunningMinutes "transitionalMinutes" .transitionalMinutes "startTimeoutSeconds" .startTimeoutSeconds "cannotRunPatterns" .cannotRunPatterns "removeStaleJobs" .removeStaleJobs "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
 {{- $secret := required "ops.platformHealth.edaActivations.credentialSecret is required" .credentialSecret }}
 {{- $hash := printf "%s%s" ($.Files.Get "files/eda_activations.py") (toJson $cfg) | sha256sum | trunc 16 }}
 ---
