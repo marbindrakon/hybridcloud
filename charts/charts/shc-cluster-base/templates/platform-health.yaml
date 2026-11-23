@@ -26,7 +26,19 @@ spec:
 {{- with $p.edaActivations }}{{ if .enabled }}
 {{- $e := . }}
 {{- $an := required "ops.platformHealth.edaActivations.automationNamespace is required" .automationNamespace }}
-{{- $cfg := dict "url" (required "ops.platformHealth.edaActivations.url is required" .url) "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" .maxRepairsPerHour "maxRepairsPerDay" .maxRepairsPerDay "allowNoActivations" (.allowNoActivations | default false) "notRunningMinutes" .notRunningMinutes "transitionalMinutes" .transitionalMinutes "startTimeoutSeconds" .startTimeoutSeconds "cannotRunPatterns" .cannotRunPatterns "removeStaleJobs" .removeStaleJobs "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
+{{- $url := required "ops.platformHealth.edaActivations.url is required" .url }}
+{{- if not (kindIs "string" $url) }}{{ fail "ops.platformHealth.edaActivations.url must be an https URL" }}{{ end }}
+{{- if or (not (hasPrefix "https://" $url)) (eq $url "https://") }}{{ fail (printf "ops.platformHealth.edaActivations.url must be an https URL, not %s" $url) }}{{ end }}
+{{- $n := dict }}
+{{- range $k, $min := dict "maxRepairsPerHour" 1 "maxRepairsPerDay" 1 "notRunningMinutes" 0 "transitionalMinutes" 0 "startTimeoutSeconds" 1 }}
+{{- $_ := set $n $k (include "shc-cluster-base.wholeNumber" (list (printf "ops.platformHealth.edaActivations.%s" $k) (get $e $k) $min) | atoi) }}
+{{- end }}
+{{- $patterns := .cannotRunPatterns }}
+{{- if not (kindIs "slice" $patterns) }}{{ fail "ops.platformHealth.edaActivations.cannotRunPatterns must be a list of texts" }}{{ end }}
+{{- range $patterns }}{{ if not (kindIs "string" .) }}{{ fail "ops.platformHealth.edaActivations.cannotRunPatterns must be a list of texts" }}{{ end }}{{ end }}
+{{- $removeStale := include "shc-cluster-base.switch" (list "ops.platformHealth.edaActivations.removeStaleJobs" .removeStaleJobs) | eq "true" }}
+{{- $allowNone := include "shc-cluster-base.switch" (list "ops.platformHealth.edaActivations.allowNoActivations" .allowNoActivations) | eq "true" }}
+{{- $cfg := dict "url" $url "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" $n.maxRepairsPerHour "maxRepairsPerDay" $n.maxRepairsPerDay "allowNoActivations" $allowNone "notRunningMinutes" $n.notRunningMinutes "transitionalMinutes" $n.transitionalMinutes "startTimeoutSeconds" $n.startTimeoutSeconds "cannotRunPatterns" $patterns "removeStaleJobs" $removeStale "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
 {{- $secret := required "ops.platformHealth.edaActivations.credentialSecret is required" .credentialSecret }}
 {{- $hash := printf "%s%s" ($.Files.Get "files/eda_activations.py") (toJson $cfg) | sha256sum | trunc 16 }}
 ---
@@ -75,7 +87,7 @@ metadata:
 rules:
   - apiGroups: [batch]
     resources: [jobs]
-    verbs: {{ ternary (list "list" "delete") (list "list") (.removeStaleJobs | default false) | toJson }}
+    verbs: {{ ternary (list "list" "delete") (list "list") $removeStale | toJson }}
 ---
 apiVersion: rbac.authorization.k8s.io/v1
 kind: RoleBinding

@@ -42,6 +42,27 @@ or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -
   unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- . -}} })
 {{- end }}
 
+{{- /* a setting that must be a whole number of at least a minimum, rendered as its digits; . = (list name value
+minimum). A quoted number, a fraction, null or anything else fails with the setting's name. */}}
+{{- define "shc-cluster-base.wholeNumber" -}}
+{{- $name := index . 0 -}}{{- $v := index . 1 -}}{{- $min := index . 2 -}}
+{{- if not (or (kindIs "float64" $v) (kindIs "int64" $v) (kindIs "int" $v)) -}}
+{{- fail (printf "%s must be a whole number of at least %d, not %s" $name $min (kindOf $v)) -}}
+{{- end -}}
+{{- if or (ne (float64 $v) (floor (float64 $v))) (lt (float64 $v) (float64 $min)) -}}
+{{- fail (printf "%s must be a whole number of at least %d" $name $min) -}}
+{{- end -}}
+{{- int64 $v -}}
+{{- end }}
+
+{{- /* a setting that must be true or false; . = (list name value) */}}
+{{- define "shc-cluster-base.switch" -}}
+{{- if not (kindIs "bool" (index . 1)) -}}
+{{- fail (printf "%s must be true or false, not %s" (index . 0) (kindOf (index . 1))) -}}
+{{- end -}}
+{{- index . 1 -}}
+{{- end }}
+
 {{- define "shc-cluster-base.platformHealthEnabled" -}}
 {{- $p := .Values.ops.platformHealth | default dict -}}
 {{- range $k := list "volumes" "databaseBackups" "aggregatedAPIs" "edaActivations" "identityWriteProbe" -}}

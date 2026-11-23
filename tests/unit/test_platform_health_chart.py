@@ -155,6 +155,46 @@ class Render(unittest.TestCase):
                 self.assertNotEqual(p.returncode, 0)
                 self.assertIn(msg, p.stderr)
 
+    def test_settings_of_the_activation_check_are_checked_with_their_names(self):
+        E = P + "edaActivations."
+        cases = [
+            (["--set-string", E + "maxRepairsPerHour=3"], "edaActivations.maxRepairsPerHour must be a whole number"),
+            (["--set", E + "maxRepairsPerHour=null"], "edaActivations.maxRepairsPerHour must be a whole number"),
+            (["--set", E + "maxRepairsPerDay=2.5"], "edaActivations.maxRepairsPerDay must be a whole number"),
+            (["--set", E + "startTimeoutSeconds=0"], "edaActivations.startTimeoutSeconds must be a whole number of at least 1"),
+            (["--set", E + "notRunningMinutes=-1"], "edaActivations.notRunningMinutes must be a whole number of at least 0"),
+            (["--set", E + "transitionalMinutes=true"], "edaActivations.transitionalMinutes must be a whole number"),
+            (["--set", E + "url=http://automation.example.com"], "edaActivations.url must be an https URL"),
+            (["--set", E + "url=automation.example.com"], "edaActivations.url must be an https URL"),
+            (["--set-string", E + "removeStaleJobs=false"], "edaActivations.removeStaleJobs must be true or false"),
+            (["--set", E + "allowNoActivations=null"], "edaActivations.allowNoActivations must be true or false"),
+            (["--set-string", E + "cannotRunPatterns=pull failed"], "edaActivations.cannotRunPatterns must be a list"),
+        ]
+        for args, msg in cases:
+            with self.subTest(args=args):
+                p = render(*EDA, *args, ok=False)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn(msg, p.stderr)
+        # whole numbers, also from a values file (where the template sees them as floats), render as their digits
+        tmp = tempfile.mkdtemp(prefix="shc-values-")
+        self.addCleanup(shutil.rmtree, tmp, True)
+        values = os.path.join(tmp, "values.yaml")
+        with open(values, "w") as f:
+            yaml.safe_dump({"ops": {"platformHealth": {"edaActivations": {"maxRepairsPerDay": 10000000,
+                                                                          "transitionalMinutes": 2.5}}}}, f)
+        p = render(*EDA, "-f", values, ok=False)
+        self.assertIn("edaActivations.transitionalMinutes must be a whole number", p.stderr)
+        with open(values, "w") as f:
+            yaml.safe_dump({"ops": {"platformHealth": {"edaActivations": {"maxRepairsPerDay": 10000000}}}}, f)
+        k = by_key(render(*EDA, "-f", values, "--set", E + "maxRepairsPerHour=4"))
+        raw = k[("ConfigMap", "eda-activations", "shc-ops")]["data"]["config.json"]
+        self.assertIn('"maxRepairsPerDay": 10000000', raw)
+        cfg = yaml.safe_load(raw)
+        self.assertEqual((cfg["maxRepairsPerHour"], cfg["notRunningMinutes"]), (4, 4))
+        self.assertTrue(all(isinstance(cfg[x], int) for x in ("maxRepairsPerHour", "maxRepairsPerDay",
+                                                              "notRunningMinutes", "transitionalMinutes",
+                                                              "startTimeoutSeconds")))
+
     def test_no_lab_value_in_the_texts(self):
         docs = render(*ALL_RULES)
         for d in docs:

@@ -8,8 +8,9 @@
   with a failed newest instance, and deleted) x enabled x policy x record x where a read, write or the run fails
   (including a person disabling between the reads and a pod killed during the restart), then a second run on the
   stored state; checked against the invariants (only GETs and restart; never a restart of a disabled or unwatched
-  activation; never more restarts than the cap in any hour; never a restart without its count stored first; exit
-  non-zero exactly when a person is needed or the run was incomplete; no credential in any output);
+  activation; never more restarts than the cap in any hour; never a restart without its count, stamped in its own
+  run, stored first; exit non-zero exactly when a person is needed or the run was incomplete, for both runs; no
+  credential in any output);
 - main() end to end over HTTP (through an injected plain-http transport: the script itself takes https only).
 
 Standard library only, so it also runs in the job image (python3 -m unittest tests/unit/test_eda_activations.py)."""
