@@ -65,7 +65,14 @@ keycloak:
         # moment between the drop and the next completed backup. auto: a quarter of storage (storage must then be a whole
         # number of Mi, Gi or Ti); a size such as 4GiB or 2560MiB; empty: no limit (the data volume fills and the
         # database stops).
+        # 0 is refused, as is more than 4PiB; a plain number is bytes. On a data volume more than three quarters
+        # full the default is more than the free space: then set a size below the free space.
         archivePushQueueMax: auto
+  # Further Keycloak server options (spec.additionalOptions), after the chart's own: entries {name, value} or
+  # {name, secret: {name, key}} as the Keycloak resource takes them. The options the chart sets itself
+  # (http-enabled, hostname-strict, db-url-properties, db-pool-max-lifetime) are refused here. The list is applied
+  # whole: an option set by hand on the Keycloak object and not listed here is removed at the next sync.
+  additionalOptions: []
   tls:
     enabled: false
     secretName: keycloak-tls-secret

@@ -28,6 +28,10 @@ def render(db=None):
     values = dict(BASE)
     if db is not None:
         values["keycloak"] = {"db": db}
+    return render_values(values)
+
+
+def render_values(values):
     with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
         yaml.safe_dump(values, f)
     try:
@@ -85,14 +89,59 @@ class Connections(unittest.TestCase):
         opts = options(self.ok({"enabled": True, "host": "pg.example.org", "urlProperties": "?sslmode=require"}))
         self.assertEqual(opts["db-url-properties"], "?sslmode=require")
 
+    def test_auto_needs_postgres_too(self):
+        opts = options(self.ok(dict(OWN_DB, vendor="mysql")))
+        self.assertNotIn("db-url-properties", opts)
+
+    def test_null_values_get_the_template_defaults(self):
+        opts = options(self.ok(dict(OWN_DB, urlProperties=None, poolMaxLifetime=None)))
+        self.assertEqual(opts["db-url-properties"], "?targetServerType=primary")
+        self.assertEqual(opts["db-pool-max-lifetime"], "10m")
+
+    def test_iso_durations(self):
+        for good in ("PT10M", "P1DT2H", "PT1.5S", "600", "10m", "500ms"):
+            with self.subTest(value=good):
+                self.assertEqual(options(self.ok(dict(OWN_DB, poolMaxLifetime=good)))["db-pool-max-lifetime"], good)
+
     def test_wrong_values_are_refused_with_the_settings_name(self):
         for db, text in ((dict(OWN_DB, urlProperties="targetServerType=primary"), "keycloak.db.urlProperties"),
                          (dict(OWN_DB, poolMaxLifetime="ten minutes"), "keycloak.db.poolMaxLifetime"),
+                         (dict(OWN_DB, poolMaxLifetime="P"), "keycloak.db.poolMaxLifetime"),
+                         (dict(OWN_DB, poolMaxLifetime="PT"), "keycloak.db.poolMaxLifetime"),
+                         (dict(OWN_DB, poolMaxLifetime="PXYZ"), "keycloak.db.poolMaxLifetime"),
                          (dict(OWN_DB, poolMaxLifetime="10x"), "keycloak.db.poolMaxLifetime")):
             with self.subTest(db=db):
                 p, _ = render(db)
                 self.assertNotEqual(p.returncode, 0)
                 self.assertIn(text, p.stderr)
+
+    def test_further_options_follow_the_charts_own(self):
+        values = dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": [
+            {"name": "log-level", "value": "INFO"},
+            {"name": "example-option", "secret": {"name": "example-secret", "key": "example-key"}},
+            {"name": "example-number", "value": 3}]})
+        p, docs = render_values(values)
+        self.assertEqual(p.returncode, 0, p.stderr)
+        cr = next(d for d in docs if d.get("kind") == "Keycloak")
+        self.assertEqual([o["name"] for o in cr["spec"]["additionalOptions"]],
+                         ["http-enabled", "hostname-strict", "db-url-properties", "db-pool-max-lifetime",
+                          "log-level", "example-option", "example-number"])
+        self.assertEqual(cr["spec"]["additionalOptions"][5],
+                         {"name": "example-option", "secret": {"name": "example-secret", "key": "example-key"}})
+        self.assertEqual(cr["spec"]["additionalOptions"][6], {"name": "example-number", "value": "3"})
+
+    def test_further_options_cannot_set_the_charts_own(self):
+        for name in ("http-enabled", "hostname-strict", "db-url-properties", "db-pool-max-lifetime"):
+            with self.subTest(option=name):
+                p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB,
+                                                          "additionalOptions": [{"name": name, "value": "x"}]}))
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("keycloak.additionalOptions: %s is set by the chart" % name, p.stderr)
+        for bad in ([{"name": "x"}], [{"value": "1"}], {"x": "1"}):
+            with self.subTest(entry=bad):
+                p, _ = render_values(dict(BASE, keycloak={"db": OWN_DB, "additionalOptions": bad}))
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn("keycloak.additionalOptions", p.stderr)
 
     def test_failsafe_is_off_unless_switched_on(self):
         self.assertNotIn("patroni", cluster(self.ok(OWN_DB))["spec"])
@@ -105,6 +154,8 @@ class Connections(unittest.TestCase):
         self.assertEqual(db["urlProperties"], "auto")
         self.assertEqual(db["poolMaxLifetime"], "10m")
         self.assertIs(db["crunchy"]["patroniFailsafe"], False)
+        with open(os.path.join(CHART, "values.yaml")) as f:
+            self.assertEqual(yaml.safe_load(f)["keycloak"]["additionalOptions"], [])
 
 
 @unittest.skipUnless(shutil.which("helm"), "helm not installed")
