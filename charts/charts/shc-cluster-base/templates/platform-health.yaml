@@ -1,7 +1,6 @@
 {{- /*
 The platform's own health (ops.platformHealth; every switch off by default, each renders only its own part): alert
-rules in the cluster's monitoring for volumes, database backups, aggregated APIs and the Alertmanager's receivers,
-and two checks where no metric exists: the event activations of the automation platform (eda-activations, which
+rules in the cluster's monitoring for volumes, database backups and aggregated APIs, and two checks where no metric exists: the event activations of the automation platform (eda-activations, which
 also repairs, and eda-api-check) and a write to each listed Keycloak (identity-write-probe-<name>). A check's failed
 run is its alert; its pod's termination message says what it found.
 */}}
@@ -27,7 +26,7 @@ spec:
 {{- with $p.edaActivations }}{{ if .enabled }}
 {{- $e := . }}
 {{- $an := required "ops.platformHealth.edaActivations.automationNamespace is required" .automationNamespace }}
-{{- $cfg := dict "url" (required "ops.platformHealth.edaActivations.url is required" .url) "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" .maxRepairsPerHour "notRunningMinutes" .notRunningMinutes "transitionalMinutes" .transitionalMinutes "stopTimeoutSeconds" .stopTimeoutSeconds "startTimeoutSeconds" .startTimeoutSeconds "cannotRunPatterns" .cannotRunPatterns "removeStaleJobs" .removeStaleJobs "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
+{{- $cfg := dict "url" (required "ops.platformHealth.edaActivations.url is required" .url) "automationNamespace" $an "stateNamespace" $ns "stateConfigMap" "eda-activations-state" "maxRepairsPerHour" .maxRepairsPerHour "maxRepairsPerDay" .maxRepairsPerDay "allowNoActivations" (.allowNoActivations | default false) "notRunningMinutes" .notRunningMinutes "transitionalMinutes" .transitionalMinutes "stopTimeoutSeconds" .stopTimeoutSeconds "startTimeoutSeconds" .startTimeoutSeconds "cannotRunPatterns" .cannotRunPatterns "removeStaleJobs" .removeStaleJobs "credentialDir" "/etc/eda-credential" "caFile" (ternary "/etc/eda-ca/ca.crt" "" (not (empty .caConfigMap))) }}
 {{- $secret := required "ops.platformHealth.edaActivations.credentialSecret is required" .credentialSecret }}
 {{- $hash := printf "%s%s" ($.Files.Get "files/eda_activations.py") (toJson $cfg) | sha256sum | trunc 16 }}
 ---
@@ -190,8 +189,8 @@ data:
   {{- end }}
 {{- range $k := .keycloaks }}
 ---
-# Write check of Keycloak {{ $k.name }}: a dedicated user writes its own profile; the credential is in Secret
-# {{ $k.credentialSecret }}. No Kubernetes API access.
+# Write check of Keycloak {{ $k.name }}: a service account of a dedicated realm updates its own user; the client's
+# secret is in Secret {{ $k.credentialSecret }}. No Kubernetes API access.
 apiVersion: batch/v1
 kind: CronJob
 metadata:

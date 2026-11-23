@@ -14,9 +14,23 @@ or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -
   unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- . -}} })
 {{- end }}
 
+{{- /* a check CronJob that has not succeeded for `minutes`, or is suspended; . = (list selector minutes). Silent on a
+fresh install until its first run has succeeded or failed (the failing clause covers a first run that fails). */}}
+{{- define "shc-cluster-base.cronJobStale" -}}
+{{- $sel := index . 0 -}}
+(time() - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }) > {{ mul (index . 1) 60 }})
+or (max by (namespace, cronjob) (kube_cronjob_spec_suspend{ {{- $sel -}} }) == 1)
+{{- end }}
+
+{{- /* failing or stale; . = (list selector minutes) */}}
+{{- define "shc-cluster-base.checkDown" -}}
+({{ include "shc-cluster-base.cronJobFailing" (index . 0) }})
+or ({{ include "shc-cluster-base.cronJobStale" . }})
+{{- end }}
+
 {{- define "shc-cluster-base.platformHealthEnabled" -}}
 {{- $p := .Values.ops.platformHealth | default dict -}}
-{{- range $k := list "volumes" "databaseBackups" "aggregatedAPIs" "receiver" "edaActivations" "identityWriteProbe" -}}
+{{- range $k := list "volumes" "databaseBackups" "aggregatedAPIs" "edaActivations" "identityWriteProbe" -}}
 {{- if (get $p $k | default dict).enabled }}on{{ end -}}
 {{- end -}}
 {{- end }}
@@ -53,14 +67,15 @@ or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -
         description: "The volume is over {{ .criticalPercent }} % used; what writes to it stops when it is full (a database stops and does not start again). Free space or grow the volume now, then find what fills it."
     - alert: ShcVolumeFillsSoon
       expr: >-
-        max by (namespace, persistentvolumeclaim) (predict_linear(kubelet_volume_stats_available_bytes{ {{- $sel -}} }[{{ .rateWindow }}], {{ mul .fullWithinDays 86400 }})) < 0
+        (max by (namespace, persistentvolumeclaim) (predict_linear(kubelet_volume_stats_available_bytes{ {{- $sel -}} }[{{ .rateWindow }}], {{ mul .fullWithinDays 86400 }})) < 0)
+        and ({{ $used }} > {{ .fillsSoonMinPercent }})
         {{ $rox }}
       for: 1h
       labels:
         severity: critical
       annotations:
         summary: "Volume {{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "persistentvolumeclaim" }} fills within {{ .fullWithinDays }} days at its present rate"
-        description: "At the rate of the last {{ .rateWindow }} the volume is full within {{ .fullWithinDays }} days. Find what grows on it (for a database: its write-ahead log waiting for a backup repository that is full or failing) before it is full."
+        description: "The volume is over {{ .fillsSoonMinPercent }} % used and at the rate of the last {{ .rateWindow }} full within {{ .fullWithinDays }} days. Find what grows on it (for a database: its write-ahead log waiting for a backup repository that is full or failing) before it is full."
 {{- end }}{{ end }}
 {{- with $p.databaseBackups }}{{ if .enabled }}
 {{- $cj := printf "namespace=~\"%s\", cronjob=~\".+-repo[0-9]+-(full|diff|incr)\"" .namespaces }}
@@ -109,60 +124,53 @@ or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -
   rules:
     - alert: ShcAggregatedAPIUnavailable
       expr: >-
-        max by (name) (aggregator_unavailable_apiservice{name=~"{{ .names }}"}) == 1
+        max by (name) (avg_over_time(aggregator_unavailable_apiservice{name=~"{{ .names }}"}[{{ .window }}])) > {{ .unavailableFraction }}
       for: {{ .for }}
       labels:
         severity: critical
       annotations:
         summary: "Aggregated API {{ include "shc-cluster-base.label" "name" }} is unavailable"
-        description: "The API server cannot reach the service behind this APIService. Meanwhile namespace deletes do not finish, and so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer."
-{{- end }}{{ end }}
-{{- with $p.receiver }}{{ if .enabled }}
-- name: shc-platform-alerting
-  rules:
-    - alert: ShcAlertReceiverMissing
-      expr: >-
-        max by (namespace) (alertmanager_integrations{namespace="{{ .namespace }}", job="{{ .job }}"}) == 0
-      for: {{ .for }}
-      labels:
-        severity: warning
-      annotations:
-        summary: "The Alertmanager in {{ include "shc-cluster-base.label" "namespace" }} sends alerts nowhere"
-        description: "No receiver of the cluster monitoring's Alertmanager has an integration (mail, webhook, chat or paging), so the platform's alerts are seen only on the console's alert page. Configure a receiver in the cluster monitoring's Alertmanager configuration."
+        description: "The API server could not reach the service behind this APIService for most of the last {{ .window }}. Meanwhile namespace deletes do not finish, and so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer."
 {{- end }}{{ end }}
 {{- with $p.edaActivations }}{{ if .enabled }}
+{{- $act := list (printf "%s, cronjob=\"eda-activations\"" $ns) .staleMinutes }}
+{{- $api := list (printf "%s, cronjob=\"eda-api-check\"" $ns) .staleMinutes }}
 - name: shc-platform-automation
   rules:
+    # quiet while the API alert holds: an automation platform that does not answer is one fault, one alert
     - alert: ShcEventActivationsNotRunning
       expr: >-
-        {{ include "shc-cluster-base.cronJobFailing" (printf "%s, cronjob=\"eda-activations\"" $ns) | nindent 8 | trim }}
+        ({{ include "shc-cluster-base.checkDown" $act | nindent 10 | trim }})
+        unless on (namespace)
+        ({{ include "shc-cluster-base.checkDown" $api | nindent 10 | trim }})
       for: {{ .alertFor }}
       labels:
         severity: critical
       annotations:
-        summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: an event activation is not running after repair, cannot run, or has two pods"
-        description: "The activation check found activations it could not bring back within its repair limit, that cannot run as they are, or that run twice. Its last failed pod's termination message names each one. Fix the cause (the image, the project, the credential), then enable the activation again; of two Jobs of one activation, remove the older."
+        summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: an event activation is not running after repair, cannot run, or has two pods, or the check itself did not complete"
+        description: "The activation check found activations it could not bring back within its repair limit, that cannot run as they are, that were repaired too often in a day, or that run twice; or it could not do its own work (its repair count unreadable or not saved, the activation Jobs or an activation's instances unreadable), has not succeeded for {{ .staleMinutes }} minutes, or is suspended. Its findings: oc -n {{ include "shc-cluster-base.label" "namespace" }} get jobs, then oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-activations Job>. The ConfigMap eda-activations-state shows each activation's repairs and gaveUp. Fix the cause (the image, the project, the credential), then enable the activation again; of two Jobs of one activation, remove the older."
     - alert: ShcAutomationAPIUnavailable
       expr: >-
-        {{ include "shc-cluster-base.cronJobFailing" (printf "%s, cronjob=\"eda-api-check\"" $ns) | nindent 8 | trim }}
+        {{ include "shc-cluster-base.checkDown" $api | nindent 8 | trim }}
       for: {{ .alertFor }}
       labels:
         severity: critical
       annotations:
         summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: the automation platform's event-automation API does not answer"
-        description: "The API did not answer, answered an error, or refused the check's credential, so events are not handled and activations are neither checked nor repaired. Check the platform gateway, the automation platform's pods and its database; the check's last failed pod says what the API answered."
+        description: "The API did not answer, answered an error, or refused the check's credential (or the check has not succeeded for {{ .staleMinutes }} minutes, or is suspended), so events are not handled and activations are neither checked nor repaired. Check the platform gateway, the automation platform's pods and its database; oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest eda-api-check Job> says what the API answered."
 {{- end }}{{ end }}
 {{- with $p.identityWriteProbe }}{{ if .enabled }}
+{{- $kc := list (printf "%s, cronjob=~\"identity-write-probe-.+\"" $ns) .staleMinutes }}
 - name: shc-platform-identity
   rules:
-    - alert: ShcIdentityWriteRefused
+    - alert: ShcIdentityWriteCheckFailed
       expr: >-
-        {{ include "shc-cluster-base.cronJobFailing" (printf "%s, cronjob=~\"identity-write-probe-.+\"" $ns) | nindent 8 | trim }}
+        {{ include "shc-cluster-base.checkDown" $kc | nindent 8 | trim }}
       for: {{ .alertFor }}
       labels:
         severity: critical
       annotations:
-        summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: a Keycloak refuses a write"
-        description: "The write check of this Keycloak failed: its database refused or lost a write, or the check could not sign in; the check's last failed pod says which. Sign-ins can still work while every change fails. If writes stay refused after a database fail-over, restart the Keycloak's pods so they connect to the new primary."
+        summary: "{{ include "shc-cluster-base.label" "namespace" }}/{{ include "shc-cluster-base.label" "cronjob" }}: the identity write check failed"
+        description: "The Keycloak refused or lost a write to its database, or the check could not get a token, or the Keycloak did not answer, or the check has not succeeded for {{ .staleMinutes }} minutes or is suspended; oc -n {{ include "shc-cluster-base.label" "namespace" }} logs job/<the newest Job of this CronJob> says which. Sign-ins can still work while every change fails. If writes stay refused after a database fail-over, restart the Keycloak's pods so they connect to the new primary."
 {{- end }}{{ end }}
 {{- end }}

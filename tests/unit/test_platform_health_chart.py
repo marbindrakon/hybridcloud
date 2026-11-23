@@ -3,7 +3,8 @@ renders nothing of it; each switch renders only its own rules or CronJob; the ch
 use; missing settings fail with their names; no lab value is in the rendered texts; and the rules pass
 `promtool check rules` and `promtool test rules` on made-up series (promtool on PATH, or the Prometheus image
 through podman; skipped when neither is there): each alert fires and clears, the excluded cases never fire, and the
-generic job alerts leave the checks' CronJobs to their own alerts."""
+generic job alerts leave the checks' CronJobs to their own alerts. The receiver switch no longer exists (OpenShift's
+own AlertmanagerReceiversNotConfigured covers it)."""
 import os
 import re
 import shutil
@@ -30,7 +31,7 @@ KC = ["--set", P + "identityWriteProbe.enabled=true",
       "--set", P + "identityWriteProbe.keycloaks[0].clientId=write-check",
       "--set", P + "identityWriteProbe.keycloaks[0].credentialSecret=kc-write-check"]
 ALL_RULES = ["--set", P + "volumes.enabled=true", "--set", P + "databaseBackups.enabled=true",
-             "--set", P + "aggregatedAPIs.enabled=true", "--set", P + "receiver.enabled=true"] + EDA + KC
+             "--set", P + "aggregatedAPIs.enabled=true"] + EDA + KC
 LAB = re.compile(r"signal9|172\.18\.|2602:0{0,3}81f:|central-rhbk|services-rhbk|services-quay|shc-central")
 
 
@@ -67,8 +68,7 @@ class Render(unittest.TestCase):
         groups = {"volumes": {"ShcVolumeFilling", "ShcVolumeAlmostFull", "ShcVolumeFillsSoon"},
                   "databaseBackups": {"ShcDatabaseBackupFailed", "ShcDatabaseBackupOverdue",
                                       "ShcDatabaseBackupNotScheduled"},
-                  "aggregatedAPIs": {"ShcAggregatedAPIUnavailable"},
-                  "receiver": {"ShcAlertReceiverMissing"}}
+                  "aggregatedAPIs": {"ShcAggregatedAPIUnavailable"}}
         for key, alerts in groups.items():
             with self.subTest(key):
                 docs = render("--set", P + key + ".enabled=true")
@@ -78,22 +78,27 @@ class Render(unittest.TestCase):
         docs = render(*EDA)
         self.assertEqual(set(health_rules(docs)), {"ShcEventActivationsNotRunning", "ShcAutomationAPIUnavailable"})
         docs = render(*KC)
-        self.assertEqual(set(health_rules(docs)), {"ShcIdentityWriteRefused"})
+        self.assertEqual(set(health_rules(docs)), {"ShcIdentityWriteCheckFailed"})
+        # the former receiver switch renders nothing
+        self.assertEqual(health_rules(render("--set", P + "receiver.enabled=true")), {})
 
     def test_values_reach_the_rules(self):
         rules = health_rules(render("--set", P + "volumes.enabled=true", "--set", P + "volumes.warningPercent=70",
                                     "--set", P + "volumes.namespaces=platform-.*",
-                                    "--set", P + "aggregatedAPIs.enabled=true", "--set", P + "aggregatedAPIs.for=20m"))
+                                    "--set", P + "volumes.fillsSoonMinPercent=60",
+                                    "--set", P + "aggregatedAPIs.enabled=true", "--set", P + "aggregatedAPIs.window=20m",
+                                    "--set", P + "aggregatedAPIs.unavailableFraction=0.3"))
         self.assertIn("> 70 <= 90", rules["ShcVolumeFilling"]["expr"])
         self.assertIn('namespace=~"platform-.*"', rules["ShcVolumeFilling"]["expr"])
-        self.assertEqual(rules["ShcAggregatedAPIUnavailable"]["for"], "20m")
+        self.assertIn("* 100) > 60)", rules["ShcVolumeFillsSoon"]["expr"])
+        self.assertIn("[20m])) > 0.3", rules["ShcAggregatedAPIUnavailable"]["expr"])
 
     def test_activation_check(self):
         k = by_key(render(*EDA))
         cfg = yaml.safe_load(k[("ConfigMap", "eda-activations", "shc-ops")]["data"]["config.json"])
         self.assertEqual((cfg["url"], cfg["automationNamespace"], cfg["stateNamespace"], cfg["maxRepairsPerHour"],
-                          cfg["removeStaleJobs"], cfg["caFile"]),
-                         ("https://automation.example.com", "automation", "shc-ops", 3, False, ""))
+                          cfg["maxRepairsPerDay"], cfg["allowNoActivations"], cfg["removeStaleJobs"], cfg["caFile"]),
+                         ("https://automation.example.com", "automation", "shc-ops", 3, 6, False, False, ""))
         check = k[("CronJob", "eda-activations", "shc-ops")]["spec"]["jobTemplate"]["spec"]["template"]["spec"]
         self.assertEqual(check["serviceAccountName"], "eda-activations")
         c = check["containers"][0]
@@ -185,11 +190,17 @@ def tests(rules):
     def a(name, eval_time, alerts):
         out = []
         for labels, summary in alerts:
+            desc = re.sub(r"\{\{ \$labels\.(\w+) \}\}", lambda m: labels[m.group(1)],
+                          rules[name]["annotations"]["description"])
             out.append({"exp_labels": dict(labels, severity=rules[name]["labels"]["severity"]),
-                        "exp_annotations": {"summary": summary, "description": rules[name]["annotations"]["description"]}})
+                        "exp_annotations": {"summary": summary, "description": desc}})
         return {"eval_time": eval_time, "alertname": name, "exp_alerts": out}
 
     ops = "shc-ops"
+    ACT = ("shc-ops/eda-activations: an event activation is not running after repair, cannot run, or has two pods, "
+           "or the check itself did not complete")
+    API = "shc-ops/eda-api-check: the automation platform's event-automation API does not answer"
+    KCS = "shc-ops/identity-write-probe-%s: the identity write check failed"
     return {"rule_files": ["rules.yml"], "evaluation_interval": "1m", "tests": [
         # volumes: 85 % for a while then 50 % (warning fires, clears); 95 % (critical); a read-only-many volume and
         # an OpenShift namespace at 95 % never fire
@@ -206,10 +217,16 @@ def tests(rules):
              a("ShcVolumeAlmostFull", "7m", [({"namespace": "platform-db", "persistentvolumeclaim": "repo"},
                                               "Volume platform-db/repo is 95 % used")]),
          ]},
-        # a volume losing 1 unit of 3000 a minute fills in about 2 days: critical after its hour; a flat one never
+        # a volume two thirds full losing 1 unit of 3000 a minute fills in under a day: critical after its hour; a flat
+        # one never; a backup repository at 40 % that takes a 5-unit backup in 30 minutes never (the usage guard); the
+        # same filling volume mounted read-only by many never
         {"interval": "1m",
-         "input_series": kubelet("platform-db", "wal", "0x200", "3000x200", "3000-1x200")
-                         + kubelet("platform-db", "flat", "0x200", "3000x200", "100x200"),
+         "input_series": kubelet("platform-db", "wal", "2000x200", "3000x200", "1000-1x200")
+                         + kubelet("platform-db", "flat", "2000x200", "3000x200", "1000x200")
+                         + kubelet("platform-db", "repo", "40+0.1666x30 45x170", "100x200", "60-0.1666x30 55x170")
+                         + kubelet("platform-ro", "shared", "2000x200", "3000x200", "1000-1x200")
+                         + [{"series": 'kube_persistentvolumeclaim_access_mode{namespace="platform-ro",'
+                                       'persistentvolumeclaim="shared",access_mode="ReadOnlyMany"}', "values": "1x200"}],
          "alert_rule_test": [
              a("ShcVolumeFillsSoon", "30m", []),
              a("ShcVolumeFillsSoon", "90m", [({"namespace": "platform-db", "persistentvolumeclaim": "wal"},
@@ -242,64 +259,75 @@ def tests(rules):
         # overdue: the last successful differential backup at time 0, nothing since (50 h allowed)
         {"interval": "1m",
          "input_series": cron("platform-db", "app-pg-repo1-diff", "0x3200", "0x3200")
-                         + cron("platform-db", "app-pg-repo1-full", "0x3200", "0x3200"),
+                         + cron("platform-db", "app-pg-repo1-full", "0x3200", "0x3200")
+                         # a suspended one (its database shut down) is never overdue
+                         + cron("platform-db", "old-pg-repo1-diff", "0x3200", "0x3200")
+                         + [{"series": 'kube_cronjob_spec_suspend{namespace="platform-db",cronjob="old-pg-repo1-diff"}',
+                             "values": "1x3200"}],
          "alert_rule_test": [
              a("ShcDatabaseBackupOverdue", "50h", []),
              a("ShcDatabaseBackupOverdue", "52h", [({"namespace": "platform-db", "cronjob": "app-pg-repo1-diff"},
                                                     "Database backup platform-db/app-pg-repo1-diff: no successful run "
                                                     "for 2d 4h 0m 0s")]),
          ]},
-        # an aggregated API unavailable for 15 minutes, then back
+        # aggregated APIs: one unavailable for 15 minutes, then back; one unavailable 4 of every 5 minutes (fires);
+        # one with a one-minute blip every 10 minutes (never)
         {"interval": "1m",
          "input_series": [{"series": 'aggregator_unavailable_apiservice{name="v1.example.io",instance="a"}',
-                           "values": "0x2 1x15 0x10"},
+                           "values": "0x10 1x15 0x20"},
                           {"series": 'aggregator_unavailable_apiservice{name="v1.example.io",instance="b"}',
-                           "values": "0x30"},
-                          {"series": 'aggregator_unavailable_apiservice{name="v1.other.io",instance="a"}',
-                           "values": "0x30"}],
+                           "values": "0x45"},
+                          {"series": 'aggregator_unavailable_apiservice{name="v1.flap.io",instance="a"}',
+                           "values": " ".join(["1 1 1 1 0"] * 9)},
+                          {"series": 'aggregator_unavailable_apiservice{name="v1.blip.io",instance="a"}',
+                           "values": " ".join(["1 0 0 0 0 0 0 0 0 0"] * 5)}],
          "alert_rule_test": [
-             a("ShcAggregatedAPIUnavailable", "10m", []),
-             a("ShcAggregatedAPIUnavailable", "14m", [({"name": "v1.example.io"},
-                                                       "Aggregated API v1.example.io is unavailable")]),
-             a("ShcAggregatedAPIUnavailable", "25m", []),
+             a("ShcAggregatedAPIUnavailable", "10m", [({"name": "v1.flap.io"}, "Aggregated API v1.flap.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "24m", [({"name": "v1.example.io"},
+                                                       "Aggregated API v1.example.io is unavailable"),
+                                                      ({"name": "v1.flap.io"}, "Aggregated API v1.flap.io is unavailable")]),
+             a("ShcAggregatedAPIUnavailable", "40m", [({"name": "v1.flap.io"}, "Aggregated API v1.flap.io is unavailable")]),
          ]},
-        # the Alertmanager without an integration; one with two never alerts
+        # the checks: the activation check failing alone fires after 10 minutes; once the API check fails too, only the
+        # API alert holds (one fault, one alert); the identity probe that never succeeded fires; the generic job alert
+        # stays quiet for the checks and still fires for an ordinary ops job
         {"interval": "1m",
-         "input_series": [{"series": 'alertmanager_integrations{namespace="openshift-monitoring",job="alertmanager-main",pod="am-0"}',
-                           "values": "0x80"},
-                          {"series": 'alertmanager_integrations{namespace="other",job="alertmanager-main",pod="am-0"}',
-                           "values": "2x80"}],
-         "alert_rule_test": [
-             a("ShcAlertReceiverMissing", "50m", []),
-             a("ShcAlertReceiverMissing", "70m", [({"namespace": "openshift-monitoring"},
-                                                   "The Alertmanager in openshift-monitoring sends alerts nowhere")]),
-         ]},
-        # the checks: each failing (scheduled after its last success) fires after 10 minutes and clears on success;
-        # the identity probe that never succeeded fires too; the generic job alert stays quiet for all of them and
-        # still fires for an ordinary ops job
-        {"interval": "1m",
-         "input_series": cron(ops, "eda-activations", "0+60x40", "0x20 1260+60x20")
-                         + cron(ops, "eda-api-check", "0+60x40", "0+60x5 300x35")
-                         + cron(ops, "identity-write-probe-identity", "0+60x40")
+         "input_series": cron(ops, "eda-activations", "0+60x60", "0x60")
+                         + cron(ops, "eda-api-check", "0+60x60", "0+60x20 1200x40")
+                         + cron(ops, "identity-write-probe-identity", "0+60x60")
                          + cron(ops, "etcd-backup", "1000x100", "500x100"),
          "alert_rule_test": [
              a("ShcEventActivationsNotRunning", "9m", []),
-             a("ShcEventActivationsNotRunning", "15m", [({"namespace": ops, "cronjob": "eda-activations"},
-                                                         "shc-ops/eda-activations: an event activation is not running "
-                                                         "after repair, cannot run, or has two pods")]),
-             a("ShcEventActivationsNotRunning", "25m", []),
-             a("ShcAutomationAPIUnavailable", "18m", [({"namespace": ops, "cronjob": "eda-api-check"},
-                                                       "shc-ops/eda-api-check: the automation platform's "
-                                                       "event-automation API does not answer")]),
-             a("ShcIdentityWriteRefused", "12m", [({"namespace": ops, "cronjob": "identity-write-probe-identity"},
-                                                   "shc-ops/identity-write-probe-identity: a Keycloak refuses a "
-                                                   "write")]),
+             a("ShcEventActivationsNotRunning", "15m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcEventActivationsNotRunning", "35m", []),
+             a("ShcAutomationAPIUnavailable", "15m", []),
+             a("ShcAutomationAPIUnavailable", "35m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
+             a("ShcIdentityWriteCheckFailed", "12m", [({"namespace": ops, "cronjob": "identity-write-probe-identity"},
+                                                      KCS % "identity")]),
              {"eval_time": "90m", "alertname": "ShcBackupJobFailed", "exp_alerts": [
                  {"exp_labels": {"severity": "warning", "namespace": ops, "cronjob": "etcd-backup"},
                   "exp_annotations": {"summary": "shc-ops/etcd-backup: the last run failed",
                                       "description": "The most recent run of CronJob etcd-backup did not succeed. "
                                                      "The failed pod's termination message or its log says why."}}]},
              {"eval_time": "90m", "alertname": "ShcBackupJobNeverSucceeded", "exp_alerts": []},
+         ]},
+        # staleness: a check that is suspended (its last run fine) fires; one whose last success is more than an hour
+        # old fires, even with no failed run; a fresh install (the CronJob exists, nothing ran yet) stays quiet
+        {"interval": "1m",
+         "input_series": cron(ops, "identity-write-probe-paused", "0+60x30", "0+60x30")
+                         + [{"series": 'kube_cronjob_spec_suspend{namespace="%s",cronjob="identity-write-probe-paused"}' % ops,
+                             "values": "0x5 1x25"},
+                            {"series": 'kube_cronjob_spec_suspend{namespace="%s",cronjob="identity-write-probe-new"}' % ops,
+                             "values": "0x100"},
+                            {"series": 'kube_cronjob_info{namespace="%s",cronjob="identity-write-probe-new"}' % ops,
+                             "values": "1x100"}]
+                         + cron(ops, "identity-write-probe-stuck", "0x100", "0x100"),
+         "alert_rule_test": [
+             a("ShcIdentityWriteCheckFailed", "4m", []),
+             a("ShcIdentityWriteCheckFailed", "20m", [({"namespace": ops, "cronjob": "identity-write-probe-paused"},
+                                                      KCS % "paused")]),
+             a("ShcIdentityWriteCheckFailed", "75m", [({"namespace": ops, "cronjob": "identity-write-probe-stuck"},
+                                                      KCS % "stuck")]),
          ]},
     ]}
 

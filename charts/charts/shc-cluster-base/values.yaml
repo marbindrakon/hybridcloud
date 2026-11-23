@@ -236,7 +236,8 @@ ops:
   # The platform's own health (templates/platform-health.yaml, docs/platform/platform-alerts.md): alert rules in the
   # cluster's monitoring, and two small checks where no metric exists. Each switch renders its rules or its CronJob
   # only when on; all are off by default. Alerts reach a person only through a receiver of the cluster monitoring's
-  # Alertmanager, which the installation configures (receiver.enabled warns while there is none).
+  # Alertmanager, which the installation configures (OpenShift's own alert AlertmanagerReceiversNotConfigured warns
+  # while there is none).
   platformHealth:
     # Persistent volumes filling up, read from the kubelet's volume statistics. OpenShift's own alert already covers
     # its namespaces, hence the default exclusion.
@@ -248,6 +249,7 @@ ops:
       criticalPercent: 90
       fullWithinDays: 3                              # critical when the present rate fills the volume in this time
       rateWindow: 6h                                 # the rate is the trend over this window
+      fillsSoonMinPercent: 50                        # ... and only once it is this full (a backup's burst is not a trend)
     # Backups of the platform's PostgreSQL databases: the backup CronJobs the database operator creates for each
     # scheduled backup (<cluster>-<repository>-full, -diff, -incr). Suspended CronJobs (a database shut down or a
     # standby) are left out.
@@ -261,35 +263,34 @@ ops:
         incr: 50
       # a database with a backup repository volume but no scheduled full backup, for this long
       notScheduledFor: 6h
-    # An aggregated API (an APIService served by a pod) unavailable: namespace deletes hang meanwhile.
+    # An aggregated API (an APIService served by a pod) unavailable: namespace deletes hang meanwhile. Fires when it
+    # was unavailable for more than unavailableFraction of the last `window` (so an API that flaps is caught too).
     aggregatedAPIs:
       enabled: false
       names: ".+"                                    # regular expression of the APIService names watched
-      for: 10m
-    # No receiver of the cluster monitoring's Alertmanager sends anywhere (it counts its integrations; no
-    # configuration is read). Switch it off on a cluster whose alerts go to another Alertmanager with receivers.
-    receiver:
-      enabled: false
-      namespace: openshift-monitoring
-      job: alertmanager-main
-      for: 1h
+      window: 10m
+      unavailableFraction: 0.5
+      for: 5m                                        # ... held this long
     # The event activations of the automation platform (files/eda_activations.py), on the cluster that runs it:
     # an activation that is enabled but not running is disabled and enabled again, at most maxRepairsPerHour times
-    # an hour each; the repair count is kept in the ConfigMap eda-activations-state of ops.namespace. A second
-    # CronJob (eda-api-check) reports an event-automation API that does not answer.
+    # an hour each; the repair count is kept in the ConfigMap eda-activations-state of ops.namespace. Only activations
+    # with restart policy `always` are watched. A second CronJob (eda-api-check) reports an event-automation API that
+    # does not answer (while it does, the activation alert stays quiet: one fault, one alert).
     edaActivations:
       enabled: false
       schedule: "*/5 * * * *"
       apiCheckSchedule: "*/5 * * * *"
       # python3 (3.9 or later, standard library only)
       image: registry.redhat.io/ubi9/python-312-minimal:latest
-      url: ""                       # the platform gateway's base URL, e.g. https://automation.example.com
+      url: ""                       # the platform gateway's base URL (https), e.g. https://automation.example.com
       automationNamespace: ""       # the namespace where the platform runs the activation Jobs
       # Secret in ops.namespace with key token (a bearer token), or keys username and password. The account needs to
       # view, enable and disable the activations (the organization's Operator role).
       credentialSecret: ""
       caConfigMap: ""               # ConfigMap in ops.namespace with key ca.crt when the gateway's CA is private
       maxRepairsPerHour: 3
+      maxRepairsPerDay: 6           # more repairs of one activation in a day: reported although each one worked
+      allowNoActivations: false     # an empty activations list is reported (an account that sees none) unless true
       notRunningMinutes: 4          # not running on two runs this far apart before a repair
       transitionalMinutes: 10       # pending, starting or stopping this long counts as not running
       stopTimeoutSeconds: 90
@@ -300,15 +301,18 @@ ops:
       # deleting Jobs in automationNamespace)
       removeStaleJobs: false
       alertFor: 10m
-    # A write to each listed Keycloak's database (files/identity_write_probe.py): a dedicated user writes its own
-    # profile through the Account API. Turn it on per Keycloak; docs/platform/platform-alerts.md says what to create.
+      staleMinutes: 60              # no successful run for this long, or the CronJob suspended: alerted
+    # A write to each listed Keycloak's database (files/identity_write_probe.py): in a dedicated realm, a client's
+    # service account updates its own user through the Admin API. Turn it on per Keycloak;
+    # docs/platform/platform-alerts.md says what to create.
     identityWriteProbe:
       enabled: false
       schedule: "*/5 * * * *"
       image: registry.redhat.io/ubi9/python-312-minimal:latest
       alertFor: 10m
-      # [{name, url, realm, clientId, credentialSecret, attribute (default lastName), caConfigMap}]; the Secret, in
-      # ops.namespace, holds username, password and, for a confidential client, clientSecret
+      staleMinutes: 60
+      # [{name, url (https), realm, clientId, credentialSecret, attribute (default lastName), caConfigMap}]; the
+      # Secret, in ops.namespace, holds the client's secret under the key clientSecret
       keycloaks: []
   # fabric health metrics and alerts (templates/fabric-health.yaml): on the cluster that holds the HybridFabric and
   # CloudGateway objects. A kube-state-metrics instance of its own (custom resource state only) and the rules
