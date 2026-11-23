@@ -33,13 +33,16 @@ or ({{ include "shc-cluster-base.cronJobStale" . }})
 
 {{- /* the API check down in a way that silences the activation alert: failing on every evaluation of the last 8
 minutes (longer than one interval of a 5-minute schedule, so a check that fails every other run, or a healthy run in
-flight, never silences), or scheduled but never succeeded. Not when it is suspended or no longer runs: an API check
-that does not run must not hide the activation alert. . = selector */}}
+flight, never silences), or scheduled but never succeeded; either only while the API check was scheduled within the
+last `minutes`. An API check that is suspended or no longer scheduled, after a failed run or before any success,
+must not hide the activation alert. . = (list selector minutes) */}}
 {{- define "shc-cluster-base.apiCheckDown" -}}
-(min_over_time((max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -}} })
-  - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- . -}} }))[8m:]) > 0)
-or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- . -}} })
-  unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- . -}} })
+{{- $sel := index . 0 -}}
+((min_over_time((max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
+  - max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{ {{- $sel -}} }))[8m:]) > 0)
+or (max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} })
+  unless on (namespace, cronjob) kube_cronjob_status_last_successful_time{ {{- $sel -}} }))
+and on (namespace, cronjob) (time() - max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{ {{- $sel -}} }) < {{ mul (index . 1) 60 }})
 {{- end }}
 
 {{- /* a setting that must be a whole number of at least a minimum, rendered as its digits; . = (list name value
@@ -179,7 +182,7 @@ minimum). A quoted number, a fraction, null or anything else fails with the sett
       expr: >-
         ({{ include "shc-cluster-base.checkDown" $act | nindent 10 | trim }})
         unless on (namespace)
-        ({{ include "shc-cluster-base.apiCheckDown" (index $api 0) | nindent 10 | trim }})
+        ({{ include "shc-cluster-base.apiCheckDown" (list (index $api 0) (include "shc-cluster-base.wholeNumber" (list "ops.platformHealth.edaActivations.apiCheckScheduledWithinMinutes" .apiCheckScheduledWithinMinutes 1))) | nindent 10 | trim }})
       for: {{ .alertFor }}
       labels:
         severity: critical

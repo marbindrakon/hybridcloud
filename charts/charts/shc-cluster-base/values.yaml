@@ -282,6 +282,9 @@ ops:
       enabled: false
       schedule: "*/5 * * * *"
       apiCheckSchedule: "*/5 * * * *"
+      # the API check quiets the activation alert only while it was scheduled within this many minutes (keep it
+      # above the interval of apiCheckSchedule): a suspended or stopped API check never hides it
+      apiCheckScheduledWithinMinutes: 10
       # python3 (3.9 or later, standard library only)
       image: registry.redhat.io/ubi9/python-312-minimal:latest
       url: ""                       # the platform gateway's base URL (https), e.g. https://automation.example.com

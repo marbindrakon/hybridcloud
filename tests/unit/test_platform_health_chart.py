@@ -401,6 +401,20 @@ def tests(rules):
              a("ShcAutomationAPIUnavailable", "15m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
              a("ShcAutomationAPIUnavailable", "90m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
          ]},
+        # the API check fails from minute 11 and is suspended at minute 20, the activation check failing throughout:
+        # the API check silences while it fails and is still scheduled, then no longer; the activation alert fires
+        # ten minutes after the silence ends and stays
+        {"interval": "1m",
+         "input_series": cron(ops, "eda-activations", "0+60x200", "0x200")
+                         + cron(ops, "eda-api-check", "0+60x20 1200x180", "0+60x10 600x190")
+                         + [{"series": 'kube_cronjob_spec_suspend{namespace="%s",cronjob="eda-api-check"}' % ops,
+                             "values": "0x19 1x181"}],
+         "alert_rule_test": [
+             a("ShcEventActivationsNotRunning", "25m", []),
+             a("ShcEventActivationsNotRunning", "45m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcEventActivationsNotRunning", "199m", [({"namespace": ops, "cronjob": "eda-activations"}, ACT)]),
+             a("ShcAutomationAPIUnavailable", "199m", [({"namespace": ops, "cronjob": "eda-api-check"}, API)]),
+         ]},
         # the API check failing every other run (every 5 minutes) while the activation check fails every run: the API
         # alert never holds its 10 minutes, so the activation alert must speak
         {"interval": "1m",
