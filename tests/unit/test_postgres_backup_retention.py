@@ -57,20 +57,38 @@ def render(chart, sets):
     return docs[0]
 
 
+def charts_with_a_database():
+    """Every chart with a template that creates a PostgresCluster, whatever the file is called: chart -> files."""
+    found = {}
+    for chart in sorted(os.listdir(CHARTS)):
+        tdir = os.path.join(CHARTS, chart, "templates")
+        for base, _dirs, files in os.walk(tdir):
+            for name in files:
+                with open(os.path.join(base, name), errors="replace") as f:
+                    if "kind: PostgresCluster" in f.read():
+                        found.setdefault(chart, []).append(os.path.relpath(os.path.join(base, name), tdir))
+    return found
+
+
+needs_helm = unittest.skipIf(HELM is None, "helm not installed")
+
+
 @unittest.skipIf(yaml is None, "PyYAML not installed")
-@unittest.skipIf(HELM is None, "helm not installed")
 class BackupsExpire(unittest.TestCase):
     def test_every_database_template_is_covered(self):
-        found = sorted(c for c in os.listdir(CHARTS)
-                       if os.path.exists(os.path.join(CHARTS, c, "templates", "postgres.yaml")))
-        self.assertEqual(found, sorted(DATABASES),
-                         "a chart with a database template is missing from this test, or one was removed")
+        found = charts_with_a_database()
+        self.assertEqual(sorted(found), sorted(DATABASES),
+                         "a chart that creates a PostgresCluster is missing from this test, or one was removed")
+        for chart, files in found.items():
+            self.assertEqual(files, ["postgres.yaml"], "%s: this test renders templates/postgres.yaml only" % chart)
 
+    @needs_helm
     def test_defaults_keep_two_full_backups_on_a_schedule(self):
         for chart, (on, _path, full) in DATABASES.items():
             with self.subTest(chart=chart):
                 pgb = render(chart, on)["spec"]["backups"]["pgbackrest"]
-                self.assertEqual(pgb["global"], {"repo1-retention-full": "2", "repo1-retention-full-type": "count"})
+                self.assertEqual(pgb["global"], {"repo1-retention-full": "2", "repo1-retention-full-type": "count",
+                                                 "repo1-retention-diff": "2"})
                 repos = pgb["repos"]
                 self.assertEqual([r["name"] for r in repos], ["repo1"])
                 self.assertEqual(repos[0]["schedules"]["full"], full)
@@ -82,15 +100,33 @@ class BackupsExpire(unittest.TestCase):
         minutes = [full.split()[0] for _on, _path, full in DATABASES.values()]
         self.assertEqual(len(minutes), len(set(minutes)), "two databases would start their backups together")
 
+    @needs_helm
     def test_the_settings_follow_the_values(self):
         for chart, (on, path, _full) in DATABASES.items():
             with self.subTest(chart=chart):
-                sets = on + [path + ".retentionFull=5", path + ".fullSchedule=7 3 * * 6",
-                             path + ".differentialSchedule=7 3 * * 0-5"]
+                sets = on + [path + ".retentionFull=5", path + ".retentionDifferential=3",
+                             path + ".fullSchedule=7 3 * * 6", path + ".differentialSchedule=7 3 * * 0-5"]
                 pgb = render(chart, sets)["spec"]["backups"]["pgbackrest"]
                 self.assertEqual(pgb["global"]["repo1-retention-full"], "5")
+                self.assertEqual(pgb["global"]["repo1-retention-diff"], "3")
                 self.assertEqual(pgb["repos"][0]["schedules"],
                                  {"full": "7 3 * * 6", "differential": "7 3 * * 0-5"})
+
+    @needs_helm
+    def test_an_empty_differential_schedule_means_no_differential_backups(self):
+        for chart, (on, path, full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                pgb = render(chart, on + [path + ".differentialSchedule="])["spec"]["backups"]["pgbackrest"]
+                self.assertEqual(pgb["repos"][0]["schedules"], {"full": full})
+
+    @needs_helm
+    def test_values_without_the_backup_settings_get_the_defaults(self):
+        for chart, (on, path, full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                pgb = render(chart, on + [path + "=null"])["spec"]["backups"]["pgbackrest"]
+                self.assertEqual(pgb["global"]["repo1-retention-full"], "2")
+                self.assertEqual(pgb["repos"][0]["schedules"],
+                                 {"full": full, "differential": full.replace("* * 0", "* * 1-6")})
 
     def test_the_values_files_document_the_defaults_the_templates_use(self):
         for chart, (_on, path, full) in DATABASES.items():
@@ -99,7 +135,7 @@ class BackupsExpire(unittest.TestCase):
                     node = yaml.safe_load(f)
                 for key in path.split("."):
                     node = node[key]
-                self.assertEqual(node, {"retentionFull": 2, "fullSchedule": full,
+                self.assertEqual(node, {"retentionFull": 2, "retentionDifferential": 2, "fullSchedule": full,
                                         "differentialSchedule": full.replace("* * 0", "* * 1-6")})
 
 

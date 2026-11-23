@@ -36,6 +36,7 @@ spec:
       global:
         repo1-retention-full: {{ ((.Values.postgres.backup).retentionFull | default 2) | quote }}
         repo1-retention-full-type: count
+        repo1-retention-diff: {{ ((.Values.postgres.backup).retentionDifferential | default 2) | quote }}
       # A full backup on demand: annotate the PostgresCluster with postgres-operator.crunchydata.com/pgbackrest-backup
       manual:
         repoName: repo1
@@ -45,7 +46,12 @@ spec:
         - name: repo1
           schedules:
             full: {{ ((.Values.postgres.backup).fullSchedule | default "10 1 * * 0") | quote }}
-            differential: {{ ((.Values.postgres.backup).differentialSchedule | default "10 1 * * 1-6") | quote }}
+            {{- $backup := (.Values.postgres.backup) | default dict }}
+            {{- if not (hasKey $backup "differentialSchedule") }}
+            differential: "10 1 * * 1-6"
+            {{- else if $backup.differentialSchedule }}
+            differential: {{ $backup.differentialSchedule | quote }}
+            {{- end }}
           volume:
             volumeClaimSpec:
               accessModes:
