@@ -28,12 +28,12 @@ the same namespace. The operations layer must be rendered on the cluster (`layer
 |---|---|---|---|
 | `ShcVolumeFilling` | warning | A volume in the watched namespaces is over `volumes.warningPercent` (80) % used for 15 minutes. | Find what grows on it. For a database, it is usually write-ahead log waiting for a backup repository that is full or failing. Otherwise grow the volume. |
 | `ShcVolumeAlmostFull` | critical | Over `volumes.criticalPercent` (90) % used. | What writes to it stops when it is full, and a stopped database does not start again on a full volume. Free space or grow the volume now. |
-| `ShcVolumeFillsSoon` | critical | Over `volumes.fillsSoonMinPercent` (50) % used and, at the rate of the last `volumes.rateWindow` (6 hours), full within `volumes.fullWithinDays` (3) days, for an hour. | As above, before it is full. A short burst on a volume that is mostly empty (a backup into its repository) does not count. |
+| `ShcVolumeFillsSoon` | warning | Over `volumes.fillsSoonMinPercent` (50) % used and, at the rate of the last `volumes.rateWindow` (6 hours), full within `volumes.fullWithinDays` (3) days, for an hour. | As above, before it is full. A short burst on a volume that is mostly empty does not count; a trend alone is a warning, `ShcVolumeAlmostFull` is the critical one. |
 | `ShcDatabaseBackupFailed` | warning | A scheduled backup of a database (CronJob `<database>-<repository>-full`, `-diff` or `-incr`) has not succeeded since its newest run, for `databaseBackups.failedFor` (3 hours), or has never succeeded. | Read the backup Job's log. A full or failing repository also holds back the database's write-ahead log, which then fills the database's own volume. |
 | `ShcDatabaseBackupOverdue` | warning | No successful backup of that kind for longer than `databaseBackups.overdueHours` allows (full 192, differential and incremental 50 hours). | Check the CronJob's schedule and its latest Jobs. A restore would go further back than planned, and old backups do not expire. |
 | `ShcDatabaseBackupNotScheduled` | warning | A database has a backup repository volume (its `<database>-repo-host` StatefulSet) but no scheduled full backup, for 6 hours. | Give the PostgresCluster a backup schedule and a retention. Without them, old backups and log never expire and the repository fills. |
-| `ShcAggregatedAPIUnavailable` | critical | The API server could not reach the service behind an APIService for more than `aggregatedAPIs.unavailableFraction` (half) of the last `aggregatedAPIs.window` (10 minutes), held for `aggregatedAPIs.for` (5 minutes). An API that keeps dropping out counts too. | Meanwhile namespace deletes do not finish, so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer. |
-| `ShcEventActivationsNotRunning` | critical | The activation check reported something that needs a person (below), its run was incomplete, it has not succeeded for `edaActivations.staleMinutes` (60), or its CronJob is suspended. Quiet while `ShcAutomationAPIUnavailable` holds. | `oc -n <ops namespace> get jobs` shows the newest `eda-activations-<n>` Job; `oc -n <ops namespace> logs job/<that Job>` lists each finding with the activation's name. The ConfigMap `eda-activations-state` shows each activation's repairs and whether the check gave up on it. Fix the cause (the image, the project, the credential), then enable the activation again. Of two Jobs of one activation, remove the older. |
+| `ShcAggregatedAPIUnavailable` | critical | The API server cannot reach the service behind an APIService, and has not for `aggregatedAPIs.for` (10 minutes) without a break; or it could not for at least `aggregatedAPIs.unavailableFraction` (half) of the last `aggregatedAPIs.flapWindow` (an hour), held for 10 minutes. It fires while the fault lasts; a new APIService that is not ready for its first minutes does not fire. | Meanwhile namespace deletes do not finish, so cluster deletes hang. Check the APIService's conditions and the pods behind its service; restart a pod that runs but does not answer. |
+| `ShcEventActivationsNotRunning` | critical | The activation check reported something that needs a person (below), its run was incomplete, it has not succeeded for `edaActivations.staleMinutes` (60), or its CronJob is suspended. Quiet while `ShcAutomationAPIUnavailable` holds for a failing API check (not for a suspended one). | `oc -n <ops namespace> get jobs` shows the newest `eda-activations-<n>` Job; `oc -n <ops namespace> logs job/<that Job>` lists each finding with the activation's name. The ConfigMap `eda-activations-state` shows each activation's restarts and `gaveUp` (the platform refused its restart). Fix the cause (the image, the project, the credential); the check restarts the activation on its next run when the hour allows, or restart it yourself. Of two Jobs of one activation, remove the older. |
 | `ShcAutomationAPIUnavailable` | critical | The event-automation API did not answer the check, answered an error, or refused the check's credential; or the API check has not succeeded for 60 minutes, or is suspended. | Events are not handled and activations are neither checked nor repaired. Check the platform gateway, the automation platform's pods and its database. `oc -n <ops namespace> logs job/<the newest eda-api-check Job>` says what the API answered. |
 | `ShcIdentityWriteCheckFailed` | critical | The identity write check failed: the Keycloak refused or lost a write to its database, the check could not get a token, or the Keycloak did not answer; or the check has not succeeded for `identityWriteProbe.staleMinutes` (60), or is suspended. | The newest Job's log says which. Sign-ins can still work while every change fails. If writes stay refused after a database fail-over, restart the Keycloak's pods so that they connect to the new primary. |
 
@@ -51,49 +51,61 @@ so a failed check raises one alert.
 
 ## The activation check
 
-`eda-activations` runs every 5 minutes (`edaActivations.schedule`). It lists the activations through the
-event-automation API (`<url>/api/eda/v1/activations/`, every page). It watches the activations whose restart policy
-is `always`; others are not watched, and the log names them once per run. For each watched, enabled activation it
-reads the newest instance. Then:
+`eda-activations` runs every 5 minutes (`edaActivations.schedule`). It reads its restart count, then lists the
+activations through the event-automation API (`<url>/api/eda/v1/activations/`, every page).
 
-- **Running** (and its newest instance running): nothing to do.
-- **Not running** (failed, stopped, completed, unresponsive, error), or **running while its newest instance is
-  not**: seen on two runs at least `notRunningMinutes` (4) apart, so the platform's own restart goes first. The
-  check reads the activation again; if it still does not run, the check records the repair (below), disables it,
-  waits until it has stopped (`stopTimeoutSeconds`), enables it again and waits until it runs
-  (`startTimeoutSeconds`). Enabling resets the platform's own failure count. Each repair is logged with the
-  activation's name and counted. All repairs of one run are done together, so a whole platform's activations come
-  back in one wait. After a repair the waiting time starts again, so a slow start is not repaired again on the next
-  run.
-- **Pending, starting or stopping** for longer than `transitionalMinutes` (10): treated as not running.
-- **At most `maxRepairsPerHour` (3) repairs per activation in any hour.** Past that it is reported and left alone
-  until it is seen running with no repair in the last hour.
-- **Repaired more than `maxRepairsPerDay` (6) times in a day**: reported, although each repair worked, so that an
-  activation that keeps dying is looked at.
-- **Cannot run as it is**: its status message, or its newest instance's, contains one of `cannotRunPatterns` (an
-  image that cannot be pulled, an invalid request): reported, never repaired. When the platform refuses to enable
-  it as invalid, it stays disabled and is reported each run until a person enables it.
-- **The platform's workers are offline**, or **a status the check does not know**: reported, not repaired.
-- **Two activation Jobs with running pods for one activation** (Jobs `activation-job-<activation>-<instance>` in
-  `automationNamespace`): reported, naming the older Job. With `removeStaleJobs: true` (off by default) the older
-  Job is removed, but only when the activation and its newest instance run and the newest instance's Job runs.
-- **An empty activations list** is reported (an account that cannot see the activations reads as an empty list),
-  unless `allowNoActivations` is true. Nothing is changed then.
+**What it watches.** An activation that is enabled and has restart policy `always`. A disabled activation is never
+touched and never reported, whoever disabled it. One with another restart policy is named once per run in the log
+and left alone.
 
-**The record comes first.** The repair count is kept in the ConfigMap `eda-activations-state` in `ops.namespace`.
-Before the check disables or enables anything, it writes there the counted repair and the mark that it disabled
-the activation itself; if that write fails, it changes nothing and reports. So whatever stops a run midway (an API
-error, its deadline, the pod evicted), an activation the check disabled is either enabled again in the same run or
-marked, and the next run enables it again, within the same hourly limit. An activation disabled by anyone else is
-never enabled. When the ConfigMap cannot be read, nothing is repaired and the run is reported. Deleting it resets
-every count.
+**What it does.** One call: `POST <url>/api/eda/v1/activations/<id>/restart/`, for a watched activation that, for
+longer than its grace, either does not run (failed, stopped, completed, unresponsive, error) or reads running while
+its newest instance does not (the platform lost track of it). The grace is `notRunningMinutes` (4): the activation
+was seen so on an earlier run, so the platform's own restart goes first. Pending, starting and stopping get
+`transitionalMinutes` (10), counted from when the check first saw it not running or last restarted it. Just before
+the call the check reads that one activation again and restarts it only if it is still enabled and still due: a
+person who disables it in between stops the restart, and one the platform has started working on in between is
+left to the platform. After the restarts it waits up to `startTimeoutSeconds` (180) for them to run.
 
-The run exits with an error (and so raises `ShcEventActivationsNotRunning`) whenever something needs a person or
-the run was incomplete: a finding above, a repair that did not finish, or a read or write it needed that failed.
+**What it never does.** It makes no call but reads and restart: it never disables, enables, changes or deletes an
+activation (only with `removeStaleJobs: true` it deletes the older of two Jobs of one activation, see below).
 
-`eda-api-check` (every 5 minutes, `edaActivations.apiCheckSchedule`) makes one authenticated read of the
-activations list. While it fails, `ShcAutomationAPIUnavailable` fires and `ShcEventActivationsNotRunning` stays
-quiet, so an outage of the automation platform raises one alert.
+**Its limits.**
+- At most `maxRepairsPerHour` (3) restarts per activation in any hour. At the cap it reports the activation and
+  restarts it again when the hour allows.
+- Every restart is counted in the ConfigMap `eda-activations-state` in `ops.namespace` before it is made, for every
+  activation of a run before the first call. If the count cannot be stored, nothing is restarted and the run reports.
+  If it cannot be read, nothing is restarted. If another run wrote it meanwhile (two runs at once), the run stops
+  without acting further and reports. A restart that was counted but not made (the activation changed in between)
+  is taken off the count again.
+- More than `maxRepairsPerDay` (6) restarts of one activation within a day are reported although each one worked,
+  so that an activation that keeps dying is looked at. The report holds until fewer than that are within the last
+  24 hours, also after the activation runs steadily again.
+- A restart the platform refuses as invalid or not allowed (400, 403) gives up on that activation: reported on
+  every run, not restarted again until it is seen running or is disabled. Any other failed restart counts as an
+  attempt and is reported.
+
+**What it reports** (the run then exits with an error, which raises `ShcEventActivationsNotRunning`): an activation
+at the cap, refused, or not running after its restart; one restarted too often in a day; one that cannot run as it
+is (its status message, or its newest instance's, contains one of `cannotRunPatterns`: an image that cannot be
+pulled, an invalid request); the platform's workers offline; a status the check does not know; two activation Jobs
+with running pods for one watched activation (Jobs `activation-job-<activation>-<instance>` in
+`automationNamespace`, the older one named; with `removeStaleJobs: true`, off by default, the older Job is removed,
+but only when the activation and its newest instance run and the newest instance's Job runs); an empty activations
+list (an account that cannot see them reads as one), unless `allowNoActivations` is true (an empty list never
+clears the counts); and any read or write it needed that failed.
+
+**The trade.** A restart does not reset the platform's own failure budget (the count after which the platform stops
+restarting an activation by itself). Once that budget is used up, each further failure of the activation waits for
+this check's next run, up to 5 minutes, instead of the platform's own restart a minute later. A configuration run
+that disables and enables the activations is what resets the budget.
+
+`eda-api-check` (every 5 minutes, `edaActivations.apiCheckSchedule`) makes one authenticated read of the activations
+list. While it keeps failing, `ShcAutomationAPIUnavailable` fires and `ShcEventActivationsNotRunning` stays quiet,
+so an outage of the automation platform raises one alert. A suspended API check does not quiet it.
+
+**Stale checks.** `staleMinutes` (60) must be well above the interval of the check's schedule: a check that runs
+less often than that would read as stale between its runs.
 
 Both checks use https only, never follow a redirect, and follow a next-page link only on the same address, so the
 credential goes nowhere else.
@@ -107,10 +119,10 @@ credential goes nowhere else.
 | `edaActivations.credentialSecret` | A Secret in `ops.namespace` with key `token` (a token of a platform account, sent as a bearer token) or keys `username` and `password`. |
 | `edaActivations.caConfigMap` | Optional: a ConfigMap in `ops.namespace` with key `ca.crt` when the gateway's certificate is not from a public CA. |
 
-The account needs to view, enable and disable the activations, and nothing else. The smallest built-in role that
+The account needs to view the activations and restart them, and nothing else. The smallest built-in role that
 allows this is the **Organization Operator** role of the organization that owns the activations (view of every
-object, enable, disable and restart of activations). A custom role definition with only the activation permissions
-`view`, `enable` and `disable` is smaller still.
+object; enable, disable and restart of activations). A custom role definition with only the activation permissions
+`view` and `restart` is smaller still; the check needs neither enable nor disable.
 
 ## The Keycloak write check
 
@@ -134,7 +146,8 @@ Create in that Keycloak:
 - **a realm of its own for this check**, one that no application trusts and nobody signs in to (no other client,
   no identity provider, no users);
 - in it, a confidential client with only **Service accounts** on (standard flow, direct access grants and refresh
-  tokens for the client-credentials grant off);
+  tokens for the client-credentials grant off). Keep its default client scopes (the `basic` scope puts the user's
+  id, `sub`, into the token, which the check needs) and its default full scope;
 - for the client's service account, the role `manage-users` of that realm's `realm-management` client, and no
   other role.
 
