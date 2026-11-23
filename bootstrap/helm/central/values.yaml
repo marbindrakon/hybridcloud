@@ -160,7 +160,7 @@ sovereignNamespacesServices:
 # ─── RHBK Central (Keycloak) ─────────────────────────────────────────────────
 rhbk:
   enabled: true
-  chartVersion: "0.10.2-shc.2"  # 0.10.2-shc.2: database replicas spread one per node
+  chartVersion: "0.10.2-shc.3"  # 0.10.2-shc.3: the Keycloak takes only the primary database and renews its connections every 10 minutes; backups on a schedule; the archive limit (ops2); 0.10.2-shc.2: database replicas spread one per node
   syncWave: "20"
   destinationNamespace: central-rhbk
   values:
@@ -197,7 +197,7 @@ rhbk:
 # ─── RHBK Services (Keycloak) ────────────────────────────────────────────────
 rhbkServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.10.2-shc.2"  # 0.10.2-shc.2: database replicas spread one per node, as central since 11-20; 0.10.2-shc.1: the chart's own routes (keycloak.routes, keycloak.ingress)
+  chartVersion: "0.10.2-shc.3"  # 0.10.2-shc.3: the Keycloak takes only the primary database and renews its connections every 10 minutes; backups on a schedule; the archive limit (ops2); 0.10.2-shc.2: database replicas spread one per node, as central since 11-20; 0.10.2-shc.1: the chart's own routes (keycloak.routes, keycloak.ingress)
   syncWave: "20"
   destinationNamespace: services-rhbk
   values:
@@ -2423,7 +2423,7 @@ aap:
   # managed Postgres while the Crunchy cluster sat unused. aap-instance points them at Crunchy
   # (external-postgres-sync job). manageNamespace keeps the aap Namespace the old chart owned.
   chart: aap-instance
-  chartVersion: "0.5.5-shc.3"
+  chartVersion: "0.5.5-shc.4"
   syncWave: "30"
   destinationNamespace: aap
   values:
@@ -2449,7 +2449,7 @@ aap:
 # ─── AAP (central cluster — EDA controller) ────────────────────────────────
 aapCentral:
   enabled: true
-  chartVersion: "0.5.5-shc.3"
+  chartVersion: "0.5.5-shc.4"
   syncWave: "30"
   destinationNamespace: aap
   values:
@@ -2611,7 +2611,7 @@ mtv:
 # transit seal token check, cert-manager metrics, alert rules.
 shcClusterOpsCentral:
   enabled: true
-  chartVersion: "0.3.15"  # 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
+  chartVersion: "0.3.37"  # 0.3.37: the platform's own alerts, the activation and API checks (ops2); 0.3.16 to 0.3.36 changed only what the hub does not switch on; 0.3.15: OIDC issuer probe + ShcOidc* alerts; 0.3.7: etcd fsync / leader-change alerts
   syncWave: "24"
   values:
     layers:
@@ -2631,6 +2631,29 @@ shcClusterOpsCentral:
       issuerProbe:
         enabled: true
         issuers: [services]
+      # ops2 r2: the switches only the services cluster uses, pinned off on the hub (they default off; hub-ops-layer-diff.md)
+      shcTenancy:
+        enabled: false
+      edaRedrive:
+        enabled: false
+      tenantOrphanCheck:
+        enabled: false
+      fabricHealth:
+        enabled: false
+      # ops2 r2: the platform's own health (docs/platform/platform-alerts.md); no alert receiver in the lab (OD200)
+      platformHealth:
+        volumes:
+          enabled: true
+        databaseBackups:
+          enabled: true
+        aggregatedAPIs:
+          enabled: true
+        # the activation check and the API check; the account (view and restart of activations) is the owner step's
+        edaActivations:
+          enabled: true
+          url: https://sovereign-aap-aap.apps.central.shc.signal9.gg
+          automationNamespace: aap
+          credentialSecret: eda-activations-account
 
 # shc (LAB-PLAN D9/D21): ODF external on central (charts/charts/odf-external). Adopts the day-1 objects
 # (p2/day1 40/50 + bootstrap.sh ceph-central); after the vault-backend store (wave 22).
@@ -2730,7 +2753,7 @@ quay:
 # ─── Quay (services) ────────────────────────────────────────────────────────
 quayServices:
   enabled: true  # shc: P4 (services cluster) enabled
-  chartVersion: "0.6.4-shc.4"  # shc: OIDC and RGW storage through the config bundle; .3: the settings in a tracked ConfigMap (a changed sign-in server reaches the bundle); .4: every database backed up on a schedule, two full backups kept, a full backup on demand (ops2)
+  chartVersion: "0.6.4-shc.5"  # shc: OIDC and RGW storage through the config bundle; .3: the settings in a tracked ConfigMap (a changed sign-in server reaches the bundle); .4: every database backed up on a schedule, two full backups kept, a full backup on demand (ops2); .5: the archive limit (ops2)
   syncWave: "35"
   destinationNamespace: services-quay
   values:
@@ -2918,7 +2941,7 @@ gitea:
 # This is separate from the services-cluster Gitea (managed by the 'gitea' app above).
 giteaCentral:
   enabled: true
-  chartVersion: "0.4.6-shc.4"  # 0.4.6-shc.4: every database backed up on a schedule, two full backups kept, a full backup on demand (ops2); 0.4.6-shc.3: database replicas spread one per node
+  chartVersion: "0.4.6-shc.5"  # 0.4.6-shc.5: the archive limit (ops2); 0.4.6-shc.4: every database backed up on a schedule, two full backups kept, a full backup on demand (ops2); 0.4.6-shc.3: database replicas spread one per node
   syncWave: "18"
   values:
     gitea:
@@ -3086,7 +3109,7 @@ dnsForwarderServices:
 # wave 0) and the Let's Encrypt issuer + API/ingress certificates ("certs", wave 2, after the store).
 shcClusterBaseServices:
   enabled: true
-  chartVersion: "0.3.36"  # 0.3.36: the reasons copy: EarlierClusterNotRemoved, the InstallRetrying text (uxb2 r3); 0.3.35: the reasons copy (ImageNotFound, DefaultImageNotFound, WaitingForEarlierCluster) and the status library (uxb2 r2); 0.3.34: the reasons copy: the installation reasons (Installing, InstallRetrying, QuotaExceeded, InstallFailed and the rest) (uxb2); 0.3.33: the reasons copy: sign-in, access group and cluster credential reasons (osoui); 0.3.32: alert texts ShcFabricServiceLinkDown, ShcFabricServiceSessionsDown, ShcFabricRoutingDaemonRestarted and the reasons copy (ServiceLinkDown, RoutingDaemonRestarted) (bnode); 0.3.31: reasons copy (ServiceShareReached, ServiceLimitReached, ServiceNotRealized) (svc2); 0.3.30: reasons texts of the gate follow-up (0.3.29: alerts ShcFabricServiceSessionsDown and ShcFabricServiceLinkDown)
+  chartVersion: "0.3.37"  # 0.3.37: the platform's own alerts: volumes, database backups, the identity write check when switched on (ops2); 0.3.36: the reasons copy: EarlierClusterNotRemoved, the InstallRetrying text (uxb2 r3); 0.3.35: the reasons copy (ImageNotFound, DefaultImageNotFound, WaitingForEarlierCluster) and the status library (uxb2 r2); 0.3.34: the reasons copy: the installation reasons (Installing, InstallRetrying, QuotaExceeded, InstallFailed and the rest) (uxb2); 0.3.33: the reasons copy: sign-in, access group and cluster credential reasons (osoui); 0.3.32: alert texts ShcFabricServiceLinkDown, ShcFabricServiceSessionsDown, ShcFabricRoutingDaemonRestarted and the reasons copy (ServiceLinkDown, RoutingDaemonRestarted) (bnode); 0.3.31: reasons copy (ServiceShareReached, ServiceLimitReached, ServiceNotRealized) (svc2); 0.3.30: reasons texts of the gate follow-up (0.3.29: alerts ShcFabricServiceSessionsDown and ShcFabricServiceLinkDown)
   # BF-15: on services the ACM observability addon (endpoint-monitoring-operator) owns
   # openshift-monitoring/cluster-monitoring-config data and rewrites it in its own normalized form, so Argo's copy
   # never stays applied (permanent OutOfSync). Ignored, and with RespectIgnoreDifferences not re-applied, while the
@@ -3184,6 +3207,21 @@ shcClusterBaseServices:
       # ops1: the fabric health metrics and alerts on the cluster that holds the HybridFabric and CloudGateway objects
       fabricHealth:
         enabled: true
+      # ops2 r2: the platform's own health (docs/platform/platform-alerts.md); no alert receiver in the lab (OD200)
+      platformHealth:
+        volumes:
+          enabled: true
+        databaseBackups:
+          enabled: true
+        # the identity write check: realm and client made by the owner step (a service account with manage-users of it only)
+        identityWriteProbe:
+          enabled: true
+          keycloaks:
+            - name: services
+              url: https://auth.shc.signal9.gg
+              realm: shc-write-check
+              clientId: shc-write-check
+              credentialSecret: identity-write-check-services
 
 # ─── External Secrets Operator (services) ───────────────────────────────────
 externalSecretsServices:
