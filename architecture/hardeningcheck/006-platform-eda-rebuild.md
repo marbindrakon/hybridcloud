@@ -44,7 +44,7 @@
 | 28 | EDA Controller | Rulebook project from Git (not inline) | ✅ | `sovereign-eda-rulebooks` project references Gitea repo |
 | 29 | EDA Controller | Authentication on Event Stream ingress | ✅ | Bearer token required on POST; token from Vault |
 | 30 | EDA Controller | `no_log` on all credential registration tasks | ✅ | eda-config role marks credential/stream/activation tasks `no_log: true` |
-| 31 | EDA Controller | Restart policy on failure | ✅ | `restart_policy: on-failure` on rulebook activations |
+| 31 | EDA Controller | Restart policy always | ✅ | `restart_policy: always` on rulebook activations |
 | 32 | Dashboard Refresh | Rate limiting on API endpoints | ✅ | `apiLimiter` 120/min; `mutationLimiter` 30/min in tenancy dashboard |
 | 33 | Dashboard Refresh | X-Forwarded-Access-Token only | ✅ | k8s-proxy rejects calls without user OAuth token |
 | 34 | Dashboard Refresh | No ServiceAccount token for mutations | ✅ | Refresh PATCH uses logged-in user's token, not pod SA |

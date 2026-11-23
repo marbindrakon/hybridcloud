@@ -7,7 +7,7 @@ eda_rulebook_activations:
     rulebook: entity-create.yml
     decision_environment: de-entity
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -18,7 +18,7 @@ eda_rulebook_activations:
     rulebook: entity-delete.yml
     decision_environment: de-entity
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -29,7 +29,7 @@ eda_rulebook_activations:
     rulebook: team-create.yml
     decision_environment: de-team
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -40,7 +40,7 @@ eda_rulebook_activations:
     rulebook: team-delete.yml
     decision_environment: de-team
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -51,7 +51,7 @@ eda_rulebook_activations:
     rulebook: assignment-create.yml
     decision_environment: de-assignment
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -62,7 +62,7 @@ eda_rulebook_activations:
     rulebook: assignment-delete.yml
     decision_environment: de-assignment
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -73,7 +73,7 @@ eda_rulebook_activations:
     rulebook: project-create.yml
     decision_environment: de-project
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -84,7 +84,7 @@ eda_rulebook_activations:
     rulebook: project-delete.yml
     decision_environment: de-project
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -95,7 +95,7 @@ eda_rulebook_activations:
     rulebook: platformopenshift-create.yml
     decision_environment: de-platformopenshift
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -106,7 +106,7 @@ eda_rulebook_activations:
     rulebook: platformopenshift-delete.yml
     decision_environment: de-platformopenshift
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -117,7 +117,7 @@ eda_rulebook_activations:
     rulebook: cloudoso-create.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -128,7 +128,7 @@ eda_rulebook_activations:
     rulebook: cloudoso-delete.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -140,7 +140,7 @@ eda_rulebook_activations:
     rulebook: cloudinfrastructure-create.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -151,7 +151,7 @@ eda_rulebook_activations:
     rulebook: cloudinfrastructure-delete.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -163,7 +163,7 @@ eda_rulebook_activations:
     rulebook: dnsconfig-create.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -174,7 +174,7 @@ eda_rulebook_activations:
     rulebook: dnsconfig-delete.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -187,7 +187,7 @@ eda_rulebook_activations:
     rulebook: fabric-events.yml
     decision_environment: de-cloudoso
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -198,8 +198,10 @@ eda_rulebook_activations:
     rulebook: openstack-migration-create.yml
     decision_environment: de-openstack-migration
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: false  # shc: openstack-migration is disabled (no de-openstack-migration image)
+    # the module ignores enabled for the state: only state disabled keeps it off (and disables it if it runs)
+    state: disabled
     eda_credentials:
       - sovereign-aap-controller-credential
       - sovereign-kafka-consumer-credential
@@ -209,7 +211,7 @@ eda_rulebook_activations:
     rulebook: cloudaws-create.yml
     decision_environment: de-cloudaws
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -220,7 +222,7 @@ eda_rulebook_activations:
     rulebook: cloudaws-delete.yml
     decision_environment: de-cloudaws
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -232,7 +234,7 @@ eda_rulebook_activations:
     rulebook: cloudgcp-create.yml
     decision_environment: de-cloudaws
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -243,7 +245,7 @@ eda_rulebook_activations:
     rulebook: cloudgcp-delete.yml
     decision_environment: de-cloudaws
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -254,7 +256,7 @@ eda_rulebook_activations:
     rulebook: persona-create.yml
     decision_environment: de-persona
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -265,7 +267,7 @@ eda_rulebook_activations:
     rulebook: persona-delete.yml
     decision_environment: de-persona
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -276,7 +278,7 @@ eda_rulebook_activations:
     rulebook: rbacconfig-create.yml
     decision_environment: de-plugin-rbac
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -287,7 +289,7 @@ eda_rulebook_activations:
     rulebook: rbacconfig-delete.yml
     decision_environment: de-plugin-rbac
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -298,7 +300,7 @@ eda_rulebook_activations:
     rulebook: rbac-create.yml
     decision_environment: de-plugin-rbac
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -309,7 +311,7 @@ eda_rulebook_activations:
     rulebook: rbac-delete.yml
     decision_environment: de-plugin-rbac
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -320,7 +322,7 @@ eda_rulebook_activations:
     rulebook: vault-create.yml
     decision_environment: de-plugin-vault
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -331,7 +333,7 @@ eda_rulebook_activations:
     rulebook: vault-delete.yml
     decision_environment: de-plugin-vault
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -342,7 +344,7 @@ eda_rulebook_activations:
     rulebook: vaultkv-create.yml
     decision_environment: de-plugin-vault
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -353,7 +355,7 @@ eda_rulebook_activations:
     rulebook: vaultkv-delete.yml
     decision_environment: de-plugin-vault
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -364,7 +366,7 @@ eda_rulebook_activations:
     rulebook: aapconfig-create.yml
     decision_environment: de-plugin-aap
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -375,7 +377,7 @@ eda_rulebook_activations:
     rulebook: aapconfig-delete.yml
     decision_environment: de-plugin-aap
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -386,7 +388,7 @@ eda_rulebook_activations:
     rulebook: aaporg-create.yml
     decision_environment: de-plugin-aap
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -397,7 +399,7 @@ eda_rulebook_activations:
     rulebook: aaporg-delete.yml
     decision_environment: de-plugin-aap
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -408,7 +410,7 @@ eda_rulebook_activations:
     rulebook: quayconfig-create.yml
     decision_environment: de-plugin-quay
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -419,7 +421,7 @@ eda_rulebook_activations:
     rulebook: quayconfig-delete.yml
     decision_environment: de-plugin-quay
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -430,7 +432,7 @@ eda_rulebook_activations:
     rulebook: quayorg-create.yml
     decision_environment: de-plugin-quay
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential
@@ -441,7 +443,7 @@ eda_rulebook_activations:
     rulebook: quayorg-delete.yml
     decision_environment: de-plugin-quay
     organization: Default
-    restart_policy: on-failure
+    restart_policy: always
     enabled: true
     eda_credentials:
       - sovereign-aap-controller-credential

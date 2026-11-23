@@ -27,6 +27,8 @@
 | [Border gateway nodes](platform/border-gateway-nodes.md) | What the fabric does on a border gateway node on either core transport: VRFs kept from the node's own addresses, what the host must not have, the TCP MSS clamps, a network leaving a node, the orphan check, teardown. |
 | [SRv6 core transport](platform/srv6-core-transport.md) | The fabric's core transport switch, the SID block and locators, what a border gateway node needs, the guard and the routing rule, readiness, status fields, changing transport. |
 | [Convert an OpenShift Virtualization site to dual-stack](platform/metal-dual-stack-conversion.md) | The day-2 conversion of a bare-metal OpenShift cluster: pre-checks, the node step, the cluster step, the roll, post steps, verification, rollback by rebuild, known product issues. |
+| [Platform services: what recovers by itself](platform/platform-operations.md) | Event activations and their restart limit, the Keycloak after a database fail-over, database backups, retention, the restore window and the limit on the waiting archive, upgrading an installation that carried the schema compatibility service. |
+| [Platform alerts](platform/platform-alerts.md) | The alerts on the platform's own services, what each means and what to do, and the receiver an installation sets. |
 | [Bootstrap](../bootstrap/README.md) | Building the charts and seeding Argo CD on a new installation. |
 | [Disconnected deploy](disconnected-deploy.md) | What a disconnected installation needs. |
 | [Lab configuration policy](lab-config.md) | Where installation-specific values live (never in Git). |
