@@ -7,7 +7,7 @@ does not come back are on their own page: [Platform alerts](platform-alerts.md).
 
 | Service | Recovers by itself | Needs a person |
 |---|---|---|
-| Event activations | a clean exit or a failed one is restarted | an activation past the platform's restart limit (see below) |
+| Event activations | a clean exit or a failed one is restarted; past the platform's restart limit, the activation check restarts it, at most 3 times an hour | an activation the check cannot bring back, or one that cannot run as it is |
 | Keycloak | after a database fail-over: within the connection lifetime, without a restart | a database that has no primary at all |
 | Databases | a full backup weekly, a differential one daily, old backups expire; a repository that cannot take the archive costs the restore point, not the database | a restore; a repository that stays broken |
 
@@ -36,9 +36,10 @@ clean exit means its event source ended; a failed exit, that the process or its 
   check the effect after a change (the variable on the server's pods, and the "(n/limit)" in an activation's
   restart message). Nothing is set by default. That the platform operator passes these settings on next to the
   ones it sets itself is not proven for every operator version: try the setting on a test instance first.
-- **The activation check** on the hub disables and enables an activation that is not running, at most a few times
-  an hour, which also resets its count, and raises an alert for one it cannot bring back. Its settings and alerts
-  are on [Platform alerts](platform-alerts.md).
+- **The activation check** on the hub restarts an activation that is not running with one restart call, at most 3
+  times an hour per activation by default, and raises an alert for one it cannot bring back. A restart does not reset
+  the platform's count, so once the limit is reached each further failure waits for the check's next run. Its
+  settings and alerts are on [Platform alerts](platform-alerts.md).
 - **Changing an existing activation.** The platform refuses to change an activation while it is enabled ("Activation
   is not in disabled mode and in stopped status"), so a configuration run that changes, for example, the restart
   policy of running activations fails for each of them. The configuration run hides the module's messages (secure
@@ -163,7 +164,10 @@ waited.
    oc delete apiservice v1.schemafix.sovereign-bootstrap.io
    ```
 
-3. **Upgrade** the release from the repository's root, keeping its earlier settings (Helm 3.14 or later):
+3. **Upgrade** the release from the repository's root, keeping its earlier settings (Helm 3.14 or later). The make
+   target that installs or upgrades the init release (`make init-central-applicationset` in `bootstrap/`) runs the
+   same upgrade without the comparison and without deleting the APIService: on a hub that carried the removed
+   service, do steps 1 and 2 by hand before it.
 
    ```sh
    helm upgrade sovereign-init bootstrap/helm/init \
