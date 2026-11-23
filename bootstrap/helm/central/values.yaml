@@ -3211,7 +3211,6 @@ shcClusterBaseServices:
       platformHealth:
         volumes:
           enabled: true
-          warningPercent: 10  # ops2 gate G4b: below today's use, so the warning fires; restored after
         databaseBackups:
           enabled: true
         # the identity write check: realm and client made by the owner step (a service account with manage-users of it only)
