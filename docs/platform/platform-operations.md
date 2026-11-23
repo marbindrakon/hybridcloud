@@ -17,8 +17,9 @@ Every activation runs one rulebook that is meant to run for ever: it consumes th
 clean exit means its event source ended; a failed exit, that the process or its pod failed.
 
 - **Restart policy `always`.** The automation platform restarts an activation after a clean exit and after a
-  failed one. Under `on-failure` an activation that exited cleanly stayed "completed" and its events were not
-  handled until somebody restarted it.
+  failed one. A clean exit is restarted at once and without a limit; a failed one after a delay (60 seconds by
+  default) and within the restart limit below. Under `on-failure` an activation that exited cleanly stayed
+  "completed" and its events were not handled until somebody restarted it.
 - **The restart limit.** The platform counts every failure of an activation over its life and stops restarting it
   once the count reaches its limit (5 by default): it then reads "failed ... has reached the maximum number of
   restarts". A restart does not reset the count; only disabling and enabling the activation does. You can raise the
@@ -33,14 +34,18 @@ clean exit means its event source ended; a failed exit, that the process or its 
 
   The server reads these settings from its environment and ignores a name it does not know without an error, so
   check the effect after a change (the variable on the server's pods, and the "(n/limit)" in an activation's
-  restart message). Nothing is set by default.
+  restart message). Nothing is set by default. That the platform operator passes these settings on next to the
+  ones it sets itself is not proven for every operator version: try the setting on a test instance first.
 - **The activation check** on the hub disables and enables an activation that is not running, at most a few times
   an hour, which also resets its count, and raises an alert for one it cannot bring back. Its settings and alerts
   are on [Platform alerts](platform-alerts.md).
 - **Changing an existing activation.** The platform refuses to change an activation while it is enabled ("Activation
   is not in disabled mode and in stopped status"), so a configuration run that changes, for example, the restart
-  policy of running activations reports "Unable to update activation" for each. Disable the activations first; the
-  configuration run then changes and starts them, and the start resets their failure counts.
+  policy of running activations fails for each of them. The configuration run hides the module's messages (secure
+  logging), so the job shows a censored failure rather than "Unable to update activation". Disable the activations
+  first; the configuration run then changes and starts them, and the start resets their failure counts.
+- **An activation that must stay off** needs `state: disabled` in its definition. The definition's `enabled` field
+  does not decide it: without `state: disabled` every configuration run starts the activation.
 
 ## The Keycloak after a database fail-over
 
@@ -60,9 +65,15 @@ What it does not cover: a request that is running on a connection when the prima
 without these settings; and the Keycloak's readiness probe does not test a write, so ready does not prove that
 writes succeed.
 
+Further server options of an installation go into `keycloak.additionalOptions`, entries `{name, value}` or
+`{name, secret: {name, key}}`, rendered after the chart's own; the options the chart sets itself (`http-enabled`,
+`hostname-strict`, `db-url-properties`, `db-pool-max-lifetime`) are refused there.
+
 The two options are server options (`spec.additionalOptions` of the Keycloak), applied by the Keycloak operator as
 environment variables of the Keycloak's pods: a change of either rolls the pods. The central chart's Applications
-of the two Keycloaks no longer ignore that field, so a changed option reaches the Keycloak.
+of the two Keycloaks no longer ignore that field, so a changed option reaches the Keycloak. Argo CD applies the
+list as a whole: **before upgrading, move any option set by hand on a Keycloak object into
+`keycloak.additionalOptions`**, or the first sync removes it and the Keycloak's pods roll without it.
 
 ## Databases and their backups
 
@@ -85,7 +96,13 @@ up by pgBackRest into a repository volume of its own.
   whole waiting queue is dropped at once when it passes the limit, and the limit is checked when an archiving run
   starts, so the queue can pass it briefly. `auto` (the default) is a quarter of the data volume (`storage` must then
   be a whole number of Mi, Gi or Ti, or the chart refuses to render and asks for the value); a size such as `4GiB`
-  sets it; empty means no limit, and a broken repository then fills the data volume until the database stops.
+  sets it (a plain number is bytes; 0 and more than 4PiB are refused); empty means no limit, and a broken
+  repository then fills the data volume until the database stops.
+  How long a broken repository takes to trip the limit: a database writes at least one 16 MiB segment a minute,
+  so the limit in MiB divided by 16 is the longest time in minutes (2560MiB: under 3 hours; 20GiB: under 22
+  hours); a busy database writes more and trips it sooner. On a data volume that is more than three quarters full
+  the default is more than the free space, and the volume fills before the limit is reached: set a size below the
+  free space, or grow the volume.
 - **A full backup on demand.** Annotate the database's PostgresCluster; each new value of the annotation starts one
   full backup:
 
@@ -120,14 +137,48 @@ An installation whose hub carried the Argo CD schema compatibility service (the 
 is upgraded to this version: the upgrade deletes its namespace, Deployment, Service, configuration, service account,
 cluster role and binding, and the APIService. Current versions of the multicluster engine publish no references the
 service would have fixed, and while it was unavailable the hub's namespace deletes, and with them cluster deletes,
-waited. Upgrade the release from the repository's root, keeping its earlier settings (Helm 3.14 or later):
+waited.
 
-```sh
-helm upgrade sovereign-init bootstrap/helm/init \
-  --namespace openshift-gitops-operator \
-  --reset-then-reuse-values \
-  --wait --timeout=5m
-```
+1. **Compare first.** Helm deletes every object of the release's stored manifest that the new render no longer
+   contains. The init chart renders the namespaces for its pull secrets only when they do not exist yet, so a
+   release installed before those namespaces existed has them in its manifest, and the new render does not: the
+   upgrade would delete them with everything in them. Compare the stored manifest with the new render and keep
+   every namespace the comparison would remove (a Helm resource policy), and look at every other change:
+
+   The new render must come from the cluster (a server-side dry run), because the namespaces depend on what exists:
+
+   ```sh
+   helm get manifest sovereign-init -n openshift-gitops-operator > /tmp/init-stored.yaml
+   helm upgrade sovereign-init bootstrap/helm/init -n openshift-gitops-operator \
+     --reset-then-reuse-values --dry-run=server > /tmp/init-new.yaml
+   diff <(grep -E '^(kind|  name|  namespace):' /tmp/init-stored.yaml) \
+        <(grep -E '^(kind|  name|  namespace):' /tmp/init-new.yaml)
+   oc annotate namespace <namespace> helm.sh/resource-policy=keep   # each namespace that must stay
+   ```
+
+2. **Delete the APIService first.** Helm deletes the objects in one pass and only logs a delete that fails; an
+   APIService left behind without its server makes every namespace delete on the hub wait. Delete it yourself:
+
+   ```sh
+   oc delete apiservice v1.schemafix.sovereign-bootstrap.io
+   ```
+
+3. **Upgrade** the release from the repository's root, keeping its earlier settings (Helm 3.14 or later):
+
+   ```sh
+   helm upgrade sovereign-init bootstrap/helm/init \
+     --namespace openshift-gitops-operator \
+     --reset-then-reuse-values \
+     --wait --timeout=5m
+   ```
+
+4. **Check** that the APIService and the namespace are gone, and that a namespace delete completes:
+
+   ```sh
+   oc get apiservice v1.schemafix.sovereign-bootstrap.io     # NotFound
+   oc get namespace argocd-schema-fix                        # NotFound, after a few minutes
+   oc create namespace example-delete-check && oc delete namespace example-delete-check --wait
+   ```
 
 If a later version of the cluster engine brought such references back, Argo CD would fail to build its cache of the
 hub: applications that deploy to the hub would show sync status Unknown, with a cluster cache error that names an
