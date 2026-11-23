@@ -8,6 +8,7 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
 import unittest
 
 import yaml
@@ -18,11 +19,16 @@ from play_helper import ROOT  # noqa: E402
 CHART = os.path.join(ROOT, "bootstrap", "helm", "charts", "aap-instance")
 
 
-def render(*sets):
+def render(*sets, values=None):
     args = ["helm", "template", "t", CHART, "--set", "namespace=example-aap", "--show-only", "templates/instance.yaml"]
     for s in sets:
         args += ["--set", s]
-    p = subprocess.run(args, capture_output=True, text=True, timeout=120)
+    with tempfile.NamedTemporaryFile("w", suffix=".yaml", delete=False) as f:
+        yaml.safe_dump(values or {}, f)
+    try:
+        p = subprocess.run(args + ["-f", f.name], capture_output=True, text=True, timeout=120)
+    finally:
+        os.unlink(f.name)
     docs = [d for d in yaml.safe_load_all(p.stdout) if isinstance(d, dict)] if p.returncode == 0 else []
     return p, docs
 
@@ -46,6 +52,15 @@ class EdaSettings(unittest.TestCase):
         self.assertEqual(eda["extra_settings"], [
             {"setting": "EDA_ACTIVATION_MAX_RESTARTS_ON_FAILURE", "value": "100"},
             {"setting": "EDA_EXAMPLE_FLAG", "value": "true"}])
+
+    def test_a_null_value_or_a_map_is_refused(self):
+        for values, text in (({"eda": {"extraSettings": [{"setting": "EDA_X", "value": None}]}},
+                               "eda.extraSettings: each item needs a setting and a value"),
+                              ({"eda": {"extraSettings": {"EDA_X": "1"}}}, "eda.extraSettings must be a list")):
+            with self.subTest(values=values):
+                p, _ = render(values=values)
+                self.assertNotEqual(p.returncode, 0)
+                self.assertIn(text, p.stderr)
 
     def test_an_incomplete_item_is_refused(self):
         for sets in (["eda.extraSettings[0].setting=EDA_X"], ["eda.extraSettings[0].value=1"]):

@@ -28,6 +28,8 @@ eda:
   #     - setting: EDA_ACTIVATION_MAX_RESTARTS_ON_FAILURE
   #       value: "100"
   # A setting the server does not know is ignored without an error: check the effect after a change.
+  # That the platform operator passes these to the server next to its own settings is not proven for every
+  # operator version: try a setting on a test instance first.
   extraSettings: []
   rbac:
     enabled: true
@@ -60,4 +62,6 @@ postgres:
     # moment between the drop and the next completed backup. auto: a quarter of storage (storage must then be a whole
     # number of Mi, Gi or Ti); a size such as 4GiB or 2560MiB; empty: no limit (the data volume fills and the
     # database stops).
+    # 0 is refused, as is more than 4PiB; a plain number is bytes. On a data volume more than three quarters
+    # full the default is more than the free space: then set a size below the free space.
     archivePushQueueMax: auto
