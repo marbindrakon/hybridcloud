@@ -150,4 +150,25 @@ argocdSchemaFix:
   # Deploys a minimal HTTPS server that injects the tilde-encoded UserPermissionStatus
   # definition into the aggregated OpenAPI v2 spec, working around a kube-openapi ~1
   # resolution bug in ArgoCD when MCE/RHACM is installed on the same cluster.
+  # false: none of its objects (namespace, service account, cluster role and binding, configuration, Deployment,
+  # Service, disruption budget, APIService); an upgrade of the release removes them from a running cluster.
+  # Its APIService is an aggregated API: while it is unavailable, API discovery is incomplete and namespace
+  # deletes wait. Turn it off where Argo CD's cluster cache syncs without it.
+  enabled: true
   image: "/hybrid-sovereign/ansible-runner:latest"
+  # Pods of the server, spread over nodes where possible; with more than one, a disruption budget keeps one
+  # through a node drain.
+  replicas: 2
+  # The longest a connection may take for its TLS handshake, and then for each read or write, before the server
+  # closes it. Each connection is served on its own, so a silent one costs only itself.
+  handshakeTimeoutSeconds: 10
+  readTimeoutSeconds: 30
+  # How long a starting pod may take to load the cluster's OpenAPI documents and answer, before it is restarted.
+  startupAllowanceSeconds: 600
+  # The server holds the cluster's aggregated OpenAPI document in memory while it refreshes the definitions.
+  resources:
+    requests:
+      cpu: 50m
+      memory: 256Mi
+    limits:
+      memory: 1Gi

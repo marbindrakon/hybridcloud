@@ -1,4 +1,4 @@
-{{- if .Values.bootstrap.operator }}
+{{- if include "sovereign-init.schemaFixEnabled" . }}
 {{- /*
   ArgoCD OpenAPI v2 Schema Compatibility Shim
   ===========================================
@@ -12,8 +12,10 @@
   OpenAPI spec and re-serves them under their tilde-encoded keys so kube-openapi can
   resolve the references. The cluster cache sync then succeeds.
 
-  This is a permanent workaround until ArgoCD/kube-openapi fixes upstream (~1 decoding).
+  This is a workaround until ArgoCD/kube-openapi decodes ~1 itself. argocdSchemaFix.enabled false renders none
+  of these objects, and an upgrade of the release then removes them.
 */ -}}
+{{- $sf := .Values.argocdSchemaFix | default dict }}
 ---
 apiVersion: v1
 kind: Namespace
@@ -74,137 +76,9 @@ data:
     echo "Schema fix: TLS cert generated, starting HTTPS server on :6443"
     exec python3 /config/server.py
 
+  # The server's code: files/schema-fix-server.py (unit-tested there).
   server.py: |
-    import http.server, ssl, json, urllib.request, os, threading, time, re
-
-    KUBE_API = os.environ.get('KUBERNETES_SERVICE_HOST', 'kubernetes.default.svc')
-    KUBE_PORT = os.environ.get('KUBERNETES_SERVICE_PORT', '443')
-    TOKEN_FILE = '/var/run/secrets/kubernetes.io/serviceaccount/token'
-    CA_FILE = '/var/run/secrets/kubernetes.io/serviceaccount/ca.crt'
-
-    def kube_get(path):
-        with open(TOKEN_FILE) as f:
-            token = f.read().strip()
-        ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
-        ctx.load_verify_locations(CA_FILE)
-        req = urllib.request.Request(
-            f'https://{KUBE_API}:{KUBE_PORT}{path}',
-            headers={'Authorization': f'Bearer {token}'}
-        )
-        with urllib.request.urlopen(req, context=ctx) as r:
-            return json.loads(r.read())
-
-    def load_shims():
-        """Build shim definitions by:
-        1. Scanning aggregated /openapi/v2 for ~1-encoded $ref keys not in definitions
-        2. Scanning per-group /openapi/v3 for all schema names → add tilde-encoded stubs
-           (v3 is not affected by our own contributions to the v2 aggregated spec)
-        """
-        v2_spec = kube_get('/openapi/v2')
-        v2_defs = v2_spec.get('definitions', {})
-        v2_str = json.dumps(v2_spec)
-        all_v2_refs = set(re.findall(r'"#/definitions/([^"]+)"', v2_str))
-
-        shims = {}
-
-        # Step 1: from aggregated v2 — find all tilde-encoded $ref keys missing from defs
-        for tilde_key in all_v2_refs:
-            if '~1' not in tilde_key:
-                continue
-            slash_key = tilde_key.replace('~1', '/').replace('~0', '~')
-            if slash_key in v2_defs:
-                # Add the slash-decoded definition under the tilde-encoded key
-                shims[tilde_key] = v2_defs[slash_key]
-
-        # Step 2: from per-group v3 — get all schema names from API groups that have
-        # slash-separated definition names (these are the ones that cause ~1 ref issues)
-        try:
-            v3_index = kube_get('/openapi/v3')
-            for path_info in v3_index.get('paths', {}).values():
-                group_path = path_info.get('serverRelativeURL', '')
-                if not group_path:
-                    continue
-                try:
-                    v3_spec = kube_get(group_path.split('?')[0])
-                    for schema_name in v3_spec.get('components', {}).get('schemas', {}).keys():
-                        if '/' not in schema_name:
-                            continue
-                        tilde_key = schema_name.replace('~', '~0').replace('/', '~1')
-                        if tilde_key not in shims:
-                            slash_key = schema_name
-                            if slash_key in v2_defs:
-                                shims[tilde_key] = v2_defs[slash_key]
-                            else:
-                                shims[tilde_key] = {
-                                    'type': 'object',
-                                    'x-kubernetes-preserve-unknown-fields': True
-                                }
-                except Exception:
-                    pass
-        except Exception as e:
-            print(f'v3 group scan failed (non-fatal): {e}', flush=True)
-
-        return shims
-
-    SHIMS = {}
-    LOCK = threading.Lock()
-
-    def refresh_loop():
-        global SHIMS
-        time.sleep(90)  # Let old pod terminate and API aggregation cache refresh
-        while True:
-            try:
-                s = load_shims()
-                with LOCK:
-                    SHIMS = s
-                print(f'Schema shims refreshed: {len(s)} definitions', flush=True)
-            except Exception as e:
-                print(f'Shim refresh failed: {e}', flush=True)
-            time.sleep(120)  # Re-check every 2 minutes
-
-    class Handler(http.server.BaseHTTPRequestHandler):
-        def do_GET(self):
-            if '/openapi/v2' in self.path:
-                with LOCK:
-                    shims = dict(SHIMS)
-                body = json.dumps({
-                    'swagger': '2.0',
-                    'info': {'title': 'ArgoCD Schema Compatibility Shim', 'version': '0.2.0'},
-                    'paths': {
-                        '/apis/schemafix.sovereign-bootstrap.io/v1/': {'get': {
-                            'operationId': 'listSchemaFixResources',
-                            'produces': ['application/json'],
-                            'responses': {'200': {'description': 'OK'}}
-                        }}
-                    },
-                    'definitions': shims
-                }).encode()
-            else:
-                body = b'{"apiVersion":"v1","groupVersion":"schemafix.sovereign-bootstrap.io/v1","resources":[]}'
-            self.send_response(200)
-            self.send_header('Content-Type', 'application/json')
-            self.send_header('Content-Length', str(len(body)))
-            self.end_headers()
-            self.wfile.write(body)
-
-        def log_message(self, *a):
-            pass
-
-    try:
-        SHIMS = load_shims()
-        print(f'Initial shims loaded: {len(SHIMS)} definitions', flush=True)
-    except Exception as e:
-        print(f'Initial shim load failed (will retry): {e}', flush=True)
-        threading.Thread(target=refresh_loop, daemon=True).start()
-    else:
-        threading.Thread(target=refresh_loop, daemon=True).start()
-
-    httpd = http.server.HTTPServer(('', 6443), Handler)
-    tls_ctx = ssl.SSLContext(ssl.PROTOCOL_TLS_SERVER)
-    tls_ctx.load_cert_chain('/tmp/certs/server.crt', '/tmp/certs/server.key')
-    httpd.socket = tls_ctx.wrap_socket(httpd.socket, server_side=True)
-    print('Schema fix server ready on :6443', flush=True)
-    httpd.serve_forever()
+{{ .Files.Get "files/schema-fix-server.py" | indent 4 }}
 ---
 apiVersion: apps/v1
 kind: Deployment
@@ -214,7 +88,13 @@ metadata:
   labels:
     {{- include "sovereign-init.labels" . | nindent 4 }}
 spec:
-  replicas: 1
+  replicas: {{ $sf.replicas | default 2 }}
+  # a new pod is Ready before an old one goes, so the APIService keeps an endpoint through an upgrade
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxSurge: 1
+      maxUnavailable: 0
   selector:
     matchLabels:
       app: schema-fix-server
@@ -222,26 +102,67 @@ spec:
     metadata:
       labels:
         app: schema-fix-server
+      annotations:
+        # a change of the server's code rolls the pods (the ConfigMap alone would not)
+        checksum/server: {{ .Files.Get "files/schema-fix-server.py" | sha256sum | trunc 16 | quote }}
     spec:
       serviceAccountName: schema-fix-server
       imagePullSecrets:
         - name: quay-pull-secret
+      # the replicas on different nodes where the cluster has several, so one node going down leaves the API served
+      topologySpreadConstraints:
+        - maxSkew: 1
+          topologyKey: kubernetes.io/hostname
+          whenUnsatisfiable: ScheduleAnyway
+          labelSelector:
+            matchLabels:
+              app: schema-fix-server
       containers:
         - name: server
-          image: {{ .Values.argocdSchemaFix.image | default "/hybrid-sovereign/ansible-runner:latest" }}
+          image: {{ $sf.image | default "/hybrid-sovereign/ansible-runner:latest" }}
           command: ["/bin/sh", "/config/serve.sh"]
+          env:
+            - name: SCHEMA_FIX_HANDSHAKE_TIMEOUT
+              value: {{ $sf.handshakeTimeoutSeconds | default 10 | quote }}
+            - name: SCHEMA_FIX_READ_TIMEOUT
+              value: {{ $sf.readTimeoutSeconds | default 30 | quote }}
           ports:
             - containerPort: 6443
               name: https
           volumeMounts:
             - name: config
               mountPath: /config
-          readinessProbe:
-            tcpSocket:
+          # Each probe is a real HTTPS request through the server, the path every API request takes. The first
+          # load of the cluster's OpenAPI documents happens before the server listens: the startup probe allows for
+          # it; after that liveness restarts a server that stopped answering.
+          startupProbe:
+            httpGet:
+              path: /healthz
               port: 6443
-            initialDelaySeconds: 5
+              scheme: HTTPS
             periodSeconds: 5
-            failureThreshold: 12
+            timeoutSeconds: 3
+            failureThreshold: {{ div (int ($sf.startupAllowanceSeconds | default 600)) 5 }}
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 6443
+              scheme: HTTPS
+            periodSeconds: 5
+            timeoutSeconds: 3
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 6443
+              scheme: HTTPS
+            periodSeconds: 10
+            timeoutSeconds: 5
+            failureThreshold: 3
+          {{- with $sf.resources }}
+          resources:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
           securityContext:
             allowPrivilegeEscalation: false
             capabilities:
@@ -252,6 +173,22 @@ spec:
           configMap:
             name: schema-fix-server
             defaultMode: 0755
+{{- if gt (int ($sf.replicas | default 2)) 1 }}
+---
+# a voluntary eviction (a node drain) leaves at least one server
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: schema-fix-server
+  namespace: argocd-schema-fix
+  labels:
+    {{- include "sovereign-init.labels" . | nindent 4 }}
+spec:
+  minAvailable: 1
+  selector:
+    matchLabels:
+      app: schema-fix-server
+{{- end }}
 ---
 apiVersion: v1
 kind: Service
