@@ -44,8 +44,9 @@ def storage_path(path):
     return path.rsplit(".", 1)[0] + ".storage"
 
 
-def render(chart, sets):
-    """The PostgresCluster of a chart, rendered from its postgres template alone."""
+def render(chart, sets, values=None):
+    """The PostgresCluster of a chart, rendered from its postgres template alone (values: a further values file's
+    content, given after the chart's own)."""
     src = os.path.join(CHARTS, chart)
     with tempfile.TemporaryDirectory(prefix="shc-pgbackup-") as tmp:
         os.makedirs(os.path.join(tmp, "templates"))
@@ -57,6 +58,10 @@ def render(chart, sets):
         if os.path.exists(helpers):
             shutil.copy(helpers, os.path.join(tmp, "templates"))
         args = [HELM, "template", "t", tmp]
+        if values is not None:
+            with open(os.path.join(tmp, "extra-values.yaml"), "w") as f:
+                yaml.safe_dump(values, f)
+            args += ["-f", os.path.join(tmp, "extra-values.yaml")]
         for s in sets:
             args += ["--set", s]
         out = subprocess.run(args, capture_output=True, text=True)
@@ -183,6 +188,44 @@ class TheWaitingArchiveIsLimited(unittest.TestCase):
                 # a size given explicitly needs no computable data volume
                 self.assertEqual(self.queue_max(chart, [storage_path(path) + "=100G",
                                                         path + ".archivePushQueueMax=25GB"]), "25GB")
+
+    @needs_helm
+    def test_the_templates_own_storage_default_is_the_reference(self):
+        # with the data volume's size unset, the quarter is taken of the size the template itself defaults to
+        for chart, (_on, path, _full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                self.assertEqual(self.queue_max(chart, [storage_path(path) + "=null"]), QUEUE_MAX[chart])
+
+    @staticmethod
+    def nested(path, value):
+        node = value
+        for key in reversed(path.split(".")):
+            node = {key: node}
+        return node
+
+    @needs_helm
+    def test_a_yaml_number_is_a_number_of_bytes(self):
+        for chart, (on, path, _full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                pgb = render(chart, on, values=self.nested(path + ".archivePushQueueMax", 4294967296))
+                self.assertEqual(pgb["spec"]["backups"]["pgbackrest"]["global"]["archive-push-queue-max"],
+                                 "4294967296")
+                with self.assertRaises(AssertionError) as err:
+                    render(chart, on, values=self.nested(path + ".archivePushQueueMax", 1.5))
+                self.assertIn(path + ".archivePushQueueMax must be a whole size", str(err.exception))
+
+    @needs_helm
+    def test_the_limits_of_pgbackrest(self):
+        for chart, (on, path, _full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                self.assertEqual(self.queue_max(chart, [path + ".archivePushQueueMax=4PiB"]), "4PiB")
+                self.assertEqual(self.queue_max(chart, [path + ".archivePushQueueMax=4096TiB"]), "4096TiB")
+                self.assertEqual(self.queue_max(chart, [path + ".archivePushQueueMax=1b"]), "1b")
+                for bad in ("0", "0MiB", "5PiB", "4097TiB", "99999999999999999999"):
+                    with self.assertRaises(AssertionError) as err:
+                        render(chart, on + [path + ".archivePushQueueMax=" + bad])
+                    self.assertIn(path + ".archivePushQueueMax must be more than 0 and at most 4PiB",
+                                  str(err.exception))
 
     @needs_helm
     def test_a_limit_that_cannot_be_computed_or_read_is_refused_with_the_settings_name(self):

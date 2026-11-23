@@ -62,6 +62,8 @@ crunchy:
     # moment between the drop and the next completed backup. auto: a quarter of storage (storage must then be a whole
     # number of Mi, Gi or Ti); a size such as 4GiB or 2560MiB; empty: no limit (the data volume fills and the
     # database stops).
+    # 0 is refused, as is more than 4PiB; a plain number is bytes. On a data volume more than three quarters
+    # full the default is more than the free space: then set a size below the free space.
     archivePushQueueMax: auto
 
 dbInitJob:
