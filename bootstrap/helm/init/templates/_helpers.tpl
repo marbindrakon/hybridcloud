@@ -20,15 +20,6 @@ True when ApplicationSet layer is enabled (central app-of-apps).
 {{- end }}
 
 {{/*
-True when the Argo CD schema compatibility shim is deployed: the operator layer is on and argocdSchemaFix.enabled
-is not false (unset means on).
-*/}}
-{{- define "sovereign-init.schemaFixEnabled" -}}
-{{- $sf := .Values.argocdSchemaFix | default dict -}}
-{{- if and .Values.bootstrap.operator (or (not (hasKey $sf "enabled")) (kindIs "invalid" $sf.enabled) $sf.enabled) }}true{{- end }}
-{{- end }}
-
-{{/*
 Expand the name of the chart.
 */}}
 {{- define "sovereign-init.name" -}}

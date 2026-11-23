@@ -100,17 +100,6 @@ init-central-argo: check-env-central ## Install OpenShift GitOps operator and wa
 	@echo "$(BOLD)Patching Argo CD: serverSideDiff + clusterview exclusions (RHACM schema fix)...$(RESET)"
 	@oc patch argocd openshift-gitops -n openshift-gitops --type=merge -p \
 	  '{"spec":{"extraConfig":{"resource.compareoptions":"serverSideDiff: true\n"},"resourceExclusions":"- apiGroups:\n  - clusterview.open-cluster-management.io\n  clusters:\n  - \"*\"\n  kinds:\n  - \"*\"\n- apiGroups:\n  - tekton.dev\n  clusters:\n  - \"*\"\n  kinds:\n  - TaskRun\n  - PipelineRun\n- apiGroups:\n  - internal.open-cluster-management.io\n  clusters:\n  - \"*\"\n  kinds:\n  - ManagedClusterInfo\n"}}' > /dev/null
-	@echo "$(BOLD)Waiting for ArgoCD OpenAPI schema-fix service (MCE ~1 ref workaround)...$(RESET)"
-	@for i in $$(seq 1 60); do \
-	  if oc get deployment schema-fix-server -n argocd-schema-fix >/dev/null 2>&1; then \
-	    READY=$$(oc get deployment schema-fix-server -n argocd-schema-fix -o jsonpath='{.status.readyReplicas}' 2>/dev/null); \
-	    if [ "$$READY" = "1" ]; then \
-	      echo "  Schema fix server ready"; \
-	      break; \
-	    fi; \
-	  fi; \
-	  sleep 5; \
-	done
 	@echo "$(BOLD)Restarting Argo CD application-controller to rebuild cluster cache...$(RESET)"
 	@oc rollout restart statefulset/openshift-gitops-application-controller -n openshift-gitops > /dev/null
 	@oc rollout status statefulset/openshift-gitops-application-controller -n openshift-gitops --timeout=5m > /dev/null

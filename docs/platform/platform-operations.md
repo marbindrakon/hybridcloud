@@ -2,15 +2,13 @@
 
 For the platform team. What the platform's own services do after a fault without anybody acting, what still needs
 a person, and the values that set each: the event activations of the automation platform, the Keycloak after a
-database fail-over, the schema compatibility service of the hub's Argo CD, and the platform's databases with their
-backups. The alerts that tell somebody when a service does not come back are on their own page:
-[Platform alerts](platform-alerts.md).
+database fail-over, and the platform's databases with their backups. The alerts that tell somebody when a service
+does not come back are on their own page: [Platform alerts](platform-alerts.md).
 
 | Service | Recovers by itself | Needs a person |
 |---|---|---|
 | Event activations | a clean exit or a failed one is restarted | an activation past the platform's restart limit (see below) |
 | Keycloak | after a database fail-over: within the connection lifetime, without a restart | a database that has no primary at all |
-| Schema compatibility service | a server that stops answering is restarted; one silent client does not block it | a cluster where it is not needed: switch it off |
 | Databases | a full backup weekly, a differential one daily, old backups expire; a repository that cannot take the archive costs the restore point, not the database | a restore; a repository that stays broken |
 
 ## Event activations
@@ -66,51 +64,6 @@ The two options are server options (`spec.additionalOptions` of the Keycloak), a
 environment variables of the Keycloak's pods: a change of either rolls the pods. The central chart's Applications
 of the two Keycloaks no longer ignore that field, so a changed option reaches the Keycloak.
 
-## The schema compatibility service
-
-On a hub with the multicluster engine, Argo CD fails to resolve some `~1`-encoded references of the cluster's
-aggregated OpenAPI document. The init chart can deploy a small HTTPS server behind the APIService
-`v1.schemafix.sovereign-bootstrap.io` that serves the definitions those references need. Its APIService is an
-aggregated API: while it is unavailable, API discovery is incomplete and namespace deletes, and with them cluster
-deletes, wait.
-
-How it recovers:
-
-- each connection is served on its own, with a timeout on the TLS handshake and on every read, so a client that
-  connects and stays silent costs only its own connection;
-- a startup probe allows the first load of the cluster's OpenAPI documents, then a liveness probe (a real HTTPS
-  request) restarts a server that stopped answering;
-- two replicas, spread over nodes where the cluster has several, a rolling update that keeps one Ready, and a
-  disruption budget that keeps one through a node drain.
-
-Values of the init chart (`argocdSchemaFix`):
-
-| Value | Default | What it does |
-|---|---|---|
-| `enabled` | `true` | `false` renders none of its objects: its namespace with its pull secret, service account, cluster role and binding, configuration, Deployment, Service, disruption budget and APIService. |
-| `replicas` | `2` | Server pods; with more than one, a disruption budget keeps one. |
-| `handshakeTimeoutSeconds`, `readTimeoutSeconds` | `10`, `30` | How long a connection may take for its handshake, then for each read or write. |
-| `startupAllowanceSeconds` | `600` | How long a starting pod may take to load the documents and answer before it is restarted. |
-| `resources` | requests 50m CPU, 256Mi; limit 1Gi | The server holds the cluster's aggregated OpenAPI document in memory while it refreshes. |
-
-Switch it off where Argo CD's cluster cache syncs without it. If Argo CD then fails on a `~1` reference again,
-switch it back on.
-
-The init chart is installed with Helm, not by Argo CD, so a change reaches a running hub only with an upgrade of
-its release. Keep the release's earlier settings and take the new chart's defaults (Helm 3.14 or later):
-
-```sh
-helm upgrade sovereign-init bootstrap/helm/init \
-  --namespace openshift-gitops-operator \
-  --reset-then-reuse-values \
-  --set argocdSchemaFix.enabled=false \
-  --wait --timeout=5m
-```
-
-Leave out the `--set` line to keep the service and take the hardened server. The upgrade replaces the server's pods
-one at a time (a new one Ready before an old one goes); no other pod of the release restarts. Switched off, the
-upgrade deletes the APIService, the Deployment and the rest, and the namespace with them.
-
 ## Databases and their backups
 
 Each of the platform's PostgreSQL databases (the automation platform's, the Keycloaks', Gitea's, Quay's) is backed
@@ -159,3 +112,23 @@ Where the settings are, by chart:
 What does not recover by itself: a restore is a person's decision and work, and a repository that stays broken keeps
 the database without new restore points until it is repaired; the volume and backup alerts on
 [Platform alerts](platform-alerts.md) say when that happens.
+
+## Upgrading
+
+An installation whose hub carried the Argo CD schema compatibility service (the APIService
+`v1.schemafix.sovereign-bootstrap.io` in the namespace `argocd-schema-fix`) loses it when the init chart's release
+is upgraded to this version: the upgrade deletes its namespace, Deployment, Service, configuration, service account,
+cluster role and binding, and the APIService. Current versions of the multicluster engine publish no references the
+service would have fixed, and while it was unavailable the hub's namespace deletes, and with them cluster deletes,
+waited. Upgrade the release from the repository's root, keeping its earlier settings (Helm 3.14 or later):
+
+```sh
+helm upgrade sovereign-init bootstrap/helm/init \
+  --namespace openshift-gitops-operator \
+  --reset-then-reuse-values \
+  --wait --timeout=5m
+```
+
+If a later version of the cluster engine brought such references back, Argo CD would fail to build its cache of the
+hub: applications that deploy to the hub would show sync status Unknown, with a cluster cache error that names an
+OpenAPI reference which cannot be resolved. Report it with that message.
