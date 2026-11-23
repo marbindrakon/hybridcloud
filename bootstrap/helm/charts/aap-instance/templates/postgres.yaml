@@ -35,6 +35,31 @@ spec:
         repo1-retention-full: {{ ((.Values.postgres.backup).retentionFull | default 2) | quote }}
         repo1-retention-full-type: count
         repo1-retention-diff: {{ ((.Values.postgres.backup).retentionDifferential | default 2) | quote }}
+        {{- /* The waiting archive: past this size the segments that wait in the data volume are dropped (and
+             reported in the database's log) instead of filling the volume; the database then cannot be restored to a
+             moment after the drop until the next backup. Default a quarter of the data volume; empty: no limit. */}}
+        {{- $arc := (.Values.postgres.backup) | default dict }}
+        {{- $qmax := "auto" }}
+        {{- if and (hasKey $arc "archivePushQueueMax") (not (kindIs "invalid" $arc.archivePushQueueMax)) }}{{ $qmax = toString $arc.archivePushQueueMax }}{{ end }}
+        {{- if eq $qmax "auto" }}
+        {{- $size := toString (.Values.postgres.storage | default "10Gi") }}
+        {{- if not (regexMatch "^[0-9]+(Mi|Gi|Ti)$" $size) }}
+        {{- fail (printf "postgres.backup.archivePushQueueMax must be set (a size such as 4GiB, or empty for no limit): a quarter of postgres.storage %q cannot be computed" $size) }}
+        {{- end }}
+        {{- $n := regexFind "^[0-9]+" $size | atoi }}
+        {{- $mib := div $n 4 }}
+        {{- if hasSuffix "Gi" $size }}{{ $mib = mul $n 256 }}{{ else if hasSuffix "Ti" $size }}{{ $mib = mul $n 262144 }}{{ end }}
+        {{- if lt $mib 1 }}
+        {{- fail (printf "postgres.backup.archivePushQueueMax must be set: postgres.storage %q is too small to take a quarter of" $size) }}
+        {{- end }}
+        {{- $qmax = ternary (printf "%dGiB" (div $mib 1024)) (printf "%dMiB" $mib) (eq (mod $mib 1024) 0) }}
+        {{- end }}
+        {{- if $qmax }}
+        {{- if not (regexMatch "(?i)^[0-9]+(b|k|kb|kib|m|mb|mib|g|gb|gib|t|tb|tib|p|pb|pib)?$" $qmax) }}
+        {{- fail (printf "postgres.backup.archivePushQueueMax must be a whole size such as 4GiB or 2560MiB, or empty for no limit, got %q" $qmax) }}
+        {{- end }}
+        archive-push-queue-max: {{ $qmax | quote }}
+        {{- end }}
       # A full backup on demand: annotate the PostgresCluster with postgres-operator.crunchydata.com/pgbackrest-backup
       manual:
         repoName: repo1

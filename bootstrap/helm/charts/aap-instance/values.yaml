@@ -44,3 +44,11 @@ postgres:
     retentionDifferential: 2
     fullSchedule: "0 1 * * 0"
     differentialSchedule: "0 1 * * 1-6"
+    # The waiting archive (pgBackRest archive-push-queue-max). When write-ahead log cannot be archived, for
+    # example because the backup volume is full or unreachable, the segments wait in the data volume. Past this size
+    # they are dropped and the database's log says "dropped WAL file ... because archive queue exceeded ...": the
+    # database keeps running instead of filling its data volume and stopping, but it can no longer be restored to a
+    # moment between the drop and the next completed backup. auto: a quarter of storage (storage must then be a whole
+    # number of Mi, Gi or Ti); a size such as 4GiB or 2560MiB; empty: no limit (the data volume fills and the
+    # database stops).
+    archivePushQueueMax: auto

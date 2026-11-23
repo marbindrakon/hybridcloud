@@ -2,7 +2,10 @@
 
 Without a schedule the backup repository keeps every write-ahead log since the first backup: it fills, the database
 can no longer archive, its data volume fills too and it stops. Each PostgresCluster template therefore sets a number
-of full backups to keep, a full and a differential schedule, and a repository for a full backup on demand.
+of full backups to keep, a full and a differential schedule, and a repository for a full backup on demand. When the
+repository cannot take write-ahead log, the segments that wait for it in the data volume are dropped past a limit
+(archive-push-queue-max, by default a quarter of the data volume), so a broken repository costs the restore point and
+not the database.
 
 Each chart's templates/postgres.yaml is rendered alone (a scratch chart with the chart's values and helpers), so a
 chart with subchart dependencies renders without fetching them.
@@ -31,6 +34,14 @@ DATABASES = {
     "gitea": (["crunchy.enabled=true"], "crunchy.backup", "30 1 * * 0"),
     "quay": (["crunchy.enabled=true"], "crunchy.backup", "40 1 * * 0"),
 }
+
+# chart -> the default limit of the waiting archive: a quarter of the chart's default data volume
+QUEUE_MAX = {"aap-instance": "2560MiB", "aap": "2560MiB", "rhbk": "2560MiB", "gitea": "2560MiB", "quay": "5GiB"}
+
+
+def storage_path(path):
+    """The values path of the data volume's size, beside the backup settings."""
+    return path.rsplit(".", 1)[0] + ".storage"
 
 
 def render(chart, sets):
@@ -88,7 +99,8 @@ class BackupsExpire(unittest.TestCase):
             with self.subTest(chart=chart):
                 pgb = render(chart, on)["spec"]["backups"]["pgbackrest"]
                 self.assertEqual(pgb["global"], {"repo1-retention-full": "2", "repo1-retention-full-type": "count",
-                                                 "repo1-retention-diff": "2"})
+                                                 "repo1-retention-diff": "2",
+                                                 "archive-push-queue-max": QUEUE_MAX[chart]})
                 repos = pgb["repos"]
                 self.assertEqual([r["name"] for r in repos], ["repo1"])
                 self.assertEqual(repos[0]["schedules"]["full"], full)
@@ -125,6 +137,7 @@ class BackupsExpire(unittest.TestCase):
             with self.subTest(chart=chart):
                 pgb = render(chart, on + [path + "=null"])["spec"]["backups"]["pgbackrest"]
                 self.assertEqual(pgb["global"]["repo1-retention-full"], "2")
+                self.assertEqual(pgb["global"]["archive-push-queue-max"], QUEUE_MAX[chart])
                 self.assertEqual(pgb["repos"][0]["schedules"],
                                  {"full": full, "differential": full.replace("* * 0", "* * 1-6")})
 
@@ -136,7 +149,50 @@ class BackupsExpire(unittest.TestCase):
                 for key in path.split("."):
                     node = node[key]
                 self.assertEqual(node, {"retentionFull": 2, "retentionDifferential": 2, "fullSchedule": full,
-                                        "differentialSchedule": full.replace("* * 0", "* * 1-6")})
+                                        "differentialSchedule": full.replace("* * 0", "* * 1-6"),
+                                        "archivePushQueueMax": "auto"})
+
+
+@unittest.skipIf(yaml is None, "PyYAML not installed")
+class TheWaitingArchiveIsLimited(unittest.TestCase):
+    """archive-push-queue-max: a quarter of the data volume by default, a size as given, empty for no limit; never
+    silently no limit when the quarter cannot be computed."""
+
+    def queue_max(self, chart, sets):
+        return render(chart, DATABASES[chart][0] + sets)["spec"]["backups"]["pgbackrest"]["global"].get(
+            "archive-push-queue-max")
+
+    @needs_helm
+    def test_the_default_is_a_quarter_of_the_data_volume(self):
+        for chart, (_on, path, _full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                st = storage_path(path)
+                self.assertEqual(self.queue_max(chart, [st + "=80Gi"]), "20GiB")
+                self.assertEqual(self.queue_max(chart, [st + "=10Gi"]), "2560MiB")
+                self.assertEqual(self.queue_max(chart, [st + "=1Ti"]), "256GiB")
+                self.assertEqual(self.queue_max(chart, [st + "=4000Mi"]), "1000MiB")
+                self.assertEqual(self.queue_max(chart, [st + "=10Gi", path + ".archivePushQueueMax=auto"]),
+                                 "2560MiB")
+
+    @needs_helm
+    def test_a_size_overrides_and_empty_means_no_limit(self):
+        for chart, (_on, path, _full) in DATABASES.items():
+            with self.subTest(chart=chart):
+                self.assertEqual(self.queue_max(chart, [path + ".archivePushQueueMax=4GiB"]), "4GiB")
+                self.assertIsNone(self.queue_max(chart, [path + ".archivePushQueueMax="]))
+                # a size given explicitly needs no computable data volume
+                self.assertEqual(self.queue_max(chart, [storage_path(path) + "=100G",
+                                                        path + ".archivePushQueueMax=25GB"]), "25GB")
+
+    @needs_helm
+    def test_a_limit_that_cannot_be_computed_or_read_is_refused_with_the_settings_name(self):
+        for chart, (on, path, _full) in DATABASES.items():
+            for sets in ([storage_path(path) + "=100G"], [storage_path(path) + "=2Mi"],
+                         [path + ".archivePushQueueMax=2.5GiB"], [path + ".archivePushQueueMax=a lot"]):
+                with self.subTest(chart=chart, sets=sets):
+                    with self.assertRaises(AssertionError) as err:
+                        render(chart, on + sets)
+                    self.assertIn(path + ".archivePushQueueMax", str(err.exception))
 
 
 if __name__ == "__main__":
