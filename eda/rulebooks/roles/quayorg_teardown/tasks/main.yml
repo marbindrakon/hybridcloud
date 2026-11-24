@@ -25,7 +25,8 @@
       ansible.builtin.set_fact:
         quayorg_spec: "{{ quayorg_spec | combine({'quayConfig': resolved_config_name}) }}"
 
-    # the name the provision recorded; nothing recorded = the provision never made or kept an organization
+    # the name the provision recorded; nothing recorded = the provision never made or kept an organization, and
+    # nothing is deleted in the registry
     - name: The organization's recorded name
       ansible.builtin.set_fact:
         fin_org_name: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).orgName | default('', true) }}"
@@ -46,13 +47,6 @@
     - name: Delete Quay org
       when: _quay_config.resources | default([]) | length > 0 and fin_org_name | length > 0
       block:
-        - name: Require the registry organizations' mail domain
-          ansible.builtin.fail:
-            msg: >-
-              The setting REGISTRY_ORG_MAIL_DOMAIN of the automation configuration is not set: without it the
-              platform cannot tell its own registry organization from another of the same name.
-          when: quayorg_mail_domain | default('', true) | length == 0
-
         # the same credentials and URL the provision role uses (central Vault KV quay-services-admin); the
         # QuayConfig's spec.secret is a legacy pointer without a token, so the delete below ran with an undefined
         # token while the deletion was still reported complete
@@ -69,14 +63,10 @@
             status_code: [200, 404]
           register: _fin_org
 
-        # only an organization with the platform's mark (or none, made before the mark) under the recorded name
-        - name: "Decide: delete or leave"
-          vars:
-            _email: "{{ (_fin_org.json | default({}, true)).email | default('', true) if (_fin_org.status | int) == 200 else '' }}"
+        # the organization the status records is this object's, whatever its contact address (written for people)
+        - name: "Decide: delete or gone"
           ansible.builtin.set_fact:
-            quayorg_fin_decision: >-
-              {{ 'gone' if (_fin_org.status | int) == 404
-                 else ('delete' if _email in [fin_org_name ~ '@' ~ quayorg_mail_domain, ''] else 'leave') }}
+            quayorg_fin_decision: "{{ 'gone' if (_fin_org.status | int) == 404 else 'delete' }}"
 
         - name: Delete organization from Quay
           when: quayorg_fin_decision == 'delete'
@@ -106,9 +96,9 @@
           deletionComplete: true
           lastReconciledAt: "{{ quayorg_delete_transition_time }}"
           message: >-
-            {{ ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted by EDA') if quayorg_fin_decision | default('') != 'leave'
-               else ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted; the registry organization ' ~ fin_org_name
-                     ~ ' does not carry the platform\'s mark and was left untouched') }}
+            {{ ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted by EDA') if fin_org_name | length > 0
+               else ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted; its status records no registry organization, so nothing'
+                     ~ ' was deleted in the registry') }}
 
   rescue:
     - name: Mark QuayOrg delete as failed on services cluster
