@@ -45,6 +45,23 @@
       ansible.builtin.set_fact:
         aapconfig_generation: "{{ _cr.resources[0].metadata.generation | default(0) | int }}"
 
+    - name: Check the name against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ aapconfig_cr_name }}", what: automation connection}
+
+    - name: Refuse a name that breaks the rule for names
+      when: name_check_message | length > 0
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            aapconfig_failure_reason: NameNotAllowed
+
+        - name: Refuse a name that breaks the rule for names (stop)
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Read RbacConfig for Keycloak settings
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -126,6 +143,9 @@
         kce_root_url: "{{ aap_gateway_url }}"
         kce_redirect_uris: ["{{ aap_oidc_callback }}"]
         kce_web_origins: ["{{ aap_gateway_url }}"]
+        kce_owner: "AAPConfig/{{ aapconfig_cr_namespace }}/{{ aapconfig_cr_name }}"
+        # a platform tool's client made before the mark is taken and marked; another owner's is refused
+        kce_adopt_unmarked: true
         kce_attributes: {"access.token.lifespan": "3600"}
 
     - name: Keep the client for the secret lookup
@@ -253,6 +273,9 @@
         kce_root_url: "{{ aap_gateway_url }}"
         kce_redirect_uris: ["{{ aap_auth_callback }}"]
         kce_web_origins: ["{{ aap_gateway_url }}"]
+        kce_owner: "AAPConfig/{{ aapconfig_cr_namespace }}/{{ aapconfig_cr_name }}"
+        # a platform tool's client made before the mark is taken and marked; another owner's is refused
+        kce_adopt_unmarked: true
       when: aap_auth_callback | length > 0 and aap_auth_callback != aap_oidc_callback
 
     - name: Set authenticator ID
@@ -307,11 +330,12 @@
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          reason: "{{ 'NameTakenOnSite' if kce_refused | default(false) | bool else aapconfig_failure_reason | default('EDAFailed', true) }}"
           conditions:
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ 'NameTakenOnSite' if kce_refused | default(false) | bool else aapconfig_failure_reason | default('EDAFailed', true) }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

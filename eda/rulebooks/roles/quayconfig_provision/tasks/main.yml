@@ -50,6 +50,23 @@
       ansible.builtin.set_fact:
         quayconfig_generation: "{{ _quayconfig_cr.resources[0].metadata.generation | default(0) | int }}"
 
+    - name: Check the name against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ quayconfig_cr_name }}", what: registry connection}
+
+    - name: Refuse a name that breaks the rule for names
+      when: name_check_message | length > 0
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            quayconfig_failure_reason: NameNotAllowed
+
+        - name: Refuse a name that breaks the rule for names (stop)
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Read RbacConfig for Keycloak settings
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -110,6 +127,9 @@
           {{ ['', '/attach', '/cli'] | map('regex_replace', '^', (quay_url | regex_replace('/$', '')) ~ '/oauth2/'
              ~ quay_login_service_id ~ '/callback') | list }}
         kce_web_origins: ["{{ quay_url | regex_replace('/$', '') }}"]
+        kce_owner: "QuayConfig/{{ quayconfig_cr_namespace }}/{{ quayconfig_cr_name }}"
+        # a platform tool's client made before the mark is taken and marked; another owner's is refused
+        kce_adopt_unmarked: true
         kce_attributes: {"access.token.lifespan": "3600"}
 
     - name: Keep the client for the secret lookup
@@ -188,11 +208,12 @@
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          reason: "{{ 'NameTakenOnSite' if kce_refused | default(false) | bool else quayconfig_failure_reason | default('EDAFailed', true) }}"
           conditions:
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ 'NameTakenOnSite' if kce_refused | default(false) | bool else quayconfig_failure_reason | default('EDAFailed', true) }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

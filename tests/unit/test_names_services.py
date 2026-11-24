@@ -36,6 +36,11 @@ AAP_T = os.path.join(ROLES, "aaporg_teardown", "tasks", "main.yml")
 VAULT_OIDC = os.path.join(ROLES, "vault_provision", "tasks", "configure_oidc.yml")
 VAULT_T = os.path.join(ROLES, "vault_teardown", "tasks", "main.yml")
 KCE = os.path.join(ROOT, "eda", "common", "tasks", "keycloak_client_ensure.yml")
+SSG = os.path.join(ROOT, "eda", "common", "tasks", "services_signin_groups.yml")
+KV_ENGINE = os.path.join(ROLES, "vaultkv_provision", "tasks", "kv_engine.yml")
+KV_T = os.path.join(ROLES, "vaultkv_teardown", "tasks", "main.yml")
+TOOL_T = {"aapconfig": os.path.join(ROLES, "aapconfig_teardown", "tasks", "main.yml"),
+          "quayconfig": os.path.join(ROLES, "quayconfig_teardown", "tasks", "main.yml")}
 
 PAIRS = [("acme-corp", "web"), ("acme", "corp-web")]
 
@@ -263,6 +268,94 @@ class SignInMaps(unittest.TestCase):
         self.assertEqual(got["delete"], [])
         self.assertEqual(got["foreign"], ["acme_web-admin-map-acme/qa"])   # another organization's: not touched
         self.assertEqual(got["create"], [])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class AdoptionElsewhere(unittest.TestCase):
+    """Client roles of a site's sign-in client, the tools' clients and the secrets store's paths."""
+
+    def test_client_roles_of_a_sign_in_client(self):
+        """(what the client holds under the wanted name) x (adopt unmarked asked) -> this entity's | refused."""
+        tasks = load(SSG)
+        steps = [by_name(tasks, n) for n in ("This entity's client roles and their owners",
+                                             "Take the wanted client roles made before the marks",
+                                             "A wanted group held by a role of another entity is that group's fault (per group)")]
+        holds = {"nothing": [],
+                 "ours": [{"name": "acme.devs", "attributes": {"entity": ["acme"], "owner": ["CloudVirt/prod"]}}],
+                 "unmarked": [{"name": "acme.devs", "attributes": {}}],
+                 "no-attributes": [{"name": "acme.devs"}],
+                 "other": [{"name": "acme.devs", "attributes": {"entity": ["acme-corp"]}}]}
+        cases, want = [], []
+        for state, roles in holds.items():
+            for adopt in (False, True):
+                cases.append({"roles": roles, "adopt": adopt})
+                if state == "nothing":
+                    want.append({"mine": False, "foreign": False})
+                elif state == "ours" or (state in ("unmarked", "no-attributes") and adopt):
+                    want.append({"mine": True, "foreign": False})
+                else:
+                    want.append({"mine": False, "foreign": True})
+        pre = [{"ansible.builtin.set_fact": {"_ssg_roles_now": {"json": "{{ case.roles }}"},
+                                             "ssg_adopt_unmarked": "{{ case.adopt }}", "ssg_faults": [],
+                                             "ssg_wanted_groups": ["acme.devs"]}}]
+        got = run_cases(pre + steps, cases,
+                        "{'mine': 'acme.devs' in ssg_entity_roles, 'foreign': ssg_faults | length > 0}",
+                        extra_vars={"ssg_entity": "acme", "ssg_legacy_owner": "Entity/acme", "ssg_per_group": True,
+                                    "ssg_kc": "https://kc.example.org", "ssg_realm": "tenants",
+                                    "ssg_client_id": "openshift-site", "_ssg_client": {"json": [{"id": "c1"}]},
+                                    "ssg_wanted_eff": [{"rbac": "devs", "path": "/acme/devs", "group": "acme.devs"}]})
+        self.assertEqual(got, want)
+
+    def test_a_secrets_path_in_use(self):
+        """(create answer) x (what is mounted there) x (does status record the path)."""
+        mark = "(VaultKV entity-acme/app)"
+        mounted = {"kv2-ours": {"type": "kv", "options": {"version": "2"}, "description": "Secrets path app " + mark},
+                   "kv2-unmarked": {"type": "kv", "options": {"version": "2"}, "description": ""},
+                   "kv2-other": {"type": "kv", "options": {"version": "2"}, "description": "the team's own"},
+                   "kv1": {"type": "kv", "options": {"version": "1"}, "description": ""},
+                   "other-engine": {"type": "pki", "description": "Secrets path app " + mark}}
+        cases, want = [{"create": 204, "existing": {}, "recorded": ""}], ["create"]
+        for state, m in mounted.items():
+            for recorded in ("", "app"):
+                cases.append({"create": 400, "existing": {"status": 200, "json": {"data": m}}, "recorded": recorded})
+                want.append({"kv2-ours": "ours", "kv2-unmarked": "adopt" if recorded else "refuse"}.get(state, "refuse"))
+        cases.append({"create": 400, "existing": {"status": 400, "json": {"errors": ["no matching mount"]}},
+                      "recorded": ""})                       # a reserved path (sys, identity, ...)
+        want.append("refuse")
+        pre = [{"ansible.builtin.set_fact": {"_kv_mount_create": {"status": "{{ case.create }}"},
+                                             "_kv_mount_existing": "{{ case.existing }}",
+                                             "kv_recorded_path": "{{ case.recorded }}"}}]
+        steps = [by_name(load(KV_ENGINE), "Decide: ours, adopt, create or refuse")]
+        got = run_cases(pre + steps, cases, "kv_decision | trim", extra_vars={"kv_path": "app", "kv_mark": mark})
+        self.assertEqual(got, want)
+        # the teardown removes the recorded path only with the mark (or no description)
+        pre = [{"ansible.builtin.set_fact": {"_kv_fin_mount": "{{ case }}"}}]
+        steps = [by_name(load(KV_T), "Decide: delete or leave")]
+        cases = [{"status": 404}, {"status": 200, "json": {"data": mounted["kv2-ours"]}},
+                 {"status": 200, "json": {"data": mounted["kv2-unmarked"]}},
+                 {"status": 200, "json": {"data": mounted["kv2-other"]}}]
+        got = run_cases(pre + steps, cases, "kv_fin_decision | trim", extra_vars={"kv_fin_path": "app",
+                                                                                   "kv_fin_mark": mark})
+        self.assertEqual(got, ["gone", "delete", "delete", "leave"])
+
+    def test_tool_client_teardowns(self):
+        for role, kind in (("aapconfig", "AAPConfig"), ("quayconfig", "QuayConfig")):
+            owner = kind + "/sovereign-cloud-plugins/main"
+            cid = ("aap" if role == "aapconfig" else "quay") + "-main"
+            pre = [{"ansible.builtin.set_fact": {"_kc_client": {"json": "{{ case }}"}}}]
+            steps = [by_name(load(TOOL_T[role]), "Decide: delete or leave")]
+            cases = [[], [{"id": "u", "clientId": cid, "attributes": {"hybridsovereign.redhat/owner": owner}}],
+                     [{"id": "u", "clientId": cid}],
+                     [{"id": "u", "clientId": cid, "attributes": {"hybridsovereign.redhat/owner": "Vault/x/y"}}]]
+            got = run_cases(pre + steps, cases, role + "_fin_decision | trim",
+                            extra_vars={role + "_fin_client_id": cid, role + "_fin_owner": owner})
+            self.assertEqual(got, ["gone", "delete", "delete", "leave"], role)
+
+    def test_tool_clients_are_marked(self):
+        for role, kind in (("aapconfig", "AAPConfig"), ("quayconfig", "QuayConfig")):
+            body = text(os.path.join(ROLES, role + "_provision", "tasks", "main.yml"))
+            self.assertIn('kce_owner: "%s/{{ %s_cr_namespace }}/{{ %s_cr_name }}"' % (kind, role, role), body)
+            self.assertNotIn("clientId=%s-{{" % ("aap" if role == "aapconfig" else "quay"), text(TOOL_T[role]))
 
 
 # ---- the shared sign-in client task against a small directory over HTTP ----------------------------------------
