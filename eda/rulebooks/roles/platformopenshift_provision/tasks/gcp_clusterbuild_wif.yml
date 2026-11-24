@@ -95,8 +95,8 @@
             name: "oidc-static-{{ cb_app_name }}"
             namespace: "{{ cb_issuer_namespace }}"
             labels:
-              shc.signal9.gg/oidc-static: "true"
-              shc.signal9.gg/oidc-name: "{{ cb_app_name }}"
+              hybridsovereign.redhat/oidc-static: "true"
+              hybridsovereign.redhat/oidc-name: "{{ cb_app_name }}"
               app.kubernetes.io/managed-by: eda-platformopenshift
           data:
             keys.json: "{{ cb_jwks | to_json }}"

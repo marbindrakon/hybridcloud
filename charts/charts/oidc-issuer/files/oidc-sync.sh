@@ -20,7 +20,7 @@
 # The age of kept documents is recorded there and deliberately not judged: a site may be off or paused for days.
 set -o pipefail
 SA_CA=${SA_CA:-/var/run/secrets/kubernetes.io/serviceaccount/service-ca.crt}
-ANN_PREFIX=${ANN_PREFIX:-shc.signal9.gg/oidc-fetched-}
+ANN_PREFIX=${ANN_PREFIX:-hybridsovereign.redhat/oidc-fetched-}
 cd "${WORKDIR:-/tmp}" && rm -rf old new && mkdir -p old new || exit 1
 rc=0; report=()
 now=$(date -u +%Y-%m-%dT%H:%M:%SZ)

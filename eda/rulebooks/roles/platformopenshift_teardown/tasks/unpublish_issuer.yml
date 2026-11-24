@@ -1,7 +1,9 @@
 ---
 # The cluster's static issuer on central (the provision's ConfigMap oidc-static-<build>, labelled with the build's
-# name): found by its exact name and that label in any namespace, so the delete needs no installation setting. None
-# found: said in the job's result (nothing else of the cluster depends on it). Input: po_build_name.
+# name): found by its exact name and that label in any namespace, so the delete needs no installation setting. The
+# label key is hybridsovereign.redhat/oidc-name; a ConfigMap made before it carries the older key of the same word,
+# so both are looked for. None found: said in the job's result (nothing else of the cluster depends on it). Input:
+# po_build_name.
 - name: The cluster's static issuer
   kubernetes.core.k8s_info:
     host: "{{ central_api_host }}"
@@ -10,8 +12,21 @@
     api_version: v1
     kind: ConfigMap
     field_selectors: ["metadata.name=oidc-static-{{ po_build_name }}"]
-    label_selectors: ["shc.signal9.gg/oidc-name={{ po_build_name }}"]
-  register: _ui_found
+    label_selectors: ["{{ item }}={{ po_build_name }}"]
+  loop: [hybridsovereign.redhat/oidc-name, shc.signal9.gg/oidc-name]
+  register: _ui_lookups
+
+- name: What was found under either key
+  ansible.builtin.set_fact:
+    _ui_found:
+      resources: >-
+        {%- set out = [] -%}
+        {%- set seen = [] -%}
+        {%- for r in _ui_lookups.results | map(attribute='resources') | flatten -%}
+          {%- set k = r.metadata.namespace ~ '/' ~ r.metadata.name -%}
+          {%- if k not in seen -%}{%- set _ = seen.append(k) -%}{%- set _ = out.append(r) -%}{%- endif -%}
+        {%- endfor -%}
+        {{ out }}
 
 - name: Remove it
   kubernetes.core.k8s:

@@ -22,7 +22,7 @@ tls:
 # An issuer that cannot be fetched keeps its last published documents. The job fails only for a fault: a local, url
 # or static issuer that fails, or an acm cluster that fails while its ManagedCluster is available. An acm cluster that
 # is not available (powered off, paused) is reported in the job log and is not a fault. Annotations
-# shc.signal9.gg/oidc-fetched-<name> on ConfigMap oidc-documents record when each issuer was last fetched; the age of
+# hybridsovereign.redhat/oidc-fetched-<name> on ConfigMap oidc-documents record when each issuer was last fetched; the age of
 # kept documents is recorded, not judged (a site may be off or paused for days).
 sync:
   schedule: "*/15 * * * *"
@@ -37,8 +37,8 @@ sync:
   # issuer name in label <nameLabel>, the key set (public keys) in data keys.json; the discovery document is generated.
   # For issuers whose signing key exists before the cluster does (AWS STS clusters); deleting the ConfigMap unpublishes.
   static:
-    label: shc.signal9.gg/oidc-static
-    nameLabel: shc.signal9.gg/oidc-name
+    label: hybridsovereign.redhat/oidc-static
+    nameLabel: hybridsovereign.redhat/oidc-name
   acm:
     managedServiceAccount: shc-oidc-sync
     # cluster-proxy addon user server; its serving certificate comes from the service CA
