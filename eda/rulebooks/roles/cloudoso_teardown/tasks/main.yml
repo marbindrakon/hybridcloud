@@ -98,7 +98,6 @@
              | default(_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true), true) }}
         oso_project_id: "{{ _st.projectId | default('') }}"
         oso_project_name: "{{ _st.projectName | default(names_result.name, true) }}"
-        oso_project_owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
         oso_fip_ids: "{{ [_st.apiFloatingIPId | default(''), _st.ingressFloatingIPId | default('')] | select | list }}"
         oso_app_cred_ids: "{{ [_st.appCredentialId | default('')] | select | list }}"
         oso_dns_provider: "{{ _st.dnsProvider | default('') }}"
@@ -136,7 +135,7 @@
               domain: "{{ oso_project_domain }}"
               project_id: "{{ oso_project_id }}"
               project: "{{ oso_project_name }}"
-              owner: "{{ oso_project_owner }}"
+              owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
               allowed_fip_ids: "{{ oso_fip_ids }}"
               # an environment zone holds its own SOA/NS and goes with the environment (T4): no record check
               dns_zone_id: "{{ oso_dns_zone_id if (oso_dns_provider == 'designate' and (oso_env_dns.zoneId | default('')) | length == 0) else '' }}"
@@ -194,7 +193,7 @@
               domain: "{{ oso_project_domain }}"
               project_id: "{{ oso_project_id }}"
               project: "{{ oso_project_name }}"
-              owner: "{{ oso_project_owner }}"
+              owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
               fip_ids: "{{ oso_fip_ids }}"
               fip_descriptions:
                 - "sovereign-{{ cloudoso_cr_name }}-api"
