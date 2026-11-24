@@ -570,8 +570,9 @@ class GcpTenantIpv6Test(unittest.TestCase):
             def __getattr__(self, name):
                 return lambda *a: {}
 
-            def place_up(self, *a):
+            def place_up(self, *a, **kw):
                 seen["args"] = a
+                seen["kw"] = kw
                 return {}
 
         argv = ["shc_gcp_tenant.py", "--config", "{}", "place-up", "--placement", PLACEMENT, "--vni", str(VNI),
@@ -654,7 +655,7 @@ class GcpPlacementTasksTest(unittest.TestCase):
     def call_args(self, name, v6, place=None):
         task = by_name(load(os.path.join(NP, "backend_cloudgcp.yml")), name)
         return run_play([task_vars(task), write_out("_out")],
-                        {"np_gcp_cfg": {}, "gcp_edge_cfg": {}, "np_gcp_placement": PLACEMENT, "np_l3vni": VNI,
+                        {"np_gcp_cfg": {}, "gcp_edge_cfg": {}, "fab_name": PLACEMENT, "np_gcp_vpc": N, "np_l3vni": VNI,
                          "np_prefixes_v4": V4, "np_gcp_edge": EDGE, "np_gcp_egress": "fabric", "np_gcp_known": {},
                          "_np_gcp_tunnels": {"path": "/tmp/x"}, "np_gcp_ipv6": v6, "np_gcp_network6": [NET6],
                          "np_gcp_place": place or {}})["gcp_args"]
@@ -663,8 +664,8 @@ class GcpPlacementTasksTest(unittest.TestCase):
         up = "The placement's VPC and its HA VPN to the site's routers"
         net = "The routers' VRF and tunnels for this network"
         def parsed(args):
-            return [json.loads(a) if i in (6, 8, 12) else a for i, a in enumerate(args)]
-        base = ["place-up", "--placement", PLACEMENT, "--vni", str(VNI), "--prefixes", V4, "--edge", EDGE,
+            return [json.loads(a) if i in (8, 10, 14) else a for i, a in enumerate(args)]
+        base = ["place-up", "--placement", PLACEMENT, "--vpc", N, "--vni", str(VNI), "--prefixes", V4, "--edge", EDGE,
                 "--egress", "fabric", "--known-peers", {}]
         self.assertEqual(parsed(self.call_args(up, {})), base)    # IPv4 only: as before
         self.assertEqual(self.call_args(net, {}), ["net-up", "--vni", str(VNI)])
@@ -728,7 +729,7 @@ class GcpPlacementTasksTest(unittest.TestCase):
         task = by_name(load(os.path.join(NP, "backend_cloudgcp.yml")), "The environment's project and the placement's names")
         tasks = [task, write_out("np_gcp_cfg.ipv6Edge")]
         common = {"np_backend": {"status": {"project": PROJECT, "region": REGION}}, "fab_entity": "acme",
-                  "fab_spec": {"network": "n1"}, "fab_namespace": "acme", "fab_name": "p1",
+                  "fab_spec": {"network": "n1"}, "fab_namespace": "acme", "fab_name": "p1", "np_backend_name": "prod",
                   "np_gateway": {"metadata": {"name": SITE}, "status": {}}, "np_asn": 65010}
         self.assertIs(run_play(tasks, dict(common, gcp_real={"edge": {"ipv6": {"enabled": True}}})), True)
         self.assertIs(run_play(tasks, dict(common, gcp_real={"edge": {}})), False)

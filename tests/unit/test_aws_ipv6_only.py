@@ -164,12 +164,16 @@ class FakeEdge:
     def tgw(self):
         return {"TransitGatewayId": TGW}
 
+    names = []   # the names the tenant side hands the hub (net_up, net_attach), kept apart from the pinned calls
+
     def net_up(self, vni, **kw):
+        FakeEdge.names.append(["net_up", kw.pop("names", None)])
         FakeEdge.calls.append(["net_up", vni, kw])
         eg = {"publicIp": EIP, "natGateway": "nat-1"} if kw.get("egress") else None
         return {"routeTable": "tgw-rtb-net", "connectAttachment": "tgw-attach-connect", "egress": eg}
 
-    def net_attach(self, vni, att):
+    def net_attach(self, vni, att, names=None):
+        FakeEdge.names.append(["net_attach", names])
         FakeEdge.calls.append(["net_attach", vni, att])
         return {}
 
@@ -229,10 +233,12 @@ def dual_stack_scenarios(module, ec2_cls):
 
 
 # the scenarios' calls as the module made them before IPv6-only existed (sha256 of the canonical JSON)
+# re-pinned for the names rules: the placement's VPC is looked up before its IPv6 pool (its Name decides the pool's),
+# and place-public finds its route table by the role tag instead of the Name tag; every other call as before
 DUAL_STACK_DIGESTS = {
-    "ipv4": "b33bb9d63af45b6e3c37a1bc13a9c9ae697b1f68a29218eb44794466f2d89868",
-    "network": "fd6c1fcde2b0c49a6287261335bd8f87831620aceadb594ff6740e6f06c9ff3a",
-    "provider": "f854fd92a5b1687f10ba3fbc3eaae0d5a12fa76ff09e86c629740a93d057a1b4",
+    "ipv4": "6ed1628e5a1d9f61526b0d401ad51d225b4d1025db181173f7587f4ad056db7b",
+    "network": "a5b48148eb1a2369d30a253a2a75caa2282bf00f141388aa3e081c7c2781b7ce",
+    "provider": "1406b1d4dd4167c881d445b2fcf28dc859af9bbd8317d0c72191f0d4820a1d00",
 }
 
 
@@ -489,7 +495,7 @@ class TenantIpv6OnlyTest(unittest.TestCase):
             def __init__(self, cfg):
                 self.changed = []
 
-            def place_up(self, *a):
+            def place_up(self, *a, **kw):
                 seen["up"] = a
                 return {}
         argv = ["x", "--config", "{}", "place-up", "--placement", PLACEMENT, "--vni", str(VNI), "--egress",
@@ -529,7 +535,9 @@ if HAVE_BOTO:
             self.atts = {"tgw-attach-connect": {"TransitGatewayAttachmentId": "tgw-attach-connect", "ResourceType": "connect",
                                                 "State": "available", "Tags": []}}
             self.tgw_rts = {"tgw-rtb-net": {"TransitGatewayRouteTableId": "tgw-rtb-net", "State": "available",
-                                            "Tags": [{"Key": "Name", "Value": "shc-net-%d" % VNI}]}}
+                                            "Tags": [{"Key": "Name", "Value": "shc-net-%d" % VNI},
+                                                     {"Key": "shc-edge-site", "Value": "site-x"},
+                                                     {"Key": "shc-vni", "Value": str(VNI)}]}}
             self.assoc, self.static = {}, {}
             self.amazon = [EGRESS6]
 
@@ -571,6 +579,13 @@ if HAVE_BOTO:
         def _f(Filters):
             return {f["Name"]: f["Values"] for f in Filters or []}
 
+        @classmethod
+        def _by_tags(cls, out, Filters):
+            for k, v in cls._f(Filters).items():
+                if k.startswith("tag:"):
+                    out = [x for x in out if E.tagmap(x).get(k[4:]) in v]
+            return out
+
         def h_describe_transit_gateways(self, **kw):
             return {"TransitGateways": [{"TransitGatewayId": TGW, "State": "available"}]}
 
@@ -578,10 +593,7 @@ if HAVE_BOTO:
             out = list(self.vpcs.values())
             if VpcIds:
                 out = [v for v in out if v["VpcId"] in VpcIds]
-            f = self._f(Filters)
-            if "tag:Name" in f:
-                out = [v for v in out if E.tagmap(v).get("Name") in f["tag:Name"]]
-            return {"Vpcs": copy.deepcopy(out)}
+            return {"Vpcs": copy.deepcopy(self._by_tags(out, Filters))}
 
         def h_create_vpc(self, CidrBlock, **kw):
             v = self._id("vpc")
@@ -702,8 +714,7 @@ if HAVE_BOTO:
             return {"NatGateways": copy.deepcopy(out)}
 
         def h_describe_addresses(self, Filters=None, **kw):
-            name = self._f(Filters).get("tag:Name", [None])[0]
-            return {"Addresses": [copy.deepcopy(a) for a in self.eips.values() if E.tagmap(a).get("Name") == name]}
+            return {"Addresses": copy.deepcopy(self._by_tags(list(self.eips.values()), Filters))}
 
         def h_allocate_address(self, **kw):
             a = self._id("eipalloc")
@@ -759,11 +770,7 @@ if HAVE_BOTO:
             return {}
 
         def h_describe_transit_gateway_route_tables(self, Filters=None, **kw):
-            out = list(self.tgw_rts.values())
-            f = self._f(Filters)
-            if "tag:Name" in f:
-                out = [r for r in out if E.tagmap(r).get("Name") in f["tag:Name"]]
-            return {"TransitGatewayRouteTables": copy.deepcopy(out)}
+            return {"TransitGatewayRouteTables": copy.deepcopy(self._by_tags(list(self.tgw_rts.values()), Filters))}
 
         def h_get_transit_gateway_route_table_associations(self, TransitGatewayRouteTableId, **kw):
             return {"Associations": [{"TransitGatewayAttachmentId": a, "State": "associated"}
@@ -820,8 +827,10 @@ def egress_scenario(module, nat64_runs=None):
     return ec2
 
 
-# the hub's calls for a network's NAT egress VPC (up, re-run, down) before NAT64 existed (sha256)
-EGRESS_DIGEST = "b331dbe391422fa85cfa57d958212c1a0bfad1235a4265abaa462fcd1fbb527b"
+# the hub's calls for a network's NAT egress VPC (up, re-run, down) before NAT64 existed (sha256); re-pinned for the
+# names rules: the egress VPC, its address and the network's route table are looked up by their tags (site, VNI, role)
+# instead of their Name, every other call as before
+EGRESS_DIGEST = "d836932560114338826452a49cd1aad01920b034f244bba0649a3a6e6536ed07"
 
 
 @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
@@ -1008,9 +1017,9 @@ class TasksTest(unittest.TestCase):
     def test_place_up_without_a_prefix(self):
         task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The placement's VPC and its attachment to the network")
         args = run_play([task_vars(task), write_out("_out")],
-                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_l3vni": VNI,
+                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_aws_name": "acme_p1", "np_l3vni": VNI,
                          "np_prefixes_v4": [], "np_aws_nat_egress": True, "np_aws_ipv6": only6("Provider")})["aws_args"]
-        self.assertEqual(args[:6], ["place-up", "--placement", "acme/p1", "--vni", str(VNI), "--egress"])
+        self.assertEqual(args[:8], ["place-up", "--placement", "acme/p1", "--name", "acme_p1", "--vni", str(VNI), "--egress"])
         self.assertEqual(json.loads(args[-1]), only6("Provider"))
 
     def test_translation_and_placeholder_recorded(self):

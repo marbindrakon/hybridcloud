@@ -13,6 +13,48 @@
       vars:
         fab_read_entity: true
 
+    # before anything is made: the environment's and the tenant's names obey the rule for names (an object made
+    # before the rule), then the name is the tenant's only environment of that name across the four kinds (they all
+    # get the zone <environment>.<tenant>.<domain>)
+    - name: Check the environment's names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ fab_name }}", what: environment}
+          - {value: "{{ fab_entity }}", what: tenant}
+
+    - name: Refuse a name that breaks the rule
+      ansible.builtin.set_fact:
+        fab_fail_reason: NameNotAllowed
+        fab_fail_msg: "CloudGCP {{ fab_name }}: {{ name_check_message }}"
+      when: name_check_message | length > 0
+
+    - name: Stop on a refused name
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: name_check_message | length > 0
+
+    - name: Check that the tenant has no other environment of this name
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/environment_name_unique.yml"
+      vars:
+        enu_kind: CloudGCP
+        enu_name: "{{ fab_name }}"
+        enu_namespace: "{{ fab_namespace }}"
+        enu_created: "{{ fab_obj.metadata.creationTimestamp }}"
+
+    - name: Refuse a name another of the tenant's environments holds
+      ansible.builtin.set_fact:
+        fab_fail_reason: EnvironmentNameTaken
+        fab_fail_msg: >-
+          CloudGCP {{ fab_name }}: the tenant already has an environment named {{ fab_name }} ({{ enu_holder_kind }});
+          create this one with another name
+      when: enu_taken | bool
+
+    - name: Stop on a name already in use
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: enu_taken | bool
+
     - name: Start with nothing to wait for
       ansible.builtin.set_fact:
         ca_waiting: []
@@ -102,12 +144,31 @@
         msg: "{{ fab_fail_msg }}"
       when: ca_account | length == 0
 
+    # the zone's resource name: the one the environment's status records (kept for its life), else
+    # shc-<tenant>--<environment> from the names function (Cloud DNS: 1-63, a letter first, [a-z0-9-])
+    - name: The zone name the environment recorded
+      ansible.builtin.set_fact:
+        ca_zone_name: "{{ (fab_st | default({}, true)).dnsZoneId | default('', true) | string | trim }}"
+
+    - name: The zone name from the names function
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+      vars:
+        names_request: {action: name, kind: gcp-dns-zone, parts: ["{{ fab_entity }}", "{{ fab_name }}"]}
+      when: ca_zone_name | length == 0
+
+    - name: Keep the new zone name
+      ansible.builtin.set_fact:
+        ca_zone_name: "{{ names_result.name }}"
+      when: ca_zone_name | length == 0
+
+    # label values (Google: at most 63 of [a-z0-9_-]) are the tenant's and the environment's names, which obey the
+    # rule for names (checked first)
     - name: The tenant helper's settings
       ansible.builtin.set_fact:
         ca_tenant_cfg:
           project: "{{ ca_account }}"
           region: "{{ ci_spec.gcp.region }}"
-          labels: {shc-entity: "{{ fab_entity }}", shc-environment: "{{ fab_namespace }}-{{ fab_name }}"}
+          labels: {shc-entity: "{{ fab_entity }}", shc-environment: "{{ fab_name }}"}
 
     - name: Enter the project
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
@@ -125,7 +186,20 @@
       vars:
         gcp_helper: shc_gcp_tenant.py
         gcp_config: "{{ ca_tenant_cfg }}"
-        gcp_args: [zone-up, --zone, "{{ ca_zone }}"]
+        gcp_args: [zone-up, --zone, "{{ ca_zone }}", --zone-name, "{{ ca_zone_name }}"]
+        gcp_soft: true
+
+    # a zone of this name or DNS name in the project that the platform did not make for this environment
+    - name: Refuse a zone the platform did not make
+      ansible.builtin.set_fact:
+        fab_fail_reason: NameTakenOnSite
+        fab_fail_msg: "CloudGCP {{ fab_name }}: {{ gcp_error }}"
+      when: gcp_error | length > 0 and gcp_result.reason | default('') == 'NameTakenOnSite'
+
+    - name: Stop on a zone error
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg if gcp_result.reason | default('') == 'NameTakenOnSite' else 'GCP zone-up failed: ' ~ gcp_error }}"
+      when: gcp_error | length > 0
 
     - name: Keep the zone
       ansible.builtin.set_fact:

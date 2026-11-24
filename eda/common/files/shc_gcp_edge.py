@@ -264,6 +264,11 @@ class Edge:
     # ---- pieces of the site
     def ensure_sa(self):
         sa = g.http("GET", "%s/projects/%s/serviceAccounts/%s" % (IAM, self.project, self.sa_email), token=self.tok, ok404=True)
+        # an account of this id that the platform did not make for this site (its display name is the mark) is
+        # refused, never given the site's secret
+        if sa and (sa.get("displayName") or "") != "SHC edge router " + self.site:
+            fail("A service account %s already exists in the project and was not made by the platform for this "
+                 "gateway; it was left untouched." % self.prefix, reason="NameTakenOnSite")
         if not sa:
             self.changed.append("service account " + self.prefix)
             g.http("POST", "%s/projects/%s/serviceAccounts" % (IAM, self.project), {

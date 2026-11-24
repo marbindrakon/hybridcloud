@@ -57,7 +57,7 @@ KINDS = {
     "site-namespace": ("label", 63, "", 0, 3),               # <tenant>--<environment>--<namespace>
     # Google Cloud: names of 63; the longest ending a placement's objects get is "-default6" (9)
     "gcp-placement": ("label", 63, "shc-", 9, 2),            # shc-<tenant>--<placement>
-    "gcp-dns-zone": ("label", 63, "shc-", 0, 2),             # shc-<environment>--<tenant> (the zone's resource name)
+    "gcp-dns-zone": ("label", 63, "shc-", 0, 2),             # shc-<tenant>--<environment> (the zone's resource name)
     # AWS: the Name tag of a placement's objects; the longest ending is "-public-<az letter>" (9)
     "aws-placement": ("plain", 255, "", 9, 2),               # <tenant>_<placement>
     # the platform's own services

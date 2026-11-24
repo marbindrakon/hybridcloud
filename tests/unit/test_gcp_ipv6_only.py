@@ -352,13 +352,16 @@ class UnchangedPlacements(Base):
     FAKE = V.FakeCompute
 
     # sha256 of every call (method, path, body; GETs included) of place-up, a re-run, place-status and place-down,
-    # recorded with the module as it was before IPv6-only placements existed, on this fake and with these secrets
+    # recorded with the module as it was before IPv6-only placements existed, on this fake and with these secrets;
+    # re-recorded for the names rules (three calls differ): the site's external VPN gateway is labelled with its site
+    # (not the first placement's labels), place-down reads the VPC's description first (an unmarked VPC is refused)
+    # and reads the one external gateway its tunnels used by name instead of listing every one
     PINNED = {
-        "dual-stack": (76, "baebde4aabf39dbf8c74b7d6c2211e81c1d1ca1502eecc67b115bee0d9064f49"),
-        "dual-stack internet off": (77, "6c1fc48336e2f9cbf8e2a536c63588997f9fa65b561c6f164238f00959f91280"),
-        "ipv4-only": (67, "85a3c268f8063a122a48b42379f904fdaecf3dec1b2ab729a7de53938c6fa379"),
-        "ipv4-only ipv6Edge": (67, "ce73b312eb80cdcfddd4089c3884e0f6e4bbbcc004f0fcec1a495f958d004250"),
-        "dual-stack cloudNat": (75, "e9072d9cc3f9f7824884e6b5f444579947a89de34938ed099dfc00489e1bd79c"),
+        "dual-stack": (77, "53f96f917f49ce2d2e1d8f0a6159f706f72b2d6f2b13490856fabffcff265ebf"),
+        "dual-stack internet off": (78, "fc7dbb75372f0c1ed8a5b43fa59188f5ca5fcf366319b4f1d09d659f52c0cd12"),
+        "ipv4-only": (68, "1cdee0b297ee46367d5d0265d13dc467cfbed9549f35eec215bf359db79b7fd8"),
+        "ipv4-only ipv6Edge": (68, "ff132834560fb49a076b9ec3ecc38cca831c0441f947b7c2b9e9c0c14ff08bd6"),
+        "dual-stack cloudNat": (76, "e3217bd2d037d45a04d14eefad29d12461c8fa4e7512ceec935d9dd99454f140"),
     }
 
     def calls(self, ipv6, egress="fabric", **cfg):
