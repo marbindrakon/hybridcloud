@@ -805,8 +805,11 @@ def placement_network(req):
     if proj is None:
         raise RuntimeError(f"platform project {req['platformProject']} does not exist (the CloudGateway creates it)")
     name, tag = req["name"], req["tag"]
-    net = next(iter(conn.network.networks(name=name, project_id=proj.id)), None)
-    router = next(iter(conn.network.routers(name=name, project_id=proj.id)), None)
+    _require(req, "tag")
+    # found by the recorded id or by the placement's tag, never by name: a network or router of that name may be
+    # anybody's (Neutron does not keep names unique), and an object an earlier release named hn<number> is renamed
+    net = _placed(conn.network.networks(project_id=proj.id), req.get("networkId"), tag, "network")
+    router = _placed(conn.network.routers(project_id=proj.id), req.get("routerId"), tag, "router")
     if req.get("state", "present") == "absent":
         out = {"name": name, "found": bool(net or router), "deleted": []}
         if net is not None:
@@ -841,31 +844,47 @@ def placement_network(req):
         return out
 
     created, changed = [], []
+    desc = req.get("description", "")
     if net is None:
-        net = conn.network.create_network(name=name, project_id=proj.id, mtu=int(req["mtu"]),
-                                          description=req.get("description", ""))
+        net = conn.network.create_network(name=name, project_id=proj.id, mtu=int(req["mtu"]), description=desc)
         created.append("network")
-    elif int(req["mtu"]) != net.mtu:
-        net = conn.network.update_network(net, mtu=int(req["mtu"]))
-        changed.append("mtu")
+    else:
+        # names and descriptions are refreshed in place (Neutron's name and description are writable)
+        upd = {k: v for k, v in (("mtu", int(req["mtu"])), ("name", name), ("description", desc))
+               if getattr(net, k, None) != v}
+        if upd:
+            net = conn.network.update_network(net, **upd)
+            changed.extend(sorted(upd))
     if tag not in (net.tags or []):
         conn.network.set_tags(net, sorted(set((net.tags or []) + [tag])))
     have = {sn.cidr: sn for sn in conn.network.subnets(network_id=net.id)}
     mode, resolvers = req.get("addressMode") or "", req.get("resolvers") or []
-    subnets, gateways, applied_mode = {}, {}, ""
-    for i, cidr in enumerate(req["prefixes"]):
+    subnets, gateways, applied_mode, seen = {}, {}, "", {4: 0, 6: 0}
+    for cidr in req["prefixes"]:
         family = 6 if ":" in cidr else 4
+        seen[family] += 1
+        sn_name = f"{name}_v{family}" + (f"_{seen[family]}" if seen[family] > 1 else "")
         dns = _family_resolvers(resolvers, family)
         sn = have.get(cidr)
         if sn is None:
             # the RA and address modes are fixed at creation (Neutron can't change them on a subnet)
             v6 = {"ipv6_ra_mode": mode, "ipv6_address_mode": mode} if family == 6 and mode else {}
-            sn = conn.network.create_subnet(name=f"{name}-{i}", network_id=net.id, project_id=proj.id,
+            sn = conn.network.create_subnet(name=sn_name, network_id=net.id, project_id=proj.id, description=desc,
                                             ip_version=family, cidr=cidr, enable_dhcp=True, dns_nameservers=dns, **v6)
             created.append(f"subnet {cidr}")
-        elif _canon(sn.dns_nameservers or []) != _canon(dns):
-            sn = conn.network.update_subnet(sn, dns_nameservers=dns)
-            changed.append(f"subnet {cidr} resolvers")
+        else:
+            upd = {}
+            if _canon(sn.dns_nameservers or []) != _canon(dns):
+                upd["dns_nameservers"] = dns
+                changed.append(f"subnet {cidr} resolvers")
+            for k, v in (("name", sn_name), ("description", desc)):
+                if getattr(sn, k, None) != v:
+                    upd[k] = v
+                    changed.append(f"subnet {cidr} {k}")
+            if upd:
+                sn = conn.network.update_subnet(sn, **upd)
+        if tag not in (getattr(sn, "tags", None) or []):
+            conn.network.set_tags(sn, sorted(set((getattr(sn, "tags", None) or []) + [tag])))
         if family == 6:
             applied_mode = getattr(sn, "ipv6_address_mode", None) or ""
         subnets[cidr] = sn.id
@@ -879,12 +898,19 @@ def placement_network(req):
         if int(rv or 0) != int(req["l3Vni"]):
             raise RuntimeError(f"router {name} has evpn_vni {rv}, expected {req['l3Vni']}")
     if router is None:
-        r = conn.network.post("/routers", json={"router": {"name": name, "project_id": proj.id,
+        r = conn.network.post("/routers", json={"router": {"name": name, "project_id": proj.id, "description": desc,
                                                            "evpn_vni": int(req["l3Vni"])}})
         if r.status_code >= 300:
             raise RuntimeError(f"router create: HTTP {r.status_code} {r.text[:300]}")
         router = conn.network.get_router(r.json()["router"]["id"])
         created.append("router")
+    else:
+        upd = {k: v for k, v in (("name", name), ("description", desc)) if getattr(router, k, None) != v}
+        if upd:
+            router = conn.network.update_router(router, **upd)
+            changed.extend(f"router {k}" for k in sorted(upd))
+    if tag not in (getattr(router, "tags", None) or []):
+        conn.network.set_tags(router, sorted(set((getattr(router, "tags", None) or []) + [tag])))
     attached = {ip["subnet_id"] for p in _router_ports(conn, router.id) for ip in p.fixed_ips}
     for cidr, sid in subnets.items():
         if sid not in attached:
@@ -935,6 +961,27 @@ def placement_network(req):
                     "routerExternalForProject": _external_for_project(conn, net, ra),
                     "inUse": uses["virtualMachines"]["inUse"] + ra["inUse"], "pruneInUse": prune_in_use})
     return out
+
+
+def _placed(objs, recorded_id, tag, what):
+    """The placement's network or router among objs: the recorded id, else the one carrying the placement's tag
+    (one at most); None when there is none. One recorded but tagged for another placement is refused."""
+    objs = list(objs)
+    if recorded_id:
+        o = next((x for x in objs if x.id == recorded_id), None)
+        if o is not None:
+            others = [t for t in (getattr(o, "tags", None) or []) if t.startswith(PLACEMENT_TAG) and t != tag]
+            if others:
+                raise RuntimeError(f"{what} {recorded_id} carries another placement's tag ({others[0]})")
+            return o
+    tagged = [x for x in objs if tag in (getattr(x, "tags", None) or [])]
+    if len(tagged) > 1:
+        raise RuntimeError(f"{len(tagged)} {what}s in the platform project carry the tag {tag}; one is expected")
+    return tagged[0] if tagged else None
+
+
+# the tag every object of a placement in the platform project carries: shc-placement=<namespace>/<name>
+PLACEMENT_TAG = "shc-placement="
 
 
 def cluster_fips(req):
@@ -1225,7 +1272,7 @@ def platform_inventory(req):
     routers = []
     for r in conn.network.routers(project_id=proj.id):
         vni = conn.network.get(f"/routers/{r.id}").json()["router"].get("evpn_vni")
-        routers.append({"id": r.id, "name": r.name, "evpnVni": vni})
+        routers.append({"id": r.id, "name": r.name, "tags": getattr(r, "tags", None) or [], "evpnVni": vni})
     return {"found": True, "projectId": proj.id, "networks": nets, "routers": routers}
 
 

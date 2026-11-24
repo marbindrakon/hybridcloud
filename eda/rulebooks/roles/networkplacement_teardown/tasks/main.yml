@@ -128,6 +128,8 @@
         - name: Set the names
           ansible.builtin.set_fact:
             npd_names: "{{ fab_check_result }}"
+            # the OpenStack network keeps the name it was given (status.siteNetwork.name)
+            npd_site_network_name: "{{ (fab_st.siteNetwork | default({}, true)).name | default(fab_check_result.osNetwork, true) }}"
 
         - name: Remove the OpenShift site side
           when: fab_spec.backend.kind == 'CloudVirt' and ci_found | bool
@@ -210,8 +212,11 @@
                   region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
                   domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
                   platformProject: "{{ fab_real.openstack.platformProject }}"
-                  name: "{{ npd_names.osNetwork }}"
+                  name: "{{ npd_site_network_name }}"
+                  # found by the recorded ids or by the tag, never by name
                   tag: "{{ npd_names.tag }}"
+                  networkId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).networkId | default('', true) }}"
+                  routerId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerId | default('', true) }}"
                   # the site's router advertisement service drops what it holds for the router port before the
                   # interface is removed (once nothing blocks the deletion); asked only when the placement used
                   # router attachments or the last run recorded the service holding the advertisement
@@ -240,7 +245,7 @@
                   ready: false
                   lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
                   message: >-
-                    Deletion waits until nothing else uses network {{ npd_names.osNetwork }}:
+                    Deletion waits until nothing else uses network {{ npd_site_network_name }}:
                     {{ os_result.blocked[:10] | join(', ') }}{{ (' and ' ~ (os_result.blocked | length - 10) ~ ' more')
                     if os_result.blocked | length > 10 else '' }}
                   deletionBlockedBy: "{{ os_result.blocked }}"

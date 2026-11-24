@@ -1,7 +1,8 @@
 ---
 # shc (design/P7-PLAN.md P7.3.3, §12.3): CloudVirt provision. Resolves the site (type openshift, the Entity
 # allowed, virtualization offered), checks the Rbac CRs it grants access to, maps its namespaces to site
-# namespaces (<entity>-<cloudvirt>-<name>; none may clash with another environment's) and records per namespace
+# namespaces (<entity>--<cloudvirt>--<name>, or the name status records; none may clash with another environment's,
+# and a site namespace of the name that is not this environment's is refused, never merged into) and records per namespace
 # whether its network is placed here; ends pending on the site or the Rbac CRs while those aren't there. Then
 # (P7.3.7) realizes the namespaces on the site with the fabric credential: labels (a namespace with a network gets
 # the primary-network label at creation; the network's placement selects it by label), a ResourceQuota from
@@ -90,6 +91,8 @@
           entity: "{{ fab_entity }}"
           cloudvirt: "{{ fab_name }}"
           namespaces: "{{ fab_spec.namespaces | default([{'name': 'vms'}], true) }}"
+          # an environment keeps the site namespaces its status records (an earlier release's names)
+          recorded: "{{ fab_st.namespaces | default([], true) }}"
 
     - name: Set the namespace facts
       ansible.builtin.set_fact:
@@ -200,6 +203,43 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/site_kubeconfig.yml"
           vars:
             site_kc_tag: "cv-{{ fab_namespace }}-{{ fab_name }}"
+
+        # a namespace of the wanted name that is not this environment's (another tenant's, the site's own, or one
+        # of the tenant's other environments) is refused before anything is applied: never merged into
+        - name: Read the site namespaces of those names
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: v1
+            kind: Namespace
+            name: "{{ item.namespace }}"
+          loop: "{{ cv_namespaces }}"
+          loop_control:
+            label: "{{ item.namespace }}"
+          register: _cv_ns_existing
+
+        - name: Decide whether the namespaces are the environment's
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+          vars:
+            fab_check:
+              action: namespace-ownership
+              namespaces: "{{ cv_namespaces }}"
+              existing: >-
+                {%- set out = {} -%}
+                {%- for r in _cv_ns_existing.results | default([]) if r.resources | default([]) | length > 0 -%}
+                  {%- set _ = out.update({r.item.namespace: r.resources[0].metadata.labels | default({}, true)}) -%}
+                {%- endfor -%}
+                {{ out }}
+
+        - name: Refuse namespaces that are not the environment's
+          ansible.builtin.set_fact:
+            fab_fail_reason: "{{ fab_check_result.reason }}"
+            fab_fail_msg: "{{ fab_check_result.message }}"
+          when: not (fab_check_result.ok | bool)
+
+        - name: Stop before anything is applied
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: not (fab_check_result.ok | bool)
 
         - name: Ensure the site namespaces
           kubernetes.core.k8s:

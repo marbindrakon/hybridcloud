@@ -38,10 +38,13 @@ actions:
                   node (network address + (nodeOrdinal << 16) + index, /128), else ""; with core.srv6.block and
                   nodeOrdinal the SRv6 locator (the /48 of the block with node field locatorNode = nodeOrdinal * 256 +
                   index, both 1-255; unique across nodes), else "" / 0
-  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?}
-                  the site namespace of each CloudVirt namespace: <entity>-<cloudvirt>-<name>, cut to 54 characters
-                  plus a hash when longer than 63 (namespace names are global on the site's cluster), with its
-                  labels; selector = all of the environment's namespaces, networkSelector = those naming network
+  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?, recorded?}
+                  the site namespace of each CloudVirt namespace: <entity>--<cloudvirt>--<name> (shc_names,
+                  kind site-namespace; cut with a derived ending beyond 63), or the one status.namespaces recorded,
+                  with its labels; selector = all of the environment's namespaces, networkSelector = those naming
+                  network
+  namespace-ownership {namespaces, existing}  may the environment apply its site namespaces (see the function)
+  site-object-ownership {objects: [{kind, name, existing}], labels}  may a placement apply its objects on a site
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
   orphan-report   {crs, ledgers, sites, nodes}  the fabric orphan check's findings (see orphan_report)
   egress-plan     {egress: realization egress, nodes: [node names], networks: [{network, vpnTarget, index,
@@ -138,8 +141,13 @@ actions:
 import hashlib
 import ipaddress
 import json
+import os
 import re
 import sys
+
+# the names function sits beside this file (also when run with python -I, which leaves the script's folder off the path)
+sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+import shc_names  # noqa: E402
 
 
 def nets(cidrs):
@@ -2438,10 +2446,9 @@ def root_vrfs(req, circuits):
 
 
 def site_namespace(entity, cloudvirt, name):
-    base = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{cloudvirt}-{name}".lower())
-    if len(base) <= 63:
-        return base
-    return base[:54].rstrip("-") + "-" + hashlib.sha1(base.encode()).hexdigest()[:8]
+    """<tenant>--<environment>--<namespace> (shc_names, kind site-namespace): the joiner cannot occur in a part, so
+    two tenants never get one name; cut with a derived ending beyond 63."""
+    return shc_names.name("site-namespace", [entity, cloudvirt, name])["name"]
 
 
 def label_value(v):
@@ -2463,9 +2470,13 @@ def site_labels(entity, cloudvirt, network=""):
 
 
 def cloudvirt_namespaces(req):
+    """The site namespace of each of the environment's namespaces. recorded: the environment's status.namespaces
+    ([{name, namespace}]): a namespace the status already records keeps its name (an earlier release's form)."""
+    kept = {r.get("name"): r.get("namespace") for r in req.get("recorded") or []
+            if isinstance(r, dict) and r.get("name") and r.get("namespace")}
     out, errors, seen = [], [], {}
     for n in req.get("namespaces") or []:
-        ns = site_namespace(req.get("entity", ""), req.get("cloudvirt", ""), n.get("name", ""))
+        ns = kept.get(n.get("name")) or site_namespace(req.get("entity", ""), req.get("cloudvirt", ""), n.get("name", ""))
         if ns in seen:
             errors.append(f"namespaces {seen[ns]} and {n.get('name')} map to the same site namespace {ns}")
         seen[ns] = n.get("name")
@@ -2478,23 +2489,83 @@ def cloudvirt_namespaces(req):
             if req.get("network") else {}}
 
 
+def namespace_ownership(req):
+    """Whether the environment may apply its site namespaces. namespaces: [{namespace, labels}] (what it wants, from
+    cloudvirt-namespaces); existing: {namespace: its labels} for those the site already has. A namespace is the
+    environment's when it carries the environment's tenant and environment labels; one of the tenant with another
+    environment's label is the tenant's own clash (NamespaceTaken); any other (no labels, another tenant's, the
+    site's own) is refused with NameTakenOnSite. Nothing is merged into a namespace that is not the environment's.
+    Returns {ok, reason, message, refused: [namespace]}."""
+    keys = ("hybridsovereign.redhat/entity", "hybridsovereign.redhat/cloudvirt")
+    existing = req.get("existing") or {}
+    tenant_clash, foreign = [], []
+    for n in req.get("namespaces") or []:
+        if n["namespace"] not in existing:
+            continue
+        have = existing[n["namespace"]] or {}
+        want = n.get("labels") or {}
+        if all(have.get(k) == want.get(k) for k in keys):
+            continue
+        (tenant_clash if have.get(keys[0]) == want.get(keys[0]) else foreign).append(n["namespace"])
+    if foreign:
+        return {"ok": False, "reason": "NameTakenOnSite", "refused": foreign,
+                "message": "The site already has namespace(s) " + ", ".join(foreign) + " that the platform did not make "
+                           "for this environment; the platform does not take them over. Ask the platform team to "
+                           "remove them, or use other namespace names."}
+    if tenant_clash:
+        return {"ok": False, "reason": "NamespaceTaken", "refused": tenant_clash,
+                "message": "Namespace(s) " + ", ".join(tenant_clash) + " on the site belong to another of your "
+                           "environments; use other namespace names."}
+    return {"ok": True, "reason": "", "message": "", "refused": []}
+
+
+def site_object_ownership(req):
+    """Whether a placement may apply its objects on a site (cluster-scoped, named by number: the network object and
+    the route advertisement). objects: [{kind, name, existing}], existing = the object's labels on the site, or null
+    when the site has none of that name; labels: the placement's. One is the placement's when its tenant and
+    placement labels match; any other is refused (NameTakenOnSite) and nothing is applied."""
+    want = req.get("labels") or {}
+    keys = ("hybridsovereign.redhat/entity", "hybridsovereign.redhat/networkplacement")
+    for o in req.get("objects") or []:
+        have = o.get("existing")
+        if have is None or all((have or {}).get(k) == want.get(k) for k in keys):
+            continue
+        return {"ok": False, "reason": "NameTakenOnSite",
+                "message": f"The site already has a {o.get('kind', 'network object')} named {o.get('name', '')} that "
+                           "the platform did not make for this placement; the platform does not change it. Ask the "
+                           "platform team to remove it."}
+    return {"ok": True, "reason": "", "message": ""}
+
+
 def placement_names(req):
-    """Names of a placement's realized objects. Site objects are named after the placement's L3 VNI: unique on the
-    fabric and short, because OpenShift derives Linux device names (15 characters) from the network name."""
+    """Names of a placement's realized objects. Devices and the OpenShift site's network objects are named after the
+    placement's L3 VNI: unique on the fabric and short, because OpenShift derives Linux device names (15 characters)
+    from the network name; the names people chose go beside them (the annotation below, FRR description lines). The
+    OpenStack network and router are for people: <tenant>_<placement> (shc_names, kind openstack-network); the
+    platform finds them by recorded id or by the tag, never by that name."""
     vni, key = int(req["l3Vni"]), f"{req['namespace']}/{req['name']}"
+    os_name = shc_names.name("openstack-network", [req.get("entity", ""), req["name"]])["name"]
     return {"vrf": f"t{vni}", "cudn": f"hn{vni}", "routeAdvertisement": f"hn{vni}",
-            "osNetwork": f"hn{vni}", "osRouter": f"hn{vni}", "tag": f"shc-placement={key}",
+            "osNetwork": os_name, "osRouter": os_name, "tag": f"shc-placement={key}",
+            "display": shc_names.display([req.get("entity", ""), req.get("network", ""), req["name"]]),
+            "annotations": {NAMES_ANNOTATION: json.dumps({"tenant": req.get("entity", ""),
+                                                          "network": f"{req['namespace']}/{req.get('network', '')}",
+                                                          "placement": key}, sort_keys=True)},
             "labels": {"hybridsovereign.redhat/entity": label_value(req.get("entity", "")),
                        "hybridsovereign.redhat/networkplacement": label_value(req["name"]),
                        "hybridsovereign.redhat/hybridnetwork": label_value(req.get("network", "")),
                        "hybridsovereign.redhat/l3vni": str(vni)}}
 
 
+# on a site's network object and route advertisement, named by number: the names people chose
+NAMES_ANNOTATION = "hybridsovereign.redhat/names"
+
+
 def orphan_report(req):
     """Fabric orphan check (report only): what the platform realized that no CR owns any more, and CR claims that
     the ledger does not back. Input: crs {fabrics, gateways, networks, placements, cloudvirts, circuits} (CR objects),
     ledgers {fabric: ledger} (with its IPAM section), sites [{gateway, type, cudns: [{name, l3vni}], routeAdvertisements: [...],
-    namespaces: [{name, labels}], networks: [{name, sharedTo}], routers: [{name, evpnVni}]}],
+    namespaces: [{name, labels}], networks: [{id, name, tags, sharedTo}], routers: [{id, name, tags, evpnVni}]}],
     nodes [{fabric, node, netns: {name: [vrf]}, rootDevices: [{name, master, addrs6}] (the root's VLAN devices in root
     VRFs or on a bearer interface within the attachment VLAN pool, with their global IPv6 addresses), rootBfd: [{peer,
     vrf, interface, status}] (the root bfdd's sessions), rootAttach6 (the circuits' IPv6 filter table is loaded),
@@ -2588,10 +2659,16 @@ def orphan_report(req):
             if n["name"] not in ns_owned:
                 findings.append(f"{where}: namespace {n['name']} (CloudVirt label {n.get('labels', {}).get('hybridsovereign.redhat/cloudvirt')}) "
                                 "belongs to no CloudVirt")
+        # the platform project's networks and routers belong to the placement whose status records their id, or
+        # whose tag (shc-placement=<namespace>/<name>) they carry; their names are for people and never parsed
         for kind in ("networks", "routers"):
+            idkey = "networkId" if kind == "networks" else "routerId"
             for o in site.get(kind) or []:
-                m = re.fullmatch(r"hn(\d+)", o.get("name") or "")
-                p = by_vni.get(int(m.group(1))) if m else None
+                tags = set(o.get("tags") or [])
+                p = next((x for x in placements
+                          if (o.get("id") and (((x.get("status") or {}).get("realization") or {}).get("site") or {})
+                              .get(idkey) == o.get("id"))
+                          or f"shc-placement={key(x).split('/', 1)[1]}" in tags), None)
                 if p is None or (p.get("status") or {}).get("cloudGateway") != gw:
                     findings.append(f"{where}: {kind[:-1]} {o.get('name')} in the platform project has no placement")
                 elif kind == "networks":
@@ -2670,7 +2747,9 @@ def orphan_report(req):
 
 ACTIONS = {"check-fabric": check_fabric, "check-gateway": check_gateway, "check-network": check_network,
            "cloudvirt-namespaces": cloudvirt_namespaces, "pe-addresses": pe_addresses,
-           "placement-names": placement_names, "orphan-report": orphan_report, "egress-plan": egress_plan,
+           "placement-names": placement_names, "orphan-report": orphan_report,
+           "namespace-ownership": namespace_ownership, "site-object-ownership": site_object_ownership,
+           "egress-plan": egress_plan,
            "circuit-plan": circuit_plan, "service-kept": service_kept, "check-circuit": check_circuit, "attachments-plan": attachments_plan,
            "reserved-ranges": reserved_ranges_action, "service-plan": service_plan,
            "service-prefix-check": service_prefix_check, "check-cluster-networks": check_cluster_networks}
