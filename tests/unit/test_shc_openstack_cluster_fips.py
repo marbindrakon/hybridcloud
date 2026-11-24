@@ -1,8 +1,9 @@
 """cluster-fips of eda/common/files/shc_openstack.py against a fake Neutron: a cluster's API and ingress floating IPs
-found by description first (a re-run after a failure at any step creates nothing twice), else created on the named
-network; one on another network refused; duplicates of a description released; the release by recorded ids and by
-description, a missing id counted as released, another project's floating IP never touched. Also provision without
-the environment's floating IP pair. Addresses are documentation space only."""
+are created on the named network (create_only, required) and never found by their description (a description in the
+tenant's project is anyone's to write; the cluster's are the ones its status records); the release goes by recorded
+ids only, a missing id counted as released, another project's floating IP never touched. Also provision without the
+environment's floating IP pair, and the environment's teardown by recorded ids. Addresses are documentation space
+only."""
 import importlib.util
 import os
 import sys
@@ -81,91 +82,77 @@ def present(conn, **over):
 
 
 class Present(unittest.TestCase):
+    """present: (create_only given or not) x (floating IPs of the descriptions already in the project: none, one on
+    the network, one on another network, associated and unassociated duplicates). The descriptions are never read:
+    with create_only both are created, without it the request is refused before any call."""
+
+    def seeded(self, kind):
+        conn = FakeConn()
+        add = lambda fid, port, net: conn.network.fips.append(Obj(id=fid, floating_ip_address="192.0.2.50",
+                                                                   project_id=PROJECT, port_id=port,
+                                                                   floating_network_id=net, description=DESCS["api"]))
+        if kind == "one":
+            add("fip-x", None, NET)
+        elif kind == "other network":
+            add("fip-x", None, OTHER_NET)
+        elif kind == "duplicates":
+            for fid, port in (("fip-a", None), ("fip-b", "port-1"), ("fip-c", None)):
+                add(fid, port, NET)
+        return conn
+
+    def test_states(self):
+        for kind in ("none", "one", "other network", "duplicates"):
+            conn = self.seeded(kind)
+            before = [i.id for i in conn.network.fips]
+            with self.assertRaises(ValueError) as cm:                      # no create_only: refused, nothing called
+                present(conn)
+            self.assertIn("create_only", str(cm.exception))
+            self.assertEqual(conn.network.calls, [], kind)
+            out = present(conn, create_only=True)                         # create_only: two new ones, nothing else
+            self.assertEqual([op for op, _ in conn.network.calls], ["create_ip", "create_ip"], kind)
+            self.assertTrue(out["api"]["created"] and out["ingress"]["created"], kind)
+            self.assertNotIn(out["api"]["id"], before)
+            self.assertEqual(out["released"], [], kind)
+            self.assertEqual([i.id for i in conn.network.fips][:len(before)], before, kind)
+
     def test_creates_both_on_the_network(self):
         conn = FakeConn()
-        out = present(conn)
+        out = present(conn, create_only=True)
         self.assertEqual(out["network"], NET)
         self.assertEqual(out["api"], {"address": "192.0.2.11", "id": "fip-1", "created": True})
         self.assertEqual(out["ingress"], {"address": "192.0.2.12", "id": "fip-2", "created": True})
         self.assertEqual(conn.network.calls, [("create_ip", {"floating_network_id": NET, "description": DESCS["api"]}),
                                               ("create_ip", {"floating_network_id": NET, "description": DESCS["ingress"]})])
-        self.assertEqual(out["released"], [])
-
-    def test_rerun_finds_them_by_description(self):
-        conn = FakeConn()
-        first = present(conn)
-        n = len(conn.network.calls)
-        again = present(conn)
-        self.assertEqual(conn.network.calls[n:], [])
-        self.assertEqual((again["api"]["id"], again["ingress"]["id"]), (first["api"]["id"], first["ingress"]["id"]))
-        self.assertFalse(again["api"]["created"] or again["ingress"]["created"])
-
-    def test_create_only_reads_no_description_back(self):
-        # a floating IP of the description that the cluster's status does not record is not the cluster's
-        conn = FakeConn()
-        present(conn)
-        n = len(conn.network.calls)
-        out = present(conn, create_only=True)
-        self.assertEqual([op for op, _ in conn.network.calls[n:]], ["create_ip", "create_ip"])
-        self.assertTrue(out["api"]["created"] and out["ingress"]["created"])
-        self.assertEqual(out["released"], [])
-
-    def test_failure_between_the_two_converges(self):
-        conn = FakeConn()
-        conn.network.fail_create_on = DESCS["ingress"]
-        with self.assertRaises(RuntimeError):
-            present(conn)
-        conn.network.fail_create_on = None
-        out = present(conn)
-        self.assertFalse(out["api"]["created"])
-        self.assertTrue(out["ingress"]["created"])
-        self.assertEqual(len(conn.network.fips), 2)
-
-    def test_one_on_another_network_is_refused(self):
-        conn = FakeConn()
-        conn.network.fips.append(Obj(id="fip-x", floating_ip_address="192.0.2.99", project_id=PROJECT, port_id=None,
-                                     floating_network_id=OTHER_NET, description=DESCS["api"]))
-        with self.assertRaises(RuntimeError) as cm:
-            present(conn)
-        self.assertIn(f"is on network {OTHER_NET}, not {NET}", str(cm.exception))
-        self.assertEqual(conn.network.calls, [])
-
-    def test_unassociated_duplicates_are_released(self):
-        conn = FakeConn()
-        for fid, port in (("fip-a", None), ("fip-b", "port-1"), ("fip-c", None)):
-            conn.network.fips.append(Obj(id=fid, floating_ip_address="192.0.2.50", project_id=PROJECT, port_id=port,
-                                         floating_network_id=NET, description=DESCS["api"]))
-        out = present(conn)
-        self.assertEqual(out["api"]["id"], "fip-b")  # the associated one stays
-        self.assertEqual(out["released"], ["fip-a", "fip-c"])
 
     def test_both_descriptions_are_required(self):
         with self.assertRaises(ValueError):
-            present(FakeConn(), descriptions={"api": DESCS["api"]})
+            present(FakeConn(), descriptions={"api": DESCS["api"]}, create_only=True)
 
 
 class Absent(unittest.TestCase):
     def test_release_by_recorded_ids(self):
         conn = FakeConn()
-        out = present(conn)
+        out = present(conn, create_only=True)
         rel = call(conn, state="absent", ids=[out["api"]["id"], out["ingress"]["id"]])
         self.assertEqual(rel, {"released": ["fip-1", "fip-2"], "missing": []})
         self.assertEqual(conn.network.fips, [])
 
     def test_missing_id_counts_as_released(self):
         conn = FakeConn()
-        present(conn)
+        present(conn, create_only=True)
         rel = call(conn, state="absent", ids=["fip-1", "fip-gone", ""])
         self.assertEqual(rel, {"released": ["fip-1"], "missing": ["fip-gone"]})
         again = call(conn, state="absent", ids=["fip-1"])
         self.assertEqual(again, {"released": [], "missing": ["fip-1"]})
 
-    def test_unrecorded_ones_go_by_description(self):
-        # a run that created a floating IP and failed before recording it
+    def test_unrecorded_ones_are_never_found_by_description(self):
+        # a run that created floating IPs and failed before recording them: they are left (the platform team
+        # removes them), as a description in the tenant's project is anyone's to write
         conn = FakeConn()
-        present(conn)
+        present(conn, create_only=True)
         rel = call(conn, state="absent", ids=[], descriptions=DESCS)
-        self.assertEqual(sorted(rel["released"]), ["fip-1", "fip-2"])
+        self.assertEqual(rel, {"released": [], "missing": []})
+        self.assertEqual(len(conn.network.fips), 2)
 
     def test_another_projects_floating_ip_is_never_touched(self):
         conn = FakeConn()
@@ -194,6 +181,27 @@ class ProvisionWithoutPair(unittest.TestCase):
         self.assertEqual(out["fips"], {})
         conn_p.network.find_network.assert_not_called()
         conn_p.network.create_ip.assert_not_called()
+
+    def test_fip_descriptions_are_refused(self):
+        with mock.patch.object(S, "Account") as acct:
+            with self.assertRaises(ValueError):
+                S.provision({"action": "provision", "domain": "tenants", "project": "env", "owner": "CloudOSO/x/env",
+                             "fip_descriptions": {"api": "x"}})
+        acct.assert_not_called()
+
+    def test_teardown_reads_no_description(self):
+        conn_d, conn = mock.MagicMock(), mock.MagicMock()
+        conn_d.session.auth.get_access.return_value = Obj(user_id="u1", domain_id="d1", project_id=None)
+        conn_d.identity.projects.side_effect = [[Obj(id="p1", name="env")], []]
+        conn.network.security_groups.return_value = []
+        conn.identity.application_credentials.return_value = []
+        acct = mock.Mock()
+        acct.domain.return_value, acct.project.return_value = conn_d, conn
+        with mock.patch.object(S, "Account", return_value=acct):
+            out = S.teardown({"action": "teardown", "domain": "tenants", "project_id": "p1", "fip_ids": ["fip-1"],
+                              "fip_descriptions": ["sovereign-env-api"]})
+        conn.network.ips.assert_not_called()
+        self.assertEqual(out["floating_ips"], ["fip-1"])
 
 
 if __name__ == "__main__":
