@@ -38,6 +38,24 @@
         vault_svc_name: "vault-{{ vault_cr_name }}"
         vault_ha_enabled: "{{ vault_spec.ha | default(true) | bool }}"
 
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ entity_name }}", what: tenant}
+          - {value: "{{ vault_cr_name }}", what: secrets store}
+
+    - name: Refuse a name that breaks the rule for names
+      when: name_check_message | length > 0
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            vault_failure_reason: NameNotAllowed
+
+        - name: Refuse a name that breaks the rule for names (stop)
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Deploy Vault Kubernetes resources
       ansible.builtin.include_tasks: deploy_resources.yml
 
@@ -101,7 +119,9 @@
         cr_namespace: "{{ vault_cr_namespace }}"
         cr_status_body:
           status: failed
-          reason: ProvisionFailed
+          reason: >-
+            {{ 'NameTakenOnSite' if kce_refused | default(false) | bool
+               else vault_failure_reason | default('ProvisionFailed', true) }}
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"

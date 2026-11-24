@@ -83,11 +83,15 @@
         namespace: "{{ vault_cr_namespace }}"
       ignore_errors: true
 
-    - name: Derive Vault OIDC client ID
+    # the client id the provision recorded (never rebuilt); nothing recorded = no client was made or kept
+    - name: The Vault's recorded sign-in client
       ansible.builtin.set_fact:
         vault_fin_entity: "{{ vault_cr_final.resources[0].status.entity | default('') }}"
-        vault_fin_oidc_client_id: "vault-{{ vault_cr_final.resources[0].status.entity | default('') }}-{{ vault_cr_name }}"
-      when: vault_cr_final.resources | length > 0
+        vault_fin_oidc_client_id: "{{ vault_cr_final.resources[0].status.oidcClientId }}"
+        vault_fin_owner: "Vault/{{ vault_cr_namespace }}/{{ vault_cr_name }}"
+      when:
+        - vault_cr_final.resources | length > 0
+        - (vault_cr_final.resources[0].status | default({}, true)).oidcClientId | default('', true) | length > 0
 
     # the tenant realm's clients automation client (published by the RbacConfig job), not the master realm admin
     - name: Run Keycloak OIDC client cleanup
@@ -109,14 +113,14 @@
               {{ (shc_live_spec | default({}, true)).rbacConfig
                  | default((vault_cr_final.resources[0].spec | default({}, true)).rbacConfig
                            if vault_cr_final.resources | default([]) | length > 0 else '', true)
-                 | default('keycloak-sovereign-tenants-services', true) }}
+                 | default('', true) }}
             krt_url: "{{ kc_external_url_fin }}"
             krt_token_fact: kc_token_fin
 
         # the client representation carries the client secret
         - name: Look up Vault Keycloak OIDC client
           ansible.builtin.uri:
-            url: "{{ keycloak_realm_url }}/admin/realms/sovereign-tenants/clients?clientId={{ vault_fin_oidc_client_id | urlencode }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/clients?clientId={{ vault_fin_oidc_client_id | urlencode }}"
             method: GET
             headers:
               Authorization: "Bearer {{ kc_token_fin }}"
@@ -125,15 +129,27 @@
           register: kc_client_lookup_fin
           no_log: true
 
+        # only the recorded client with this Vault's mark, or with none (made before the mark)
+        - name: "Decide: delete or leave"
+          vars:
+            _found: "{{ kc_client_lookup_fin.json | default([], true) | selectattr('clientId', 'equalto', vault_fin_oidc_client_id) | list }}"
+            _mark: >-
+              {{ (((_found | first).attributes | default({}, true))['hybridsovereign.redhat/owner'] | default('', true))
+                 if _found | length > 0 else '' }}
+          ansible.builtin.set_fact:
+            vault_fin_client_uuid: "{{ (_found | first).id if _found | length > 0 else '' }}"
+            vault_fin_decision: >-
+              {{ 'gone' if _found | length == 0 else ('delete' if _mark in [vault_fin_owner, ''] else 'leave') }}
+
         - name: Delete Vault Keycloak OIDC client
           ansible.builtin.uri:
-            url: "{{ keycloak_realm_url }}/admin/realms/sovereign-tenants/clients/{{ kc_client_lookup_fin.json[0].id }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/clients/{{ vault_fin_client_uuid }}"
             method: DELETE
             headers:
               Authorization: "Bearer {{ kc_token_fin }}"
             validate_certs: false
             status_code: [200, 204, 404]
-          when: kc_client_lookup_fin.json | default([]) | length > 0
+          when: vault_fin_decision == 'delete'
       always:
         - name: Forget the realm token and the client
           ansible.builtin.set_fact:
