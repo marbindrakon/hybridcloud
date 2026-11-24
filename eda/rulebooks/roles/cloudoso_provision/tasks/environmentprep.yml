@@ -183,15 +183,23 @@
   vars:
     os_helper: shc_dns.py
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: ensure-zone
       owner_project_id: "{{ oso_env_dns.ownerProjectId }}"
       name: "{{ ep_cluster_domain }}"
+      # the recorded zone first; a zone of the name is this environment's only when it carries this description (the
+      # platform's mark; Designate keeps no tags on zones). Any other is refused, never reused and shared.
+      zone_id: "{{ ((cloudoso_cr_lookup.resources[0].status | default({}, true)).dns | default({}, true)).zoneId | default('', true) }}"
       email: "hostmaster@{{ ep_base_domain }}"
       description: "Environment zone of CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }} (shared with its project)"
       share_with: "{{ ep_os.project.id }}"
       attributes: "{{ oso_env_dns.zoneAttributes | default({}) }}"
       region: "{{ ep_region_name }}"
+  when: ep_dns_provider == 'zone'
+
+- name: Refuse a zone or delegation of the name that is not this environment's
+  ansible.builtin.include_tasks: dns_refusal.yml
   when: ep_dns_provider == 'zone'
 
 - name: Keep the environment zone
@@ -212,13 +220,19 @@
   vars:
     os_helper: shc_dns.py
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: ensure-delegation
       project_id: "{{ oso_env_dns.globalProjectId }}"
       zone_id: "{{ oso_env_dns.globalZoneId }}"
       name: "{{ ep_cluster_domain }}"
       nameservers: "{{ ep_env_zone.nameservers }}"
+      # the mark: an NS recordset of the name with another description is refused (teardown deletes only this one)
       description: "Delegation of CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }} (site {{ oso_cloudinfra_name }})"
+  when: ep_dns_provider == 'zone' and ep_env_delegate | bool
+
+- name: Refuse a delegation of the name that is not this environment's
+  ansible.builtin.include_tasks: dns_refusal.yml
   when: ep_dns_provider == 'zone' and ep_env_delegate | bool
 
 - name: Check the environment domain sits inside the Designate zone

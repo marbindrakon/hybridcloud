@@ -18,11 +18,15 @@ Actions (request["action"]):
                      name is held by another project (then the namespace isn't reserved on this site).
                      Optional `attributes` (dict) are set on a zone this call creates (Designate pool
                      scheduling, e.g. {"scope": "public"}); the same for ensure-zone.
-  ensure-zone        the environment zone `name` in owner_project_id, shared with share_with (a project id):
-                     created when missing, share added when missing. Returns id, NS records, share id.
-  delete-zone        deletes zone_id (or `name`) in owner_project_id with its shares, tenant records included.
-  ensure-delegation  NS records `name` -> nameservers in the global zone (project_id, zone_id).
-  delete-delegation  removes them.
+  ensure-zone        the environment zone `name` in owner_project_id, shared with share_with (a project id): the
+                     recorded zone_id, else the zone of the name only when its description is the one given (the
+                     platform's mark: Designate keeps no tags on zones); created when missing, share added when
+                     missing; any other zone of the name is refused (NameTakenOnSite). Returns id, NS records, share id.
+  delete-zone        deletes zone_id (or `name`, only with the given description) in owner_project_id with its shares,
+                     tenant records included.
+  ensure-delegation  NS records `name` -> nameservers in the global zone (project_id, zone_id); `description` is the
+                     mark: an NS recordset of the name with another description is refused (NameTakenOnSite).
+  delete-delegation  removes them, only when they carry `description`.
 
 Platform records (reverse DNS of the platform's IPv6 space). Every recordset these write carries the description
 `shc:<owner>` (the ownership marker; a long owner is shortened with a hash); a recordset of the same name and type
@@ -49,7 +53,7 @@ import time
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import openstack  # noqa: E402
-from shc_openstack import Account  # noqa: E402
+from shc_openstack import Account, Refusal  # noqa: E402
 
 
 def fqdn(name):
@@ -175,17 +179,48 @@ def ensure_parent(req):
             "attributes": z.attributes or {}}
 
 
+def _taken(what, name):
+    return Refusal("NameTakenOnSite",
+                   f"The DNS {what} {fqdn(name)} already exists on the site and was not made by the platform for this "
+                   f"environment; the platform does not take it over or change it. Ask the platform team to remove it, "
+                   f"or use another environment name.")
+
+
+def _ours(obj, description):
+    """The platform's mark on a zone or a delegation it made: its description is exactly the one the platform writes
+    for this owner (Designate keeps no tags on zones or recordsets: designate/objects/zone.py, recordset.py; the
+    description, at most 160 characters, is the one free field). An empty wanted description marks nothing."""
+    return bool(description) and (getattr(obj, "description", None) or "") == description
+
+
 def ensure_zone(req):
+    """The environment zone: the recorded zone_id, else the zone of that name in the owner project only when it
+    carries this environment's description; else created. Any other zone of that name, in the project or held by
+    another project, is refused (NameTakenOnSite), never reused or shared. The description is refreshed."""
     conn = Account(req).project(req["owner_project_id"])
-    z = zone_in_project(conn, req["name"])
+    desc = (req.get("description") or "")[:DESCRIPTION_MAX]
+    z = None
+    if req.get("zone_id"):
+        try:
+            z = conn.dns.get_zone(req["zone_id"])
+        except openstack.exceptions.NotFoundException:
+            z = None
+        if z is not None and z.name != fqdn(req["name"]):
+            z = None                       # a recorded id of another name is not this zone
+    if z is None:
+        z = zone_in_project(conn, req["name"])
+        if z is not None and not _ours(z, desc):
+            raise _taken("zone", req["name"])
     created = False
     if z is None:
         try:
-            z = conn.dns.create_zone(name=fqdn(req["name"]), email=req["email"],
-                                     description=req.get("description", ""), **zone_attributes(req))
-        except openstack.exceptions.HttpException as e:  # 409 duplicate, 403 inside another project's zone
-            raise RuntimeError(f"zone {fqdn(req['name'])} is held by another project on this site: {e}")
+            z = conn.dns.create_zone(name=fqdn(req["name"]), email=req["email"], description=desc,
+                                     **zone_attributes(req))
+        except openstack.exceptions.HttpException:  # 409 duplicate, 403 inside another project's zone
+            raise _taken("zone", req["name"])
         created = True
+    elif desc and (z.description or "") != desc:
+        z = conn.dns.update_zone(z, description=desc)
     z = wait_active(conn, z)
     share = None
     if req.get("share_with"):
@@ -201,6 +236,7 @@ def ensure_zone(req):
 
 
 def delete_zone(req):
+    """By the recorded zone_id; by name only when the zone carries the given description (else kept)."""
     conn = Account(req).project(req["owner_project_id"])
     z = None
     if req.get("zone_id"):
@@ -210,6 +246,8 @@ def delete_zone(req):
             z = None
     elif req.get("name"):
         z = zone_in_project(conn, req["name"])
+        if z is not None and not _ours(z, (req.get("description") or "")[:DESCRIPTION_MAX]):
+            return {"deleted": False, "missing": False, "kept": "not made by the platform for this environment"}
     if z is None:
         return {"deleted": False, "missing": True}
     conn.dns.delete_zone(z, ignore_missing=True, delete_shares=True)
@@ -217,31 +255,44 @@ def delete_zone(req):
 
 
 def ensure_delegation(req):
+    """NS records name -> nameservers in the global zone. An existing NS recordset of that name is changed only when
+    it carries this environment's description (the platform's mark); any other is refused (NameTakenOnSite)."""
     conn = Account(req).project(req["project_id"])
     zone = conn.dns.get_zone(req["zone_id"])
     name = fqdn(req["name"])
     if not name.endswith("." + zone.name):
         raise RuntimeError(f"{name} is not below the global zone {zone.name}")
+    desc = (req.get("description") or "")[:DESCRIPTION_MAX]
+    if not desc:
+        raise ValueError("refused: description is empty; it marks the delegation as the platform's")
     want = sorted(fqdn(n) for n in req["nameservers"])
-    existing = list(conn.dns.recordsets(zone, name=name, type="NS"))
+    existing = [rs for rs in conn.dns.recordsets(zone, name=name, type="NS") if rs.name == name]
+    if existing and not _ours(existing[0], desc):
+        raise _taken("delegation", name)
     if existing and sorted(existing[0].records) == want:
         return {"state": "unchanged", "name": name, "nameservers": want}
     if existing:
         conn.dns.update_recordset(existing[0], records=want)
         return {"state": "updated", "name": name, "nameservers": want}
-    conn.dns.create_recordset(zone, name=name, type="NS", ttl=req.get("ttl", 3600), records=want,
-                              description=req.get("description", ""))
+    conn.dns.create_recordset(zone, name=name, type="NS", ttl=req.get("ttl", 3600), records=want, description=desc)
     return {"state": "created", "name": name, "nameservers": want}
 
 
 def delete_delegation(req):
+    """Deletes the NS recordset name only when it carries the description ensure-delegation wrote for this
+    environment; one without it (or a request without a description) is kept and said so."""
     conn = Account(req).project(req["project_id"])
     zone = conn.dns.get_zone(req["zone_id"])
     name = fqdn(req["name"])
-    found = list(conn.dns.recordsets(zone, name=name, type="NS"))
-    for rs in found:
+    desc = (req.get("description") or "")[:DESCRIPTION_MAX]
+    found = [rs for rs in conn.dns.recordsets(zone, name=name, type="NS") if rs.name == name]
+    mine = [rs for rs in found if _ours(rs, desc)]
+    for rs in mine:
         conn.dns.delete_recordset(rs, zone, ignore_missing=True)
-    return {"deleted": bool(found), "name": name}
+    out = {"deleted": bool(mine), "name": name}
+    if found and not mine:
+        out["kept"] = "not made by the platform for this environment" if desc else "no description to check it by"
+    return out
 
 
 # ---- platform records ----
@@ -350,6 +401,9 @@ if __name__ == "__main__":
     request = json.load(sys.stdin)
     try:
         print(json.dumps(ACTIONS[request["action"]](request)))
+    except Refusal as e:  # the reason and the sentence go to the object's condition
+        print(json.dumps({"error": e.message, "reason": e.reason, "message": e.message}))
+        sys.exit(1)
     except Exception as e:  # one line for the job log
         print(json.dumps({"error": f"{type(e).__name__}: {e}"}))
         sys.exit(1)

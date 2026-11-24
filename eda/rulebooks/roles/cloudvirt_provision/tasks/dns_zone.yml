@@ -51,13 +51,30 @@
       vars:
         os_helper: shc_dns.py
         os_call_no_log: false
+        os_call_soft: true
         os_request:
           action: ensure-zone
           owner_project_id: "{{ dnscfg_project_id }}"
           name: "{{ fab_name }}.{{ fab_entity }}.{{ dnscfg_domain }}"
+          # the recorded zone first; a zone of the name is this environment's only when it carries this description
+          # (the platform's mark); any other is refused, never reused
+          zone_id: "{{ (fab_st.dns | default({}, true)).zoneId | default('', true) }}"
           email: "hostmaster@{{ dnscfg_domain }}"
           description: "Environment zone of CloudVirt {{ fab_namespace }}/{{ fab_name }} (platform-held)"
           attributes: "{{ dnscfg_zone_attributes | default({}) }}"
+
+    - name: Refuse a zone of the name that is not this environment's
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ 'NameTakenOnSite' if (os_result.reason | default('', true)) == 'NameTakenOnSite' else fab_fail_reason | default('ProvisionFailed', true) }}"
+        fab_fail_msg: >-
+          {{ os_result.message if (os_result.reason | default('', true)) == 'NameTakenOnSite'
+             else 'OpenStack ensure-zone failed: ' ~ os_result.error }}
+      when: os_result.error is defined
+
+    - name: Stop on the zone's failure
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: os_result.error is defined
 
     - name: Record the zone
       ansible.builtin.set_fact:

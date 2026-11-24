@@ -241,6 +241,8 @@
           project_id: "{{ oso_env_dns.globalProjectId }}"
           zone_id: "{{ oso_env_dns.globalZoneId }}"
           name: "{{ oso_env_dns.zone }}"
+          # only the NS recordset provision wrote (its description is the mark)
+          description: "Delegation of CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }} (site {{ (cloudoso_cr_lookup.resources | default([]) | first | default({})).status.cloudInfrastructure | default(rca_site, true) }})"
       when: (oso_env_dns.zoneId | default('')) | length > 0 and (oso_env_dns.delegated | default(false) | bool)
 
     - name: Note the step

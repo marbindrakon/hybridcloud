@@ -31,8 +31,11 @@ Actions (request["action"]):
   cluster-identity-delete  deletes a cluster's user (its credentials go with it).
   leftover-users  deletes the platform's users of the domain that hold a role on the project (what a failed cluster
                 teardown left), before the project goes.
-  dns-upsert    creates or updates A records in a Designate zone (scoped to the zone's project).
-  dns-delete    deletes recordsets by name/type from a Designate zone; reports what was missing.
+  dns-upsert    creates or updates A records in a Designate zone (scoped to the zone's project), each marked with the
+                description shc:<owner>; a recordset of the name without that mark is refused (NameTakenOnSite)
+                before anything is written.
+  dns-delete    deletes recordsets by name/type from a Designate zone, only those with the owner's mark; reports
+                what was missing and what was kept (not the platform's).
   site-probe    CloudInfrastructure probe (cloud admin): authenticates, reports the catalog, Neutron's
                 extensions (evpn), the named external network and the site's global external networks (those
                 with an access_as_external RBAC policy for every project, target "*"; a network external for some
@@ -82,6 +85,7 @@ Actions (request["action"]):
                 its tags and external gateway (network and fixed addresses), for the PlatformOpenshift role's router
                 gateway step (files/po_preflight.py router-gateway judges them).
 """
+import hashlib
 import ipaddress
 import json
 import os
@@ -360,40 +364,71 @@ def teardown(req):
     return result
 
 
+# A cluster's records in its environment's zone carry the description shc:<owner> (shc_dns.py owner_description: the
+# platform's mark; Designate keeps no tags on recordsets, designate/objects/recordset.py, and the description takes
+# 160 characters). The tenant manages records in that zone too: a recordset of the name without the owner's mark is
+# never overwritten or deleted.
+RECORD_DESCRIPTION_MAX = 160
+
+
+def record_mark(owner):
+    owner = str(owner or "").strip()
+    if not owner:
+        raise ValueError("refused: owner is empty; it marks the cluster's DNS records as the platform's")
+    d = f"shc:{owner}"
+    if len(d) > RECORD_DESCRIPTION_MAX:
+        d = d[:RECORD_DESCRIPTION_MAX - 11] + "~" + hashlib.sha1(owner.encode()).hexdigest()[:10]
+    return d
+
+
 def dns_upsert(req):
     conn = Account(req).project(req["dns_project_id"])
     zone = conn.dns.get_zone(req["dns_zone_id"])
-    out = []
+    mark = record_mark(req.get("owner"))
+    out, wanted = [], []
     for rec in req["records"]:
         name = rec["name"].rstrip(".") + "."
         if not name.endswith(zone.name):
             raise RuntimeError(f"{name} is outside zone {zone.name}")
-        existing = list(conn.dns.recordsets(zone, name=name, type=rec.get("type", "A")))
+        existing = [rs for rs in conn.dns.recordsets(zone, name=name, type=rec.get("type", "A")) if rs.name == name]
+        if existing and (getattr(existing[0], "description", None) or "") != mark:
+            raise Refusal("NameTakenOnSite",
+                          f"The DNS name {name} already has a {rec.get('type', 'A')} record that the platform did not "
+                          f"make for this cluster; the platform does not change it. Remove that record from the zone, "
+                          f"or use another cluster name.")
+        wanted.append((rec, name, existing))
+    # every record checked before the first write
+    for rec, name, existing in wanted:
         if existing and sorted(existing[0].records) == sorted(rec["records"]):
             state, rs = "unchanged", existing[0]
         elif existing:
             state, rs = "updated", conn.dns.update_recordset(existing[0], records=rec["records"])
         else:
             state, rs = "created", conn.dns.create_recordset(zone, name=name, type=rec.get("type", "A"),
-                                                             ttl=rec.get("ttl", 300), records=rec["records"])
+                                                             ttl=rec.get("ttl", 300), records=rec["records"],
+                                                             description=mark)
         out.append({"zoneId": zone.id, "zone": zone.name, "name": name, "type": rs.type, "state": state})
     return {"records": out}
 
 
 def dns_delete(req):
+    """Deletes the cluster's recordsets (those with the owner's mark); one of the name without it is kept."""
     conn = Account(req).project(req["dns_project_id"])
     try:
         zone = conn.dns.get_zone(req["dns_zone_id"])
     except openstack.exceptions.NotFoundException:
         return {"deleted": [], "missing": [r["name"] for r in req["records"]], "zone_missing": True}
-    deleted, missing = [], []
+    mark = record_mark(req.get("owner"))
+    deleted, missing, kept = [], [], []
     for rec in req["records"]:
         name = rec["name"].rstrip(".") + "."
-        found = list(conn.dns.recordsets(zone, name=name, type=rec.get("type", "A")))
-        for rs in found:
+        label = f"{name} {rec.get('type', 'A')}"
+        found = [rs for rs in conn.dns.recordsets(zone, name=name, type=rec.get("type", "A")) if rs.name == name]
+        mine = [rs for rs in found if (getattr(rs, "description", None) or "") == mark]
+        for rs in mine:
             conn.dns.delete_recordset(rs, zone, ignore_missing=True)
-        (deleted if found else missing).append(f"{name} {rec.get('type', 'A')}")
-    return {"deleted": deleted, "missing": missing}
+        (deleted if mine else kept if found else missing).append(label)
+    return {"deleted": deleted, "missing": missing, "kept": kept}
 
 
 def public_volume_types(conn, services, notes):
