@@ -68,9 +68,9 @@
     # a site never uses Route53 for an environment; the legacy account only when the environment recorded route53
     rca_route53_vault_path: >-
       {{ rca_status_keys.route53 or ((_legacy_route53 if rca_dns_provider == 'route53' else '') if rca_site | length == 0 else '') }}
-    rca_clouds_config_paths: >-
-      {{ rca_status_keys.paths if rca_status_keys.paths | length > 0
-         else (['oso/projects/' ~ rca_name ~ '/clouds-config'] if rca_name | length > 0 else []) }}
+    # only the paths the environment's status records: a path made of the environment's name alone would be
+    # another tenant's when two tenants use one name
+    rca_clouds_config_paths: "{{ rca_status_keys.paths }}"
 
 - name: Does the environment have its own zone
   ansible.builtin.set_fact:

@@ -41,6 +41,8 @@
               project_id: "{{ dnscfg_project_id }}"
               zone_id: "{{ dnscfg_zone_id }}"
               name: "{{ cad_dns.zone }}"
+              # only the NS recordset the provision wrote (its description is the mark); another one is kept
+              description: "Delegation of CloudGCP {{ fab_namespace }}/{{ fab_name }} (Cloud DNS, project {{ cad_account }})"
           when: dnscfg_found | default(false) | bool
 
     - name: Remove the environment's zone

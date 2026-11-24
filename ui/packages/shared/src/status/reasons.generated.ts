@@ -145,6 +145,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "RouterAttachmentsOff": { actor: "T", class: "failed", summary: "The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement." },
   "RoutesMissing": { actor: "P", class: "failed", summary: "Network routes are missing. The platform team is looking at it." },
   "RoutingDaemonDown": { actor: "P", class: "failed", summary: "Routing on a node is partly down. The platform team is alerted." },
+  "SecretNameTaken": { actor: "T", class: "failed", summary: "A Secret of the name the platform generates already exists in your namespace. Rename it, or name your own Secret in the circuit." },
   "ServiceFailed": { actor: "P", class: "failed", summary: "A network service on a node is not running. The platform team is alerted." },
   "ServiceLinkDown": { actor: "P", class: "failed", summary: "On a node, a network's link to the platform's connection is down: the platform may not reach all its clusters. The platform team is alerted." },
   "ServiceNotOffered": { actor: "P", class: "failed", summary: "The platform's connection for clusters on networks is not offered here. Ask the platform team." },

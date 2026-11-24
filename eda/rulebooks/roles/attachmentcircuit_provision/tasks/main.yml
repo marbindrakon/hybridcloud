@@ -399,7 +399,7 @@
           vars:
             _meta: "{{ (_ac_generated.resources | default([{}], true))[0].metadata | default({}, true) }}"
           ansible.builtin.set_fact:
-            fab_fail_reason: InvalidSecret
+            fab_fail_reason: SecretNameTaken
             fab_fail_msg: >-
               AttachmentCircuit {{ fab_name }}: a Secret named {{ ac_secret_name }} already exists in this namespace and
               was not made for this circuit; the platform does not overwrite it. Rename or remove it, or name a Secret of
@@ -414,7 +414,7 @@
         - name: Stop on a Secret that is not the circuit's
           ansible.builtin.fail:
             msg: "{{ fab_fail_msg }}"
-          when: fab_fail_reason | default('') == 'InvalidSecret'
+          when: fab_fail_reason | default('') == 'SecretNameTaken'
 
         - name: Read the kept password
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"

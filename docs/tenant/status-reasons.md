@@ -304,6 +304,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `RouterAttachmentsOff` | The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement. | You (the tenant) |
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
+| `SecretNameTaken` | A Secret of the name the platform generates already exists in your namespace. Rename it, or name your own Secret in the circuit. | You (the tenant) |
 | `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
 | `ServiceLinkDown` | On a node, a network's link to the platform's connection is down: the platform may not reach all its clusters. The platform team is alerted. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |
