@@ -1,0 +1,16 @@
+---
+# The rule for names, checked by a job before it makes anything (the CRDs carry the same rule; this is for an
+# object made before the rule, or by a client that got past it). Input: name_check_items, a list of
+# {value, what[, limit]} ("what" is the word the person reads: tenant, environment, network, placement, cluster,
+# group, gateway). Sets name_check_message: '' when every name obeys the rule, else the sentence for the person.
+# The caller writes its own status with reason NameNotAllowed and stops; nothing here fails for a refused name.
+- name: Check the names against the rule for names
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request:
+      action: check-all
+      items: "{{ name_check_items }}"
+
+- name: Keep the answer
+  ansible.builtin.set_fact:
+    name_check_message: "{{ names_result.message | default('', true) }}"

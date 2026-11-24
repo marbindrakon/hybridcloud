@@ -22,6 +22,8 @@ Use as a module (the other helpers import it) or as a filter over stdin, one JSO
 
   {"action": "check", "value": "web", "what": "cluster", "limit": 30}
       -> {"ok": true, "message": ""} | {"ok": false, "message": "<the sentence for the person>"}
+  {"action": "check-all", "items": [{"value": "acme", "what": "tenant"}, {"value": "web", "what": "cluster"}]}
+      -> the same answer for the first item that breaks the rule (eda/common/tasks/name_check.yml)
   {"action": "name", "kind": "<one of KINDS>", "parts": ["acme-corp", "prod"], ...}
       -> {"name": "acme-corp_prod", "exact": true, "display": "acme-corp / prod"}
   {"action": "join", "form": "plain"|"label", "parts": [...], "limit": 63, "prefix": "", "reserve": 0}
@@ -146,6 +148,12 @@ def _act(req):
     if action == "check":
         message = check_name(req.get("value"), req.get("what") or "name", req.get("limit") or NAME_MAX)
         return {"ok": not message, "message": message}
+    if action == "check-all":
+        for item in req.get("items") or []:
+            message = check_name(item.get("value"), item.get("what") or "name", item.get("limit") or NAME_MAX)
+            if message:
+                return {"ok": False, "message": message}
+        return {"ok": True, "message": ""}
     if action == "name":
         return name(req.get("kind"), req.get("parts") or [])
     if action == "join":

@@ -175,6 +175,15 @@ class Filter(unittest.TestCase):
         self.assertEqual(self.call({"action": "join", "form": "label", "parts": ["a", "b"], "limit": 63})[1]["name"],
                          "a--b")
 
+    def test_check_all_names_the_first_that_breaks_the_rule(self):
+        items = [{"value": "acme", "what": "tenant"}, {"value": "gw-" + "x" * 19, "what": "gateway", "limit": 21},
+                 {"value": "Web", "what": "cluster"}, {"value": "1x", "what": "network"}]
+        rc, out = self.call({"action": "check-all", "items": items})
+        self.assertEqual((rc, out["ok"]), (0, False))
+        self.assertIn("gateway", out["message"])
+        self.assertEqual(self.call({"action": "check-all", "items": items[:1]}), (0, {"ok": True, "message": ""}))
+        self.assertEqual(self.call({"action": "check-all", "items": []}), (0, {"ok": True, "message": ""}))
+
     def test_errors_are_json(self):
         for req in ({"action": "nothing"}, {"action": "name", "kind": "openstack-project", "parts": ["acme"]},
                     {"action": "group", "tenant": "a" * 40, "group": "b" * 40}):
