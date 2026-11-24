@@ -388,13 +388,19 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
                                 cf_network_id=S3.NET, cf_account="sites/site1",
                                 fake_os={"cluster-fips/present": {"api": {"address": "x", "id": "y"},
                                                                   "ingress": {"address": "x", "id": "y"}}})[0]
+        # nothing recorded: both are made, none is found by its description
+        self.assertIs(present["create_only"], True)
+        # a floating IP someone else described as the cluster's is not taken, nor deleted as a duplicate
+        planted = conn.network.create_ip(floating_network_id=S3.NET,
+                                         description="OpenShift cluster c1: API (platform build shc-oso-acme-c1)")
         out = self.helper(conn, present)
+        self.assertNotEqual(out["api"]["id"], planted.id)
+        self.assertIn(planted.id, [i.id for i in conn.network.fips])
+        conn.network.delete_ip(planted.id)
         # the cluster's name in words, the build name as the platform's mark
         self.assertEqual(sorted(i.description for i in conn.network.fips),
                          ["OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
                           "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"])
-        again = self.helper(conn, present)
-        self.assertEqual((again["api"]["id"], again["api"]["created"]), (out["api"]["id"], False))
         # the release by the record only: a floating IP that is not recorded is not released, whatever it is called
         absent = self.requests("cluster_fips_release.yml", cfr_project_id=S3.PROJECT, cfr_account="sites/site1",
                                cfr_ids=[out["api"]["id"]], cfr_cr_name="c1", cfr_cr_namespace="acme")[0]
@@ -416,6 +422,18 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
                               po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]})
         self.assertEqual(calls, [])
         self.assertEqual(len(conn.network.fips), 2)
+
+    def test_a_record_of_half_the_pair_makes_nothing(self):
+        import test_platformopenshift_network as PO
+        for rec in ({"api": {"address": "192.0.2.10", "id": "fip-1"}}, {"api": {"id": "fip-1"}, "ingress": {"id": "fip-2"}},
+                    {"ingress": {"address": "192.0.2.11"}}):
+            v = dict(PO.BASE, cb_app_name="shc-oso-acme-c1", cf_project_id="p1", cf_network_id="n1",
+                     cf_account="sites/site1", po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]})
+            rc, tr, out = H.run("platformopenshift_provision", "cluster_fips.yml", v)
+            self.assertNotEqual(rc, 0, rec)
+            self.assertEqual(H.os_calls(tr, "cluster-fips"), [], rec)
+            self.assertEqual(H.patches(tr), [], rec)
+            self.assertIn("only part of the cluster's floating IPs", out)
 
     def test_the_environment_releases_a_legacy_pair(self):
         import test_shc_openstack_cluster_fips as S3

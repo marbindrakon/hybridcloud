@@ -33,6 +33,41 @@
           the placement's router (status.realization.site.routerId), its network and the site account of the
           environment.
 
+    # the platform project the placement's router is in, by the id recorded for it: the placement's record, else the
+    # one its site's gateway recorded (never found by a tag here)
+    - name: Read the placement's gateway
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudGateway
+        name: "{{ (pf_placement.status | default({}, true)).cloudGateway | default('', true) }}"
+        namespace: "{{ fabric_platform_namespace }}"
+      register: _rap_gateway
+      when: >-
+        (((pf_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).projectId
+        | default('', true) | length == 0 and (pf_placement.status | default({}, true)).cloudGateway | default('', true) | length > 0
+
+    - name: The platform project's recorded id
+      ansible.builtin.set_fact:
+        rap_platform_project_id: >-
+          {{ ((((pf_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).projectId
+              | default('', true))
+             or ((((((_rap_gateway.resources | default([], true)) if _rap_gateway is not skipped else []) | first
+                   | default({})).status | default({}, true)).site | default({}, true)).project | default({}, true)).id
+                | default('', true) }}
+
+    # nobody has to act: the placement's or the gateway's next run records it
+    - name: Wait while the site's platform project is not recorded
+      ansible.builtin.include_tasks: preflight_stop.yml
+      vars:
+        ps_reason: WaitingForPlacement
+        ps_message: >-
+          PlatformOpenshift {{ ansible_operator_meta.name }}: the placement of network {{ oso_network }} has not
+          recorded the platform's project on the site yet, so the floating IPs cannot be advertised yet.
+      when: rap_platform_project_id | trim | length == 0
+
     - name: Read the environment's site
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/resolve_cloud_infrastructure.yml"
       vars:
@@ -59,6 +94,7 @@
             ra_site: "{{ cb_oso_site }}"
             ra_domain: "{{ fab_real.openstack.projectDomain | default(((ci_spec | default({}, true)).openstack | default({}, true)).projectDomain, true) }}"
             ra_platform_project: "{{ fab_real.openstack.platformProject }}"
+            ra_platform_project_id: "{{ rap_platform_project_id | trim }}"
             ra_region: "{{ ((ci_spec | default({}, true)).openstack | default({}, true)).region | default('', true) }}"
       always:
         - name: Remove the account's temp files

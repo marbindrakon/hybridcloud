@@ -1311,6 +1311,31 @@ class CloudNetworkFiles(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertFalse([p for p in H.patches(tr) if "platformPrefixes" in p["body"]])
 
+    def test_aws_external_public_subnets_in_the_recorded_vpc_only(self):
+        """place-public up is given the VPC the placement records; a placement that records none: nothing is made."""
+        fakes = {"aws_call.yml": H.TRACE % "{'aws': aws_args}" + """- name: fake result
+  ansible.builtin.set_fact:
+    aws_result: {result: {public: [{id: subnet-p1}]}}
+"""}
+        rc, tr, out = H.run("platformopenshift_provision", "aws_clusterbuild_network.yml", cloud_vars("aws", "External"),
+                            k8s=k8s(net=network_obj(reach=("False", "NotRequested", "")),
+                                    places=self.placements("CloudAWS"), fab={}),
+                            result="cb_public_subnet_ids", fakes=fakes)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([t["aws"] for t in tr if "aws" in t],
+                         [["place-public", "--placement", f"{NS}/p1", "--state", "up", "--vpc-id", "vpc-1"]])
+        for site in ({"subnets": [{"id": "subnet-1", "az": "az-a"}]},
+                     {"vpc": "", "subnets": [{"id": "subnet-1", "az": "az-a"}]}):
+            with self.subTest(site=site):
+                rc, tr, out = H.run("platformopenshift_provision", "aws_clusterbuild_network.yml",
+                                    cloud_vars("aws", "External"),
+                                    k8s=k8s(net=network_obj(reach=("False", "NotRequested", "")),
+                                            places=[placement(kind="CloudAWS", ra=None, site=site)], fab={}),
+                                    fakes=fakes)
+                self.assertNotEqual(rc, 0, out)
+                self.assertEqual([t for t in tr if "aws" in t], [])
+                self.assertIn("Prepare the cluster's public subnets on AWS", out)
+
     def test_installed_or_started_cluster_keeps_its_prefix_on_a_refusal(self):
         # Review R3 N2 (R2 M1 on AWS/GCP): a refused row for a cluster whose install was started or is done reports the
         # refusal and keeps the prefix (and with it its place); before the install the prefix is withdrawn
@@ -1872,8 +1897,17 @@ class RouterAdvertisementPreflight(unittest.TestCase):
     REAL = {"placement": {"routerAdvertisementBySite": {"site1": {"url": "https://ra.site1.example.org"}}},
             "openstack": {"platformProject": "platform-project", "projectDomain": "platform-domain"}}
 
-    def run_ra(self, real, answer=None):
-        place = placement(site={"networkId": "net-1", "networkName": "shc-n1", "routerId": "router-1"})
+    def run_ra(self, real, answer=None, project_id="proj-platform", gateway=None):
+        """project_id: the platform project the placement records (status.realization.site.projectId); gateway: the
+        site's CloudGateway object the placement names (status.cloudGateway)."""
+        site = {"networkId": "net-1", "networkName": "shc-n1", "routerId": "router-1"}
+        if project_id:
+            site["projectId"] = project_id
+        place = placement(site=site)
+        extra = {f"CloudInfrastructure/{PLAT}/site1": SITE}
+        if gateway is not None:
+            place["status"]["cloudGateway"] = "gw-site1"
+            extra[f"CloudGateway/{PLAT}/gw-site1"] = gateway
         v = os_preflight_vars(fabric_realization=real, cb_fip_account="sites/site1",
                               fake_os=dict(NAME_OK, **{"router-advertisement/present": answer or {}}))
         # the role's rescue records po_fail_reason (main.yml); here a rescue traces it
@@ -1882,7 +1916,7 @@ class RouterAdvertisementPreflight(unittest.TestCase):
         tasks = [{"block": [{"ansible.builtin.include_tasks": os.path.join(TASKS, "openstack_preflight.yml")}],
                   "rescue": [trace, {"ansible.builtin.fail": {"msg": "{{ ansible_failed_result.msg | default('') }}"}}]}]
         return H.run("platformopenshift_provision", "openstack_preflight.yml", v, tasks=tasks,
-                     k8s=k8s(places=[place], extra={f"CloudInfrastructure/{PLAT}/site1": SITE}), result="1")
+                     k8s=k8s(places=[place], extra=extra), result="1")
 
     def test_no_service_calls_nothing(self):
         rc, tr, out = self.run_ra({})
@@ -1901,7 +1935,27 @@ class RouterAdvertisementPreflight(unittest.TestCase):
                           req["platformProject"], req["domain"]),
                          ("present", "router-1", "net-1", "site1", "https://ra.site1.example.org", "platform-project",
                           "platform-domain"))
+        # the platform project by the id the placement recorded, never found by its tag
+        self.assertEqual(req["platformProjectId"], "proj-platform")
         self.assertFalse(H.patches(tr))   # nothing recorded or created by the preflight
+
+    def test_the_platform_project_id_from_the_gateway_or_a_wait(self):
+        ok = {"service": "found", "port_id": "port-1", "nat": True, "wanted": True, "changed": False, "restores": 0,
+              "lastRestoredAt": "", "reason": "", "message": ""}
+        # a placement of the release before that has not recorded the id: the gateway's record
+        gw = {"metadata": {"name": "gw-site1"}, "status": {"site": {"project": {"id": "proj-from-gw"}}}}
+        rc, tr, out = self.run_ra(self.REAL, ok, project_id="", gateway=gw)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr, "router-advertisement")[0]["platformProjectId"], "proj-from-gw")
+        # neither records it: the cluster waits, nothing is asked of the site
+        for gateway in (None, {"metadata": {"name": "gw-site1"}, "status": {}}):
+            with self.subTest(gateway=gateway):
+                rc, tr, out = self.run_ra(self.REAL, ok, project_id="", gateway=gateway)
+                self.assertEqual(rc, 0, out)
+                self.assertFalse(H.os_calls(tr, "router-advertisement"))
+                self.assertNotIn({"result": 1}, tr)
+                self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlacement")
+                self.assertIn("has not recorded the platform's project", H.patches(tr)[-1]["body"]["message"])
 
     def test_failing_or_unconfirmed(self):
         for answer, want in (({"service": "found", "nat": False, "reason": "NotYourPort",
