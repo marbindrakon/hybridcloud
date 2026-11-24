@@ -697,6 +697,10 @@ class ZoneTeardownSaysWhatItLeft(unittest.TestCase):
             ], kind)
             for g in got[1:4]:
                 self.assertNotIn("removed", g)
+            if kind == "aws":   # the account kept in the hub's share for another environment
+                got = run_cases(steps, cases[:1], "cad_done", extra_vars={"cad_account_shared": True})
+                self.assertEqual(got[0], z + " deleted; its delegation in the tenant zone deleted; the account stays "
+                                             "in the hub's transit gateway share, as another environment records it")
 
 
 class HubNames(unittest.TestCase):

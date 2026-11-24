@@ -159,7 +159,7 @@
           ; no delegation in a tenant zone was recorded
           {%- endif -%}
           {%- endif -%}
-          {{- '; the account stays in the hub\'s transit gateway share, as another environment records it'
+          {{- "; the account stays in the hub's transit gateway share, as another environment records it"
               if cad_account_shared | default(false) | bool else '' }}
 
     - name: Mark deletion complete
