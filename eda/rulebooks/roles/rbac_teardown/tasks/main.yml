@@ -95,7 +95,8 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_keycloak_realm_token.yml"
           vars:
             krt_purpose: membership
-            krt_rbac_config: "{{ rbac_cfg_final.resources[0].metadata.name | default(rbac_spec.config | default('keycloak-sovereign-tenants-services', true), true) }}"
+            # '' = the platform's default connection (obtain_keycloak_realm_token.yml names it, in one place)
+            krt_rbac_config: "{{ rbac_cfg_final.resources[0].metadata.name | default(rbac_spec.config | default('', true), true) }}"
             krt_url: "{{ svc_keycloak_url }}"
             krt_headers: "{{ svc_keycloak_url_http_headers | default({}) }}"
             krt_token_fact: svc_access_token_final
@@ -107,7 +108,7 @@
 
         - name: Look up RBAC subgroup to delete
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_full_path_query }}"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
             method: GET
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
@@ -118,7 +119,7 @@
         - name: Read the access group to delete
           when: child_delete_lookup.status == 200
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ child_delete_lookup.json.id }}"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ child_delete_lookup.json.id }}"
             method: GET
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
@@ -137,7 +138,7 @@
         - name: Delete RBAC subgroup from Keycloak
           when: rbac_child_ours | bool
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ child_delete_lookup.json.id }}"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ child_delete_lookup.json.id }}"
             method: DELETE
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
@@ -167,7 +168,7 @@
         - name: Look up parent entity group when no siblings remain
           when: rbac_sibling_count | int == 0
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_parent_path_query }}"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_parent_path_query }}"
             method: GET
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
@@ -180,7 +181,7 @@
             - rbac_sibling_count | int == 0
             - parent_group_final_lookup.status == 200
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_final_lookup.json.id }}"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_final_lookup.json.id }}"
             method: GET
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
@@ -192,7 +193,7 @@
             - rbac_sibling_count | int == 0
             - parent_delete_read.status | default(0) == 200
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_final_lookup.json.id }}/children?first=0&max=1"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_final_lookup.json.id }}/children?first=0&max=1"
             method: GET
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
@@ -208,7 +209,7 @@
             - parent_delete_children.status | default(0) == 200
             - (parent_delete_children.json | default([1])) | length == 0
           ansible.builtin.uri:
-            url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_final_lookup.json.id }}"
+            url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_final_lookup.json.id }}"
             method: DELETE
             headers: "{{ {'Authorization': 'Bearer ' + svc_access_token_final} | combine(svc_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
