@@ -229,10 +229,12 @@ def dual_stack_scenarios(module, ec2_cls):
 
 
 # the scenarios' calls as the module made them before IPv6-only existed (sha256 of the canonical JSON)
+# re-pinned for the names rules: the placement's VPC is looked up before its IPv6 pool (its Name decides the pool's),
+# and place-public finds its route table by the role tag instead of the Name tag; every other call as before
 DUAL_STACK_DIGESTS = {
-    "ipv4": "b33bb9d63af45b6e3c37a1bc13a9c9ae697b1f68a29218eb44794466f2d89868",
-    "network": "fd6c1fcde2b0c49a6287261335bd8f87831620aceadb594ff6740e6f06c9ff3a",
-    "provider": "f854fd92a5b1687f10ba3fbc3eaae0d5a12fa76ff09e86c629740a93d057a1b4",
+    "ipv4": "6ed1628e5a1d9f61526b0d401ad51d225b4d1025db181173f7587f4ad056db7b",
+    "network": "a5b48148eb1a2369d30a253a2a75caa2282bf00f141388aa3e081c7c2781b7ce",
+    "provider": "1406b1d4dd4167c881d445b2fcf28dc859af9bbd8317d0c72191f0d4820a1d00",
 }
 
 
@@ -489,7 +491,7 @@ class TenantIpv6OnlyTest(unittest.TestCase):
             def __init__(self, cfg):
                 self.changed = []
 
-            def place_up(self, *a):
+            def place_up(self, *a, **kw):
                 seen["up"] = a
                 return {}
         argv = ["x", "--config", "{}", "place-up", "--placement", PLACEMENT, "--vni", str(VNI), "--egress",
@@ -1008,9 +1010,9 @@ class TasksTest(unittest.TestCase):
     def test_place_up_without_a_prefix(self):
         task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The placement's VPC and its attachment to the network")
         args = run_play([task_vars(task), write_out("_out")],
-                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_l3vni": VNI,
+                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_aws_name": "acme_p1", "np_l3vni": VNI,
                          "np_prefixes_v4": [], "np_aws_nat_egress": True, "np_aws_ipv6": only6("Provider")})["aws_args"]
-        self.assertEqual(args[:6], ["place-up", "--placement", "acme/p1", "--vni", str(VNI), "--egress"])
+        self.assertEqual(args[:8], ["place-up", "--placement", "acme/p1", "--name", "acme_p1", "--vni", str(VNI), "--egress"])
         self.assertEqual(json.loads(args[-1]), only6("Provider"))
 
     def test_translation_and_placeholder_recorded(self):

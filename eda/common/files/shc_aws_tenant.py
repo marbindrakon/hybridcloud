@@ -4,9 +4,12 @@ automation role) and enters the tenant account through its `shc-automation` role
 the hub through shc_aws_edge.py for the network's transit gateway side. Idempotent; prints one JSON line.
 
   shc_aws_tenant.py --config '<json>' check
-  shc_aws_tenant.py --config '<json>' zone-up --zone FQDN           the environment's Route53 public zone
-  shc_aws_tenant.py --config '<json>' zone-down --zone FQDN
-  shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N [--prefix CIDR ...] [--egress]
+  shc_aws_tenant.py --config '<json>' zone-up --zone FQDN [--zone-id ID]   the environment's Route53 public zone
+  shc_aws_tenant.py --config '<json>' zone-down --zone FQDN [--zone-id ID]
+      ID: the zone the environment's status records. A public zone of that id or of that name that does not carry
+      the platform's tags (shc-managed=true and this tenant's shc-entity) is refused (reason NameTakenOnSite), never
+      taken over, never deleted.
+  shc_aws_tenant.py --config '<json>' place-up --placement NS/NAME --vni N [--name NAME] [--prefix CIDR ...] [--egress]
                                                 [--ipv6 '<json>']        (no --prefix: IPv6-only, see below)
   shc_aws_tenant.py --config '<json>' place-down --placement NS/NAME --vni N [--ipv6 '<json>']
   shc_aws_tenant.py --config '<json>' place-public --placement NS/NAME --state up|down
@@ -17,7 +20,12 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
 config: {"account", "region", "memberRole", "entry", "azs": [..], "tags": {..},
          "edge": <shc_aws_edge.py config of the region's edge site>}
 
-A placement is one VPC in the tenant account: its prefixes (the first is the VPC's primary CIDR), in each AZ a
+A placement is one VPC in the tenant account, found by its tag shc-placement=NS/NAME (never by its name). Its Name
+tag is NAME (the platform's names function: <tenant>_<placement>) when the VPC is made, and the Name tag it carries
+afterwards; the other objects are named from it (<name>-work-<zone letter>, <name>-tgw-<zone letter>,
+<name>-public-<zone letter>, <name>-public) and found by their tags (shc-role and the subnet's own zone, the route
+table's shc-role), never by the Name tag. Every object carries the config's tags (tenant, environment, network) and
+shc-placement. Its prefixes (the first is the VPC's primary CIDR), in each AZ a
 workload subnet (the lower half of the prefix split per AZ) and a /28 for the transit gateway attachment (from the
 top of the prefix), the attachment accepted into the network's route table (shc-net-<vni>, its Connect attachment
 to the edge routers created on first use), and the VPC's default route to the transit gateway. Traffic leaves the
@@ -206,11 +214,15 @@ GONE = ("delete-in-progress", "delete-complete", "delete-failed")
 
 
 
-def public_subnet_of(name, sn_name, subnet):
-    """Whether a subnet is one place-public made for this placement: named "<name>-public-<letter>" with the letter of
-    its own availability zone (never a name that merely starts the same way)."""
-    az = str((subnet or {}).get("AvailabilityZone") or "")
-    return bool(az) and sn_name == "%s-public-%s" % (name, az[-1])
+def by_role(subnets):
+    """A VPC's subnets by (shc-role tag, availability zone): how the platform finds them again (never by name)."""
+    return {(tagmap(s).get("shc-role"), s.get("AvailabilityZone")): s for s in subnets if tagmap(s).get("shc-role")}
+
+
+def vpc_name(vpc, name, placement):
+    """The placement's Name: the one its VPC carries, else the one given (the names function's), else the older
+    form shc-<namespace>-<placement>."""
+    return tagmap(vpc or {}).get("Name") or name or "shc-" + placement.replace("/", "-")
 
 class Tenant:
     def __init__(self, cfg):
@@ -220,15 +232,46 @@ class Tenant:
         self.changed = []
 
     # ---- the environment's zone
-    def find_zone(self, zone):
+    def zone_owner(self, z):
+        """ours | unmarked | other: whether a hosted zone carries the platform's tags, and this tenant's."""
+        t = {x["Key"]: x["Value"] for x in self.r53.list_tags_for_resource(
+            ResourceType="hostedzone", ResourceId=z["Id"].split("/")[-1])["ResourceTagSet"].get("Tags", [])}
+        if t.get("shc-managed") != "true":
+            return "unmarked"
+        mine = (self.cfg.get("tags") or {}).get("shc-entity")
+        if mine and t.get("shc-entity") != mine:
+            return "other"
+        return "ours"
+
+    def find_zone(self, zone, zone_id=None):
+        """The environment's public zone: the recorded one, else the one of that name carrying the platform's tags
+        and this tenant's. Route 53 lets several zones share a name: one of that name that is not ours, with none of
+        ours beside it, is refused; one recorded that is not ours is refused."""
         name = zone.rstrip(".") + "."
-        for z in self.r53.list_hosted_zones_by_name(DNSName=name, MaxItems="5")["HostedZones"]:
-            if z["Name"] == name and not z["Config"].get("PrivateZone"):
+        if zone_id:
+            try:
+                z = self.r53.get_hosted_zone(Id=zone_id)["HostedZone"]
+            except botocore.exceptions.ClientError as e:
+                if "NoSuchHostedZone" not in str(e):
+                    raise
+                z = None
+            if z and (z["Name"] != name or z["Config"].get("PrivateZone") or self.zone_owner(z) != "ours"):
+                fail("The DNS zone %s already exists in the account and was not made by the platform for this; it "
+                     "was left untouched." % zone.rstrip("."), reason="NameTakenOnSite")
+            if z:
                 return z
+        same = [z for z in self.r53.list_hosted_zones_by_name(DNSName=name, MaxItems="100")["HostedZones"]
+                if z["Name"] == name and not z["Config"].get("PrivateZone")]
+        for z in same:
+            if self.zone_owner(z) == "ours":
+                return z
+        if same:
+            fail("The DNS zone %s already exists in the account and was not made by the platform for this; it was "
+                 "left untouched." % zone.rstrip("."), reason="NameTakenOnSite")
         return None
 
-    def zone_up(self, zone):
-        z = self.find_zone(zone)
+    def zone_up(self, zone, zone_id=None):
+        z = self.find_zone(zone, zone_id)
         if not z:
             self.changed.append("zone " + zone)
             z = self.r53.create_hosted_zone(Name=zone, CallerReference="shc-%s-%d" % (zone, int(time.time())),
@@ -252,8 +295,8 @@ class Tenant:
         ns = self.r53.get_hosted_zone(Id=z["Id"])["DelegationSet"]["NameServers"]
         return {"zone": zone, "zoneId": z["Id"].split("/")[-1], "nameServers": sorted(ns)}
 
-    def zone_down(self, zone):
-        z = self.find_zone(zone)
+    def zone_down(self, zone, zone_id=None):
+        z = self.find_zone(zone, zone_id)
         if not z:
             return {"zone": zone, "deleted": False}
         changes = []
@@ -528,7 +571,7 @@ class Tenant:
             self.ec2.modify_subnet_attribute(SubnetId=sid, EnableDns64={"Value": bool(dns64)})
             self.changed.append("subnet %s DNS64 %s" % (sn_name, "on" if dns64 else "off"))
 
-    def place_up(self, placement, vni, prefixes, egress=False, ipv6=None):
+    def place_up(self, placement, vni, prefixes, egress=False, ipv6=None, name=None):
         c = self.cfg
         v6 = ipv6_want(ipv6)
         only = not prefixes
@@ -547,7 +590,8 @@ class Tenant:
         extra = dict(c.get("tags", {}), **{"shc-placement": placement, "shc-vni": str(vni)})
         if only:
             extra["shc-ipv6-only"] = "true"
-        name = "shc-" + placement.replace("/", "-")
+        vpc = self.find_vpc(placement)
+        name = vpc_name(vpc, name, placement)
         lay = layout_only(placeholder, c["azs"]) if only else layout(prefixes, c["azs"])
         pool_id = ipam_id = None
         if v6 and v6["source"] == "Network":
@@ -555,7 +599,6 @@ class Tenant:
             ipam = self.ensure_ipam()
             ipam_id = ipam["IpamId"]
             pool_id = self.ensure_pool(ipam, placement, v6["prefix"], name, extra)
-        vpc = self.find_vpc(placement)
         if vpc and vpc["CidrBlock"] != cidrs[0]:
             fail("VPC %s of %s has CIDR %s, want %s" % (vpc["VpcId"], placement, vpc["CidrBlock"], cidrs[0]))
         if not vpc:
@@ -585,15 +628,14 @@ class Tenant:
             dhcp_id = self.dhcp_up(vpc_id, placement, name, extra, v6.get("resolvers") or ["AmazonProvidedDNS"])
         elif only:
             self.dhcp_down(vpc_id, placement)
-        subnets = {tagmap(s).get("Name"): s for s in self.ec2.describe_subnets(
-            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
+        subnets = by_role(self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"])
         work, tgw_subnets = [], []
         for l in lay:
             for role, cidr in (("work", l.get("work")), ("tgw", l["tgw"])):
                 sn_name = "%s-%s-%s" % (name, role, l["az"][-1])
                 cidr6 = lay6[l["az"]][role] if v6 else None
                 native = only and role == "work"
-                s = subnets.get(sn_name)
+                s = subnets.get((role, l["az"]))
                 if not s and native:
                     self.changed.append("subnet " + sn_name)
                     s = self.ec2.create_subnet(VpcId=vpc_id, AvailabilityZone=l["az"], Ipv6Native=True,
@@ -711,19 +753,20 @@ class Tenant:
         if not vpc:
             fail("placement %s has no VPC" % placement)
         vpc_id = vpc["VpcId"]
-        name = "shc-" + placement.replace("/", "-")
+        name = vpc_name(vpc, None, placement)
         extra = dict(self.cfg.get("tags", {}), **{"shc-placement": placement, "shc-role": "public"})
-        subnets = {tagmap(x).get("Name"): x for x in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
+        subnets = by_role(self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"])
         rt_name = name + "-public"
+        # the public route table by its role tag in the placement's own VPC (never by its Name)
         rts = [r for r in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]},
-                                                                  {"Name": "tag:Name", "Values": [rt_name]}])["RouteTables"]]
+                                                                  {"Name": "tag:shc-role", "Values": ["public"]}])["RouteTables"]]
         igws = self.ec2.describe_internet_gateways(Filters=[{"Name": "attachment.vpc-id", "Values": [vpc_id]}])["InternetGateways"]
         if state == "up" and tagmap(vpc).get("shc-ipv6-only") == "true":
             fail("placement %s is IPv6-only: it has no IPv4 for public subnets" % placement)
         if state == "down":
-            for sn_name, s in subnets.items():
-                # exactly the names place-public up gives ("<name>-public-<zone letter>"), in the placement's own VPC
-                if public_subnet_of(name, sn_name, s):
+            for (role, _), s in sorted(subnets.items(), key=lambda kv: kv[1]["SubnetId"]):
+                # exactly the subnets place-public up made (role public), in the placement's own VPC
+                if role == "public":
                     for _ in range(30):  # load balancer ENIs go with the cluster's deprovision
                         try:
                             self.ec2.delete_subnet(SubnetId=s["SubnetId"])
@@ -758,7 +801,7 @@ class Tenant:
         assoc = {a.get("SubnetId") for a in self.ec2.describe_route_tables(RouteTableIds=[rt["RouteTableId"]])["RouteTables"][0]["Associations"]}
         for l in lay:
             sn = "%s-public-%s" % (name, l["az"][-1])
-            s = subnets.get(sn)
+            s = subnets.get(("public", l["az"]))
             if not s:
                 s = self.ec2.create_subnet(VpcId=vpc_id, CidrBlock=l["public"], AvailabilityZone=l["az"],
                                            TagSpecifications=tagspec("subnet", sn, extra))["Subnet"]
@@ -846,7 +889,9 @@ def main():
     ap.add_argument("command", choices=["check", "zone-up", "zone-down", "place-up", "place-down", "place-public",
                                         "share-down"])
     ap.add_argument("--zone")
+    ap.add_argument("--zone-id", help="the zone the environment's status records")
     ap.add_argument("--placement")
+    ap.add_argument("--name", help="place-up: the Name of a new placement's objects (the names function's)")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--prefix", action="append", default=[])
     ap.add_argument("--egress", action="store_true")
@@ -861,9 +906,9 @@ def main():
     if a.command == "place-public" and not (a.placement and a.state):
         fail("--placement and --state are required")
     r = {"check": t.check,
-         "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
+         "zone-up": lambda: t.zone_up(a.zone, a.zone_id), "zone-down": lambda: t.zone_down(a.zone, a.zone_id),
          # without --prefix: IPv6-only (place_up refuses it without the site's placeholder range)
-         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix, a.egress, a.ipv6),
+         "place-up": lambda: t.place_up(a.placement, a.vni, a.prefix, a.egress, a.ipv6, name=a.name),
          "place-down": lambda: t.place_down(a.placement, a.vni, a.ipv6),
          "place-public": lambda: t.place_public(a.placement, a.state),
          "share-down": t.share_down}[a.command]()

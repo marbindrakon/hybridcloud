@@ -58,7 +58,12 @@
               region: "{{ cad_region }}"
               memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
               entry: automation
-            aws_args: [zone-down, --zone, "{{ cad_dns.zone }}"]
+              tags: {shc-entity: "{{ fab_entity }}"}
+            # only the zone the environment recorded, and only while it carries the platform's tags and this
+            # tenant's: an unmarked zone of that name is refused, never deleted
+            aws_args: >-
+              {{ ['zone-down', '--zone', cad_dns.zone]
+                 + (['--zone-id', cad_dns.zoneId] if cad_dns.zoneId | default('', true) | length > 0 else []) }}
 
     # an account outside the Organization was added to the hub's transit gateway share by its first placement: take
     # it off again (a no-op for Organization accounts, which the share reaches through the OU)

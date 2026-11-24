@@ -302,7 +302,7 @@ class FakeEc2:
     # ---- routes
     def h_describe_route_tables(self, Filters=None, RouteTableIds=None, **kw):
         f = {x["Name"]: x["Values"] for x in Filters or []}
-        if "tag:Name" in f:
+        if any(k.startswith("tag:") for k in f):     # place-public's own table: none in these placements
             return {"RouteTables": []}
         return {"RouteTables": [copy.deepcopy(self.tables[f["vpc-id"][0]])]}
 
@@ -671,7 +671,7 @@ class AwsTenantIpv6Test(unittest.TestCase):
             def __init__(self, cfg):
                 self.changed = []
 
-            def place_up(self, *a):
+            def place_up(self, *a, **kw):
                 seen["up"] = a
                 return {}
 
@@ -785,11 +785,12 @@ class AwsPlacementTasksTest(unittest.TestCase):
     def place_args(self, v6):
         task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The placement's VPC and its attachment to the network")
         return run_play([task_vars(task), write_out("_out")],
-                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_l3vni": 1001,
+                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_aws_name": "acme_p1", "np_l3vni": 1001,
                          "np_prefixes_v4": V4, "np_aws_nat_egress": False, "np_aws_ipv6": v6})["aws_args"]
 
     def test_place_up_arguments(self):
-        self.assertEqual(self.place_args({}), ["place-up", "--placement", "acme/p1", "--vni", "1001", "--prefix=" + V4[0]])
+        self.assertEqual(self.place_args({}), ["place-up", "--placement", "acme/p1", "--name", "acme_p1", "--vni", "1001",
+                                               "--prefix=" + V4[0]])
         args = self.place_args({"source": "Provider", "internet": True, "networkPrefixes6": [NET6]})
         self.assertEqual(args[-2], "--ipv6")
         self.assertEqual(json.loads(args[-1]), {"source": "Provider", "internet": True, "networkPrefixes6": [NET6]})

@@ -315,5 +315,152 @@ class PlacementOwnership(unittest.TestCase):
         self.assertNotIn(ext, self.f.externals)
 
 
+# ---- AWS ----------------------------------------------------------------------------------------------------------
+
+try:
+    import botocore.exceptions
+    import shc_aws_tenant as A
+    HAVE_BOTO = True
+except ImportError:  # pragma: no cover
+    HAVE_BOTO = False
+
+
+class AwsPlacementName(unittest.TestCase):
+    def test_names(self):
+        self.assertEqual(shc_names.name("aws-placement", ["acme-corp", "core-prod"])["name"], "acme-corp_core-prod")
+        self.assertNotEqual(shc_names.name("aws-placement", ["acme-corp", "web"])["name"],
+                            shc_names.name("aws-placement", ["acme", "corp-web"])["name"])
+        # the longest ending the helper appends is "-public-<zone letter>"; EC2 tag values take 256
+        name = shc_names.name("aws-placement", ["t" * 30, "p" * 30])["name"]
+        self.assertLessEqual(len(name + "-public-a"), 256)
+        self.assertEqual(shc_names.KINDS["aws-placement"][3], len("-public-a"))
+
+    @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
+    def test_an_existing_vpc_keeps_its_name(self):
+        old = {"Tags": [{"Key": "Name", "Value": "shc-acme-corp-core-prod"}]}
+        self.assertEqual(A.vpc_name(old, "acme-corp_core-prod", "acme-corp/core-prod"), "shc-acme-corp-core-prod")
+        self.assertEqual(A.vpc_name(None, "acme-corp_core-prod", "acme-corp/core-prod"), "acme-corp_core-prod")
+
+    @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
+    def test_subnets_found_by_role_and_zone(self):
+        mk = lambda i, role, az: {"SubnetId": i, "AvailabilityZone": az,
+                                  "Tags": [{"Key": "Name", "Value": "x"}] + ([{"Key": "shc-role", "Value": role}] if role else [])}
+        got = A.by_role([mk("a", "work", "z1a"), mk("b", "tgw", "z1a"), mk("c", None, "z1b")])
+        self.assertEqual(sorted(got), [("tgw", "z1a"), ("work", "z1a")])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class AwsPlacementTasks(unittest.TestCase):
+    FIRST, LAST = "Check the names the placement's cloud objects carry", "The environment's account"
+
+    def test_states(self):
+        tasks = load(os.path.join(NP, "tasks", "backend_cloudaws.yml"))
+        names = [t.get("name") for t in tasks]
+        part = tasks[names.index(self.FIRST): names.index(self.LAST) + 1]
+        steps = [{"ansible.builtin.set_fact": {"fab_entity": "{{ case.tenant }}", "fab_name": "{{ case.placement }}",
+                                               "np_backend_name": "prod", "fab_spec": {"network": "core"},
+                                               "_refused": "", "np_aws_name": ""}},
+                 {"block": part, "rescue": [{"ansible.builtin.set_fact": {"_refused": "{{ fab_fail_reason }}"}}]}]
+        got = run_cases(steps, [{"tenant": "acme-corp", "placement": "web"}, {"tenant": "acme", "placement": "corp-web"},
+                                {"tenant": "acme", "placement": "Web"}],
+                        "{'name': np_aws_name, 'tags': (np_aws_cfg | default({})).tags | default({}), 'refused': _refused}",
+                        extra_vars={"role_path": NP, "np_backend": {"status": {}}, "aws_real": {"hub": {"region": "r"}},
+                                    "aws_edge_cfg": {}})
+        self.assertEqual([g["name"] for g in got[:2]], ["acme-corp_web", "acme_corp-web"])
+        self.assertEqual(got[0]["tags"], {"shc-entity": "acme-corp", "shc-environment": "prod", "shc-network": "core"})
+        self.assertEqual(got[2]["refused"], "NameNotAllowed")
+
+
+class FakeRoute53:
+    def __init__(self, zones):
+        self.zones = {z["Id"]: z for z in zones}
+        self.calls = []
+
+    def list_tags_for_resource(self, ResourceType, ResourceId):
+        z = self.zones["/hostedzone/" + ResourceId]
+        return {"ResourceTagSet": {"Tags": [{"Key": k, "Value": v} for k, v in z.get("_tags", {}).items()]}}
+
+    def get_hosted_zone(self, Id):
+        key = Id if Id.startswith("/hostedzone/") else "/hostedzone/" + Id
+        if key not in self.zones:
+            raise botocore.exceptions.ClientError({"Error": {"Code": "NoSuchHostedZone", "Message": Id}}, "GetHostedZone")
+        return {"HostedZone": self.zones[key], "DelegationSet": {"NameServers": ["ns-1.example."]}}
+
+    def list_hosted_zones_by_name(self, DNSName, MaxItems):
+        return {"HostedZones": [z for z in self.zones.values() if z["Name"] == DNSName]}
+
+    def create_hosted_zone(self, Name, **kw):
+        self.calls.append("create")
+        z = {"Id": "/hostedzone/ZNEW", "Name": Name + ".", "Config": {"PrivateZone": False}}
+        self.zones[z["Id"]] = z
+        return {"HostedZone": z}
+
+    def change_tags_for_resource(self, **kw):
+        self.zones["/hostedzone/" + kw["ResourceId"]]["_tags"] = {t["Key"]: t["Value"] for t in kw["AddTags"]}
+
+    def list_resource_record_sets(self, **kw):
+        return {"ResourceRecordSets": []}
+
+    def get_paginator(self, name):
+        return mock.Mock(paginate=lambda **kw: [{"ResourceRecordSets": []}])
+
+    def change_resource_record_sets(self, **kw):
+        self.calls.append("change")
+
+    def delete_hosted_zone(self, Id):
+        self.calls.append("delete")
+        del self.zones[Id]
+
+
+AZONE = "prod.acme-corp.tenants.example.com"
+
+
+def r53zone(zid, tags, name=AZONE + "."):
+    return {"Id": "/hostedzone/" + zid, "Name": name, "Config": {"PrivateZone": False}, "_tags": tags}
+
+
+OURS = {"shc-managed": "true", "shc-entity": "acme-corp"}
+
+
+@unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
+class AwsZoneOwnership(unittest.TestCase):
+    """exists ours / exists unmarked / exists another tenant's / absent; by the recorded id or by name."""
+
+    def run_zone(self, action, zones, zone_id=None):
+        t = A.Tenant.__new__(A.Tenant)
+        t.r53, t.changed, t.cfg = FakeRoute53(zones), [], {"tags": {"shc-entity": "acme-corp"}}
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                return getattr(t, action)(AZONE, zone_id), t.r53
+            except SystemExit:
+                return {"refused": json.loads(buf.getvalue())}, t.r53
+
+    def test_up(self):
+        out, r = self.run_zone("zone_up", [])
+        self.assertEqual((out["zoneId"], r.calls), ("ZNEW", ["create"]))
+        out, r = self.run_zone("zone_up", [r53zone("Z1", OURS)], "Z1")
+        self.assertEqual((out["zoneId"], r.calls), ("Z1", []))
+        out, r = self.run_zone("zone_up", [r53zone("Z1", OURS)])
+        self.assertEqual(out["zoneId"], "Z1")
+        # ours beside an unmarked one of the same name (Route 53 allows several): ours is used
+        out, r = self.run_zone("zone_up", [r53zone("Z0", {}), r53zone("Z1", OURS)])
+        self.assertEqual(out["zoneId"], "Z1")
+        for zones, zid in (([r53zone("Z1", {})], None), ([r53zone("Z1", {"shc-managed": "true", "shc-entity": "acme"})], None),
+                           ([r53zone("Z1", {})], "Z1"), ([r53zone("Z1", OURS, name="other.example.com.")], "Z1")):
+            out, r = self.run_zone("zone_up", zones, zid)
+            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", zones)
+            self.assertEqual(r.calls, [])
+
+    def test_down(self):
+        out, r = self.run_zone("zone_down", [r53zone("Z1", OURS)], "Z1")
+        self.assertEqual((out["deleted"], r.calls), (True, ["delete"]))
+        out, r = self.run_zone("zone_down", [])
+        self.assertFalse(out["deleted"])
+        out, r = self.run_zone("zone_down", [r53zone("Z1", {})])
+        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
+        self.assertEqual(r.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()

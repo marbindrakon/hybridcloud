@@ -109,7 +109,7 @@
           region: "{{ ci_spec.aws.region }}"
           memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
           entry: automation
-          tags: {shc-entity: "{{ fab_entity }}", shc-environment: "{{ fab_namespace }}/{{ fab_name }}"}
+          tags: {shc-entity: "{{ fab_entity }}", shc-environment: "{{ fab_name }}"}
 
     - name: Enter the account
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
@@ -123,7 +123,24 @@
       vars:
         aws_helper: shc_aws_tenant.py
         aws_config: "{{ ca_tenant_cfg }}"
-        aws_args: [zone-up, --zone, "{{ ca_zone }}"]
+        # the zone the environment recorded, else the one of that name carrying the platform's tags (or a new one)
+        aws_args: >-
+          {{ ['zone-up', '--zone', ca_zone]
+             + (['--zone-id', fab_st.route53ZoneId] if (fab_st | default({}, true)).route53ZoneId | default('', true) | length > 0
+                else []) }}
+        aws_soft: true
+
+    # a public zone of this name or recorded id that the platform did not make for this environment
+    - name: Refuse a zone the platform did not make
+      ansible.builtin.set_fact:
+        fab_fail_reason: NameTakenOnSite
+        fab_fail_msg: "CloudAWS {{ fab_name }}: {{ aws_error }}"
+      when: aws_error | length > 0 and aws_result.reason | default('') == 'NameTakenOnSite'
+
+    - name: Stop on a zone error
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg if aws_result.reason | default('') == 'NameTakenOnSite' else 'AWS zone-up failed: ' ~ aws_error }}"
+      when: aws_error | length > 0
 
     - name: Keep the zone
       ansible.builtin.set_fact:
