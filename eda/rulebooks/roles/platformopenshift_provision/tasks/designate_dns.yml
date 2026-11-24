@@ -32,10 +32,13 @@
       vars:
         shc_step: "Write the cluster's DNS names"
         os_call_no_log: false
+        os_call_soft: true
         os_request:
           action: dns-upsert
           dns_zone_id: "{{ designate_zone_id }}"
           dns_project_id: "{{ designate_project_id }}"
+          # the platform's mark on the records (description shc:<owner>): only records with it are changed or deleted
+          owner: "PlatformOpenshift/{{ ansible_operator_meta.namespace }}/{{ ansible_operator_meta.name }}"
           records:
             - {name: "api.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_api_vip }}"]}
             - {name: "*.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}", records: ["{{ cb_ingress_vip }}"]}
@@ -45,6 +48,30 @@
         path: "/tmp/eda-po-{{ cb_cluster_name }}-{{ item }}"
         state: absent
       loop: [clouds.yaml, ca.crt]
+
+# a record of the wanted name that the platform did not make for this cluster (the tenant's own, in its zone) is
+# refused, never changed: NameTakenOnSite; any other failure is the step's sentence (the answer goes to the log)
+- name: The site's answer for the DNS names, for the job's log
+  ansible.builtin.debug:
+    msg: "{{ os_result.message | default('', true) or os_result.error | default('', true) }}"
+  when: (os_result.error | default('', true) | length > 0) or (os_result.reason | default('', true) | length > 0)
+
+- name: Refuse a DNS name that holds a record the platform did not make
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: NameTakenOnSite
+    ps_message: >-
+      The DNS name api.{{ cb_ocp_name }}.{{ cb_cluster_domain }} or *.apps.{{ cb_ocp_name }}.{{ cb_cluster_domain }}
+      already has a record that the platform did not make for this cluster; the platform does not change it. Remove
+      that record from the zone, or use another cluster name.
+  when: (os_result.reason | default('', true)) == 'NameTakenOnSite'
+
+- name: Fail when the DNS names could not be written
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  vars:
+    shc_step: "Write the cluster's DNS names"
+  when: (os_result.error | default('', true) | length > 0) or (os_result.reason | default('', true) | length > 0)
 
 - name: Record the Designate records
   ansible.builtin.set_fact:

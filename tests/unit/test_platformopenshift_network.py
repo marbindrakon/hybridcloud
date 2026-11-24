@@ -915,6 +915,43 @@ class DnsRecordedBeforeCreated(unittest.TestCase):
                          [("zone-1", "api.c1.env1.example.org.", "A"), ("zone-1", "*.apps.c1.env1.example.org.", "A")])
         self.assertTrue(H.patches(tr)[0]["partial"])
 
+    DESIGNATE = dict(cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16", cb_ocp_name="c1",
+                     cb_cluster_domain="env1.example.org", cb_cluster_name="shc-oso-acme-c1", use_designate_dns=True,
+                     designate_zone_id="zone-1", designate_project_id="dnsproj-1",
+                     designate_admin_vault_path="sites/site1")
+
+    def test_designate_records_carry_the_clusters_owner(self):
+        """The helper marks the records shc:<owner> and refuses an empty owner: the request names the cluster."""
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": {"records": []}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1")
+        self.assertEqual(rc, 0, out)
+        req = H.os_calls(tr, "dns-upsert")[0]
+        self.assertEqual(req["owner"], f"PlatformOpenshift/{CR['namespace']}/{CR['name']}")
+
+    def test_a_record_the_platform_did_not_make_is_refused(self):
+        taken = {"error": "refused", "reason": "NameTakenOnSite",
+                 "message": "The DNS name api.c1.env1.example.org. already has a A record ..."}
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": taken})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        facts = json.loads(H.LAST_VARS)
+        self.assertEqual(facts["po_fail_reason"], "NameTakenOnSite")
+        self.assertIn("api.c1.env1.example.org", facts["po_preflight_condition"]["message"])
+        # any other failure is the step's sentence, no refusal reason
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": {"error": "HTTP 503"}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("po_fail_reason", json.loads(H.LAST_VARS))
+        self.assertIn("Write the cluster's DNS names", out)
+
+    def test_the_teardown_deletes_only_the_clusters_records(self):
+        v = dict(TD_BASE, po_dns={"provider": "designate", "projectId": "dnsproj-1", "records": [
+            {"zoneId": "zone-1", "name": "api.c1.env1.example.org.", "type": "A"}]},
+            po_dns_account_vault_path="sites/site1", fake_os={"dns-delete": {"deleted": [], "missing": [], "kept": []}})
+        rc, tr, out = H.run("platformopenshift_teardown", "delete_dns_openstack.yml", v, result="1")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr, "dns-delete")[0]["owner"], f"PlatformOpenshift/{NS}/c1")
+
     def test_route53(self):
         tasks = load(os.path.join(TASKS, "openstack_clusterbuild.yml"))
         block = by_name(tasks, "Create Route53 records for the cluster")["block"]
