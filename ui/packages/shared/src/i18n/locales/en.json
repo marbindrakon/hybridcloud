@@ -455,11 +455,11 @@
     "blockServer": "The platform refused it: {{reason}}",
     "nameRule": {
       "max": "At most {{max}} characters.",
-      "pattern": "Lowercase letters, digits and hyphens; starts and ends with a letter or digit.",
-      "doubleHyphen": "No two hyphens in a row (the name becomes a namespace)."
+      "rule": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters.",
+      "ruleGoogle": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters; on Google Cloud not starting with \"goog\" and without \"google\" or a look-alike."
     },
-    "nameHelp": "Lowercase letters, digits and hyphens; it cannot be changed later.",
-    "entityNameHelp": "Becomes the tenant namespace {{namespace}}; at most 56 characters, no dots, no \"--\".",
+    "nameHelp": "It cannot be changed later.",
+    "entityNameHelp": "Becomes the tenant namespace {{namespace}}; it cannot be changed later.",
     "created": "{{kind}} {{name}} created",
     "submitted": "Created",
     "submitFailed": "Not created",
@@ -1132,7 +1132,7 @@
     "chooseEnvironment": "Choose an environment",
     "alreadyAttached": "This network is already attached to this environment ({{name}}).",
     "pinnedInvalid": "The pinned prefix must be an IPv4 network prefix of /16 to /{{max}} inside the network's address space.",
-    "nameInvalid": "The name must be lowercase letters, digits and hyphens, at most 63 characters.",
+    "nameInvalid": "The name does not follow the rule for names: a letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters.",
     "size": "Address block size",
     "sizeOption": "/{{length}} ({{addresses}} addresses)",
     "sizeLimits": "From /{{min}} to /{{max}}; the platform picks a free block of this size in the network's address space.",
@@ -1140,7 +1140,7 @@
     "pinned": "Pinned prefix (optional)",
     "pinnedHelp": "Used exactly, or the placement waits while another placement holds it; never replaced by another prefix.",
     "name": "Name",
-    "nameHelp": "Name of the network placement object; by default <network>-<environment>.",
+    "nameHelp": "Name of the network placement object; by default <network>-<environment>, shortened to fit the rule for names.",
     "create": "Attach",
     "attach": "Attach",
     "attachNetwork": "Attach network",
