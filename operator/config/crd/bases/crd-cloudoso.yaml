@@ -45,6 +45,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The environment.
               type: object
@@ -82,12 +93,16 @@ spec:
                         environment's project.
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     viewRbac:
                       type: array
                       description: >-
                         Access groups whose members get read-only access to the environment's project.
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 project:
                   type: string
                   description: Name hint for the OpenStack project. Required.
@@ -99,19 +114,23 @@ spec:
                     depending on the platform's admission settings.
                 baseDomain:
                   type: string
+                  maxLength: 253
                   description: >-
                     Base DNS domain. With Designate the environment gets <name>.<entity>.<baseDomain>
                     inside the zone designateZoneId. Ignored with a cloudRef in effect. Default: the installation default.
                 projectDomain:
                   type: string
+                  maxLength: 64
                   description: "Keystone domain for the project. Ignored with a cloudRef in effect. Default: the installation default."
                 externalNetwork:
                   type: string
+                  maxLength: 255
                   description: >-
                     No effect: the environment holds no floating IPs; each OpenShift cluster chooses its own network
                     (PlatformOpenshift spec.openstack).
                 regionName:
                   type: string
+                  maxLength: 64
                   description: "OpenStack region. Default: the account's clouds.yaml region."
                 dnsProvider:
                   type: string

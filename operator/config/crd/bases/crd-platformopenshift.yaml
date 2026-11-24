@@ -36,6 +36,15 @@ spec:
           required:
             - spec
           x-kubernetes-validations:
+            # Google Cloud refuses names like "google" (the installer's GCPClusterName); checked when the cluster
+            # is created (the name and spec.type never change)
+            - rule: >-
+                oldSelf.hasValue() || !has(self.spec.type) || self.spec.type != 'gcp'
+                || (!self.metadata.name.startsWith('goog') && !self.metadata.name.matches('g[o0]{2}gle'))
+              optionalOldSelf: true
+              message: >-
+                On Google Cloud a cluster's name may not start with "goog" or contain "google" or a word
+                like it (such as "g00gle").
             # install-time fields: refused while the cluster is installing or installed
             - rule: >-
                 (!(has(self.status) && has(self.status.clusterInstalled) && self.status.clusterInstalled == true) &&
@@ -136,6 +145,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The cluster.
               type: object
@@ -207,6 +227,8 @@ spec:
                   properties:
                     environment:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: Name of the OpenStack environment (CloudOSO) in this namespace.
                     network:
                       type: string
@@ -294,9 +316,13 @@ spec:
                   properties:
                     environment:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: Name of the AWS environment (CloudAWS) in this namespace.
                     network:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         HybridNetwork (same namespace) whose NetworkPlacement in the environment
                         hosts the cluster's machines; the placement needs an IPv4 subnet (the
@@ -309,6 +335,7 @@ spec:
                       default: External
                     region:
                       type: string
+                      maxLength: 32
                       description: "AWS region; must be the environment's region (default: the environment's region)"
                     clusterType:
                       type: string
@@ -340,10 +367,14 @@ spec:
                   properties:
                     environment:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         Name of the Google Cloud environment (CloudGCP) in this namespace.
                     network:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         HybridNetwork (same namespace) whose NetworkPlacement in the environment
                         hosts the cluster's machines; the placement needs an IPv4 subnet (the
@@ -356,6 +387,7 @@ spec:
                       default: External
                     region:
                       type: string
+                      maxLength: 32
                       description: "Google Cloud region; must be the environment's region (default: the environment's region)"
                     controlPlaneCount:
                       type: integer
@@ -449,6 +481,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     clusterOperatorRbac:
                       description: >-
                         Access groups whose members can manage workloads and power state on the
@@ -456,6 +490,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     clusterDeveloperRbac:
                       description: >-
                         Access groups whose members can deploy applications in the namespaces
@@ -463,11 +499,15 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     clusterViewerRbac:
                       description: Access groups whose members get read-only access to the cluster.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 clusterViewerRbac:
                   description: >-
                     Access groups whose members can read this object on the services cluster.
@@ -476,6 +516,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object

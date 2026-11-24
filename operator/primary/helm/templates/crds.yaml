@@ -298,6 +298,19 @@ spec:
             platform identity.
           type: object
           properties:
+            metadata:
+              type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The organization and who gets which access.
               type: object
@@ -314,6 +327,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members are admins of the
                     organization.
@@ -321,6 +336,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can run the
                     organization's job templates.
@@ -328,6 +345,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read the
                     organization (jobs, inventories, templates).
@@ -559,6 +578,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: What goes on which cluster, and who gets which access there.
               type: object
@@ -566,17 +596,23 @@ spec:
                 team:
                   description: Name of the team setup (Team) in this namespace.
                   type: string
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 projects:
                   description: >-
                     Names of the app projects (Project) in this namespace to create on the cluster.
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 openshift:
                   description: >-
                     Name of the OpenShift cluster (PlatformOpenshift) in this namespace. One cluster
                     per assignment.
                   type: string
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 toolRbac:
                   description: >-
                     Access on the assigned cluster: each field names one access group (an Rbac in
@@ -586,21 +622,29 @@ spec:
                   properties:
                     assignmentAdmin:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         Access group whose members get admin in every namespace this assignment
                         creates on the cluster (the team's tooling, mesh and app project namespaces)
                         and admin in the team's Argo CD.
                     assignmentDeveloper:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         Access group whose members get edit in the app project namespaces.
                     assignmentViewer:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         Access group whose members get view in every namespace this assignment
                         creates on the cluster.
                     assignmentOps:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         Access group whose members get view in the app project namespaces, edit in
                         the team's tooling and mesh namespaces, and admin in the team's Argo CD.
@@ -899,6 +943,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -1416,6 +1471,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -1700,6 +1766,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 21 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 21 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -2271,6 +2348,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -2551,6 +2639,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -3174,6 +3273,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The environment.
               type: object
@@ -3211,12 +3321,16 @@ spec:
                         environment's project.
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     viewRbac:
                       type: array
                       description: >-
                         Access groups whose members get read-only access to the environment's project.
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 project:
                   type: string
                   description: Name hint for the OpenStack project. Required.
@@ -3228,19 +3342,23 @@ spec:
                     depending on the platform's admission settings.
                 baseDomain:
                   type: string
+                  maxLength: 253
                   description: >-
                     Base DNS domain. With Designate the environment gets <name>.<entity>.<baseDomain>
                     inside the zone designateZoneId. Ignored with a cloudRef in effect. Default: the installation default.
                 projectDomain:
                   type: string
+                  maxLength: 64
                   description: "Keystone domain for the project. Ignored with a cloudRef in effect. Default: the installation default."
                 externalNetwork:
                   type: string
+                  maxLength: 255
                   description: >-
                     No effect: the environment holds no floating IPs; each OpenShift cluster chooses its own network
                     (PlatformOpenshift spec.openstack).
                 regionName:
                   type: string
+                  maxLength: 64
                   description: "OpenStack region. Default: the account's clouds.yaml region."
                 dnsProvider:
                   type: string
@@ -3670,6 +3788,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -3765,12 +3894,16 @@ spec:
                         attachment.
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     viewRbac:
                       type: array
                       description: >-
                         Access groups whose members get read-only access to the VM namespaces.
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -4340,14 +4473,6 @@ spec:
           type: object
           required:
             - spec
-          x-kubernetes-validations:
-            - rule: >-
-                self.metadata.name.size() <= 56
-                && self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-                && !self.metadata.name.contains('--')
-              message: >-
-                Tenant names are lowercase letters, digits and single '-', at most 56 characters; the
-                name becomes the namespace entity-<name>.
           properties:
             apiVersion:
               type: string
@@ -4355,6 +4480,18 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters. The tenant's name becomes the namespace
+                        entity-<name>.
             spec:
               description: What the tenant is and which access groups hold which roles.
               type: object
@@ -4438,18 +4575,24 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     auditor:
                       description: >-
                         Auditor: read everything a tenant admin can change.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     BobsTeam:
                       description: >-
                         Deprecated: the same as auditor; use auditor.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudOSOAdmin:
                       description: >-
                         OpenStack environment admin: create, change and delete OpenStack
@@ -4457,12 +4600,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudOSOView:
                       description: >-
                         OpenStack environment viewer: read OpenStack environments and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudVirtAdmin:
                       description: >-
                         OpenShift Virtualization environment admin: create, change and delete VM
@@ -4470,6 +4617,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudVirtView:
                       description: >-
                         OpenShift Virtualization environment viewer: read VM environments
@@ -4477,6 +4626,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     networkAdmin:
                       description: >-
                         Network admin: create, change and delete networks, network placements and
@@ -4484,6 +4635,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     networkView:
                       description: >-
                         Network viewer: read networks, network placements, edge connections and
@@ -4491,6 +4644,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudAWSAdmin:
                       description: >-
                         AWS environment admin: create, change and delete AWS environments
@@ -4498,12 +4653,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudAWSView:
                       description: >-
                         AWS environment viewer: read AWS environments and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     platformOpenshiftAdmin:
                       description: >-
                         OpenShift cluster admin: create, change and delete OpenShift clusters
@@ -4511,12 +4670,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     platformOpenshiftView:
                       description: >-
                         OpenShift cluster viewer: read OpenShift clusters and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     teamAdmin:
                       description: >-
                         Team setup admin: create, change and delete team setups (Team); read cluster
@@ -4524,12 +4687,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     teamView:
                       description: >-
                         Team setup viewer: read team setups, cluster assignments and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     projectAdmin:
                       description: >-
                         App project admin: create, change and delete app projects (Project); read
@@ -4537,6 +4704,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     projectView:
                       description: >-
                         App project viewer: read app projects, cluster assignments and access
@@ -4544,6 +4713,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     assignmentAdmin:
                       description: >-
                         Cluster assignment admin: create, change and delete cluster assignments
@@ -4551,12 +4722,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     identityAdmin:
                       description: >-
                         Access group admin: create, change and delete access groups (Rbac).
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -4793,6 +4968,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -5337,6 +5523,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -5379,6 +5576,8 @@ spec:
                     and its placements.
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 egress:
                   type: object
                   description: Traffic from the network to destinations outside it.
@@ -6175,6 +6374,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The network and the environment it is placed on.
               type: object
@@ -7407,6 +7617,15 @@ spec:
           required:
             - spec
           x-kubernetes-validations:
+            # Google Cloud refuses names like "google" (the installer's GCPClusterName); checked when the cluster
+            # is created (the name and spec.type never change)
+            - rule: >-
+                oldSelf.hasValue() || !has(self.spec.type) || self.spec.type != 'gcp'
+                || (!self.metadata.name.startsWith('goog') && !self.metadata.name.matches('g[o0]{2}gle'))
+              optionalOldSelf: true
+              message: >-
+                On Google Cloud a cluster's name may not start with "goog" or contain "google" or a word
+                like it (such as "g00gle").
             # install-time fields: refused while the cluster is installing or installed
             - rule: >-
                 (!(has(self.status) && has(self.status.clusterInstalled) && self.status.clusterInstalled == true) &&
@@ -7507,6 +7726,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The cluster.
               type: object
@@ -7578,6 +7808,8 @@ spec:
                   properties:
                     environment:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: Name of the OpenStack environment (CloudOSO) in this namespace.
                     network:
                       type: string
@@ -7665,9 +7897,13 @@ spec:
                   properties:
                     environment:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: Name of the AWS environment (CloudAWS) in this namespace.
                     network:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         HybridNetwork (same namespace) whose NetworkPlacement in the environment
                         hosts the cluster's machines; the placement needs an IPv4 subnet (the
@@ -7680,6 +7916,7 @@ spec:
                       default: External
                     region:
                       type: string
+                      maxLength: 32
                       description: "AWS region; must be the environment's region (default: the environment's region)"
                     clusterType:
                       type: string
@@ -7711,10 +7948,14 @@ spec:
                   properties:
                     environment:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         Name of the Google Cloud environment (CloudGCP) in this namespace.
                     network:
                       type: string
+                      maxLength: 63
+                      pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                       description: >-
                         HybridNetwork (same namespace) whose NetworkPlacement in the environment
                         hosts the cluster's machines; the placement needs an IPv4 subnet (the
@@ -7727,6 +7968,7 @@ spec:
                       default: External
                     region:
                       type: string
+                      maxLength: 32
                       description: "Google Cloud region; must be the environment's region (default: the environment's region)"
                     controlPlaneCount:
                       type: integer
@@ -7820,6 +8062,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     clusterOperatorRbac:
                       description: >-
                         Access groups whose members can manage workloads and power state on the
@@ -7827,6 +8071,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     clusterDeveloperRbac:
                       description: >-
                         Access groups whose members can deploy applications in the namespaces
@@ -7834,11 +8080,15 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     clusterViewerRbac:
                       description: Access groups whose members get read-only access to the cluster.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 clusterViewerRbac:
                   description: >-
                     Access groups whose members can read this object on the services cluster.
@@ -7847,6 +8097,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -8362,6 +8614,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The app project.
               type: object
@@ -8650,6 +8913,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -9230,6 +9504,19 @@ spec:
             identity.
           type: object
           properties:
+            metadata:
+              type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The organization and who gets which access.
               type: object
@@ -9246,6 +9533,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members are admins of the
                     organization.
@@ -9253,6 +9542,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can create
                     repositories.
@@ -9260,6 +9551,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read and push to
                     the organization's repositories.
@@ -9490,6 +9783,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The access group.
               type: object
@@ -9972,6 +10276,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The team's tooling.
               type: object
@@ -11106,6 +11421,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The Vault instance.
               type: object
@@ -11351,6 +11677,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The secrets engine and who gets which access.
               type: object
@@ -11360,6 +11697,8 @@ spec:
                 vault:
                   description: Name of the Vault (Vault object) in this namespace.
                   type: string
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultAdminRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can manage the
@@ -11367,12 +11706,16 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultReaderRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read the secrets.
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultOpsRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can create, read,
@@ -11380,6 +11723,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultDeveloperRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read secrets and
@@ -11387,6 +11732,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object

@@ -40,6 +40,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The secrets engine and who gets which access.
               type: object
@@ -49,6 +60,8 @@ spec:
                 vault:
                   description: Name of the Vault (Vault object) in this namespace.
                   type: string
+                  maxLength: 63
+                  pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultAdminRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can manage the
@@ -56,12 +69,16 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultReaderRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read the secrets.
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultOpsRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can create, read,
@@ -69,6 +86,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                 vaultDeveloperRbac:
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read secrets and
@@ -76,6 +95,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
