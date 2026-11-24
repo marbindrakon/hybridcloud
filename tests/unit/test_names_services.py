@@ -5,9 +5,13 @@ What must hold:
   - the names come from the names function, <tenant>_<name> and vault_<tenant>_<name>, so the two tenants of the
     pair acme-corp + web and acme + corp-web get two names (today's hyphen join gave them one);
   - a name the status records is kept, and the teardown reads it from status (it never rebuilds it);
-  - something of the wanted name is ours only with the platform's mark (or with no mark when this object's status
-    records the name: made before the mark); anything else is refused (NameTakenOnSite), never taken over, never
-    deleted. The decisions are enumerated over (what exists) x (whose mark) x (what status records);
+  - an organization or a sign-in client is this object's only when this object's status records it (the automation
+    organization by the gateway's id, the registry organization by its name, the sign-in client by its id); with
+    nothing recorded the job creates, and something of the wanted name is refused (NameTakenOnSite) whatever it
+    carries: the registry organization's address and the automation organization's description are written for
+    people and decide nothing. The decisions are enumerated over (what exists) x (what status records) x (what the
+    object carries), with the release before's objects (recorded name, old fixed address, old hyphen name) and a
+    forged mark with nothing recorded;
   - the automation organization's sign-in maps are found by the ids its status records (or by their exact names
     pointing at its organization), never by the beginning of a name.
 Names are examples.
@@ -117,61 +121,109 @@ class TeardownsReadStatus(unittest.TestCase):
 
 # ---- the decisions, enumerated --------------------------------------------------------------------------------
 
-MARK_EMAIL = "acme-corp_web@example.org"
+WANTED = "acme-corp_web"                    # the names function's name for tenant acme-corp, object web
+OLD_HYPHEN = "acme-corp-web"                # the name the release before gave it (hyphen join)
+DOMAIN = "example.org"
+# what a registry organization can carry as its contact address
+ADDRESSES = {"platform's": "%s@" + DOMAIN,
+             "release before's": "%s@sovereign.local",     # the fixed address the release before wrote
+             "none": "",
+             "someone's": "someone@example.net",
+             "forged": WANTED + "@" + DOMAIN}            # any registry user who makes an organization chooses it
 
 
-def _run_quay(steps, cases):
-    pre = [{"ansible.builtin.set_fact": {
-        "_org_existing": "{{ case.existing }}", "quayorg_recorded_name": "{{ case.recorded }}"}}]
-    return run_cases(pre + steps, cases, "quayorg_decision | trim",
-                     extra_vars={"quayorg_mark_email": MARK_EMAIL, "org_name": "acme-corp_web"})
+def _run_quay(cases):
+    pre = [{"ansible.builtin.set_fact": {"_org_existing": "{{ case.existing }}", "quayorg_recorded_name": "{{ case.recorded }}",
+                                         "org_name": "{{ case.recorded or '%s' }}" % WANTED}}]
+    return run_cases(pre + [by_name(load(QUAY_P), "Decide: ours, create or refuse")], cases, "quayorg_decision | trim")
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class Decisions(unittest.TestCase):
-    """(exists on the platform) x (whose mark) x (does status record the name) -> ours | adopt | create | refuse."""
+    """(exists on the platform) x (what status records) x (what the object carries) -> ours | adopt | create | refuse."""
 
     def test_registry_organization(self):
-        exists = {"none": {"status": 404},
-                  "ours": {"status": 200, "json": {"email": MARK_EMAIL}},
-                  "unmarked": {"status": 200, "json": {"email": ""}},
-                  "other": {"status": 200, "json": {"email": "someone@example.org"}},
-                  "other-domain": {"status": 200, "json": {"email": "acme-corp_web@elsewhere.example"}}}
         cases, want = [], []
-        for state, existing in exists.items():
-            for recorded in ("", "acme-corp_web"):
-                cases.append({"existing": existing, "recorded": recorded})
-                want.append({"none": "create", "ours": "ours",
-                             "unmarked": "adopt" if recorded else "refuse"}.get(state, "refuse"))
-        self.assertEqual(_run_quay([by_name(load(QUAY_P), "Decide: ours, adopt, create or refuse")], cases), want)
+        for recorded in ("", WANTED, OLD_HYPHEN):
+            name = recorded or WANTED
+            cases.append({"existing": {"status": 404}, "recorded": recorded})
+            want.append("create")
+            for kind, address in ADDRESSES.items():
+                email = address % name if "%s" in address else address
+                cases.append({"existing": {"status": 200, "json": {"name": name, "email": email}}, "recorded": recorded})
+                # recorded: ours whatever its address (the release before's included); nothing recorded: refused,
+                # the forged platform address included
+                want.append("ours" if recorded else "refuse")
+        self.assertEqual(_run_quay(cases), want)
+
+    def test_the_mail_domain_is_needed_only_to_create(self):
+        step = by_name(load(QUAY_P), "Require the registry organizations' mail domain")
+        for decision in ("ours", "refuse"):
+            self.assertEqual(run_cases([step], [{}], "'passed'", extra_vars={
+                "quayorg_decision": decision, "quayorg_mail_domain": "", "org_name": WANTED}), ["passed"])
+        with self.assertRaises(AssertionError) as e:
+            run_cases([step], [{}], "'passed'", extra_vars={"quayorg_decision": "create", "quayorg_mail_domain": "",
+                                                              "org_name": WANTED})
+        self.assertIn("REGISTRY_ORG_MAIL_DOMAIN", str(e.exception))
+
+    def test_registry_organization_is_never_rewritten_or_marked(self):
+        """Nothing writes the address of an organization that exists: no PUT on the organization."""
+        for t in walk(load(QUAY_P)):
+            uri = t.get("ansible.builtin.uri") or {}
+            if str(uri.get("method", "GET")).upper() == "PUT":
+                self.assertIn("/team/", str(uri.get("url")), t.get("name"))
 
     def test_automation_organization(self):
         mark = "(AAPOrg entity-acme-corp/web)"
-        found = {"none": [],
-                 "ours": [{"id": 7, "name": "acme-corp_web", "description": "Automation organization web of tenant "
-                                                                             "acme-corp, made by the platform " + mark}],
-                 "unmarked": [{"id": 7, "name": "acme-corp_web", "description": "Sovereign tenant org for entity x"}],
-                 "empty": [{"id": 7, "name": "acme-corp_web", "description": ""}],
-                 "other": [{"id": 7, "name": "acme-corp_web", "description": "made (AAPOrg entity-acme/corp-web)"}],
-                 "other-name": [{"id": 7, "name": "acme-corp_web-ci", "description": mark}]}
+        descriptions = {"platform's": "Automation organization web of tenant acme-corp, made by the platform " + mark,
+                        "release before's": "Sovereign tenant org for entity acme-corp", "none": "",
+                        "another object's": "made by the platform (AAPOrg entity-acme/corp-web)",
+                        "forged": "anything " + mark}
+        by_id = {"none recorded": None, "there": {"status": 200}, "gone": {"status": 404}}
         cases, want = [], []
-        for state, results in found.items():
-            for recorded in ("", "acme-corp_web"):
-                cases.append({"results": results, "recorded": recorded})
-                if state in ("none", "other-name"):
-                    want.append("create")
-                elif state == "ours":
-                    want.append("ours")
-                elif state in ("unmarked", "empty"):
-                    want.append("adopt" if recorded else "refuse")
-                else:
-                    want.append("refuse")
-        pre = [{"ansible.builtin.set_fact": {"_gw_org_lookup": {"json": {"results": "{{ case.results }}"}},
-                                             "aaporg_recorded_name": "{{ case.recorded }}"}}]
+        for recorded_name in ("", WANTED, OLD_HYPHEN):
+            org = recorded_name or WANTED
+            for id_state, answer in by_id.items():
+                if id_state != "none recorded" and not recorded_name:
+                    continue                                    # an id is recorded together with the name
+                for found in [None] + list(descriptions):
+                    results = [] if found is None else [{"id": 7, "name": org, "description": descriptions[found]}]
+                    rec_id = "" if id_state == "none recorded" else "7" if id_state == "there" else "9"
+                    by = {} if answer is None else dict(answer, json={"id": int(rec_id), "name": "renamed-by-someone",
+                                                                      "description": "edited"})
+                    cases.append({"by_id": by, "results": results, "rid": rec_id, "rname": recorded_name, "org": org})
+                    if id_state == "there":
+                        want.append("ours")         # by its id, whatever its name or description now
+                    elif found is None:
+                        want.append("create")
+                    elif id_state == "none recorded" and recorded_name:
+                        want.append("adopt")        # the release before recorded only the name: taken once, id recorded
+                    else:
+                        want.append("refuse")       # nothing recorded (forged mark included), or not the recorded id
+        pre = [{"ansible.builtin.set_fact": {"_gw_org_by_id": "{{ case.by_id }}",
+                                             "_gw_org_lookup": {"json": {"results": "{{ case.results }}"}},
+                                             "aaporg_recorded_id": "{{ case.rid }}",
+                                             "aaporg_recorded_name": "{{ case.rname }}", "org_name": "{{ case.org }}"}}]
         steps = [by_name(load(AAP_P), "Decide: ours, adopt, create or refuse")]
-        got = run_cases(pre + steps, cases, "aaporg_decision | trim",
-                        extra_vars={"org_name": "acme-corp_web", "aaporg_mark": mark})
-        self.assertEqual(got, want)
+        self.assertEqual(run_cases(pre + steps, cases, "aaporg_decision | trim"), want)
+
+    def test_a_renamed_organization_is_found_by_its_id_and_named_back(self):
+        """An organization's administrator renames ours: the provision finds it by id and sets its name back; another
+        tenant's object whose wanted name is the new name finds it unrecorded and refuses it."""
+        steps = [by_name(load(AAP_P), "Decide: ours, adopt, create or refuse")]
+        pre = [{"ansible.builtin.set_fact": {
+            "_gw_org_by_id": {"status": 200, "json": {"id": 7, "name": "globex_ci", "description": "(AAPOrg entity-globex/ci)"}},
+            "_gw_org_lookup": {"json": {"results": []}}, "aaporg_recorded_id": "7", "aaporg_recorded_name": WANTED,
+            "org_name": WANTED}}]
+        got = run_cases(pre + steps, [{}], "{'d': aaporg_decision | trim, 'name': aaporg_found.name}")[0]
+        self.assertEqual(got, {"d": "ours", "name": "globex_ci"})
+        patch = by_name(load(AAP_P), "Set the name and the description of this organization")
+        self.assertEqual(patch["ansible.builtin.uri"]["body"]["name"], "{{ org_name }}")
+        pre = [{"ansible.builtin.set_fact": {
+            "_gw_org_by_id": {}, "aaporg_recorded_id": "", "aaporg_recorded_name": "", "org_name": "globex_ci",
+            "_gw_org_lookup": {"json": {"results": [{"id": 7, "name": "globex_ci",
+                                                     "description": "x (AAPOrg entity-globex/ci)"}]}}}}]
+        self.assertEqual(run_cases(pre + steps, [{}], "aaporg_decision | trim"), ["refuse"])
 
     def test_sign_in_client(self):
         owner = "Vault/entity-acme-corp/web"
@@ -183,42 +235,60 @@ class Decisions(unittest.TestCase):
                             "attributes": {"hybridsovereign.redhat/owner": "Vault/entity-acme/corp-web"}}]}
         cases, want = [], []
         for state, clients in found.items():
-            for adopt in (False, True):
-                cases.append({"clients": clients, "adopt": adopt})
-                want.append({"none": "create", "ours": "ours",
-                             "unmarked": "adopt" if adopt else "refuse"}.get(state, "refuse"))
+            for recorded in (False, True):
+                cases.append({"clients": clients, "recorded": recorded})
+                if state == "none":
+                    want.append("create")
+                elif not recorded:
+                    want.append("refuse")           # not recorded: refused, our own mark included
+                else:
+                    want.append({"ours": "ours", "unmarked": "adopt"}.get(state, "refuse"))
         pre = [{"ansible.builtin.set_fact": {"_kce_lookup": {"json": "{{ case.clients }}"},
-                                             "kce_adopt_unmarked": "{{ case.adopt }}"}}]
+                                             "kce_recorded": "{{ case.recorded }}"}}]
         steps = [by_name(load(KCE), "Decide: ours, adopt, create or refuse ({{ kce_client }})")]
         got = run_cases(pre + steps, cases, "kce_decision | trim",
                         extra_vars={"kce_client": "vault_acme-corp_web", "kce_owner": owner})
         self.assertEqual(got, want)
         # without an owner (a caller that marks nothing) the client is used as before
-        got = run_cases(pre + steps, [{"clients": found["other"][:], "adopt": False}], "kce_decision | trim",
+        got = run_cases(pre + steps, [{"clients": found["other"][:], "recorded": False}], "kce_decision | trim",
                         extra_vars={"kce_client": "vault_acme-corp_web", "kce_owner": ""})
         self.assertEqual(got, ["ours"])
 
-    def test_teardowns_delete_only_what_carries_the_mark(self):
-        # registry: (status code, email) -> gone | delete | leave
+    def test_the_callers_say_what_their_status_records(self):
+        for path in (VAULT_OIDC, os.path.join(ROLES, "aapconfig_provision", "tasks", "main.yml"),
+                     os.path.join(ROLES, "quayconfig_provision", "tasks", "main.yml")):
+            body = text(path)
+            self.assertNotIn("kce_adopt_unmarked", body, path)
+            self.assertIn("kce_recorded:", body, path)
+        self.assertNotIn("kce_adopt_unmarked", text(KCE))
+
+    def test_teardowns_delete_what_status_records(self):
+        # registry: the recorded organization goes whatever its address; nothing recorded, nothing is read or deleted
         pre = [{"ansible.builtin.set_fact": {"_fin_org": "{{ case }}"}}]
-        steps = [by_name(load(QUAY_T), "Decide: delete or leave")]
-        cases = [{"status": 404}, {"status": 200, "json": {"email": MARK_EMAIL}},
-                 {"status": 200, "json": {"email": ""}}, {"status": 200, "json": {"email": "x@example.org"}}]
-        got = run_cases(pre + steps, cases, "quayorg_fin_decision | trim",
-                        extra_vars={"fin_org_name": "acme-corp_web", "quayorg_mail_domain": "example.org"})
-        self.assertEqual(got, ["gone", "delete", "delete", "leave"])
-        # automation organization
-        mark = "(AAPOrg entity-acme-corp/web)"
-        pre = [{"ansible.builtin.set_fact": {"_gw_org_lookup": {"json": {"results": "{{ case }}"}}}}]
-        steps = [by_name(load(AAP_T), "Decide: delete or leave")]
-        cases = [[], [{"id": 1, "name": "acme-corp_web", "description": "x " + mark}],
-                 [{"id": 1, "name": "acme-corp_web", "description": "old description"}],
-                 [{"id": 1, "name": "acme-corp_web", "description": "x (AAPOrg entity-acme/corp-web)"}],
-                 [{"id": 1, "name": "acme-corp_web-ci", "description": "x " + mark}]]
-        got = run_cases(pre + steps, cases, "aaporg_fin_decision | trim",
-                        extra_vars={"fin_org_name": "acme-corp_web", "fin_org_mark": mark})
-        self.assertEqual(got, ["gone", "delete", "delete", "leave", "gone"])
-        # secrets store's sign-in client
+        steps = [by_name(load(QUAY_T), "Decide: delete or gone")]
+        cases = [{"status": 404}] + [{"status": 200, "json": {"email": (a % WANTED) if "%s" in a else a}}
+                                     for a in ADDRESSES.values()]
+        got = run_cases(pre + steps, cases, "quayorg_fin_decision | trim", extra_vars={"fin_org_name": WANTED})
+        self.assertEqual(got, ["gone"] + ["delete"] * len(ADDRESSES))
+        block = by_name(load(QUAY_T), "Delete Quay org")
+        self.assertIn("fin_org_name | length > 0", block["when"])
+        self.assertNotIn("quayorg_mail_domain", text(QUAY_T))
+        # automation organization: (recorded id, recorded name) x (what the gateway answers)
+        steps = [by_name(load(AAP_T), "Decide: delete or gone")]
+        org = {"id": 7, "name": "renamed-by-someone", "description": "edited by its administrators"}
+        cases = [{"id": "7", "by_id": {"status": 200, "json": org}, "results": []},
+                 {"id": "7", "by_id": {"status": 404}, "results": [{"id": 8, "name": WANTED, "description": ""}]},
+                 {"id": "", "by_id": {}, "results": [{"id": 7, "name": OLD_HYPHEN, "description": "old"}]},
+                 {"id": "", "by_id": {}, "results": [{"id": 7, "name": OLD_HYPHEN + "-ci", "description": "x"}]},
+                 {"id": "", "by_id": {}, "results": []}]
+        pre = [{"ansible.builtin.set_fact": {"fin_org_id": "{{ case.id }}", "_gw_org_by_id": "{{ case.by_id }}",
+                                             "_gw_org_lookup": {"json": {"results": "{{ case.results }}"}}}}]
+        got = run_cases(pre + steps, cases, "{'d': aaporg_fin_decision | trim, 'id': aaporg_fin_org.id | default(0)}",
+                        extra_vars={"fin_org_name": OLD_HYPHEN})
+        self.assertEqual(got, [{"d": "delete", "id": 7}, {"d": "gone", "id": 0}, {"d": "delete", "id": 7},
+                               {"d": "gone", "id": 0}, {"d": "gone", "id": 0}])
+        # secrets store's sign-in client: the recorded id, with this Vault's mark or none; another Vault's mark (only
+        # the platform writes client attributes) is left
         owner = "Vault/entity-acme-corp/web"
         pre = [{"ansible.builtin.set_fact": {"kc_client_lookup_fin": {"json": "{{ case }}"}}}]
         steps = [by_name(load(VAULT_T), "Decide: delete or leave")]
@@ -231,43 +301,98 @@ class Decisions(unittest.TestCase):
         self.assertEqual(got, ["gone", "delete", "delete", "leave"])
 
 
+def _tasks_in_order(path):
+    return [t for t in walk(load(path)) if not any(t.get(k) for k in ("block", "rescue", "always"))]
+
+
+class RecordedWithTheCreate(unittest.TestCase):
+    """The name or id reaches status in the run that made the object, right after the create: between the create
+    and the record only the refusal of a failed create (no other write)."""
+
+    def check(self, path, create, record):
+        tasks = _tasks_in_order(path)
+        names = [t.get("name") for t in tasks]
+        i, j = names.index(create), names.index(record)
+        self.assertLess(i, j, path)
+        for t in tasks[i + 1:j]:
+            self.assertFalse(writes(t) and "patch_cr_status" not in str(t), "%s: %s" % (path, t.get("name")))
+
+    def test_each_object(self):
+        self.check(QUAY_P, "Create organization in Quay", "Record the organization's name")
+        self.check(AAP_P, "Create organization via gateway API", "Record the organization's name and id")
+        self.check(AAP_MAPS, "Create the authenticator maps", "Record this organization's maps in its status")
+        self.check(VAULT_OIDC, "Ensure the Keycloak sign-in client of this Vault", "Record the sign-in client's id")
+        for role, ensure in (("aapconfig", "Ensure the Keycloak sign-in client for AAP"),
+                             ("quayconfig", "Ensure the Keycloak sign-in client for Quay")):
+            self.check(os.path.join(ROLES, role + "_provision", "tasks", "main.yml"), ensure,
+                       "Record the sign-in client's id")
+
+
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
 class SignInMaps(unittest.TestCase):
-    """The automation organization's maps: recorded ids and exact names pointing at its organization only."""
+    """The automation organization's maps: named by the names function; recorded ids, and exact names (today's or the
+    earlier form) pointing at its organization only."""
 
-    def run_maps(self, have, recorded, groups):
+    def run_maps(self, have, recorded, grants, status=None):
         tasks = load(AAP_MAPS)
         steps = [by_name(tasks, n) for n in ("Wanted authenticator maps of this organization", "Work out the map changes",
                                              "Work out what to create, update and delete")]
+        rec = dict(status or {}, signInMaps="{{ case.recorded }}")
         pre = [{"ansible.builtin.set_fact": {"_aaporg_maps": {"json": {"results": "{{ case.have }}"}},
-                                             "aaporg_recorded": {"signInMaps": "{{ case.recorded }}"}}}]
+                                             "aaporg_recorded": rec}}]
         expr = ("{'create': aaporg_maps_create | map(attribute='name') | list, "
                 "'delete': aaporg_maps_delete | map(attribute='id') | list, "
                 "'foreign': aaporg_maps_foreign}")
+        map_names = {"%s %s" % (g["kind"], g["rbac"]): names.name("automation-map", ["acme", "web", g["kind"], g["rbac"]])["name"]
+                     for g in grants}
         return run_cases(pre + steps, [{"have": have, "recorded": recorded}], expr, extra_vars={
-            "org_name": "acme_web", "aap_auth_id": "3", "admin_groups": groups, "executor_groups": [],
-            "viewer_groups": []})[0]
+            "org_name": "acme_web", "aap_auth_id": "3", "aaporg_grants": grants, "aaporg_map_names": map_names})[0]
+
+    def test_the_map_names_come_from_the_names_function(self):
+        self.assertEqual(names.name("automation-map", ["acme", "web", "admin", "devs"])["name"], "acme_web_admin_devs")
+        # the pair that the hand join <org>-<kind>-map-<group> made one name of gives two names
+        a = names.name("automation-map", ["acme", "web", "admin", "a-admin-map-b"])["name"]
+        b = names.name("automation-map", ["acme", "web-admin-map-a", "admin", "b"])["name"]
+        self.assertNotEqual(a, b)
+        self.assertEqual("acme_web" + "-admin-map-" + "a-admin-map-b", "acme_web-admin-map-a" + "-admin-map-" + "b")
+        self.assertNotIn("-map-' ~ g", text(AAP_MAPS).split("_earlier_names")[0])
+        self.assertIn("kind: automation-map", text(os.path.join(ROLES, "aaporg_provision", "tasks", "map_name.yml")))
 
     def test_a_longer_org_of_the_same_beginning_is_never_touched(self):
-        """acme_web-ci's maps start with 'acme_web-'; today's prefix match deleted them with acme_web's."""
-        have = [{"id": 1, "name": "acme_web-admin-map-acme/devs", "organization": "acme_web", "team": "acme_web-admins",
+        devs = {"kind": "admin", "team": "admins", "order": 1, "rbac": "devs", "group": "acme/devs"}
+        qa = {"kind": "admin", "team": "admins", "order": 1, "rbac": "qa", "group": "acme/qa"}
+        have = [{"id": 1, "name": "acme_web_admin_devs", "organization": "acme_web", "team": "acme_web-admins",
                  "triggers": {"groups": {"has_or": ["/acme/devs"]}}},
-                {"id": 2, "name": "acme_web-admin-map-acme/ops", "organization": "acme_web", "team": "acme_web-admins",
+                {"id": 2, "name": "acme_web_admin_ops", "organization": "acme_web", "team": "acme_web-admins",
                  "triggers": {"groups": {"has_or": ["/acme/ops"]}}},
-                {"id": 3, "name": "acme_web-ci-admin-map-acme/devs", "organization": "acme_web-ci",
+                {"id": 3, "name": "acme_web-ci_admin_devs", "organization": "acme_web-ci",
                  "team": "acme_web-ci-admins", "triggers": {"groups": {"has_or": ["/acme/devs"]}}},
-                {"id": 4, "name": "acme_web-admin-map-acme/qa", "organization": "acme_web-admin-map-acme",
+                {"id": 4, "name": "acme_web_admin_qa", "organization": "acme_web-admin-map-acme",
                  "team": "x", "triggers": {}}]
-        got = self.run_maps(have, [{"id": "1", "name": "acme_web-admin-map-acme/devs"},
-                                   {"id": "2", "name": "acme_web-admin-map-acme/ops"}], ["acme/devs"])
+        got = self.run_maps(have, [{"id": "1", "name": "acme_web_admin_devs"},
+                                   {"id": "2", "name": "acme_web_admin_ops"}], [devs])
         self.assertEqual(got["delete"], [2])            # recorded and no longer wanted
         self.assertEqual(got["create"], [])
         self.assertEqual(got["foreign"], [])
-        # nothing recorded yet (made before the ids were kept): only the exact wanted names of this organization
-        got = self.run_maps(have, [], ["acme/devs", "acme/qa"])
+        # nothing recorded: only the exact wanted names of this organization
+        got = self.run_maps(have, [], [devs, qa])
         self.assertEqual(got["delete"], [])
-        self.assertEqual(got["foreign"], ["acme_web-admin-map-acme/qa"])   # another organization's: not touched
+        self.assertEqual(got["foreign"], ["acme_web_admin_qa"])   # another organization's: not touched
         self.assertEqual(got["create"], [])
+
+    def test_the_earlier_names_of_this_organization_are_replaced(self):
+        """A map of the release before (<org>-<kind>-map-<group>) pointing at this organization goes once the new one
+        is made; one of that name pointing at another organization stays."""
+        devs = {"kind": "admin", "team": "admins", "order": 1, "rbac": "devs", "group": "acme/devs"}
+        have = [{"id": 5, "name": "acme_web-admin-map-acme/devs", "organization": "acme_web", "team": "acme_web-admins",
+                 "triggers": {"groups": {"has_or": ["/acme/devs"]}}},
+                {"id": 6, "name": "acme_web-admin-map-acme/ops", "organization": "acme_web", "team": "acme_web-admins",
+                 "triggers": {"groups": {"has_or": ["/acme/ops"]}}},
+                {"id": 7, "name": "acme_web-admin-map-acme/devs", "organization": "other", "team": "x", "triggers": {}}]
+        got = self.run_maps(have, [], [devs], status={"adminGroups": ["acme/devs", "acme/ops"]})
+        self.assertEqual(got["create"], ["acme_web_admin_devs"])
+        self.assertEqual(sorted(got["delete"]), [5, 6])
+        self.assertEqual(got["foreign"], [])
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -316,9 +441,14 @@ class AdoptionElsewhere(unittest.TestCase):
                    "other-engine": {"type": "pki", "description": "Secrets path app " + mark}}
         cases, want = [{"create": 204, "existing": {}, "recorded": ""}], ["create"]
         for state, m in mounted.items():
-            for recorded in ("", "app"):
+            for recorded in ("", "app", "other"):
                 cases.append({"create": 400, "existing": {"status": 200, "json": {"data": m}}, "recorded": recorded})
-                want.append({"kv2-ours": "ours", "kv2-unmarked": "adopt" if recorded else "refuse"}.get(state, "refuse"))
+                # recorded and KV v2: this object's whatever the description; nothing recorded: refused, a mount
+                # carrying this object's description included
+                if recorded != "app" or not state.startswith("kv2"):
+                    want.append("refuse")
+                else:
+                    want.append("ours" if state == "kv2-ours" else "adopt")
         cases.append({"create": 400, "existing": {"status": 400, "json": {"errors": ["no matching mount"]}},
                       "recorded": ""})                       # a reserved path (sys, identity, ...)
         want.append("refuse")
@@ -328,15 +458,16 @@ class AdoptionElsewhere(unittest.TestCase):
         steps = [by_name(load(KV_ENGINE), "Decide: ours, adopt, create or refuse")]
         got = run_cases(pre + steps, cases, "kv_decision | trim", extra_vars={"kv_path": "app", "kv_mark": mark})
         self.assertEqual(got, want)
-        # the teardown removes the recorded path only with the mark (or no description)
+        # the teardown removes the recorded path whatever its description, while a KV v2 engine is mounted there
         pre = [{"ansible.builtin.set_fact": {"_kv_fin_mount": "{{ case }}"}}]
         steps = [by_name(load(KV_T), "Decide: delete or leave")]
         cases = [{"status": 404}, {"status": 200, "json": {"data": mounted["kv2-ours"]}},
                  {"status": 200, "json": {"data": mounted["kv2-unmarked"]}},
                  {"status": 200, "json": {"data": mounted["kv2-other"]}}]
+        cases.append({"status": 200, "json": {"data": mounted["other-engine"]}})
         got = run_cases(pre + steps, cases, "kv_fin_decision | trim", extra_vars={"kv_fin_path": "app",
                                                                                    "kv_fin_mark": mark})
-        self.assertEqual(got, ["gone", "delete", "delete", "leave"])
+        self.assertEqual(got, ["gone", "delete", "delete", "delete", "leave"])
 
     def test_tool_client_teardowns(self):
         for role, kind in (("aapconfig", "AAPConfig"), ("quayconfig", "QuayConfig")):
@@ -351,11 +482,43 @@ class AdoptionElsewhere(unittest.TestCase):
                             extra_vars={role + "_fin_client_id": cid, role + "_fin_owner": owner})
             self.assertEqual(got, ["gone", "delete", "delete", "leave"], role)
 
-    def test_tool_clients_are_marked(self):
-        for role, kind in (("aapconfig", "AAPConfig"), ("quayconfig", "QuayConfig")):
+    def test_tool_clients_are_marked_and_named_by_the_names_function(self):
+        for role, kind, tool in (("aapconfig", "AAPConfig", "aap"), ("quayconfig", "QuayConfig", "quay")):
             body = text(os.path.join(ROLES, role + "_provision", "tasks", "main.yml"))
             self.assertIn('kce_owner: "%s/{{ %s_cr_namespace }}/{{ %s_cr_name }}"' % (kind, role, role), body)
-            self.assertNotIn("clientId=%s-{{" % ("aap" if role == "aapconfig" else "quay"), text(TOOL_T[role]))
+            self.assertNotIn("clientId=%s-{{" % tool, text(TOOL_T[role]))
+            self.assertNotIn('"%s-{{' % tool, body)
+            self.assertIn('kind: tool-client, parts: ["%s"' % tool, body)
+            self.assertIn("status | default({}, true)).keycloakClientId", body)
+        # a connection's tool client can't take the id of a realm automation client (<connection>, <connection>-clients)
+        self.assertEqual(names.name("tool-client", ["aap", "x"])["name"], "aap_x")
+        self.assertNotEqual(names.name("tool-client", ["aap", "x"])["name"], "aap-x")
+
+    def test_realm_automation_clients_teardown(self):
+        """The RbacConfig teardown deletes the clients its status records, with the description its provision gives,
+        in the realm it recorded: (recorded) x (what the realm holds)."""
+        tasks = load(os.path.join(ROLES, "rbacconfig_teardown", "tasks", "main.yml"))
+        steps = [by_name(tasks, "The realm automation clients the status records")]
+        expr = "{'realm': rbacconfig_fin_realm, 'clients': rbacconfig_fin_clients | map(attribute='clientId') | list}"
+        got = run_cases(steps, [{}], expr, extra_vars={"shc_live_cr": {"status": {
+            "realm": "tenants", "realmAutomation": {"membershipClientId": "main", "clientsClientId": "main-clients"}}}})
+        self.assertEqual(got, [{"realm": "tenants", "clients": ["main", "main-clients"]}])
+        got = run_cases(steps, [{}], expr, extra_vars={"shc_live_cr": {"status": {}}})
+        self.assertEqual(got, [{"realm": "", "clients": []}])
+        delete = by_name(tasks, "Delete the recorded clients that carry this connection's description")
+        mine = {"id": "u1", "clientId": "main", "description": "Realm automation (membership) for RbacConfig main"}
+        lookups = [{"item": {"purpose": "membership", "clientId": "main"}, "json": [mine]},
+                   {"item": {"purpose": "clients", "clientId": "main-clients"},
+                    "json": [{"id": "u2", "clientId": "main-clients", "description": "made by hand"}]}]
+        steps = [{"ansible.builtin.set_fact": {"_rbacconfig_fin_lookup": {"results": "{{ case }}"}}},
+                 {"ansible.builtin.set_fact": {"_deleted": delete["loop"]}}]
+        cases = [[], lookups, [dict(lookups[0], json=[])],
+                 [dict(lookups[0], json=[dict(mine, description="Realm automation (membership) for RbacConfig other")])]]
+        got = run_cases(steps, cases, "_deleted | map(attribute='id') | list", extra_vars={"rbac_config_cr_name": "main"})
+        self.assertEqual(got, [[], ["u1"], [], []])
+        self.assertIn("r.item.purpose", delete["loop"])
+        self.assertIn("rbac_config_cr_name", delete["loop"])
+        self.assertNotIn("~ '-clients'", text(os.path.join(ROLES, "rbacconfig_teardown", "tasks", "main.yml")))
 
 
 # ---- every job checks the names before it makes anything -------------------------------------------------------
@@ -410,7 +573,7 @@ class NameCheckFirst(unittest.TestCase):
 
 OWNED = [os.path.join(dp, f) for top in ("eda/rulebooks/roles",) for dp, _, fs in os.walk(os.path.join(ROOT, top))
          for f in fs if f.endswith(".yml") and os.path.relpath(dp, os.path.join(ROOT, top)).split(os.sep)[0].split("_")[0]
-         in ("vault", "vaultkv", "quayorg", "quayconfig", "aaporg", "aapconfig", "dnsconfig")]
+         in ("vault", "vaultkv", "quayorg", "quayconfig", "aaporg", "aapconfig", "dnsconfig", "rbac", "rbacconfig")]
 OWNED += [os.path.join(ROOT, "eda", "common", "tasks", f) for f in os.listdir(os.path.join(ROOT, "eda", "common", "tasks"))
           if f.startswith("keycloak_") or f in ("services_signin_groups.yml", "obtain_keycloak_realm_token.yml")]
 OWNED += [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(ROOT, "aap-config")) for f in fs if f.endswith(".yml")]
@@ -444,6 +607,17 @@ class LabStrings(unittest.TestCase):
             if "keycloak-sovereign-tenants-services" in body:
                 holders.append(os.path.basename(path))
         self.assertEqual(holders, ["obtain_keycloak_realm_token.yml"])
+
+    def test_the_access_group_jobs_use_the_published_realm(self):
+        """The realm is named once, by the RbacConfig job that makes it and publishes it; the access group jobs use
+        the realm its credentials name (keycloak_realm_name), the RbacConfig teardown the realm its status records."""
+        holders = sorted({os.path.relpath(p, ROLES).split(os.sep)[0] for p in OWNED
+                          if "plugin_rbac_keycloak_realm" in text(p) and p.startswith(ROLES)})
+        self.assertEqual(holders, ["rbacconfig_provision"])
+        for role in ("rbac_provision", "rbac_teardown"):
+            body = "".join(text(os.path.join(ROLES, role, "tasks", f))
+                           for f in os.listdir(os.path.join(ROLES, role, "tasks")))
+            self.assertIn("/admin/realms/{{ keycloak_realm_name }}/", body, role)
 
 
 # ---- the secrets store's address -------------------------------------------------------------------------------
@@ -545,7 +719,7 @@ class Directory:
         self.httpd.server_close()
 
 
-def run_ensure(directory, owner, adopt):
+def run_ensure(directory, owner, recorded):
     tmp = tempfile.mkdtemp(prefix="shc-kce-")
     try:
         common = os.path.join(tmp, "eda", "common")
@@ -561,7 +735,7 @@ def run_ensure(directory, owner, adopt):
             json.dump({"role_path": role, "kce_url": directory.url, "kce_realm": "tenants", "kce_token": "t",
                        "kce_client": "vault_acme-corp_web", "kce_name": "Vault acme-corp/web",
                        "kce_redirect_uris": ["https://vault.example.org/cb"], "kce_owner": owner,
-                       "kce_adopt_unmarked": adopt}, f)
+                       "kce_recorded": recorded}, f)
         env = dict(os.environ, ANSIBLE_LOCALHOST_WARNING="false", ANSIBLE_INVENTORY_UNPARSED_WARNING="false",
                    ANSIBLE_NOCOLOR="1", ANSIBLE_LOCAL_TEMP=os.path.join(tmp, "lt"),
                    ANSIBLE_REMOTE_TMP=os.path.join(tmp, "rt"))
@@ -589,25 +763,32 @@ class SignInClientAgainstADirectory(unittest.TestCase):
         self.assertEqual(self.d.clients["vault_acme-corp_web"]["attributes"]["hybridsovereign.redhat/owner"],
                          self.OWNER)
 
-    def test_ours_is_converged(self):
+    def test_a_recorded_client_is_converged(self):
         self.d.add("vault_acme-corp_web", self.OWNER)
-        rc, out = run_ensure(self.d, self.OWNER, False)
+        rc, out = run_ensure(self.d, self.OWNER, True)
         self.assertEqual(rc, 0, out[-3000:])
         self.assertEqual(self.d.clients["vault_acme-corp_web"]["redirectUris"], ["https://vault.example.org/cb"])
 
-    def test_another_owners_client_is_refused_untouched(self):
+    def test_a_client_not_recorded_is_refused_untouched_whatever_it_carries(self):
+        """Nothing recorded: a client of the id is refused, this Vault's own owner attribute included."""
+        for owner in (self.OWNER, None, "Vault/entity-acme/corp-web"):
+            self.d.clients.clear()
+            self.d.log.clear()
+            self.d.add("vault_acme-corp_web", owner)
+            rc, out = run_ensure(self.d, self.OWNER, False)
+            self.assertNotEqual(rc, 0, owner)
+            self.assertIn("was not made for this object", " ".join(out.split()))
+            self.assertEqual(self.writes(), [], owner)
+            self.assertEqual(self.d.clients["vault_acme-corp_web"]["redirectUris"], [], owner)
+
+    def test_a_recorded_client_with_another_owners_mark_is_refused(self):
         self.d.add("vault_acme-corp_web", "Vault/entity-acme/corp-web")
         rc, out = run_ensure(self.d, self.OWNER, True)
         self.assertNotEqual(rc, 0)
-        self.assertIn("was not made for this object", " ".join(out.split()))
         self.assertEqual(self.writes(), [])
-        self.assertEqual(self.d.clients["vault_acme-corp_web"]["redirectUris"], [])
 
-    def test_an_unmarked_client_is_refused_unless_adoption_is_asked(self):
+    def test_a_recorded_unmarked_client_is_taken_and_marked(self):
         self.d.add("vault_acme-corp_web")
-        rc, out = run_ensure(self.d, self.OWNER, False)
-        self.assertNotEqual(rc, 0)
-        self.assertEqual(self.writes(), [])
         rc, out = run_ensure(self.d, self.OWNER, True)
         self.assertEqual(rc, 0, out[-3000:])
         self.assertEqual(self.d.clients["vault_acme-corp_web"]["attributes"]["hybridsovereign.redhat/owner"],

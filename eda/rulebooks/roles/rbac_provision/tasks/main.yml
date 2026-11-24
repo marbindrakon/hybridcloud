@@ -148,7 +148,7 @@
 
     - name: Look up parent entity group
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_parent_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_parent_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -162,7 +162,7 @@
     - name: Create parent entity group when missing
       when: parent_group_initial.status == 404
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups"
         method: POST
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
@@ -177,7 +177,7 @@
     - name: Mark the tenant's group made before the mark
       when: rbac_group_owner.parent == 'mark'
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_initial.json.id }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_initial.json.id }}"
         method: PUT
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
@@ -191,7 +191,7 @@
     - name: Refresh parent group representation
       when: parent_group_initial.status == 404
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_parent_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_parent_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -205,7 +205,7 @@
     - name: Read a tenant's group someone made meanwhile
       when: rbac_parent_create.status | default(0) == 409
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_refetch.json.id }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_refetch.json.id }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -247,7 +247,7 @@
 
     - name: Look up fully-qualified RBAC subgroup
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_full_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -270,7 +270,7 @@
     - name: Create RBAC subgroup under entity group
       when: child_group_initial.status == 404
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_id }}/children"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_id }}/children"
         method: POST
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
@@ -283,7 +283,7 @@
 
     - name: Verify RBAC subgroup now exists
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_full_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -297,7 +297,7 @@
     - name: Read an access group someone made meanwhile
       when: rbac_child_create.status | default(0) == 409
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ child_group_verify.json.id }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ child_group_verify.json.id }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -321,7 +321,7 @@
 
     - name: Update group attributes and description
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ child_group_verify.json.id }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ child_group_verify.json.id }}"
         method: PUT
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
@@ -358,7 +358,7 @@
           billingId: "{{ entity_billing_id }}"
           creator: "{{ rbac_creator }}"
           description: "{{ rbac_group_description }}"
-          realm: "{{ plugin_rbac_keycloak_realm }}"
+          realm: "{{ keycloak_realm_name }}"
           attributes: "{{ rbac_group_attributes }}"
           conditions:
             - type: Ready
@@ -366,7 +366,7 @@
               lastTransitionTime: "{{ rbac_status_transition_time }}"
               reason: EDASucceeded
               message: >-
-                Keycloak subgroup {{ rbac_group_path_display }} is present in realm {{ plugin_rbac_keycloak_realm }}.
+                Keycloak subgroup {{ rbac_group_path_display }} is present in realm {{ keycloak_realm_name }}.
 
     # what names this access group binds it now (Entity namespaceRbac, Team and Project access fields)
     - name: Wake the objects that name this access group

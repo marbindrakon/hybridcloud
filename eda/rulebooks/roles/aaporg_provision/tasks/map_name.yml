@@ -1,0 +1,14 @@
+---
+# The name of one sign-in map (aaporg_grant: {kind, rbac}) from the names function, kept in aaporg_map_names
+# under "<kind> <access group>".
+- name: The map's name from the names function
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request:
+      action: name
+      kind: automation-map
+      parts: ["{{ entity_name }}", "{{ aaporg_cr_name }}", "{{ aaporg_grant.kind }}", "{{ aaporg_grant.rbac }}"]
+
+- name: Keep the map's name
+  ansible.builtin.set_fact:
+    aaporg_map_names: "{{ aaporg_map_names | default({}) | combine({aaporg_grant.kind ~ ' ' ~ aaporg_grant.rbac: names_result.name}) }}"

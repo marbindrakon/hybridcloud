@@ -161,10 +161,13 @@
             msg: "{{ name_check_message }}"
 
     # an organization keeps the name its status records; a new one gets <tenant>_<name> from the names function
-    - name: The organization's recorded name
+    - name: The organization's recorded name and id
       ansible.builtin.set_fact:
         aaporg_recorded: "{{ (shc_live_cr | default({}, true)).status | default({}, true) }}"
         aaporg_recorded_name: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).orgName | default('', true) }}"
+        aaporg_recorded_id: >-
+          {{ (((shc_live_cr | default({}, true)).status | default({}, true)).gatewayOrgId | default('', true) | string | trim)
+             | regex_replace('^0$', '') }}
 
     - name: The organization's name for a new automation organization
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
@@ -172,16 +175,28 @@
         names_request: {action: name, kind: automation-organization, parts: ["{{ entity_name }}", "{{ aaporg_cr_name }}"]}
       when: aaporg_recorded_name | length == 0
 
-    # the platform's mark: the organization's description ends with "(AAPOrg <namespace>/<name>)"
-    - name: Set the organization's name and the platform's mark
+    # the description says, for people, what the organization is for; it decides nothing (an organization's
+    # administrators can edit it)
+    - name: Set the organization's name and description
       ansible.builtin.set_fact:
         org_name: "{{ aaporg_recorded_name or names_result.name }}"
-        aaporg_mark: "(AAPOrg {{ aaporg_cr_namespace }}/{{ aaporg_cr_name }})"
         aaporg_description: >-
           Automation organization {{ aaporg_cr_name }} of tenant {{ entity_name }}, made by the platform
           (AAPOrg {{ aaporg_cr_namespace }}/{{ aaporg_cr_name }})
 
-    - name: Find the organization in the gateway
+    - name: Read the recorded organization in the gateway
+      ansible.builtin.uri:
+        url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/{{ aaporg_recorded_id }}/"
+        method: GET
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        force_basic_auth: true
+        validate_certs: false
+        status_code: [200, 404]
+      register: _gw_org_by_id
+      when: aaporg_recorded_id | length > 0
+
+    - name: Find the organization of the wanted name in the gateway
       ansible.builtin.uri:
         url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/?name={{ org_name | urlencode }}"
         method: GET
@@ -192,18 +207,22 @@
         status_code: [200]
       register: _gw_org_lookup
 
-    # ours: it carries our mark; adopt: it carries no platform mark at all and this object's status records the
-    # name (made before the mark); create: nothing of the name; refuse: anything else (never taken over or deleted)
+    # the organization is this object's when its status records it: by the gateway's id; an object of the release
+    # before, whose status records only the name, takes the organization of exactly that name once and records its
+    # id. ours: the recorded id is there (whatever its name or description); adopt: no id recorded, the recorded
+    # name is there; create: nothing of the wanted name (and the recorded id, if any, is gone); refuse: anything
+    # else, also an organization of the recorded name whose id is not the recorded one (never taken over or deleted)
     - name: "Decide: ours, adopt, create or refuse"
       vars:
+        _by_id: "{{ _gw_org_by_id.json | default({}, true) if (_gw_org_by_id.status | default(0) | int) == 200 else {} }}"
         _found: "{{ (_gw_org_lookup.json | default({}, true)).results | default([], true) | selectattr('name', 'equalto', org_name) | list }}"
-        _desc: "{{ ((_found | first).description | default('', true) | trim) if _found | length > 0 else '' }}"
       ansible.builtin.set_fact:
-        aaporg_found: "{{ (_found | first) if _found | length > 0 else {} }}"
+        aaporg_found: "{{ _by_id if _by_id | length > 0 else ((_found | first) if _found | length > 0 else {}) }}"
         aaporg_decision: >-
-          {{ 'create' if _found | length == 0
-             else ('ours' if _desc.endswith(aaporg_mark)
-                   else ('adopt' if '(AAPOrg ' not in _desc and aaporg_recorded_name == org_name else 'refuse')) }}
+          {{ 'ours' if _by_id | length > 0
+             else ('create' if _found | length == 0
+                   else ('adopt' if aaporg_recorded_id | length == 0 and aaporg_recorded_name | length > 0
+                                    and aaporg_recorded_name == org_name else 'refuse')) }}
 
     - name: Refuse an organization of the wanted name that this platform did not make for this object
       when: aaporg_decision == 'refuse'
@@ -249,26 +268,14 @@
               The automation platform did not create organization {{ org_name }} for automation organization
               {{ aaporg_cr_name }} (answer {{ _gw_org_create.status | default(0) }}). Nothing was taken over.
 
-    - name: Write the platform's mark on an organization made before the mark
-      ansible.builtin.uri:
-        url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/{{ aaporg_found.id }}/"
-        method: PATCH
-        user: "{{ aap_username }}"
-        password: "{{ aap_password }}"
-        force_basic_auth: true
-        body_format: json
-        body:
-          description: "{{ aaporg_description }}"
-        validate_certs: false
-        status_code: [200]
-      when: aaporg_decision == 'adopt'
-
     - name: Set gateway org ID
       ansible.builtin.set_fact:
         gw_org_id: >-
           {{ (_gw_org_create.json.id if aaporg_decision == 'create' else aaporg_found.id) | default(0, true) | int }}
 
-    # recorded at once, so a later failure or the teardown finds it by this name and id and never rebuilds it
+    # recorded right after the create (or the adoption), in the same run: from now on the organization is this
+    # object's by its id, and the teardown deletes this id and nothing else. (A run that created the organization
+    # and could not record it leaves it to a platform administrator: the next run refuses it.)
     - name: Record the organization's name and id
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
       vars:
@@ -280,7 +287,42 @@
         cr_status_body:
           orgName: "{{ org_name }}"
           gatewayOrgId: "{{ gw_org_id | string }}"
-      when: aaporg_recorded_name != org_name or (aaporg_recorded.gatewayOrgId | default('', true) | string) != (gw_org_id | string)
+      when: aaporg_recorded_name != org_name or aaporg_recorded_id != (gw_org_id | string)
+
+    # the recorded organization keeps the platform's name and the description; one renamed or re-described by
+    # someone is set back (a name another organization took meanwhile fails the job, nothing else changes)
+    - name: Set the name and the description of this organization
+      ansible.builtin.uri:
+        url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/{{ gw_org_id }}/"
+        method: PATCH
+        user: "{{ aap_username }}"
+        password: "{{ aap_password }}"
+        force_basic_auth: true
+        body_format: json
+        body:
+          name: "{{ org_name }}"
+          description: "{{ aaporg_description }}"
+        validate_certs: false
+        status_code: [200, 400]
+      register: _gw_org_patch
+      when:
+        - aaporg_decision in ['ours', 'adopt']
+        - aaporg_found.name | default('') != org_name or (aaporg_found.description | default('', true) | trim) != (aaporg_description | trim)
+
+    - name: Refuse a name the gateway did not give back
+      when: (_gw_org_patch.status | default(200) | int) != 200
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            tool_org_failure_reason: NameTakenOnSite
+
+        - name: Refuse a name the gateway did not give back (stop)
+          ansible.builtin.fail:
+            msg: >-
+              The organization of automation organization {{ aaporg_cr_name }} was renamed to
+              {{ aaporg_found.name | default('') }} in the automation platform, and the gateway did not give it its
+              name {{ org_name }} back (answer {{ _gw_org_patch.status }}); another organization may hold that name. A
+              platform administrator frees the name, then this object is reconciled again.
 
     - name: Wait for org to sync to controller
       ansible.builtin.pause:
@@ -380,6 +422,24 @@
              | selectattr('status.group', 'defined')
              | map(attribute='status.group')
              | list }}
+
+    # one sign-in map per (team, access group): the access group's own name and its group path
+    - name: The access groups each team is granted
+      vars:
+        _rows: >-
+          {%- set out = [] -%}
+          {%- for kind, team, order, res in [('admin', 'admins', 1, _admin_rbac_crs.results),
+                                             ('executor', 'executors', 2, _exec_rbac_crs.results),
+                                             ('viewer', 'viewers', 3, _viewer_rbac_crs.results)] -%}
+            {%- for r in res | selectattr('resources', 'defined') | map(attribute='resources') | flatten
+                  if (r.status | default({}, true)).group is defined -%}
+              {%- set _ = out.append({'kind': kind, 'team': team, 'order': order, 'rbac': r.metadata.name,
+                                      'group': r.status.group}) -%}
+            {%- endfor -%}
+          {%- endfor -%}
+          {{ out }}
+      ansible.builtin.set_fact:
+        aaporg_grants: "{{ _rows }}"
 
     - name: Get AAP authenticator ID from AAPConfig
       ansible.builtin.set_fact:

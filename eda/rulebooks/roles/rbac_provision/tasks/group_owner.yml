@@ -9,7 +9,7 @@
 # parent create | use | mark | refuse, child create | use | refuse; fails with the sentence on a refusal.
 - name: Look up the access group before anything is made
   ansible.builtin.uri:
-    url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_full_path_query }}"
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
     method: GET
     headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
     validate_certs: false
@@ -18,7 +18,7 @@
 
 - name: Read the tenant's group
   ansible.builtin.uri:
-    url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_initial.json.id }}"
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_initial.json.id }}"
     method: GET
     headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
     validate_certs: false
@@ -28,7 +28,7 @@
 
 - name: Read the access group
   ansible.builtin.uri:
-    url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ _rgo_child_path.json.id }}"
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ _rgo_child_path.json.id }}"
     method: GET
     headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
     validate_certs: false
@@ -67,7 +67,7 @@
 
 - name: Read the access groups recorded in status
   ansible.builtin.uri:
-    url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ item }}"
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ item }}"
     method: GET
     headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
     validate_certs: false

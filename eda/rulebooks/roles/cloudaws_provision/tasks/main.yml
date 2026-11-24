@@ -165,14 +165,34 @@
       vars:
         aws_helper: shc_aws_tenant.py
         aws_config: "{{ ca_tenant_cfg }}"
-        # the zone the environment recorded, else the one of that name carrying the platform's tags (or a new one)
+        # the zone the environment recorded (the environment's whatever its tags say), else a new one; a public zone of the name
+        # that no status records is refused (tags in the tenant's account decide nothing)
         aws_args: >-
           {{ ['zone-up', '--zone', ca_zone]
              + (['--zone-id', fab_st.route53ZoneId] if (fab_st | default({}, true)).route53ZoneId | default('', true) | length > 0
                 else []) }}
         aws_soft: true
 
-    # a public zone of this name or recorded id that the platform did not make for this environment
+    # the zone reaches status as soon as it is made (also when the run fails after it), so a deletion removes it; a
+    # job that made it and stopped before this write leaves it refused on the next run (the platform team removes it)
+    - name: Record the zone the run made
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _made: "{{ (aws_result.made | default({}, true)).zoneId | default('', true) if aws_error | length > 0 else (aws_result.result | default({}, true)).zoneId | default('', true) }}"
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudawss
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        cr_status_partial: true
+        patch_ignore_not_found: true
+        cr_status_body:
+          awsAccountId: "{{ ca_account }}"
+          awsRegion: "{{ ci_spec.aws.region }}"
+          route53ZoneId: "{{ _made }}"
+          dns: {zone: "{{ ca_zone }}", zoneId: "{{ _made }}"}
+      when: _made | length > 0 and _made != (fab_st | default({}, true)).route53ZoneId | default('', true)
+
+    # a public zone of this name that no status of this environment records
     - name: Refuse a zone the platform did not make
       ansible.builtin.set_fact:
         fab_fail_reason: NameTakenOnSite

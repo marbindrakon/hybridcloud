@@ -63,7 +63,13 @@ KINDS = {
     # the platform's own services
     "registry-organization": ("plain", 255, "", 0, 2),       # <tenant>_<name>
     "automation-organization": ("plain", 255, "", 0, 2),     # <tenant>_<name>
+    # a sign-in map of an automation organization: the gateway keeps one namespace of map names per authenticator,
+    # shared by every organization (AuthenticatorMap name 512, unique with the authenticator)
+    "automation-map": ("plain", 512, "", 0, 4),             # <tenant>_<name>_<admin|executor|viewer>_<access group>
     "identity-client": ("plain", 255, "", 0, 3),             # <service>_<tenant>_<name>, e.g. vault_acme-corp_web
+    # a platform tool's sign-in client of one connection (AAPConfig, QuayConfig): <tool>_<connection>, e.g. aap_main
+    # (the realm's own automation clients, <connection> and <connection>-clients, can't hold "_")
+    "tool-client": ("plain", 255, "", 0, 2),
     # the first DNS label of a tenant's secrets store's address on the services cluster (an OpenShift Route's
     # subdomain): a label is at most 63 characters (Route validation, IsDNS1123Label)
     "vault-route": ("label", 63, "vault-", 0, 2),            # vault-<tenant>--<name>

@@ -162,7 +162,10 @@ class Base(unittest.TestCase):
     def up(self, ipv6=V6T, prefixes=(), known=None, egress="fabric", **cfg):
         t = self.tenant(**cfg)
         with fake(self.f):
-            out = t.place_up(PLACEMENT, VNI, list(prefixes), V.EDGE, egress, known, copy.deepcopy(ipv6))
+            # as the job runs it: after the first run the placement's status records the VPC and the gateway
+            out = t.place_up(PLACEMENT, VNI, list(prefixes), V.EDGE, egress, known, copy.deepcopy(ipv6),
+                             vpc_recorded=N in self.f.networks,
+                             ext_recorded="shc-edge-" + V.EDGE["site"] in self.f.externals)
         with open(self.tfile) as fh:
             self.tunnels_file = json.load(fh)
         return out, t.changed
@@ -173,7 +176,7 @@ class Base(unittest.TestCase):
     def down(self):
         t = self.tenant()
         with fake(self.f):
-            return t.place_down(PLACEMENT), t.changed
+            return t.place_down(PLACEMENT, external_gateway="shc-edge-" + V.EDGE["site"]), t.changed
 
     def status(self):
         t = self.tenant()
@@ -355,13 +358,15 @@ class UnchangedPlacements(Base):
     # recorded with the module as it was before IPv6-only placements existed, on this fake and with these secrets;
     # re-recorded for the names rules (three calls differ): the site's external VPN gateway is labelled with its site
     # (not the first placement's labels), place-down reads the VPC's description first (an unmarked VPC is refused)
-    # and reads the one external gateway its tunnels used by name instead of listing every one
+    # and reads the one external gateway its tunnels used by name instead of listing every one; re-recorded again
+    # when ownership became what status records (checked call by call against the module before): place-down reads
+    # the VPC once instead of twice and lists the project's tunnels in every region (aggregated) instead of one
     PINNED = {
-        "dual-stack": (77, "53f96f917f49ce2d2e1d8f0a6159f706f72b2d6f2b13490856fabffcff265ebf"),
-        "dual-stack internet off": (78, "fc7dbb75372f0c1ed8a5b43fa59188f5ca5fcf366319b4f1d09d659f52c0cd12"),
-        "ipv4-only": (68, "1cdee0b297ee46367d5d0265d13dc467cfbed9549f35eec215bf359db79b7fd8"),
-        "ipv4-only ipv6Edge": (68, "ff132834560fb49a076b9ec3ecc38cca831c0441f947b7c2b9e9c0c14ff08bd6"),
-        "dual-stack cloudNat": (76, "e3217bd2d037d45a04d14eefad29d12461c8fa4e7512ceec935d9dd99454f140"),
+        "dual-stack": (76, "a713a2d2ee8d445b3dda07d0bd2fc11e2334eb88466dff5fb389d787de840f00"),
+        "dual-stack internet off": (77, "133b1f20345d374a60970ed9190054751ede7832e47f28798f5211a7d5cee16c"),
+        "ipv4-only": (67, "4db009e147fc9b289e8058bb8df46081627eb7e774c26b99f7fb76e243e61646"),
+        "ipv4-only ipv6Edge": (67, "2e8605bccf6f0e13771251ff14d191020ca0762cb81528ca989746495746cdd2"),
+        "dual-stack cloudNat": (75, "26d7ba7da44690f8efd58205a076b53abd2c40b4af6e86fcae0c17baff940ee5"),
     }
 
     def calls(self, ipv6, egress="fabric", **cfg):

@@ -3,13 +3,19 @@ that the platform did not make.
 
 Google Cloud: a placement's VPC is shc-<tenant>--<placement> from the names function, cut with a derived ending so
 that every ending the helper appends still fits Google's 63 characters; an existing placement keeps the name its
-status records (status.realization.site.vpc). The environment's Cloud DNS zone is named by the function too. A VPC,
-zone or external VPN gateway of the wanted name without the platform's mark is refused (NameTakenOnSite), never
-taken over and never deleted; external VPN gateways are deleted by name and label, never by a name's beginning.
+status records (status.realization.site.vpc). The environment's Cloud DNS zone is named by the function too.
+
+What is ours on a tenant's project or account is what a status records (the VPC, the zone, the site's external VPN
+gateway): labels, tags and descriptions there are written for people (the tenant can write them) and decide nothing.
+An object of the wanted name that no status records is refused (NameTakenOnSite), never taken over and never
+deleted, whatever it carries; a recorded one is used and deleted whatever someone wrote on it. What a run makes
+reaches status in that run, also when the run fails later, so a deletion removes it. The decisions are enumerated:
+(exists or not) x (what status records) x (what the object carries).
 
 Example names are made up: tenants acme-corp / acme, placements core-prod / corp-core-prod (the two-tenant pair).
 """
 import contextlib
+import copy
 import io
 import json
 import os
@@ -111,9 +117,10 @@ class GcpPlacementTasks(unittest.TestCase):
                                                "np_backend_name": "{{ case.environment }}",
                                                "fab_spec": {"network": "{{ case.network }}"},
                                                "fab_st": "{{ case.status }}", "_refused": "",
-                                               "np_gcp_vpc": "", "fab_fail_reason": "", "fab_fail_msg": ""}}] + self.steps()
+                                               "np_gcp_vpc": "", "np_gcp_vpc_recorded": False,
+                                               "fab_fail_reason": "", "fab_fail_msg": ""}}] + self.steps()
         return run_cases(steps, cases, "{'vpc': np_gcp_vpc, 'labels': (np_gcp_cfg | default({})).labels | default({}),"
-                                       " 'refused': _refused}", extra_vars=base)
+                                       " 'refused': _refused, 'recorded': np_gcp_vpc_recorded | bool}", extra_vars=base)
 
     def test_states(self):
         ok = {"tenant": "acme-corp", "environment": "prod", "network": "core", "placement": "core-prod", "status": {}}
@@ -129,6 +136,7 @@ class GcpPlacementTasks(unittest.TestCase):
                                             "shc-placement": "core-prod"})
         self.assertEqual(got[0]["refused"], "")
         self.assertEqual(got[1]["vpc"], "shc-entity-acme-corp-core-prod")
+        self.assertEqual([g["recorded"] for g in got[:3]], [False, True, False])   # passed on as --vpc-recorded
         self.assertEqual(got[2]["vpc"], "shc-acme--corp-core-prod")
         self.assertTrue(got[3]["refused"].startswith("NameNotAllowed: NetworkPlacement core.prod: The placement name"))
         self.assertIn("NameNotAllowed: NetworkPlacement core-prod: The network name", got[4]["refused"])
@@ -183,57 +191,74 @@ def zone(name=ZONE, dns=FQDN + ".", labels=None):
 
 
 class ZoneOwnership(unittest.TestCase):
-    """exists ours / exists unmarked / exists another tenant's / absent, found by the recorded name or by DNS name."""
+    """(absent | the recorded zone | a zone of the name or DNS name) x (recorded or not) x (labels: ours, none, another
+    tenant's) -> made | used | refused; zone-down deletes only the recorded zone."""
 
-    def run_zone(self, action, zones, name=ZONE):
+    def run_zone(self, action, zones, name=ZONE, recorded=False):
         f = FakeDns(zones)
         t = T.Tenant.__new__(T.Tenant)
         t.project, t.tok, t.changed = "p", "tok", []
         t.labels = {"shc-managed": "true", "shc-entity": "acme-corp", "shc-environment": "prod"}
         buf = io.StringIO()
+        T.MADE.clear()
         with mock.patch.object(T.g, "http", f.http), mock.patch.object(T.g, "list_all", f.list_all), \
                 contextlib.redirect_stdout(buf):
             try:
-                out = getattr(t, action)(FQDN, name)
+                out = t.zone_up(FQDN, name, recorded) if action == "zone_up" else t.zone_down(FQDN, name)
             except SystemExit:
                 return {"refused": json.loads(buf.getvalue())}, f
         return out, f
 
+    LABELS = {"ours": None, "none": {}, "other": {"shc-managed": "true", "shc-entity": "acme"}}
+
     def test_up_states(self):
-        out, f = self.run_zone("zone_up", [])                                   # absent: made, with our name
-        self.assertEqual(out["zoneId"], ZONE)
-        self.assertEqual(f.zones[ZONE]["labels"]["shc-entity"], "acme-corp")
-        out, f = self.run_zone("zone_up", [zone()])                             # ours: used as it is
-        self.assertEqual(out["zoneId"], ZONE)
-        self.assertNotIn(("POST", ""), f.calls)
-        out, f = self.run_zone("zone_up", [zone(name="shc-prod-acme-corp-tenants-example-com")], name=ZONE)
-        self.assertEqual(out["zoneId"], "shc-prod-acme-corp-tenants-example-com")   # ours under an older name
-        for zones in ([zone(labels={})], [zone(name="other", labels={})],             # unmarked, by name / DNS name
-                      [zone(labels={"shc-managed": "true", "shc-entity": "acme"})],   # another tenant's
-                      [zone(dns="elsewhere.example.com.")]):                          # our name, another DNS name
-            out, f = self.run_zone("zone_up", zones)
-            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", zones)
-            self.assertNotIn("acme.", out["refused"]["error"].replace("acme-corp", ""))  # never the other tenant
-            self.assertEqual([c for c in f.calls if c[0] != "GET"], [], zones)          # untouched
+        for recorded in (False, True):
+            out, f = self.run_zone("zone_up", [], recorded=recorded)       # absent: made with the name given
+            self.assertEqual(out["zoneId"], ZONE)
+            self.assertEqual(T.MADE, {"zoneId": ZONE})
+            for label, labels in self.LABELS.items():
+                # the zone of the name: recorded -> the environment's whatever its labels; else refused
+                out, f = self.run_zone("zone_up", [zone(labels=labels)], recorded=recorded)
+                if recorded:
+                    self.assertEqual(out["zoneId"], ZONE, label)
+                else:
+                    self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", label)   # a forged mark too
+                    self.assertNotIn("acme.", out["refused"]["error"].replace("acme-corp", ""))
+                self.assertNotIn(("POST", ""), f.calls)
+                # another zone of the DNS name (recorded one gone, or nothing recorded): refused, untouched
+                out, f = self.run_zone("zone_up", [zone(name="other", labels=labels)], recorded=recorded)
+                self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", (label, recorded))
+                self.assertEqual([c for c in f.calls if c[0] != "GET"], [])
+            out, f = self.run_zone("zone_up", [zone(dns="elsewhere.example.com.")], recorded=recorded)
+            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")    # the name holds another DNS name
+        # an environment of the release before: its status records the older name
+        old = "shc-prod-acme-corp-tenants-example-com"
+        out, f = self.run_zone("zone_up", [zone(name=old, labels={})], name=old, recorded=True)
+        self.assertEqual(out["zoneId"], old)
 
     def test_up_needs_the_name(self):
         out, _ = self.run_zone("zone_up", [], name=None)
         self.assertIn("--zone-name", out["refused"]["error"])
 
     def test_down_states(self):
-        out, f = self.run_zone("zone_down", [zone()])
-        self.assertTrue(out["deleted"])
-        self.assertEqual(f.zones, {})
+        for label, labels in self.LABELS.items():                          # recorded: deleted whatever its labels
+            out, f = self.run_zone("zone_down", [zone(labels=labels)])
+            self.assertTrue(out["deleted"], label)
+            self.assertEqual(f.zones, {})
         out, f = self.run_zone("zone_down", [])
         self.assertFalse(out["deleted"])
-        for zones in ([zone(labels={})], [zone(labels={"shc-managed": "true", "shc-entity": "acme"})]):
-            out, f = self.run_zone("zone_down", zones)
-            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
-            self.assertEqual(len(f.zones), 1)
+        out, f = self.run_zone("zone_down", [zone()], name=None)           # nothing recorded: nothing deleted
+        self.assertFalse(out["deleted"])
+        self.assertEqual(len(f.zones), 1)
+        out, f = self.run_zone("zone_down", [zone(dns="elsewhere.example.com.")])
+        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
+        self.assertEqual(len(f.zones), 1)
 
 
 class PlacementOwnership(unittest.TestCase):
-    """The placement's VPC and the site's external VPN gateway: exists ours / unmarked / another site's / absent."""
+    """The placement's VPC and the site's external VPN gateway: (absent | exists) x (recorded or not) x (description
+    or labels: the platform's, edited, forged)."""
+    EXT = "shc-edge-" + V.EDGE["site"]
 
     def setUp(self):
         self.f = V.FakeCompute()
@@ -246,6 +271,7 @@ class PlacementOwnership(unittest.TestCase):
     def call(self, fn, *a, **kw):
         t = V.tenant(self.f)
         buf = io.StringIO()
+        T.MADE.clear()
         with V.fake(self.f), contextlib.redirect_stdout(buf), mock.patch.dict(os.environ, {}, clear=False):
             os.environ.pop("SHC_EDGE_VPN_TUNNELS_FILE", None)
             try:
@@ -253,66 +279,144 @@ class PlacementOwnership(unittest.TestCase):
             except SystemExit:
                 return {"refused": json.loads(buf.getvalue())}
 
-    def up(self, vpc="shc-acme--p1"):
-        return self.call("place_up", "p1", V.VNI, V.V4, V.EDGE, "fabric", None, None, vpc=vpc)
+    def up(self, vpc="shc-acme--p1", recorded=None, ext_recorded=None):
+        recorded = vpc in self.f.networks if recorded is None else recorded
+        ext_recorded = self.EXT in self.f.externals if ext_recorded is None else ext_recorded
+        return self.call("place_up", "p1", V.VNI, V.V4, V.EDGE, "fabric", None, None, vpc=vpc,
+                         vpc_recorded=recorded, ext_recorded=ext_recorded)
+
+    def add_vpc(self, name, description):
+        self.f.networks[name] = {"name": name, "mtu": 1370, "description": description,
+                                 "selfLink": self.f.link("/global/networks/" + name)}
+
+    def add_ext(self, labels):
+        self.f.externals[self.EXT] = {"name": self.EXT, "labels": labels,
+                                      "interfaces": [{"id": 0, "ipAddress": "198.51.100.11"},
+                                                     {"id": 1, "ipAddress": "198.51.100.12"}],
+                                      "selfLink": self.f.link("/global/externalVpnGateways/" + self.EXT)}
 
     def test_vpc_states(self):
-        out = self.up()                                                          # absent: made under the given name
+        out = self.up(recorded=False)                                    # absent, nothing recorded: made
         self.assertEqual(out["vpc"], "shc-acme--p1")
         self.assertTrue(self.f.networks["shc-acme--p1"]["description"].startswith(T.VPC_MARK))
-        self.assertEqual(self.up()["vpc"], "shc-acme--p1")                       # ours: used again
-        self.f.networks["shc-other"] = {"name": "shc-other", "mtu": 1370, "description": "made by hand",
-                                        "selfLink": self.f.link("/global/networks/shc-other")}
-        before = len(self.f.mutations())
-        out = self.up("shc-other")                                               # unmarked: refused, untouched
+        self.assertEqual(T.MADE["vpc"], "shc-acme--p1")
+        self.assertEqual(self.up(recorded=True)["vpc"], "shc-acme--p1")  # recorded: used again
+        for description in ("made by hand", T.VPC_MARK + "of tenant acme (forged)", ""):
+            # exists, nothing recorded: refused whatever its description says (a forged mark too), untouched
+            self.f = V.FakeCompute()
+            self.add_vpc("shc-acme--p1", description)
+            before = len(self.f.mutations())
+            out = self.up(recorded=False)
+            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", description)
+            self.assertEqual(len(self.f.mutations()), before)
+            # exists and recorded: the placement's whatever its description says (someone edited it)
+            out = self.up(recorded=True)
+            self.assertEqual(out["vpc"], "shc-acme--p1", description)
+
+    def test_a_recorded_vpc_with_an_edited_description_is_deleted(self):
+        self.up()
+        self.f.networks["shc-acme--p1"]["description"] = "edited in the console"
+        out = self.call("place_down", "p1", vpc="shc-acme--p1", external_gateway=self.EXT)
+        self.assertTrue(out["deleted"])
+        self.assertNotIn("shc-acme--p1", self.f.networks)
+        self.assertNotIn(self.EXT, self.f.externals)
+
+    def test_objects_of_the_vpcs_names_in_another_vpc(self):
+        """A subnet named like the VPC that belongs to another VPC: place-up refuses, place-down leaves it alone."""
+        self.add_vpc("elsewhere", "x")
+        self.f.subnets["shc-acme--p1"] = {"name": "shc-acme--p1", "ipCidrRange": V.V4[0], "stackType": "IPV4_ONLY",
+                                          "network": self.f.networks["elsewhere"]["selfLink"]}
+        out = self.up(recorded=False)
         self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
-        self.assertEqual(len(self.f.mutations()), before)
-        out = self.call("place_down", "x", vpc="shc-other")                      # and never emptied
-        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
-        self.assertIn("shc-other", self.f.networks)
+        self.assertEqual(out["refused"]["made"], {"vpc": "shc-acme--p1"})   # the VPC it made reaches status
+        out = self.call("place_down", "p1", vpc="shc-acme--p1")
+        self.assertIn("shc-acme--p1", self.f.subnets)
+        self.assertEqual(out["left"], ["subnet shc-acme--p1"])
 
     def test_external_gateway_states(self):
-        ext = "shc-edge-" + V.EDGE["site"]
         self.up()
-        self.assertEqual(self.f.externals[ext]["labels"], {"shc-managed": "true", "shc-edge-site": V.EDGE["site"]})
-        for labels in ({}, {"shc-managed": "true", "shc-edge-site": "another-site"}):    # unmarked / another site's
-            f = V.FakeCompute()
-            f.externals[ext] = {"name": ext, "labels": labels, "interfaces": [{"id": 0, "ipAddress": "198.51.100.11"},
-                                                                              {"id": 1, "ipAddress": "198.51.100.12"}],
-                                "selfLink": f.link("/global/externalVpnGateways/" + ext)}
-            self.f = f
-            out = self.up()
-            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", labels)
-            self.assertEqual(self.f.externals[ext]["labels"], labels)
+        self.assertEqual(self.f.externals[self.EXT]["labels"], {"shc-managed": "true", "shc-edge-site": V.EDGE["site"]})
+        for labels in ({}, {"shc-managed": "true", "shc-edge-site": V.EDGE["site"]},     # none / forged
+                       {"shc-managed": "true", "shc-edge-site": "another-site"}):
+            for recorded in (False, True):
+                self.f = V.FakeCompute()
+                self.add_ext(labels)
+                out = self.up(ext_recorded=recorded)
+                if recorded:                                  # a placement's status records it: used as it is
+                    self.assertEqual(out["externalGateway"], self.EXT, labels)
+                else:                                         # nobody records it: refused whatever its labels
+                    self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", labels)
+                    self.assertEqual(out["refused"]["made"], {"vpc": "shc-acme--p1"})
+                self.assertEqual(self.f.externals[self.EXT]["labels"], labels)
 
-    def test_delete_by_name_and_label_never_by_prefix(self):
+    def test_delete_only_the_recorded_gateway(self):
         self.up()
-        ext = "shc-edge-" + V.EDGE["site"]
-        # a gateway the platform did not make, with the old prefix: left alone
-        self.f.externals["shc-edge-by-hand"] = {"name": "shc-edge-by-hand", "labels": {},
+        self.f.externals["shc-edge-by-hand"] = {"name": "shc-edge-by-hand", "labels": {"shc-managed": "true"},
                                                 "selfLink": self.f.link("/global/externalVpnGateways/shc-edge-by-hand")}
-        out = self.call("place_down", "p1", vpc="shc-acme--p1")
-        self.assertTrue(out["deleted"])
-        self.assertNotIn(ext, self.f.externals)                  # the one the tunnels used: ours, no tunnel left
-        self.assertIn("shc-edge-by-hand", self.f.externals)
+        self.call("place_down", "p1", vpc="shc-acme--p1")                 # nothing recorded: the gateway stays
+        self.assertIn(self.EXT, self.f.externals)
+        self.call("place_down", "p1", vpc="shc-acme--p1", external_gateway=self.EXT)
+        self.assertNotIn(self.EXT, self.f.externals)                      # recorded, no tunnel left anywhere
+        self.assertIn("shc-edge-by-hand", self.f.externals)               # never by a name's beginning
 
-    def test_a_recorded_gateway_without_the_label_stays(self):
+    def test_a_recorded_gateway_without_the_label_goes(self):
         self.up()
-        ext = "shc-edge-" + V.EDGE["site"]
-        self.f.externals[ext]["labels"] = {}
-        self.call("place_down", "p1", vpc="shc-acme--p1")
-        self.assertIn(ext, self.f.externals)
+        self.f.externals[self.EXT]["labels"] = {}
+        self.call("place_down", "p1", vpc="shc-acme--p1", external_gateway=self.EXT)
+        self.assertNotIn(self.EXT, self.f.externals)
 
-    def test_a_rerun_teardown_finds_the_recorded_gateway(self):
-        """Tunnels already gone (an earlier run failed after them): the gateway the status records still goes."""
+    def test_a_tunnel_in_another_region_keeps_the_gateway(self):
         self.up()
-        ext = "shc-edge-" + V.EDGE["site"]
-        for i in range(2):
-            del self.f.tunnels["shc-acme--p1-t%d" % i]
-        self.call("place_down", "p1", vpc="shc-acme--p1")
-        self.assertIn(ext, self.f.externals)                     # nothing names it: kept
-        self.call("place_down", "p1", vpc="shc-acme--p1", external_gateway=ext)
-        self.assertNotIn(ext, self.f.externals)
+        self.f.tunnels["other-region-t0"] = {"name": "other-region-t0", "router": "x/regions/elsewhere/routers/o",
+                                             "vpnGateway": "x/regions/elsewhere/vpnGateways/o",
+                                             "peerExternalGateway": self.f.externals[self.EXT]["selfLink"]}
+        self.call("place_down", "p1", vpc="shc-acme--p1", external_gateway=self.EXT)
+        self.assertIn(self.EXT, self.f.externals)
+
+    def test_a_failed_first_run_then_delete_removes_what_was_made(self):
+        """place-up makes the VPC and fails later (here: an external gateway nobody records); the failure names what
+        it made, the job records it, and the deletion removes it."""
+        self.add_ext({})
+        out = self.up(recorded=False, ext_recorded=False)
+        self.assertEqual(out["refused"]["made"], {"vpc": "shc-acme--p1"})
+        self.assertIn("shc-acme--p1", self.f.networks)
+        self.call("place_down", "p1", vpc=out["refused"]["made"]["vpc"])
+        self.assertNotIn("shc-acme--p1", self.f.networks)
+        self.assertIn(self.EXT, self.f.externals)                          # not this placement's: untouched
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class GcpPlacementRecords(unittest.TestCase):
+    """The backend's record right after place-up: (ok | failed) x (made or reported) x (already recorded)."""
+
+    def test_states(self):
+        task = by_name(load(os.path.join(NP, "tasks", "backend_cloudgcp.yml")), "What the placement owns in the project now")
+        ok = {"vpc": "shc-a--p", "externalGateway": "shc-edge-s"}
+        cases = [{"err": "", "res": {"result": ok}, "site": {}},                                   # first run, ok
+                 {"err": "boom", "res": {"made": {"vpc": "shc-a--p"}}, "site": {}},                # failed after the VPC
+                 {"err": "boom", "res": {}, "site": {}},                                           # refused: nothing made
+                 {"err": "", "res": {"result": ok}, "site": ok},                                   # already recorded
+                 {"err": "", "res": {"result": ok}, "site": {"vpc": "shc-a--p"}}]                  # gateway first used
+        steps = [{"ansible.builtin.set_fact": {"gcp_error": "{{ case.err }}", "gcp_result": "{{ case.res }}",
+                                               "fab_st": {"realization": {"site": "{{ case.site }}"}}}}, task]
+        got = run_cases(steps, cases, "np_gcp_own")
+        self.assertEqual(got, [ok, {"vpc": "shc-a--p"}, {}, {}, {"externalGateway": "shc-edge-s"}])
+
+    def test_the_gateway_recorded_by_another_placement_of_the_project(self):
+        task = by_name(load(os.path.join(NP, "tasks", "backend_cloudgcp.yml")), "Is the site's external VPN gateway recorded")
+
+        def pl(project, ext):
+            return {"metadata": {"namespace": "n", "name": "x"},
+                    "status": {"realization": {"site": {"project": project, "externalGateway": ext}}}}
+        cases = [{"all": [], "mine": ""}, {"all": [pl("p", "shc-edge-s")], "mine": ""},
+                 {"all": [pl("q", "shc-edge-s")], "mine": ""}, {"all": [pl("p", "shc-edge-t")], "mine": ""},
+                 {"all": [], "mine": "shc-edge-s"}]
+        steps = [{"ansible.builtin.set_fact": {"_np_gcp_all": {"resources": "{{ case.all }}"},
+                                               "fab_st": {"realization": {"site": {"externalGateway": "{{ case.mine }}"}}}}},
+                 task]
+        got = run_cases(steps, cases, "np_gcp_ext_recorded | bool",
+                        extra_vars={"np_gateway": {"metadata": {"name": "s"}}, "np_gcp_cfg": {"project": "p"}})
+        self.assertEqual(got, [False, True, False, False, True])
 
 
 # ---- AWS ----------------------------------------------------------------------------------------------------------
@@ -424,12 +528,15 @@ OURS = {"shc-managed": "true", "shc-entity": "acme-corp"}
 
 @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
 class AwsZoneOwnership(unittest.TestCase):
-    """exists ours / exists unmarked / exists another tenant's / absent; by the recorded id or by name."""
+    """(absent | the recorded zone | a zone of the name) x (recorded id or not) x (tags: ours, none, another
+    tenant's) -> made | used | refused; zone-down deletes only the recorded zone."""
+    TAGS = {"ours": OURS, "none": {}, "other": {"shc-managed": "true", "shc-entity": "acme"}}
 
     def run_zone(self, action, zones, zone_id=None):
         t = A.Tenant.__new__(A.Tenant)
         t.r53, t.changed, t.cfg = FakeRoute53(zones), [], {"tags": {"shc-entity": "acme-corp"}}
         buf = io.StringIO()
+        A.MADE.clear()
         with contextlib.redirect_stdout(buf):
             try:
                 return getattr(t, action)(AZONE, zone_id), t.r53
@@ -438,28 +545,53 @@ class AwsZoneOwnership(unittest.TestCase):
 
     def test_up(self):
         out, r = self.run_zone("zone_up", [])
-        self.assertEqual((out["zoneId"], r.calls), ("ZNEW", ["create"]))
-        out, r = self.run_zone("zone_up", [r53zone("Z1", OURS)], "Z1")
-        self.assertEqual((out["zoneId"], r.calls), ("Z1", []))
-        out, r = self.run_zone("zone_up", [r53zone("Z1", OURS)])
-        self.assertEqual(out["zoneId"], "Z1")
-        # ours beside an unmarked one of the same name (Route 53 allows several): ours is used
-        out, r = self.run_zone("zone_up", [r53zone("Z0", {}), r53zone("Z1", OURS)])
-        self.assertEqual(out["zoneId"], "Z1")
-        for zones, zid in (([r53zone("Z1", {})], None), ([r53zone("Z1", {"shc-managed": "true", "shc-entity": "acme"})], None),
-                           ([r53zone("Z1", {})], "Z1"), ([r53zone("Z1", OURS, name="other.example.com.")], "Z1")):
-            out, r = self.run_zone("zone_up", zones, zid)
-            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", zones)
+        self.assertEqual((out["zoneId"], r.calls, A.MADE), ("ZNEW", ["create"], {"zoneId": "ZNEW"}))
+        out, r = self.run_zone("zone_up", [], "ZGONE")                  # the recorded zone is gone: a new one
+        self.assertEqual(out["zoneId"], "ZNEW")
+        for label, tags in self.TAGS.items():
+            out, r = self.run_zone("zone_up", [r53zone("Z1", tags)], "Z1")      # recorded: used whatever its tags
+            self.assertEqual((out["zoneId"], r.calls), ("Z1", []), label)
+            out, r = self.run_zone("zone_up", [r53zone("Z1", tags)])            # nothing recorded: refused
+            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", label)  # a forged mark too
             self.assertEqual(r.calls, [])
+            out, r = self.run_zone("zone_up", [r53zone("Z1", tags)], "ZGONE")   # recorded gone, another of the name
+            self.assertEqual(out["refused"]["reason"], "NameTakenOnSite", label)
+        out, r = self.run_zone("zone_up", [r53zone("Z1", OURS, name="other.example.com.")], "Z1")
+        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")    # the recorded id is another zone now
 
     def test_down(self):
-        out, r = self.run_zone("zone_down", [r53zone("Z1", OURS)], "Z1")
-        self.assertEqual((out["deleted"], r.calls), (True, ["delete"]))
-        out, r = self.run_zone("zone_down", [])
+        for label, tags in self.TAGS.items():
+            out, r = self.run_zone("zone_down", [r53zone("Z1", tags)], "Z1")    # recorded: deleted whatever its tags
+            self.assertEqual((out["deleted"], r.calls), (True, ["delete"]), label)
+            out, r = self.run_zone("zone_down", [r53zone("Z1", tags)])          # nothing recorded: nothing deleted
+            self.assertEqual((out["deleted"], r.calls), (False, []), label)
+        out, r = self.run_zone("zone_down", [], "Z1")
         self.assertFalse(out["deleted"])
-        out, r = self.run_zone("zone_down", [r53zone("Z1", {})])
-        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
-        self.assertEqual(r.calls, [])
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ZoneRecords(unittest.TestCase):
+    """The environment jobs record the zone right after zone-up: (ok | failed after the create | refused) x (already
+    recorded)."""
+
+    def test_states(self):
+        for cloud, res_key, err_key, field in (("aws", "aws_result", "aws_error", "route53ZoneId"),
+                                               ("gcp", "gcp_result", "gcp_error", "dnsZoneId")):
+            task = by_name(load(os.path.join(ROLES, "cloud%s_provision" % cloud, "tasks", "main.yml")),
+                           "Record the zone the run made")
+            body = dict(task["vars"])
+            probe = {"ansible.builtin.set_fact": {"_got": "{{ _made if (%s) else '' }}" % task["when"]}, "vars": body}
+            cases = [{"err": "", "res": {"result": {"zoneId": "Z1"}}, "st": {}},
+                     {"err": "boom", "res": {"made": {"zoneId": "Z1"}}, "st": {}},
+                     {"err": "boom", "res": {}, "st": {}},
+                     {"err": "", "res": {"result": {"zoneId": "Z1"}}, "st": {field: "Z1"}}]
+            steps = [{"ansible.builtin.set_fact": {err_key: "{{ case.err }}", res_key: "{{ case.res }}",
+                                                   "fab_st": "{{ case.st }}"}}, probe]
+            got = run_cases(steps, cases, "_got", extra_vars={"fab_name": "prod", "fab_namespace": "n",
+                                                              "ca_account": "a", "ca_zone": "z",
+                                                              "ci_spec": {"aws": {"region": "r"}, "gcp": {"region": "r"}}})
+            self.assertEqual(got, ["Z1", "Z1", "", ""], cloud)
+            self.assertEqual(body["cr_status_body"][field], "{{ _made }}")
 
 
 # ---- the hub's objects named by a number: the names stay, tags carry tenant, network and placement -----------------
@@ -544,10 +676,42 @@ class AwsPlacementObjects(unittest.TestCase):
             self.addCleanup(p.stop)
         self.ec2 = AT.FakeEc2()
 
-    def up(self, name="acme_p1"):
+    def up(self, name="acme_p1", vpc_id="recorded"):
         t = self.AT.tenant(self.ec2)
         t.cfg["tags"] = {"shc-entity": "acme", "shc-environment": "prod", "shc-network": "core"}
-        return t.place_up("entity-acme/p1", 1001, list(self.AT.V4), False, None, name=name)
+        if vpc_id == "recorded":            # what the placement's status records after a run
+            vpc_id = next(iter(self.ec2.vpcs), None)
+        A.MADE.clear()
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                return t.place_up("entity-acme/p1", 1001, list(self.AT.V4), False, None, name=name, vpc_id=vpc_id)
+            except SystemExit:
+                return {"refused": json.loads(buf.getvalue().splitlines()[-1])}
+
+    def test_vpc_states(self):
+        """(absent | tagged for the placement) x (recorded or not) x (tags: ours, edited)."""
+        out = self.up(vpc_id=None)                                        # absent, nothing recorded: made
+        vid = out["vpcId"]
+        self.assertEqual(A.MADE, {"vpcId": vid})
+        self.assertEqual(self.up(vpc_id=vid)["vpcId"], vid)               # recorded: used
+        out = self.up(vpc_id=None)                                        # tagged, nothing recorded: refused
+        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
+        self.assertEqual(len(self.ec2.vpcs), 1)
+        v = self.ec2.vpcs[vid]                                            # someone edits its tags
+        v["Tags"] = [t for t in v["Tags"] if t["Key"] not in ("shc-managed", "shc-entity")]
+        self.assertEqual(self.up(vpc_id=vid)["vpcId"], vid)               # recorded: still the placement's
+        out = self.up(vpc_id="vpc-gone")                                  # recorded one gone, a tagged one there
+        self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
+
+    def test_teardown_by_the_recorded_vpc(self):
+        vid = self.up(vpc_id=None)["vpcId"]
+        other = self.AT.tenant(self.ec2)
+        # another VPC carrying the placement's tag (forged): the teardown with the recorded id never touches it
+        forged = dict(copy.deepcopy(self.ec2.vpcs[vid]), VpcId="vpc-forged")
+        self.ec2.vpcs["vpc-forged"] = forged
+        other.place_down("entity-acme/p1", 1001, None, vpc_id=vid)
+        self.assertEqual(list(self.ec2.vpcs), ["vpc-forged"])
 
     def test_names_and_tags(self):
         self.up()

@@ -577,8 +577,8 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-plugin-quay
     ask_variables_on_launch: true
-    # the platform's mail domain: a registry organization's contact address <organization>@<domain> is the
-    # platform's mark on it (installation setting REGISTRY_ORG_MAIL_DOMAIN; the job refuses to run without it)
+    # the installation's mail domain (setting REGISTRY_ORG_MAIL_DOMAIN, no default): the registry needs a contact
+    # address <organization>@<domain> for a new organization; a run that has to create one fails without it
     extra_vars:
       quayorg_mail_domain: "{{ lookup('env', 'REGISTRY_ORG_MAIL_DOMAIN') }}"
     credentials:
@@ -590,10 +590,6 @@ controller_templates:
     inventory: sovereign-localhost
     execution_environment: de-plugin-quay
     ask_variables_on_launch: true
-    # the platform's mail domain: a registry organization's contact address <organization>@<domain> is the
-    # platform's mark on it (installation setting REGISTRY_ORG_MAIL_DOMAIN; the job refuses to run without it)
-    extra_vars:
-      quayorg_mail_domain: "{{ lookup('env', 'REGISTRY_ORG_MAIL_DOMAIN') }}"
     credentials:
       - sovereign-vault-admin-credential
   - name: openstack-migration-dummy
