@@ -1,0 +1,25 @@
+---
+# One answer of files/shc_names.py (pure computation): every name the platform gives an object on an underlying
+# platform comes from there. Input: names_request (dict with `action`: check | name | join | group; see the
+# helper's header). Sets names_result ({name, exact, display} or {ok, message}); fails when the helper refuses
+# (a part missing, an unknown kind, a group name that does not fit), with the helper's sentence.
+- name: "Names: {{ names_request.action }} {{ names_request.kind | default(names_request.what | default('')) }}"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../../../common/files/shc_names.py"
+    stdin: "{{ names_request | to_json }}"
+  register: _names_call
+  changed_when: false
+  failed_when: false
+
+- name: "Names: parse the answer"
+  ansible.builtin.set_fact:
+    names_result: >-
+      {{ (_names_call.stdout | from_json) if (_names_call.stdout | default('') | trim).startswith('{')
+         else {'error': (_names_call.stderr | default('') | trim)[-600:]} }}
+
+- name: "Names: fail when the helper refused"
+  ansible.builtin.fail:
+    msg: "{{ names_result.error | default('The name could not be worked out (rc ' ~ _names_call.rc ~ ').') }}"
+  when: _names_call.rc != 0 or 'error' in names_result
