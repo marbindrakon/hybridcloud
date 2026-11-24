@@ -136,7 +136,9 @@ class Removals(unittest.TestCase):
             for f in files:
                 with open(os.path.join(dirpath, f)) as fh:
                     text = fh.read()
-                if re.search(r"spec\.project\b|\.project \|", text) or "spec.get('project'" in text:
+                # the object's own spec.project, in any of the ways a job reads a spec field; a helper's answer
+                # that happens to have a "project" key (os_result.project) is not a read of it
+                if re.search(r"spec\.project\b|spec\[['\"]project['\"]\]|spec\.get\(['\"]project['\"]", text):
                     readers.append(os.path.join(dirpath, f))
         self.assertEqual(readers, [], "a CloudOSO job reads spec.project")
 
