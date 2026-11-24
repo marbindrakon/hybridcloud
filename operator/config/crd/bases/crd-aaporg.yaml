@@ -259,6 +259,26 @@ spec:
                 orgName:
                   type: string
                   description: AAP organization name.
+                gatewayOrgId:
+                  type: string
+                  description: >-
+                    Identifier of the organization in the automation platform's gateway. The platform finds the
+                    organization by it.
+                signInMaps:
+                  type: array
+                  description: >-
+                    The sign-in maps the platform made for this organization in the automation platform's gateway.
+                    A deletion removes exactly these.
+                  items:
+                    type: object
+                    description: One sign-in map.
+                    properties:
+                      id:
+                        type: string
+                        description: Identifier of the map.
+                      name:
+                        type: string
+                        description: Name of the map.
                 aapControllerUrl:
                   type: string
                   description: External AAP controller URL.

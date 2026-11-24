@@ -3,7 +3,7 @@
 platform is a letter first, then lower-case letters, digits and single hyphens, a letter or digit last, at most 30
 characters (a gateway's 21); a cluster on Google Cloud may not be named like "google". The platform's configuration
 kinds keep the API server's own rule. An object made before the rule keeps working: its status, its spec and its
-deletion are still accepted.
+deletion are still accepted. The status keys the jobs read back are kept.
 
   python3 -I tests/cel-ipam/cel_cases_names.py --crds operator/primary/helm/templates/crds.yaml [--report out.json]
 
@@ -206,6 +206,42 @@ def removal_cases(run, kube):
               json.dumps(st))
 
 
+def kept_cases(run, kube):
+    """Status keys the jobs write and read back are kept by the server (the static walk of every write is
+    tests/unit/test_status_writes_kept.py; these are its findings, on a real server)."""
+    o = obj("PlatformOpenshift", "kept", {"type": "openstack", "openstack": {"environment": "env", "workerCount": 3}})
+    rc, err = run.create(o)
+    run.check("K-setup", "a cluster for the status writes", rc == 0, err)
+    fips = {"api": {"address": "192.0.2.10", "id": "f-1", "description": "OpenShift cluster web: API"},
+            "ingress": {"address": "192.0.2.11", "id": "f-2", "description": "OpenShift cluster web: ingress"}}
+    got = status_round_trip(run, kube, "platformopenshifts", "kept", {"floatingIPs": fips})
+    run.check("K-fip", "the floating IPs keep their description, address and id",
+              (got.get("floatingIPs") or {}) == fips, json.dumps(got))
+    o = obj("AAPOrg", "kept")
+    rc, err = run.create(o)
+    run.check("K-setup", "an automation organization for the status writes", rc == 0, err)
+    maps = [{"id": "12", "name": "acme_web-admin"}]
+    got = status_round_trip(run, kube, "aaporgs", "kept", {"gatewayOrgId": "7", "signInMaps": maps})
+    run.check("K-aaporg", "the organization keeps its gateway id and its sign-in maps",
+              got.get("gatewayOrgId") == "7" and got.get("signInMaps") == maps, json.dumps(got))
+    o = obj("CloudInfrastructure", "kept")
+    rc, err = run.create(o)
+    run.check("K-setup", "a site for the status writes", rc == 0, err)
+    sign_in = {"clientId": "openshift-web", "idpName": "acme"}
+    got = status_round_trip(run, kube, "cloudinfrastructures", "kept", {"site": {"signIn": sign_in}})
+    run.check("K-site", "an OpenShift site keeps its sign-in client and button name",
+              ((got.get("site") or {}).get("signIn") or {}) == sign_in, json.dumps(got))
+
+
+def status_round_trip(run, kube, plural_name, name, status):
+    r = kube.run(["patch", plural_name, name, "-n", run.ns, "--type=merge", "--subresource=status",
+                  "-p", json.dumps({"status": status})])
+    run.check("K-write", f"{plural_name}/{name}: the status write is accepted without a warning",
+              r.returncode == 0 and "unknown field" not in r.stderr, r.stderr)
+    got, _, _err = kube.json(["get", plural_name, name, "-n", run.ns])
+    return (got or {}).get("status", {})
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--crds", required=True)
@@ -236,6 +272,7 @@ def main():
         google_cases(run)
         sample_cases(run)
         removal_cases(run, kube)
+        kept_cases(run, kube)
         results = old_run.results + run.results
     finally:
         env.stop()
