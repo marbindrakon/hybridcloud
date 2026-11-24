@@ -44,12 +44,9 @@
       tenantValues: "{{ io_tenant_values | default({}, true) }}"
     # the job's entry in status.edaJobs (as patch_cr_status.yml records it), when the job runs in the controller
     job: >-
-      {{ omit if (tower_job_id | default(awx_job_id | default('')) | string | trim | length == 0
-                  or aap_ui_url | default('') | length == 0)
+      {{ omit if (tower_job_id | default(awx_job_id | default('')) | string | trim | length == 0)
          else {'name': 'platformopenshift',
-               'jobId': tower_job_id | default(awx_job_id | default('')) | string | trim,
-               'url': (aap_ui_url | regex_replace('/$', '')) ~ '/execution/jobs/playbook/'
-                      ~ (tower_job_id | default(awx_job_id | default('')) | string | trim) ~ '/output'} }}
+               'jobId': tower_job_id | default(awx_job_id | default('')) | string | trim} }}
   register: io_obs
   # a module failure (no result of the module) is not retried: what it read fails it again
   until: (io_obs.end | default(false) | bool) or (io_once | default(false) | bool) or io_obs.end is not defined

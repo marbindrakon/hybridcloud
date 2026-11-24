@@ -6,7 +6,7 @@
 # would re-push deleted Vault keys), the recorded Vault paths, the Keycloak client, the services viewer
 # RBAC. Any failure lands in status.deletion and the CR stays Terminating; deletionComplete only after
 # every step succeeded. The build's objects on central are named after status.buildName
-# (shc-<oso|aws|gcp>-<entity>-<name>-<digest>) and are touched only when the build's hub namespace is this cluster's
+# (shc-<oso|aws|gcp>-<name>-<entity>-<digest>) and are touched only when the build's hub namespace is this cluster's
 # (hub_ownership.yml): a cluster without a recorded build, or whose name another object holds, deletes nothing on the
 # hub (Review R2 H1). A cluster on a hybrid network leaves the
 # platform's service routing domain (status.platformPrefixes cleared, the withdrawal checked) before an OpenStack
@@ -61,7 +61,6 @@
         _st: "{{ (po_cr.resources | default([]) | first | default({})).status | default({}) }}"
       ansible.builtin.set_fact:
         platform_type: "{{ (po_cr.resources | default([]) | first | default({})).spec.type | default(platform_spec.type | default('')) }}"
-        po_status_slug: "{{ _st.slug | default('') }}"
         po_status_domain: "{{ _st.domain | default('') }}"
         po_dns: "{{ _st.dns | default({}) }}"
         po_vault_paths: "{{ rpp_vault_paths }}"

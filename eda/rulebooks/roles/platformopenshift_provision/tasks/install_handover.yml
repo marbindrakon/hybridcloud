@@ -13,12 +13,9 @@
     uid: "{{ po_uid | default('', true) }}"
     event_id: "{{ (event_payload.eventId | default('')) if event_payload is defined and event_payload is mapping else '' }}"
     job: >-
-      {{ omit if (tower_job_id | default(awx_job_id | default('')) | string | trim | length == 0
-                  or aap_ui_url | default('') | length == 0)
+      {{ omit if (tower_job_id | default(awx_job_id | default('')) | string | trim | length == 0)
          else {'name': 'platformopenshift',
-               'jobId': tower_job_id | default(awx_job_id | default('')) | string | trim,
-               'url': (aap_ui_url | regex_replace('/$', '')) ~ '/execution/jobs/playbook/'
-                      ~ (tower_job_id | default(awx_job_id | default('')) | string | trim) ~ '/output'} }}
+               'jobId': tower_job_id | default(awx_job_id | default('')) | string | trim} }}
 
 - name: End the job, the next run goes on
   ansible.builtin.meta: end_play

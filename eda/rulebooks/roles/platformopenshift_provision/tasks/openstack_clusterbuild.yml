@@ -1,11 +1,4 @@
 ---
-- name: Validate slug is 5 characters (Route53 environments)
-  ansible.builtin.assert:
-    that:
-      - cb_slug | length == 5
-    fail_msg: "The environment's short name for its DNS names must be exactly 5 characters."
-  when: not (use_designate_dns | default(false) | bool)
-
 # The pull secret and SSH key are read with the platform's Vault token and end up in a cluster the tenant
 # administers: a spec value is honoured only when the platform lists it (role defaults), else the default applies.
 - name: Note the Vault fields of the spec the platform does not honour
@@ -65,8 +58,8 @@
          and (_os.sshKeyVaultPath | default('', true)) | length > 0 else default_ssh_key_vault_path }}
     # the cluster's own credential (common/tasks/openstack_cluster_credential.yml, made in the preflight)
     cb_provider_creds_vault: "cluster/oso/{{ cb_app_name }}/build/provider-creds"
-    # shc (§11.6 phase C): per cluster (two clusters on one CloudOSO overwrote each other)
-    cb_install_config_vault: "oso/projects/{{ oso_env_name }}/clusters/{{ ansible_operator_meta.name }}/install-config"
+    # the build's own path, as on AWS and Google Cloud (the build name is the cluster's identity on the hub)
+    cb_install_config_vault: "cluster/oso/{{ cb_app_name }}/build/install-config"
     cb_trust_bundle: "{{ platform_spec.openstack.trustBundle | default('') }}"
     cb_glance_image: "{{ platform_spec.openstack.glanceImageOverride | default(default_glance_image_override, true) }}"
 
