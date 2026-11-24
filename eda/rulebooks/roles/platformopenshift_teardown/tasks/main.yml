@@ -295,6 +295,17 @@
       loop_control:
         label: "{{ item.clientId }}"
 
+    # the client's sign-in flow (only people of its access groups) goes with it: found by its alias and the
+    # cluster's mark in its description (platformopenshift_provision/files/cluster_signin.py)
+    - name: Remove the cluster's sign-in flow
+      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/cluster_signin_limit.yml"
+      vars:
+        csl_action: remove
+        ocp_oidc_client_id: "{{ po_oidc_client_id }}"
+        cluster_cr_name: "{{ platformopenshift_cr_name }}"
+        cluster_namespace: "{{ platformopenshift_cr_namespace }}"
+      when: po_oidc_client_id | length > 0
+
     - name: Note the step
       ansible.builtin.set_fact:
         teardown_step: services-rbac

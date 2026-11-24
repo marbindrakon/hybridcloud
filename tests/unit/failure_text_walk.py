@@ -60,6 +60,10 @@ ALLOWED = {
     "cb_cluster_name": "the build name, shown in status.buildName",
     "po_build_name": "the build name, shown in status.buildName",
     "ocp_oidc_client_id": "the build name and a fixed suffix",
+    "cluster_cr_name": "the tenant's object name (the sign-in steps' input)",
+    "cluster_name": "the build name, shown in status.buildName (the sign-in steps' input)",
+    "csg_entity": "the tenant's name (the namespace's tenant label)",
+    "resolved_entity": "the tenant's name (the namespace's tenant label)",
     "cb_ocp_name": "the cluster's own name",
     "cb_cluster_domain": "the cluster's own DNS domain (its console and API names)",
     "cb_api_url": "the cluster's own API address",
@@ -169,6 +173,7 @@ SOURCES = {
     "cloudaws_raw.json.status": "the tenant's environment's status as read",
     "cloudgcp_raw.json.status": "the tenant's environment's status as read",
     "cb_placement.metadata": "the tenant's placement as read", "cb_placement.status": "the tenant's placement as read",
+    "ns_labels.get": "the tenant's name from its namespace's label (main.yml Resolve entity label)",
     "bn_build_name": "the build name (build_name.yml)", "rpp_build_name_in_effect": "the build name",
     "aws_domain": "the environment's own DNS domain", "gcp_domain": "the environment's own DNS domain",
     "cd_info.resources[0].status.webConsoleURL": "the cluster's own console address",
@@ -214,7 +219,12 @@ DECISION_RESULTS = ("po_result", "pf", "pp_outcome", "cl_owner", "cb_fip_conflic
                     "fab_check_result", "isk_obj")
 
 # Inputs of a shared task file: allowed inside it, checked as sinks at every include of it.
-INPUTS = {"preflight_stop.yml": ("ps_message", "ps_reason"), "patch_cr_status.yml": ("cr_status_body",)}
+INPUTS = {"preflight_stop.yml": ("ps_message", "ps_reason"), "patch_cr_status.yml": ("cr_status_body",),
+          # the shared tasks the cluster's sign-in uses: the names function's sentence about a name the tenant chose
+          # and its exit code; the caller's label (PlatformOpenshift <the tenant's object>), the tenant and the
+          # tenant's group names <tenant>.<access group> (cluster_signin_groups.yml)
+          "names_call.yml": ("names_result", "_names_call"),
+          "services_signin_groups.yml": ("ssg_label", "ssg_owner", "ssg_entity", "item")}
 
 _JINJA = None
 
