@@ -136,10 +136,17 @@ The identity realm is shared by all tenants. A tenant's cluster takes only its o
 - A new project belongs to the cluster's groups, not to the person who asked for it. OpenShift's default project
   template makes the requesting user the project's admin; on a tenant's cluster the platform sets the cluster's own
   project template (`project-request` in `openshift-config`, named by the cluster's project configuration), whose
-  admin binding names the operator level's groups. A person taken out of the group, or moved to another tenant,
-  keeps nothing of the projects they asked for. A cluster whose operator level has no access group: nobody but its
-  administrators can create a project, and a new project is bound to no group; the cluster's message for a refused
-  project request says so.
+  admin binding names the operator level's groups. A person taken out of such a group, or moved to another tenant,
+  loses the admin right of those projects when their token ends (below), including the projects they asked for. A
+  cluster whose operator level has no access group: nobody but its administrators can create a project, and a new
+  project is bound to no group; the cluster's message for a refused project request says so.
+- A limit of the project template: OpenShift applies it once, when the project is made, and the platform does not
+  change a project's admin binding afterwards. The binding names the groups that were the operator level's groups
+  when the project was made. When a group leaves the operator level (moved to another level, or taken off the
+  cluster), or is taken off and an access group of the same name is added to the cluster again later, the projects
+  made before keep that group's name in their admin binding: the members of a group of that name on the cluster are
+  admins of those projects. A group added to the operator level later is not admin of the projects made before. The
+  cluster's administrators change those bindings where that is not wanted.
 - An access group whose group is not in the directory yet gets nothing; the job's log names it.
 
 **Who can sign in.** A person of the same sign-in directory who is not in one of the cluster's access groups can
@@ -153,15 +160,18 @@ sign-in. The platform binds nothing to a person, only to groups, so a person tak
 to another tenant, keeps the cluster's group, and its rights, until their OAuth access token ends, and nothing after:
 the cluster's token lifetime is the realization's `tenantCluster.oauthAccessTokenMaxAgeSeconds` (default 86400
 seconds, OpenShift's own). A cluster administrator can end it sooner by deleting the person's tokens. An access group
-taken off the cluster loses its binding with the next run of the cluster's job. A binding that someone on the cluster
-gave a person by name (a project administrator can) is theirs to remove; the platform does not look for them.
+taken off the cluster loses the cluster's bindings (its level's binding and `self-provisioners`) with the next run of
+the cluster's job; the admin bindings of projects keep its name (the limit above). A binding that someone on the
+cluster gave a person by name (a project administrator can), and a service account token they made, are the
+cluster's administrators' to remove; the platform does not look for them.
 
 The cluster's job needs no right in the identity provider beyond the realm's `clients` and `membership` automation
 clients that the RbacConfig publishes: it manages the cluster's own client, its roles and their mappings to the
 access groups' groups. The sign-in client carries the attribute `platformopenshift=<namespace>/<cluster>` and is
 recorded in the cluster's `status.oidcClientId` as soon as it exists; a client of the same name marked for another
-cluster, or without a mark when the cluster recorded neither the client nor the build it is named after, is refused
-and never changed. The delete removes the recorded client only (when it carries the cluster's mark or none); a
+cluster, or without a mark when the cluster's `status.oidcClientId` does not record it, is refused and never changed
+(the recorded build name is not proof: the cluster records it itself before its sign-in step). A run that skips the
+sign-in step (the cluster's console is not known yet) leaves the recorded client as it is. The delete removes the recorded client only (when it carries the cluster's mark or none); a
 cluster that recorded no client deletes nothing in the sign-in directory and says so.
 
 ## The names the platform gives a cluster
@@ -176,7 +186,9 @@ cluster that recorded no client deletes nothing in the sign-in directory and say
   recorded its floating IPs keeps those two; with nothing recorded the job makes two and records them at once. They
   are never found by a description, and released by their recorded ids only. A run that made floating IPs and
   stopped before it recorded them leaves them to the platform team: the cluster's next run makes new ones, and the
-  ones left behind are released by hand in the environment's project. A record that holds only part of the pair
+  ones left behind are released by hand in the environment's project. The same holds when the second of the two
+  cannot be made after the first was: the first is left unrecorded, and the job's log does not give its id; its
+  description names the cluster. A record that holds only part of the pair
   stops the job and makes nothing: the platform team completes or clears `status.floatingIPs`.
 - **Tags and labels** on what the installer makes on AWS and Google Cloud: `shc-tenant`, `shc-environment` and
   `shc-cluster` carry the names in full, next to `shc-managed` and `shc-build`.
