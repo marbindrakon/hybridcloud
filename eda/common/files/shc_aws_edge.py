@@ -93,6 +93,12 @@ def tagspec(kind, name, **more):
     return [{"ResourceType": kind, "Tags": tags(name, **more)}]
 
 
+def name_tags(names):
+    """The tags that name what a hub-side object serves (tenant, network, placement): the person's names in full,
+    beside a Name that carries only the network's number."""
+    return [{"Key": k, "Value": str(v)} for k, v in sorted((names or {}).items()) if v not in (None, "")]
+
+
 def tagmap(o):
     return {t["Key"]: t["Value"] for t in o.get("Tags", o.get("tags", []))}
 
@@ -216,6 +222,7 @@ class Edge:
         s = session(cfg)
         self.ec2, self.iam, self.ssm, self.ram = s.client("ec2"), s.client("iam"), s.client("ssm"), s.client("ram")
         self.changed = []
+        self.net_tags = {}  # the names of the network net_up is working on (name_tags)
         self.prefix = "shc-edge-" + self.site
         self.param = "/shc/edge/%s/config" % self.site
 
@@ -652,8 +659,28 @@ systemctl enable --now shc-edge-agent.timer
     def net_names(self, vni):
         return "shc-net-%d" % vni
 
-    def net_up(self, vni, test=False, egress=False, ipv6=None, nat64=None):
+    def net_tables(self, tgw_id, vni, available=False):
+        """The network's transit gateway route tables, by the site's and the network's tags (never by the Name)."""
+        f = [{"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:shc-edge-site", "Values": [self.site]},
+             {"Name": "tag:shc-vni", "Values": [str(vni)]}]
+        if available:
+            f.append({"Name": "state", "Values": ["available"]})
+        return [r for r in self.ec2.describe_transit_gateway_route_tables(Filters=f)["TransitGatewayRouteTables"]
+                if r["State"] not in ("deleting", "deleted")]
+
+    def add_names(self, rid, obj):
+        """The network's names (net_tags) on an existing hub object that lacks them; tags are never removed."""
+        want = name_tags(getattr(self, "net_tags", None))
+        have = tagmap(obj or {})
+        missing = [t for t in want if have.get(t["Key"]) != t["Value"]]
+        if missing:
+            self.ec2.create_tags(Resources=[rid], Tags=missing)
+            self.changed.append("names on " + rid)
+
+    def net_up(self, vni, test=False, egress=False, ipv6=None, nat64=None, names=None):
+        """names: {tag: value} naming the network on its hub objects (shc-entity, shc-network); kept as given."""
         c = self.cfg
+        self.net_tags = dict(names or {})
         tgw = self.tgw()
         tgw_id = tgw["TransitGatewayId"]
         name = self.net_names(vni)
@@ -664,14 +691,13 @@ systemctl enable --now shc-edge-agent.timer
         if not tr:
             fail("site %s has no transport attachment (run up first)" % self.site)
         # the network's route table
-        rts = [r for r in self.ec2.describe_transit_gateway_route_tables(Filters=[
-            {"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:Name", "Values": [name]}])["TransitGatewayRouteTables"]
-            if r["State"] not in ("deleting", "deleted")]
+        rts = self.net_tables(tgw_id, vni)
         if rts:
             rt_id = rts[0]["TransitGatewayRouteTableId"]
+            self.add_names(rt_id, rts[0])
         else:
             self.changed.append("tgw route table " + name)
-            rt_id = self.ec2.create_transit_gateway_route_table(TransitGatewayId=tgw_id, TagSpecifications=tagspec(
+            rt_id = self.ec2.create_transit_gateway_route_table(TransitGatewayId=tgw_id, TagSpecifications=self.net_spec(
                 "transit-gateway-route-table", name, shc_edge_site=self.site, shc_vni=vni))["TransitGatewayRouteTable"]["TransitGatewayRouteTableId"]
             for _ in range(40):
                 if self.ec2.describe_transit_gateway_route_tables(TransitGatewayRouteTableIds=[rt_id])["TransitGatewayRouteTables"][0]["State"] == "available":
@@ -682,11 +708,12 @@ systemctl enable --now shc-edge-agent.timer
         ca = [a for a in ca if a["ResourceType"] == "connect"]
         if ca:
             ca_id = ca[0]["TransitGatewayAttachmentId"]
+            self.add_names(ca_id, ca[0])
         else:
             self.changed.append("connect attachment " + name)
             ca_id = self.ec2.create_transit_gateway_connect(
                 TransportTransitGatewayAttachmentId=tr[0]["TransitGatewayAttachmentId"], Options={"Protocol": "gre"},
-                TagSpecifications=tagspec("transit-gateway-attachment", name, shc_edge_site=self.site, shc_vni=vni)
+                TagSpecifications=self.net_spec("transit-gateway-attachment", name, shc_edge_site=self.site, shc_vni=vni)
             )["TransitGatewayConnect"]["TransitGatewayAttachmentId"]
         self.wait_attachment(ca_id)
         self.associate(rt_id, ca_id)
@@ -727,8 +754,10 @@ systemctl enable --now shc-edge-agent.timer
                 p = self.ec2.create_transit_gateway_connect_peer(
                     TransitGatewayAttachmentId=ca_id, PeerAddress=pa, BgpOptions={"PeerAsn": int(c["asn"])},
                     InsideCidrBlocks=blocks,
-                    TagSpecifications=tagspec("transit-gateway-connect-peer", pname,
-                                              shc_edge_site=self.site, shc_vni=vni))["TransitGatewayConnectPeer"]
+                    TagSpecifications=self.net_spec("transit-gateway-connect-peer", pname,
+                                                    shc_edge_site=self.site, shc_vni=vni))["TransitGatewayConnectPeer"]
+            else:
+                self.add_names(p["TransitGatewayConnectPeerId"], p)
             for _ in range(30):  # the peer's BGP addresses appear shortly after creation
                 cpc = p["ConnectPeerConfiguration"]
                 bgp = cpc.get("BgpConfigurations") or []
@@ -802,7 +831,7 @@ systemctl enable --now shc-edge-agent.timer
         return self.ec2.create_transit_gateway_connect_peer(
             TransitGatewayAttachmentId=p["TransitGatewayAttachmentId"], PeerAddress=cpc["PeerAddress"],
             BgpOptions={"PeerAsn": int(self.cfg["asn"])}, InsideCidrBlocks=[str(v4), str(self.next6(pool6))],
-            TagSpecifications=tagspec("transit-gateway-connect-peer", pname, shc_edge_site=self.site, shc_vni=vni,
+            TagSpecifications=self.net_spec("transit-gateway-connect-peer", pname, shc_edge_site=self.site, shc_vni=vni,
                                       shc_ipv6_recreated="true"))["TransitGatewayConnectPeer"]
 
     def set_vrfs6(self, req):
@@ -871,11 +900,17 @@ systemctl enable --now shc-edge-agent.timer
             self.ec2.enable_transit_gateway_route_table_propagation(TransitGatewayRouteTableId=rt_id, TransitGatewayAttachmentId=att_id)
             self.changed.append("propagating %s" % att_id)
 
-    def net_attach(self, vni, att_id):
+    def net_spec(self, kind, name, **more):
+        """tagspec plus the network's names (net_tags)."""
+        spec = tagspec(kind, name, **more)
+        spec[0]["Tags"] += name_tags(getattr(self, "net_tags", None))
+        return spec
+
+    def net_attach(self, vni, att_id, names=None):
+        """names: {tag: value} naming the tenant's placement on the hub's side of its attachment (shc-entity,
+        shc-environment, shc-network, shc-placement)."""
         tgw_id = self.tgw()["TransitGatewayId"]
-        rts = self.ec2.describe_transit_gateway_route_tables(Filters=[
-            {"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:Name", "Values": [self.net_names(vni)]},
-            {"Name": "state", "Values": ["available"]}])["TransitGatewayRouteTables"]
+        rts = self.net_tables(tgw_id, vni, available=True)
         if not rts:
             fail("network %d is not up" % vni)
         a = self.ec2.describe_transit_gateway_attachments(TransitGatewayAttachmentIds=[att_id])["TransitGatewayAttachments"][0]
@@ -888,7 +923,7 @@ systemctl enable --now shc-edge-agent.timer
         try:  # the hub's own tags on the tenant's attachment (lets down/status find it)
             self.ec2.create_tags(Resources=[att_id], Tags=[{"Key": "shc-edge-site", "Value": self.site},
                                                            {"Key": "shc-vni", "Value": str(vni)},
-                                                           {"Key": "shc-role", "Value": "tenant"}])
+                                                           {"Key": "shc-role", "Value": "tenant"}] + name_tags(names))
         except botocore.exceptions.ClientError as e:
             print("tagging %s: %s" % (att_id, e), file=sys.stderr)
         self.associate(rts[0]["TransitGatewayRouteTableId"], att_id)
@@ -904,9 +939,7 @@ systemctl enable --now shc-edge-agent.timer
             conf["vrfs"] = [v for v in conf["vrfs"] if v["vni"] != vni]
             ((conf.get("ipv6") or {}).get("networks") or {}).pop(str(vni), None)
             self.write_config(conf)
-        rts = [r for r in self.ec2.describe_transit_gateway_route_tables(Filters=[
-            {"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:Name", "Values": [name]}])["TransitGatewayRouteTables"]
-            if r["State"] not in ("deleting", "deleted")]
+        rts = self.net_tables(tgw_id, vni)
         for a in self.attachments(tgw_id, **{"shc-edge-site": self.site, "shc-vni": str(vni)}):
             if a["ResourceType"] == "connect":
                 for p in self.ec2.describe_transit_gateway_connect_peers(Filters=[
@@ -951,8 +984,13 @@ systemctl enable --now shc-edge-agent.timer
     def egress_name(self, vni):
         return "shc-egress-%d" % vni
 
+    def egress_tags(self, vni):
+        """The tags the network's NAT egress VPC and everything in it carry, and are found by (never by the Name)."""
+        return [{"Name": "tag:shc-edge-site", "Values": [self.site]}, {"Name": "tag:shc-vni", "Values": [str(vni)]},
+                {"Name": "tag:shc-role", "Values": ["egress"]}]
+
     def egress_vpc(self, vni):
-        v = [x for x in self.ec2.describe_vpcs(Filters=[{"Name": "tag:Name", "Values": [self.egress_name(vni)]}])["Vpcs"]]
+        v = [x for x in self.ec2.describe_vpcs(Filters=self.egress_tags(vni))["Vpcs"]]
         return v[0] if v else None
 
     def egress_attachments(self, vni):
@@ -960,10 +998,7 @@ systemctl enable --now shc-edge-agent.timer
         return [a for a in self.attachments(tgw_id, **{"shc-vni": str(vni), "shc-role": "egress"}) if a["ResourceType"] == "vpc"]
 
     def net_route_table(self, vni):
-        tgw_id = self.tgw()["TransitGatewayId"]
-        rts = [r for r in self.ec2.describe_transit_gateway_route_tables(Filters=[
-            {"Name": "transit-gateway-id", "Values": [tgw_id]}, {"Name": "tag:Name", "Values": [self.net_names(vni)]}])["TransitGatewayRouteTables"]
-            if r["State"] not in ("deleting", "deleted")]
+        rts = self.net_tables(self.tgw()["TransitGatewayId"], vni)
         return rts[0]["TransitGatewayRouteTableId"] if rts else None
 
     def egress_up(self, vni, rt_id, nat64=None):
@@ -983,18 +1018,22 @@ systemctl enable --now shc-edge-agent.timer
             cidr = next((n for n in pool.subnets(new_prefix=26) if not any(n.overlaps(u) for u in used)), None)
             if cidr is None:
                 fail("egress CIDR pool %s is exhausted" % pool)
-            vpc = self.ec2.create_vpc(CidrBlock=str(cidr), TagSpecifications=tagspec("vpc", name, **extra))["Vpc"]
+            vpc = self.ec2.create_vpc(CidrBlock=str(cidr), TagSpecifications=self.net_spec("vpc", name, **extra))["Vpc"]
             self.ec2.get_waiter("vpc_available").wait(VpcIds=[vpc["VpcId"]])
             self.changed.append("egress vpc %s %s" % (name, cidr))
+        else:
+            self.add_names(vpc["VpcId"], vpc)
         vpc_id = vpc["VpcId"]
         att_net, pub_net = list(ipaddress.ip_network(vpc["CidrBlock"]).subnets(new_prefix=28))[:2]
-        have = {tagmap(x).get("Name"): x for x in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
-        sn = {}
+        # the two subnets by their place in the VPC's block (fixed), never by their Name
+        by_cidr = {x["CidrBlock"]: x for x in self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"]}
+        have, sn = {}, {}
         for role, net in (("tgw", att_net), ("public", pub_net)):
             n = "%s-%s" % (name, role)
-            if n not in have:
+            have[n] = by_cidr.get(str(net))
+            if not have[n]:
                 have[n] = self.ec2.create_subnet(VpcId=vpc_id, CidrBlock=str(net), AvailabilityZone=az,
-                                                 TagSpecifications=tagspec("subnet", n, **extra))["Subnet"]
+                                                 TagSpecifications=self.net_spec("subnet", n, **extra))["Subnet"]
                 self.changed.append("subnet " + n)
             sn[role] = have[n]["SubnetId"]
         block6 = None
@@ -1007,16 +1046,19 @@ systemctl enable --now shc-edge-agent.timer
         if igws:
             igw_id = igws[0]["InternetGatewayId"]
         else:
-            igw_id = self.ec2.create_internet_gateway(TagSpecifications=tagspec("internet-gateway", name, **extra))["InternetGateway"]["InternetGatewayId"]
+            igw_id = self.ec2.create_internet_gateway(TagSpecifications=self.net_spec("internet-gateway", name, **extra))["InternetGateway"]["InternetGatewayId"]
             self.ec2.attach_internet_gateway(InternetGatewayId=igw_id, VpcId=vpc_id)
             self.changed.append("internet gateway " + igw_id)
-        rts = {tagmap(r).get("Name"): r for r in self.ec2.describe_route_tables(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["RouteTables"]}
+        # each route table by the subnet it serves (its association), never by its Name
+        by_subnet = {a.get("SubnetId"): r for r in self.ec2.describe_route_tables(
+            Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["RouteTables"] for a in r.get("Associations", [])
+            if a.get("SubnetId")}
 
         def table(role):
             n = "%s-%s" % (name, role)
-            r = rts.get(n)
+            r = by_subnet.get(sn[role])
             if not r:
-                r = self.ec2.create_route_table(VpcId=vpc_id, TagSpecifications=tagspec("route-table", n, **extra))["RouteTable"]
+                r = self.ec2.create_route_table(VpcId=vpc_id, TagSpecifications=self.net_spec("route-table", n, **extra))["RouteTable"]
                 self.ec2.associate_route_table(RouteTableId=r["RouteTableId"], SubnetId=sn[role])
                 self.changed.append("route table " + n)
                 r = self.ec2.describe_route_tables(RouteTableIds=[r["RouteTableId"]])["RouteTables"][0]
@@ -1037,11 +1079,11 @@ systemctl enable --now shc-edge-agent.timer
         if nats:
             nat = nats[0]
         else:
-            eips = self.ec2.describe_addresses(Filters=[{"Name": "tag:Name", "Values": [name]}])["Addresses"]
+            eips = self.ec2.describe_addresses(Filters=self.egress_tags(vni))["Addresses"]
             alloc = eips[0]["AllocationId"] if eips else self.ec2.allocate_address(
-                Domain="vpc", TagSpecifications=tagspec("elastic-ip", name, **extra))["AllocationId"]
+                Domain="vpc", TagSpecifications=self.net_spec("elastic-ip", name, **extra))["AllocationId"]
             nat = self.ec2.create_nat_gateway(SubnetId=sn["public"], AllocationId=alloc,
-                                              TagSpecifications=tagspec("natgateway", name, **extra))["NatGateway"]
+                                              TagSpecifications=self.net_spec("natgateway", name, **extra))["NatGateway"]
             self.changed.append("nat gateway " + nat["NatGatewayId"])
         self.ec2.get_waiter("nat_gateway_available").wait(NatGatewayIds=[nat["NatGatewayId"]])
         nat = self.ec2.describe_nat_gateways(NatGatewayIds=[nat["NatGatewayId"]])["NatGateways"][0]
@@ -1061,7 +1103,7 @@ systemctl enable --now shc-edge-agent.timer
         else:
             att_id = self.ec2.create_transit_gateway_vpc_attachment(
                 TransitGatewayId=tgw_id, VpcId=vpc_id, SubnetIds=[sn["tgw"]],
-                TagSpecifications=tagspec("transit-gateway-attachment", name, **extra),
+                TagSpecifications=self.net_spec("transit-gateway-attachment", name, **extra),
                 **({"Options": {"Ipv6Support": "enable"}} if nat64 else {}))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
             self.changed.append("egress attachment " + att_id)
         self.wait_attachment(att_id)
@@ -1179,7 +1221,7 @@ systemctl enable --now shc-edge-agent.timer
                 self.changed.append("deleted nat gateway " + n["NatGatewayId"])
         if nats:
             self.ec2.get_waiter("nat_gateway_deleted").wait(NatGatewayIds=[n["NatGatewayId"] for n in nats])
-        for ad in self.ec2.describe_addresses(Filters=[{"Name": "tag:Name", "Values": [self.egress_name(vni)]}])["Addresses"]:
+        for ad in self.ec2.describe_addresses(Filters=self.egress_tags(vni))["Addresses"]:
             for _ in range(12):  # the NAT gateway lets go of its address shortly after deletion
                 try:
                     self.ec2.release_address(AllocationId=ad["AllocationId"])
@@ -1300,6 +1342,7 @@ def main():
     ap.add_argument("--ipv6", help="net-up: the network's IPv6 settings {prefixes6, network6, source, internet}")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--attachment")
+    ap.add_argument("--names", help="net-up: JSON {tag: value} naming the network (shc-entity, shc-network)")
     ap.add_argument("--test", action="store_true")
     ap.add_argument("--egress", action="store_true")
     ap.add_argument("--account")
@@ -1309,7 +1352,8 @@ def main():
         fail("--vni is required")
     r = {"status": e.status, "up": e.up, "down": e.down, "replace": e.replace,
          "gateways": lambda: e.set_gateways(json.loads(a.gateways or "[]")),
-         "net-up": lambda: e.net_up(a.vni, a.test, a.egress, json.loads(a.ipv6) if a.ipv6 else None),
+         "net-up": lambda: e.net_up(a.vni, a.test, a.egress, json.loads(a.ipv6) if a.ipv6 else None,
+                                    names=json.loads(a.names) if a.names else None),
          "net-attach": lambda: e.net_attach(a.vni, a.attachment),
          "net-down": lambda: e.net_down(a.vni), "vrfs6": lambda: e.set_vrfs6(json.loads(a.vrfs6 or "{}")),
          "share-add": lambda: e.share_add(a.account or fail("--account is required")),

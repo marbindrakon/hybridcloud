@@ -371,12 +371,14 @@ class FakeEdge:
     def tgw(self):
         return {"TransitGatewayId": TGW}
 
-    def net_up(self, vni, egress=False):
+    def net_up(self, vni, egress=False, names=None):
         self.calls.append(("net_up", vni))
+        self.names = names
         return {"routeTable": "tgw-rtb-net", "connectAttachment": "tgw-attach-connect", "egress": None}
 
-    def net_attach(self, vni, att):
+    def net_attach(self, vni, att, names=None):
         self.calls.append(("net_attach", vni, att))
+        self.attach_names = names
         return {}
 
     def attachments(self, tgw_id, **f):

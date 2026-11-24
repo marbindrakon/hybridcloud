@@ -164,12 +164,16 @@ class FakeEdge:
     def tgw(self):
         return {"TransitGatewayId": TGW}
 
+    names = []   # the names the tenant side hands the hub (net_up, net_attach), kept apart from the pinned calls
+
     def net_up(self, vni, **kw):
+        FakeEdge.names.append(["net_up", kw.pop("names", None)])
         FakeEdge.calls.append(["net_up", vni, kw])
         eg = {"publicIp": EIP, "natGateway": "nat-1"} if kw.get("egress") else None
         return {"routeTable": "tgw-rtb-net", "connectAttachment": "tgw-attach-connect", "egress": eg}
 
-    def net_attach(self, vni, att):
+    def net_attach(self, vni, att, names=None):
+        FakeEdge.names.append(["net_attach", names])
         FakeEdge.calls.append(["net_attach", vni, att])
         return {}
 
@@ -531,7 +535,9 @@ if HAVE_BOTO:
             self.atts = {"tgw-attach-connect": {"TransitGatewayAttachmentId": "tgw-attach-connect", "ResourceType": "connect",
                                                 "State": "available", "Tags": []}}
             self.tgw_rts = {"tgw-rtb-net": {"TransitGatewayRouteTableId": "tgw-rtb-net", "State": "available",
-                                            "Tags": [{"Key": "Name", "Value": "shc-net-%d" % VNI}]}}
+                                            "Tags": [{"Key": "Name", "Value": "shc-net-%d" % VNI},
+                                                     {"Key": "shc-edge-site", "Value": "site-x"},
+                                                     {"Key": "shc-vni", "Value": str(VNI)}]}}
             self.assoc, self.static = {}, {}
             self.amazon = [EGRESS6]
 
@@ -573,6 +579,13 @@ if HAVE_BOTO:
         def _f(Filters):
             return {f["Name"]: f["Values"] for f in Filters or []}
 
+        @classmethod
+        def _by_tags(cls, out, Filters):
+            for k, v in cls._f(Filters).items():
+                if k.startswith("tag:"):
+                    out = [x for x in out if E.tagmap(x).get(k[4:]) in v]
+            return out
+
         def h_describe_transit_gateways(self, **kw):
             return {"TransitGateways": [{"TransitGatewayId": TGW, "State": "available"}]}
 
@@ -580,10 +593,7 @@ if HAVE_BOTO:
             out = list(self.vpcs.values())
             if VpcIds:
                 out = [v for v in out if v["VpcId"] in VpcIds]
-            f = self._f(Filters)
-            if "tag:Name" in f:
-                out = [v for v in out if E.tagmap(v).get("Name") in f["tag:Name"]]
-            return {"Vpcs": copy.deepcopy(out)}
+            return {"Vpcs": copy.deepcopy(self._by_tags(out, Filters))}
 
         def h_create_vpc(self, CidrBlock, **kw):
             v = self._id("vpc")
@@ -704,8 +714,7 @@ if HAVE_BOTO:
             return {"NatGateways": copy.deepcopy(out)}
 
         def h_describe_addresses(self, Filters=None, **kw):
-            name = self._f(Filters).get("tag:Name", [None])[0]
-            return {"Addresses": [copy.deepcopy(a) for a in self.eips.values() if E.tagmap(a).get("Name") == name]}
+            return {"Addresses": copy.deepcopy(self._by_tags(list(self.eips.values()), Filters))}
 
         def h_allocate_address(self, **kw):
             a = self._id("eipalloc")
@@ -761,11 +770,7 @@ if HAVE_BOTO:
             return {}
 
         def h_describe_transit_gateway_route_tables(self, Filters=None, **kw):
-            out = list(self.tgw_rts.values())
-            f = self._f(Filters)
-            if "tag:Name" in f:
-                out = [r for r in out if E.tagmap(r).get("Name") in f["tag:Name"]]
-            return {"TransitGatewayRouteTables": copy.deepcopy(out)}
+            return {"TransitGatewayRouteTables": copy.deepcopy(self._by_tags(list(self.tgw_rts.values()), Filters))}
 
         def h_get_transit_gateway_route_table_associations(self, TransitGatewayRouteTableId, **kw):
             return {"Associations": [{"TransitGatewayAttachmentId": a, "State": "associated"}
@@ -822,8 +827,10 @@ def egress_scenario(module, nat64_runs=None):
     return ec2
 
 
-# the hub's calls for a network's NAT egress VPC (up, re-run, down) before NAT64 existed (sha256)
-EGRESS_DIGEST = "b331dbe391422fa85cfa57d958212c1a0bfad1235a4265abaa462fcd1fbb527b"
+# the hub's calls for a network's NAT egress VPC (up, re-run, down) before NAT64 existed (sha256); re-pinned for the
+# names rules: the egress VPC, its address and the network's route table are looked up by their tags (site, VNI, role)
+# instead of their Name, every other call as before
+EGRESS_DIGEST = "d836932560114338826452a49cd1aad01920b034f244bba0649a3a6e6536ed07"
 
 
 @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")

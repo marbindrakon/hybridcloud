@@ -462,5 +462,119 @@ class AwsZoneOwnership(unittest.TestCase):
         self.assertEqual(r.calls, [])
 
 
+# ---- the hub's objects named by a number: the names stay, tags carry tenant, network and placement -----------------
+
+if HAVE_BOTO:
+    import shc_aws_edge as E
+    import test_aws_edge_ipv6 as EV
+
+    class TaggingEC2(EV.FakeEC2):
+        def create_tags(self, Resources, Tags):
+            self.rec("create_tags", {"Resources": Resources, "Tags": Tags})
+            for coll, key in ((self.route_tables, "TransitGatewayRouteTableId"),
+                              (self.attachments, "TransitGatewayAttachmentId"), (self.peers, "TransitGatewayConnectPeerId")):
+                for o in coll:
+                    if o.get(key) == Resources[0]:
+                        keys = {x["Key"] for x in Tags}
+                        o["Tags"] = [t for t in o.get("Tags", []) if t["Key"] not in keys] + Tags
+
+NAMES = {"shc-entity": "acme-corp", "shc-network": "core"}
+
+
+@unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
+@mock.patch.object(E.time, "sleep", lambda s: None) if HAVE_BOTO else (lambda c: c)
+class HubNames(unittest.TestCase):
+    def created(self, ec2, call):
+        return [E.tagmap({"Tags": kw["TagSpecifications"][0]["Tags"]}) for n, kw in ec2.calls if n == call]
+
+    def test_new_objects_carry_the_names(self):
+        e, ec2, _ = EV.edge(TaggingEC2(), ipv6=False)
+        e.net_up(51000, names=NAMES)
+        for call in ("create_transit_gateway_route_table", "create_transit_gateway_connect",
+                     "create_transit_gateway_connect_peer"):
+            for t in self.created(ec2, call):
+                self.assertTrue(t["Name"].startswith("shc-net-51000"), t)          # the name stays
+                self.assertEqual({k: t[k] for k in NAMES}, NAMES, call)
+
+    def test_existing_objects_gain_them_and_are_found_by_tags(self):
+        e, ec2, ssm = EV.edge(TaggingEC2(), ipv6=False)
+        e.net_up(51000)                                                            # made without names (older run)
+        ec2.calls = []
+        e2, _, _ = EV.edge(ec2, ipv6=False)
+        e2.ssm = e.ssm
+        e2.net_up(51000, names=NAMES)
+        self.assertEqual([n for n, _ in ec2.calls if n.startswith("create_transit_gateway")], [])   # found, not remade
+        tagged = [kw["Resources"][0] for n, kw in ec2.calls if n == "create_tags"]
+        self.assertEqual(len(tagged), 4)                                           # table, connect attachment, 2 peers
+        for rt in ec2.route_tables:
+            self.assertEqual({k: E.tagmap(rt).get(k) for k in NAMES}, NAMES)
+
+    def test_a_table_named_like_ours_without_our_tags_is_not_used(self):
+        ec2 = TaggingEC2()
+        ec2.route_tables.append({"TransitGatewayRouteTableId": "tgw-rtb-by-hand", "State": "available",
+                                 "Tags": [{"Key": "Name", "Value": "shc-net-51000"}]})
+        e, _, _ = EV.edge(ec2, ipv6=False)
+        out = e.net_up(51000, names=NAMES)
+        self.assertNotEqual(out["routeTable"], "tgw-rtb-by-hand")
+
+    def test_the_tenants_attachment_names_its_placement(self):
+        e, ec2, _ = EV.edge(TaggingEC2(), ipv6=False)
+        e.net_up(51000, names=NAMES)
+        ec2.attachments.append({"TransitGatewayAttachmentId": "tgw-attach-t", "ResourceType": "vpc", "State": "available",
+                                "TransitGatewayId": "tgw-0", "ResourceOwnerId": "111111111111", "Tags": []})
+        ec2.describe_transit_gateway_vpc_attachments = lambda **kw: {"TransitGatewayVpcAttachments": []}
+        ec2.get_transit_gateway_route_table_propagations = lambda **kw: {"TransitGatewayRouteTablePropagations": []}
+        e.net_attach(51000, "tgw-attach-t", names=dict(NAMES, **{"shc-environment": "prod",
+                                                                   "shc-placement": "entity-acme-corp/core-prod"}))
+        tags = [kw["Tags"] for n, kw in ec2.calls if n == "create_tags" and kw["Resources"] == ["tgw-attach-t"]][0]
+        self.assertEqual(E.tagmap({"Tags": tags}), {"shc-edge-site": "site-x", "shc-vni": "51000", "shc-role": "tenant",
+                                                    "shc-entity": "acme-corp", "shc-environment": "prod",
+                                                    "shc-network": "core", "shc-placement": "entity-acme-corp/core-prod"})
+
+
+@unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
+class AwsPlacementObjects(unittest.TestCase):
+    """A placement's own objects: the Name the names function gave, every tag naming it, found again by tags."""
+
+    def setUp(self):
+        import test_aws_tenant_ipv6 as AT
+        self.AT = AT
+        for p in (mock.patch.object(A.time, "sleep", lambda s: None), mock.patch.object(A.shc_aws_edge, "Edge", AT.FakeEdge)):
+            p.start()
+            self.addCleanup(p.stop)
+        self.ec2 = AT.FakeEc2()
+
+    def up(self, name="acme_p1"):
+        t = self.AT.tenant(self.ec2)
+        t.cfg["tags"] = {"shc-entity": "acme", "shc-environment": "prod", "shc-network": "core"}
+        return t.place_up("entity-acme/p1", 1001, list(self.AT.V4), False, None, name=name)
+
+    def test_names_and_tags(self):
+        self.up()
+        want = {"shc-managed": "true", "shc-entity": "acme", "shc-environment": "prod", "shc-network": "core",
+                "shc-placement": "entity-acme/p1"}
+        vpc = list(self.ec2.vpcs.values())[0]
+        self.assertEqual(A.tagmap(vpc)["Name"], "acme_p1")
+        for o in [vpc] + list(self.ec2.subnets.values()):
+            t = A.tagmap(o)
+            self.assertEqual({k: t.get(k) for k in want}, want, t)
+        self.assertEqual(sorted(A.tagmap(x)["Name"] for x in self.ec2.subnets.values()),
+                         sorted("acme_p1-%s-%s" % (r, z[-1]) for r in ("work", "tgw") for z in self.AT.AZS))
+        edge = self.AT.FakeEdge.instances[-1]
+        self.assertEqual(edge.names, {"shc-entity": "acme", "shc-network": "core"})
+        self.assertEqual(edge.attach_names["shc-placement"], "entity-acme/p1")
+        self.assertEqual(edge.attach_names["shc-environment"], "prod")
+
+    def test_a_renamed_vpc_keeps_its_objects(self):
+        """Found by tags, not Names: a re-run with another Name (or a person renaming the VPC) makes nothing new."""
+        self.up()
+        before = (len(self.ec2.vpcs), len(self.ec2.subnets))
+        for s in self.ec2.subnets.values():
+            s["Tags"] = [t for t in s["Tags"] if t["Key"] != "Name"] + [{"Key": "Name", "Value": "renamed"}]
+        self.up(name="something-else")
+        self.assertEqual((len(self.ec2.vpcs), len(self.ec2.subnets)), before)
+        self.assertEqual(A.tagmap(list(self.ec2.vpcs.values())[0])["Name"], "acme_p1")
+
+
 if __name__ == "__main__":
     unittest.main()

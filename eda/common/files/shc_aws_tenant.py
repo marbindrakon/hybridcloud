@@ -683,13 +683,16 @@ class Tenant:
                 **({"Options": {"Ipv6Support": "enable"}} if v6 else {}))["TransitGatewayVpcAttachment"]["TransitGatewayAttachmentId"]
         # the hub: the network's route table, Connect attachment and router VRF; accept the attachment into it. An
         # IPv6-only provider-source VPC also tells the network's egress VPC whether to translate for its block
+        # the hub's objects of the network carry its tenant and name; the hub's side of this attachment also the
+        # environment and the placement
+        net_names = {k: v for k, v in c.get("tags", {}).items() if k in ("shc-entity", "shc-network")}
         if only and provider:
-            net = edge.net_up(vni, egress=egress, nat64=[block6] if nat64 else [])
+            net = edge.net_up(vni, egress=egress, nat64=[block6] if nat64 else [], names=net_names)
         else:
-            net = edge.net_up(vni, egress=egress)
+            net = edge.net_up(vni, egress=egress, names=net_names)
         for _ in range(30):  # the attachment shows up on the hub side shortly after creation
             try:
-                edge.net_attach(vni, att_id)
+                edge.net_attach(vni, att_id, names=dict(c.get("tags", {}), **{"shc-placement": placement}))
                 break
             except botocore.exceptions.ClientError as e:
                 if "NotFound" not in str(e):
