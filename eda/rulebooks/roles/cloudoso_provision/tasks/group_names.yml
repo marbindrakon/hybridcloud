@@ -1,0 +1,13 @@
+---
+# The access groups' names <tenant>.<group> from the names function (group(): matched by name at every sign-in, in
+# the identity service, Keystone and the site clusters, so never cut: a name that does not fit fails the job with the
+# function's sentence). Input: gn_tenant, gn_groups (the Rbac names). Sets gn_names ({rbac: group name}).
+- name: Start the group names
+  ansible.builtin.set_fact:
+    gn_names: {}
+
+- name: Name each access group
+  ansible.builtin.include_tasks: "{{ role_path }}/../cloudoso_provision/tasks/group_name_one.yml"
+  loop: "{{ gn_groups | unique | list }}"
+  loop_control:
+    loop_var: gn_group

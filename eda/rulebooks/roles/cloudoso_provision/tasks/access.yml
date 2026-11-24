@@ -85,6 +85,12 @@
   register: _oa_rbacs
   when: oa_wanted | length > 0
 
+- name: The access groups' names
+  ansible.builtin.include_tasks: "{{ role_path }}/../cloudoso_provision/tasks/group_names.yml"
+  vars:
+    gn_tenant: "{{ entity_name }}"
+    gn_groups: "{{ oa_wanted | map(attribute='rbac') | list }}"
+
 - name: The groups of the access groups
   vars:
     _rbacs: "{{ _oa_rbacs.resources | default([]) }}"
@@ -96,7 +102,7 @@
         {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', g.rbac) | list + [{}]) | first -%}
         {%- set path = (r.status | default({}, true)).group | default('', true) -%}
         {%- set roles = oa_edit_roles if g.access == 'Edit' else oa_view_roles -%}
-        {%- set _ = out.append(g | combine({'path': path, 'exists': r | length > 0, 'group': entity_name ~ '.' ~ g.rbac,
+        {%- set _ = out.append(g | combine({'path': path, 'exists': r | length > 0, 'group': gn_names[g.rbac],
                                             'roles': roles, 'role': roles | join(', ')})) -%}
       {%- endfor -%}
       {{ out }}

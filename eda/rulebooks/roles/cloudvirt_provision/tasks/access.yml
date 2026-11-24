@@ -15,6 +15,12 @@
       {%- for r in (fab_spec.toolRbac | default({})).viewRbac | default([]) -%}{%- set _ = out.append({'rbac': r, 'role': fab_real.openshift.tenantSignIn.viewRole}) -%}{%- endfor -%}
       {{ out }}
 
+- name: The access groups' names
+  ansible.builtin.include_tasks: "{{ role_path }}/../cloudoso_provision/tasks/group_names.yml"
+  vars:
+    gn_tenant: "{{ fab_entity }}"
+    gn_groups: "{{ cv_grants | map(attribute='rbac') | list }}"
+
 - name: The groups of the Rbac CRs
   vars:
     _rbacs: "{{ _cv_rbacs.resources | default([]) }}"
@@ -24,7 +30,7 @@
       {%- for g in cv_grants -%}
         {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', g.rbac) | list + [{}]) | first -%}
         {%- set path = ((r.status | default({}, true)).group | default('', true)) -%}
-        {%- set _ = out.append(g | combine({'path': path, 'group': fab_entity ~ '.' ~ g.rbac,
+        {%- set _ = out.append(g | combine({'path': path, 'group': gn_names[g.rbac],
                                              'binding': 'shc-' ~ g.role ~ '-' ~ g.rbac})) -%}
       {%- endfor -%}
       {{ out }}

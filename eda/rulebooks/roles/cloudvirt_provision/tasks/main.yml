@@ -16,6 +16,48 @@
       vars:
         fab_read_entity: true
 
+    # the rule for names (an object made before the API carried it), then the name unique within the tenant across
+    # the four environment kinds; both before anything is read from or made on the site
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items: >-
+          {%- set out = [{'value': fab_entity, 'what': 'tenant'}, {'value': fab_name, 'what': 'environment'}] -%}
+          {%- for n in fab_spec.namespaces | default([{'name': 'vms'}], true) -%}
+            {%- set _ = out.append({'value': n.name, 'what': 'namespace'}) -%}
+          {%- endfor -%}
+          {{ out }}
+
+    - name: Refuse a name that breaks the rule
+      ansible.builtin.set_fact:
+        fab_fail_reason: NameNotAllowed
+        fab_fail_msg: "{{ name_check_message }}"
+      when: name_check_message | length > 0
+
+    - name: Check that no other environment of the tenant holds the name
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/environment_name_unique.yml"
+      vars:
+        enu_kind: CloudVirt
+        enu_name: "{{ fab_name }}"
+        enu_namespace: "{{ fab_namespace }}"
+        enu_created: "{{ fab_obj.metadata.creationTimestamp }}"
+      when: name_check_message | length == 0
+
+    - name: Refuse a name another environment of the tenant holds
+      ansible.builtin.set_fact:
+        fab_fail_reason: EnvironmentNameTaken
+        fab_fail_msg: >-
+          The name {{ fab_name }} is already used by another of your environments (an
+          {{ {'CloudVirt': 'OpenShift virtualization', 'CloudAWS': 'AWS', 'CloudGCP': 'Google Cloud',
+              'CloudOSO': 'OpenStack'}[enu_holder_kind] | default(enu_holder_kind) }} environment); environment names
+          are unique within a tenant. Delete this environment and create it with another name.
+      when: name_check_message | length == 0 and enu_taken | bool
+
+    - name: Stop before anything is made
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: fab_fail_reason | default('') in ['NameNotAllowed', 'EnvironmentNameTaken']
+
     - name: Start with nothing to wait for
       ansible.builtin.set_fact:
         cv_waiting: []
