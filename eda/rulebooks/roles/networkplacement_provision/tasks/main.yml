@@ -548,7 +548,8 @@
           {{ np_prefixes | join(', ') }} on {{ np_site }} through CloudGateway {{ np_gateway.metadata.name }}
           (VNI {{ np_l3vni }}{{ (', MAC-VRF ' ~ np_real.l2Vni) if np_real.l2Vni is defined else '' }}); routes of
           the network's other placements on the gateway: {{ np_route_nodes | map(attribute='vpnRoutes') | map('string') | join('/') }}{{
-          np_rdns_note | default('') }}{{ npp_note | default('') }}{{ np_use_note | default('', true) }}
+          np_rdns_note | default('') }}{{ npp_note | default('') }}{{ np_use_note | default('', true) }}{{
+          np_backend_note | default('', true) }}
         _np_degraded_before: >-
           {{ fab_st.conditions | default([], true) | selectattr('type', 'equalto', 'Degraded')
              | selectattr('status', 'equalto', 'True') | list | length > 0 }}

@@ -226,7 +226,9 @@ def dual_stack_scenarios(module, ec2_cls):
                 t.ec2, t.r53, t.ram, t.changed = ec2, None, None, []
                 # the VPC the placement's status records after its first run (the job writes it at once)
                 vid = recorded_vpc(ec2, PLACEMENT)
-                if what == "up":
+                if what == "up":  # with what its status records, as the job passes it
+                    if v6:
+                        v6 = dict(v6, ipams=list(ec2.ipams), **V8.recorded6(ec2, PLACEMENT))
                     t.place_up(PLACEMENT, 1001, list(V8.V4), True, v6, vpc_id=vid)
                 else:  # with the pool its status records
                     t.place_down(PLACEMENT, 1001, dict(v6, **V8.recorded6(ec2, PLACEMENT)) if v6 else v6, vpc_id=vid)
@@ -245,11 +247,15 @@ def recorded_vpc(ec2, placement):
 # the one the placement's status records: later runs read it by id (VpcIds) instead of by the tag; the same calls
 # in the same order otherwise (checked call by call against the module before); re-pinned when place-down acted only
 # on what status records: its two new reads list what carries the placement's tag (describe_vpcs by the tag, and
-# describe_ipam_pools with IPv6), the teardown is given the recorded pool, and every other call is as before
+# describe_ipam_pools with IPv6), the teardown is given the recorded pool, and every other call is as before;
+# re-pinned when place-up took its IPAM and pool by the ids status records: describe_ipams and describe_ipam_pools by
+# id instead of listing them (the recorded pool names its IPAM), and place-up's report of what carries the placement's tag (describe_vpcs by the tag,
+# describe_ipam_pools with source Network); every create, change and delete and every hub call the same, in the same
+# order (compared call by call against the module before)
 DUAL_STACK_DIGESTS = {
-    "ipv4": "574b9744b6087227a3f53980bea6c2ccb213b33de30336545c722e55657cfbbd",
-    "network": "dcd1f178697a847250128172d542d16d8354b809a67067612f5f0208ce1f85c7",
-    "provider": "d5aad2aa12c11b37f24a1b0fb6c35b4a890faee941cfcc49a34151434eab8f39",
+    "ipv4": "e3721de86e1068af2f8d036f8d1efc46ecc910259c6d53f5f336a1463a924f56",
+    "network": "da242fc8628ddd6c8219194f4c1cc12369bbab83ed326619dedf44399ca82371",
+    "provider": "a77b5d6f0c07abb13cdb357d16d654405430c664ceb80a86e9ddd904d144b851",
 }
 
 
@@ -295,7 +301,10 @@ class TenantIpv6OnlyTest(unittest.TestCase):
         self.ec2 = FakeEc2()
 
     def up(self, v6, egress=True):
+        """As the job calls it: the placement's recorded objects and the IPAMs the account's placements record."""
         t = tenant(self.ec2)
+        if v6:
+            v6 = dict(v6, ipams=list(self.ec2.ipams), **V8.recorded6(self.ec2, PLACEMENT))
         return t.place_up(PLACEMENT, VNI, [], egress, v6, vpc_id=recorded_vpc(self.ec2, PLACEMENT)), t.changed
 
     def down(self, v6):
@@ -394,7 +403,8 @@ class TenantIpv6OnlyTest(unittest.TestCase):
     def test_a_vpc_with_another_cidr_is_refused(self):
         self.up(only6())
         t = tenant(self.ec2)
-        self.assertIn("has CIDR", refused(lambda: t.place_up(PLACEMENT, VNI + 1, [], True, only6(),
+        rec = dict(only6(), **V8.recorded6(self.ec2, PLACEMENT))
+        self.assertIn("has CIDR", refused(lambda: t.place_up(PLACEMENT, VNI + 1, [], True, rec,
                                                              vpc_id=recorded_vpc(self.ec2, PLACEMENT)))["error"])
 
     def test_no_public_subnets(self):
@@ -492,6 +502,45 @@ class TenantIpv6OnlyTest(unittest.TestCase):
         with mock.patch.object(FakeEdge, "attachments", lambda self, tgw, **f: tenant_att):
             out, _ = self.down({"source": "Provider", "only": True})
         self.assertTrue(out["networkKept"])
+
+    def test_place_up_never_takes_or_deletes_an_option_set_nothing_records(self):
+        """The option set: (none | recorded with these resolvers | recorded with others | recorded and in use by
+        another VPC) x (a set tagged for the placement that nothing records: absent | present). Only a recorded set
+        is used or deleted; a tagged one nothing records is listed, never taken and never deleted (before this, a
+        place-up deleted every tagged set it did not use)."""
+        for state in ("none", "same", "other", "other, in use"):
+            for stray in (False, True):
+                with self.subTest(state=state, stray=stray):
+                    self.ec2 = FakeEc2()
+                    rec = {}
+                    if state != "none":
+                        r0, _ = self.up(only6(resolvers=RESOLVERS if state == "same" else []))
+                        rec["dhcpOptions"] = r0["ipv6"]["dhcpOptions"]
+                        rec["pool"] = r0["ipv6"]["pool"]
+                        if state == "other, in use":   # someone associates it with another VPC
+                            self.ec2.vpcs["vpc-elsewhere"] = {"VpcId": "vpc-elsewhere", "Tags": [],
+                                                              "DhcpOptionsId": rec["dhcpOptions"]}
+                    if stray:
+                        self.ec2.dhcp["dopt-x"] = {"DhcpOptionsId": "dopt-x", "DhcpConfigurations": [],
+                                                   "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}]}
+                    T.MADE.clear()
+                    t = tenant(self.ec2)
+                    r = t.place_up(PLACEMENT, VNI, [], True, dict(only6(), ipams=list(self.ec2.ipams), **rec),
+                                   vpc_id=recorded_vpc(self.ec2, PLACEMENT))
+                    mine = r["ipv6"]["dhcpOptions"]
+                    self.assertEqual(T.dhcp_servers(self.ec2.dhcp[mine]), RESOLVERS)
+                    self.assertEqual(mine == rec.get("dhcpOptions"), state == "same")
+                    self.assertEqual(T.MADE.get("dhcpOptions"), None if state == "same" else mine)
+                    if stray:
+                        self.assertIn("dopt-x", self.ec2.dhcp)
+                        self.assertIn("dhcp options dopt-x", r["left"])
+                    if state == "other":
+                        self.assertNotIn(rec["dhcpOptions"], self.ec2.dhcp)       # the recorded one replaced
+                    if state == "other, in use":
+                        self.assertIn(rec["dhcpOptions"], self.ec2.dhcp)
+                        self.assertIn("dhcp options %s (in use elsewhere)" % rec["dhcpOptions"], r["left"])
+                    if state in ("none", "same") and not stray:
+                        self.assertNotIn("left", r)
 
     def test_an_option_set_nothing_records_is_listed_not_deleted(self):
         # tagged for the placement, recorded by no status: the tag is anyone's to write in the account

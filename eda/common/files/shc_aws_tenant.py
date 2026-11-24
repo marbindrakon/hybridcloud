@@ -21,8 +21,13 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
       time-out). place-down and place-public change and delete only inside the recorded VPC, and nothing without
       --vpc-id: place-public up is refused, place-public down and place-down delete nothing in the account and list
       under "left" what carries the placement's tag (a tag is never the reason to change or delete anything there).
-      place-down's --ipv6 may name the recorded "pool" (the placement's IPAM pool) and "dhcpOptions" (its DHCP option
-      set): only those are deleted (the IPAM with its last pool); one found only by its tag is listed under "left".
+      --ipv6 of place-up and place-down carries what the placement's status records: "pool" (its IPAM pool),
+      "dhcpOptions" (its DHCP option set) and "ipam" (the account's IPAM it used); place-up also "ipams", the IPAMs
+      the account's other placements in the region record. Only those are used, replaced or deleted (place-down
+      deletes the recorded IPAM with its last pool). A pool tagged for the placement that nothing records is refused
+      on place-up (NameTakenOnSite); a tagged option set or pool nothing records is listed under "left", never
+      deleted. A place-up that makes an IPAM, a pool or an option set prints its id under "made" at once (with a
+      failure too), so the job records it.
       public /28s (one per AZ, below the attachment /28s) with an internet gateway, for internet-facing load
       balancers of a DMZ-like workload; the workload subnets keep leaving through the network
   shc_aws_tenant.py --config '<json>' share-down        stop sharing the hub's transit gateway with this account
@@ -47,8 +52,9 @@ removed again with share-down.
 IPv6 (design/IPV6-PLAN.md §6.2), --ipv6 {"source": "Network" | "Provider", "prefix": CIDR (Network: the placement's
 block, a /44 to /60 in steps of 4), "internet": bool, "networkPrefixes6": [CIDR]} (the network's IPv6 space):
   Network   the block from the network's space, placed in the VPC as space AWS never advertises: the account's IPAM in
-            the region (Free Tier, one per account and region, private GUA enabled, tagged shc-role tenant-ipam), a
-            private-scope pool per placement holding exactly the block, the VPC's IPv6 block from that pool; internet
+            the region (Free Tier, one per account and region, private GUA enabled, tagged shc-role tenant-ipam for
+            people; found only by the id a placement records), a private-scope pool per placement holding exactly the
+            block, the VPC's IPv6 block from that pool; internet
             (when asked) is ::/0 to the transit gateway, through the network
   Provider  the Amazon-assigned /56; internet (when asked) is ::/0 to an egress-only internet gateway, never through
             the network
@@ -59,7 +65,7 @@ the VPC's main route table are reconciled to exactly that set. place-up's result
 subnets, internet, path, pool, ipam, egressOnlyGateway, routes}. place-down with --ipv6 (or a VPC holding IPv6) removes
 in reverse: the IPv6 routes, the egress-only gateway, the VPC's IPv6 block, the placement's pool (cascade: IPAM
 releases a VPC's allocation minutes after the VPC is gone, so a plain deprovision would wait that long) and the
-IPAM once it holds no other pool.
+recorded IPAM once it holds no other pool.
 
 IPv6-only (design/IPV6-PLAN.md §6.4; place-up without --prefix): --ipv6 adds "placeholderV4Pool" (the site's never-
 routed IPv4 range; without it an IPv6-only placement is refused), and optionally "resolvers" (source Network: the
@@ -67,7 +73,7 @@ translation resolvers for the VPC's DHCP option set) and "nat64" (source Provide
 still needs an IPv4 CIDR and the attachment IPv4 subnets (AWS refuses an attachment on IPv6-only subnets): the VPC's
 IPv4 CIDR is a /26 of the pool chosen by the VNI (stable on re-run), holding only the attachment subnets (a /28 + a
 /64 per AZ); the workload subnets are IPv6-only (a /64 per AZ, resource-name hostnames with an AAAA record on launch).
-No IPv4 default route. Source Network: no DNS64; a DHCP option set shc-<placement> with the resolvers given (else
+No IPv4 default route. Source Network: no DNS64; a DHCP option set (recorded in status) with the resolvers given (else
 AmazonProvidedDNS) on the VPC (the VPC holds only IPv6-only workload subnets, so an IPv6-only resolver list strands no
 dual-stack guest); internet as for dual-stack. Source Provider with nat64: DNS64 on the workload subnets, the VPC's
 64:ff9b::/96 to the transit gateway, and the network's NAT egress VPC (net-up --egress --nat64) translating it with
@@ -395,24 +401,54 @@ class Tenant:
             time.sleep(5)
         fail("IPAM %s never settled (%s)" % (ipam_id, i["State"]))
 
-    def find_ipam(self):
+    def recorded_ipam(self, ids):
+        """The first live IPAM in the region among the ids placements' status records (this placement's first, then
+        the others' in the same account and region: one IPAM serves every placement there). Never found by a tag."""
         region = self.cfg["region"]
-        mine = [i for i in self.ec2.describe_ipams()["Ipams"]
-                if tagmap(i).get("shc-role") == "tenant-ipam" and tagmap(i).get("shc-managed") == "true"
-                and i.get("IpamRegion", region) == region and i["State"] not in GONE]
-        return mine[0] if mine else None
+        for i in [x for x in ids if x]:
+            try:
+                got = self.ec2.describe_ipams(IpamIds=[i])["Ipams"]
+            except botocore.exceptions.ClientError as e:
+                if "InvalidIpamId" not in str(e) and "NotFound" not in str(e):
+                    raise
+                got = []
+            got = [x for x in got if x["State"] not in GONE and x.get("IpamRegion", region) == region]
+            if got:
+                return got[0]
+        return None
 
-    def ensure_ipam(self):
+    def unrecorded_ipams(self, ids):
+        """The account's IPAMs in the region that no placement records: only reported."""
+        region = self.cfg["region"]
+        return sorted(i["IpamId"] for i in self.ec2.describe_ipams()["Ipams"]
+                      if i["State"] not in GONE and i.get("IpamRegion", region) == region and i["IpamId"] not in ids)
+
+    def ensure_ipam(self, recorded=()):
         """The account's IPAM in the region: Free Tier, private GUA enabled (the network's own GUA space, which AWS
-        never advertises, can then be provisioned into its private scope)."""
-        ipam = self.find_ipam()
+        never advertises, can then be provisioned into its private scope). The one a placement's status records
+        (recorded: this placement's, then the others' of the account and region); else a new one, which the run
+        reports under "made" at once. An IPAM nothing records is never taken: when AWS refuses a new one (an account
+        holds a limited number per region), the refusal names the IPAMs that are there."""
+        ids = [x for x in recorded if x]
+        ipam = self.recorded_ipam(ids)
         if not ipam:
             extra = {"shc-role": "tenant-ipam"}
             if self.cfg.get("tags", {}).get("shc-entity"):
                 extra["shc-entity"] = self.cfg["tags"]["shc-entity"]
-            ipam = self.ec2.create_ipam(Description="SHC placements' IPv6", Tier="free",
-                                        OperatingRegions=[{"RegionName": self.cfg["region"]}],
-                                        TagSpecifications=tagspec("ipam", "shc-tenant-ipam", extra))["Ipam"]
+            try:
+                ipam = self.ec2.create_ipam(Description="SHC placements' IPv6", Tier="free",
+                                            OperatingRegions=[{"RegionName": self.cfg["region"]}],
+                                            TagSpecifications=tagspec("ipam", "shc-tenant-ipam", extra))["Ipam"]
+            except botocore.exceptions.ClientError as e:
+                there = self.unrecorded_ipams(ids)
+                if not there:
+                    raise
+                fail("AWS refused a new IPAM in region %s (%s). The account already has IPAM %s, which no placement "
+                     "records: the platform does not take it over. The platform team removes it, or raises the "
+                     "account's IPAM limit; nothing was changed in the account."
+                     % (self.cfg["region"], e.response.get("Error", {}).get("Code", "refused"), ", ".join(there)),
+                     reason="NameTakenOnSite")
+            MADE["ipam"] = ipam["IpamId"]
             self.changed.append("ipam " + ipam["IpamId"])
         ipam = self.wait_ipam(ipam["IpamId"])
         if not ipam.get("EnablePrivateGua"):
@@ -421,21 +457,43 @@ class Tenant:
             ipam = self.wait_ipam(ipam["IpamId"])
         return ipam
 
-    def find_pool(self, placement):
-        p = [x for x in self.ec2.describe_ipam_pools()["IpamPools"]
-             if tagmap(x).get("shc-placement") == placement and x["State"] not in GONE]
+    def find_pool(self, pool_id):
+        """The placement's pool: the one its status records (pool_id); None without a record or when it is gone."""
+        if not pool_id:
+            return None
+        try:
+            p = self.ec2.describe_ipam_pools(IpamPoolIds=[pool_id])["IpamPools"]
+        except botocore.exceptions.ClientError as e:
+            if "InvalidIpamPoolId" not in str(e) and "NotFound" not in str(e):
+                raise
+            p = []
+        p = [x for x in p if x["State"] not in GONE]
         return p[0] if p else None
 
-    def ensure_pool(self, ipam, placement, block, name, extra):
-        """The placement's private-scope pool, holding exactly its block."""
-        pool = self.find_pool(placement)
+    def tagged_pools(self, placement, but=None):
+        """The pools that carry the placement's tag and are not the recorded one: only reported or refused."""
+        return sorted(x["IpamPoolId"] for x in self.ec2.describe_ipam_pools()["IpamPools"]
+                      if tagmap(x).get("shc-placement") == placement and x["State"] not in GONE
+                      and x["IpamPoolId"] != but)
+
+    def ensure_pool(self, ipam, placement, block, name, extra, pool_id=None):
+        """The placement's private-scope pool, holding exactly its block: the one its status records (pool_id); else
+        a new one, reported under "made" at once. A pool tagged for the placement that nothing records is refused
+        (NameTakenOnSite), never taken over (anyone in the account can write the tag)."""
+        pool = self.find_pool(pool_id)
         if pool and pool.get("IpamArn") and pool["IpamArn"] != ipam["IpamArn"]:
             fail("IPAM pool %s of %s belongs to another IPAM" % (pool["IpamPoolId"], placement))
         if not pool:
+            other = self.tagged_pools(placement, but=pool_id)
+            if other:
+                fail("An IPAM pool tagged for placement %s (%s) already exists in the account and was not made by the "
+                     "platform for this; it was left untouched." % (placement, ", ".join(other)),
+                     reason="NameTakenOnSite")
             pool = self.ec2.create_ipam_pool(IpamScopeId=ipam["PrivateDefaultScopeId"], Locale=self.cfg["region"],
                                              AddressFamily="ipv6", AutoImport=False,
                                              Description="SHC placement " + placement,
                                              TagSpecifications=tagspec("ipam-pool", name, extra))["IpamPool"]
+            MADE["ipamPool"] = pool["IpamPoolId"]
             self.changed.append("ipam pool " + name)
         pool_id = pool["IpamPoolId"]
         for _ in range(60):
@@ -540,9 +598,9 @@ class Tenant:
             self.ec2.delete_egress_only_internet_gateway(EgressOnlyInternetGatewayId=g)
             self.changed.append("deleted egress-only internet gateway " + g)
 
-    def pool_down(self, pool_id):
-        """The placement's recorded pool (cascade, see the module doc), then the IPAM that holds it when no other pool
-        is left in it."""
+    def pool_down(self, pool_id, ipam_id=None):
+        """The placement's recorded pool (cascade, see the module doc), then the IPAM that holds it when that IPAM is
+        the one the placement recorded (ipam_id) and no other pool is left in it."""
         out = {"pool": None, "ipamDeleted": False}
         pool = next((p for p in self.ec2.describe_ipam_pools()["IpamPools"]
                      if pool_id and p["IpamPoolId"] == pool_id and p["State"] not in GONE), None)
@@ -551,11 +609,9 @@ class Tenant:
         self.ec2.delete_ipam_pool(IpamPoolId=pool["IpamPoolId"], Cascade=True)
         self.changed.append("deleted ipam pool " + pool["IpamPoolId"])
         out["pool"] = pool["IpamPoolId"]
-        # the IPAM that holds the recorded pool (the pool names it)
-        ipam = (next((i for i in self.ec2.describe_ipams()["Ipams"]
-                      if i.get("IpamArn") == pool["IpamArn"] and i["State"] not in GONE), None)
-                if pool.get("IpamArn") else self.find_ipam())
-        if ipam and ipam["IpamArn"] == pool.get("IpamArn", ipam["IpamArn"]):
+        # the IPAM that holds the recorded pool (the pool names it), only when the placement recorded that IPAM
+        ipam = self.recorded_ipam([ipam_id]) if ipam_id else None
+        if ipam and pool.get("IpamArn") and ipam["IpamArn"] == pool["IpamArn"]:
             left = [x for x in self.ec2.describe_ipam_pools()["IpamPools"]
                     if x.get("IpamArn") == ipam["IpamArn"] and x["State"] not in GONE
                     and x["IpamPoolId"] != pool["IpamPoolId"]]
@@ -567,12 +623,19 @@ class Tenant:
 
     # ---- IPv6-only: the VPC's DHCP option set, the workload subnets' DNS
     def find_dhcp(self, placement):
+        """The option sets that carry the placement's tag: only reported (anyone in the account can write the tag)."""
         return self.ec2.describe_dhcp_options(Filters=[{"Name": "tag:shc-placement", "Values": [placement]}])["DhcpOptions"]
 
-    def dhcp_up(self, vpc_id, placement, name, extra, servers):
-        """The VPC's option set shc-<placement> with these resolvers (option sets can't change: a new one replaces
-        it, the old one goes)."""
-        sets = self.find_dhcp(placement)
+    def recorded_dhcp(self, dhcp_ids):
+        """The live option sets among the ids the placement's status records."""
+        ids = [d for d in dhcp_ids if d]
+        return [d for d in self.ec2.describe_dhcp_options()["DhcpOptions"] if d["DhcpOptionsId"] in ids] if ids else []
+
+    def dhcp_up(self, vpc_id, name, extra, servers, dhcp_ids=()):
+        """The VPC's option set with these resolvers: the recorded one when it has them; else a new one (option sets
+        can't change), reported under "made" at once, and the recorded one it replaces deleted. Returns (id, left):
+        a recorded set that could not be deleted (in use elsewhere) is listed, never forced."""
+        sets = self.recorded_dhcp(dhcp_ids)
         mine = next((d for d in sets if dhcp_servers(d) == servers), None)
         if not mine:
             region = self.cfg["region"]
@@ -580,15 +643,22 @@ class Tenant:
                     {"Key": "domain-name", "Values": ["ec2.internal" if region == "us-east-1" else region + ".compute.internal"]}]
             mine = self.ec2.create_dhcp_options(DhcpConfigurations=conf,
                                                 TagSpecifications=tagspec("dhcp-options", name, extra))["DhcpOptions"]
+            MADE["dhcpOptions"] = mine["DhcpOptionsId"]
             self.changed.append("dhcp options %s %s" % (name, ", ".join(servers)))
         if self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0].get("DhcpOptionsId") != mine["DhcpOptionsId"]:
             self.ec2.associate_dhcp_options(DhcpOptionsId=mine["DhcpOptionsId"], VpcId=vpc_id)
             self.changed.append("vpc %s dhcp options %s" % (vpc_id, mine["DhcpOptionsId"]))
+        left = []
         for d in sets:
             if d["DhcpOptionsId"] != mine["DhcpOptionsId"]:
-                self.ec2.delete_dhcp_options(DhcpOptionsId=d["DhcpOptionsId"])
-                self.changed.append("deleted dhcp options " + d["DhcpOptionsId"])
-        return mine["DhcpOptionsId"]
+                try:
+                    self.ec2.delete_dhcp_options(DhcpOptionsId=d["DhcpOptionsId"])
+                    self.changed.append("deleted dhcp options " + d["DhcpOptionsId"])
+                except botocore.exceptions.ClientError as e:
+                    if "DependencyViolation" not in str(e):
+                        raise
+                    left.append("dhcp options %s (in use elsewhere)" % d["DhcpOptionsId"])
+        return mine["DhcpOptionsId"], left
 
     def dhcp_down(self, vpc_id, dhcp_ids):
         """The placement's recorded option sets: the VPC back on the default set, then deleted."""
@@ -619,6 +689,12 @@ class Tenant:
     def place_up(self, placement, vni, prefixes, egress=False, ipv6=None, name=None, vpc_id=None):
         c = self.cfg
         v6 = ipv6_want(ipv6)
+        # what the placement's status records (ipv6 "pool", "dhcpOptions", "ipam") and the IPAMs the account's other
+        # placements in the region record ("ipams"): the only ones taken, changed or deleted
+        rec6 = ipv6 or {}
+        rec_pool = str(rec6.get("pool") or "").strip()
+        rec_dhcp = [str(rec6.get("dhcpOptions") or "").strip()]
+        rec_ipams = [str(rec6.get("ipam") or "").strip()] + [str(x).strip() for x in rec6.get("ipams") or []]
         only = not prefixes
         if only and not (v6 and v6.get("placeholderV4Pool")):
             fail("an AWS placement needs an IPv4 prefix: a VPC keeps an IPv4 CIDR and the attachment needs IPv4 "
@@ -645,9 +721,14 @@ class Tenant:
         pool_id = ipam_id = None
         if v6 and v6["source"] == "Network":
             layout6(v6["prefix"], c["azs"])  # refuse a block too small before anything is made
-            ipam = self.ensure_ipam()
+            # the IPAM that holds the recorded pool comes first (the pool names it): the platform made both
+            held = self.find_pool(rec_pool)
+            if held and held.get("IpamArn"):
+                rec_ipams = [i["IpamId"] for i in self.ec2.describe_ipams()["Ipams"]
+                             if i.get("IpamArn") == held["IpamArn"]] + rec_ipams
+            ipam = self.ensure_ipam(rec_ipams)
             ipam_id = ipam["IpamId"]
-            pool_id = self.ensure_pool(ipam, placement, v6["prefix"], name, extra)
+            pool_id = self.ensure_pool(ipam, placement, v6["prefix"], name, extra, pool_id=rec_pool)
         if vpc and vpc["CidrBlock"] != cidrs[0]:
             fail("VPC %s of %s has CIDR %s, want %s" % (vpc["VpcId"], placement, vpc["CidrBlock"], cidrs[0]))
         if not vpc:
@@ -673,11 +754,11 @@ class Tenant:
             block6 = self.vpc_block(vpc_id, v6.get("prefix"), pool_id)
             lay6 = {l["az"]: l for l in layout6(block6, c["azs"])}
         # source Network, IPv6-only: the guests' resolvers from the VPC's option set (Provider keeps Amazon's)
-        dhcp_id = None
+        dhcp_id, left = None, []
         if only and not provider:
-            dhcp_id = self.dhcp_up(vpc_id, placement, name, extra, v6.get("resolvers") or ["AmazonProvidedDNS"])
-        elif only:
-            self.dhcp_down(vpc_id, placement)
+            dhcp_id, left = self.dhcp_up(vpc_id, name, extra, v6.get("resolvers") or ["AmazonProvidedDNS"], rec_dhcp)
+        elif only:  # source Provider keeps Amazon's resolvers: the recorded option set goes
+            self.dhcp_down(vpc_id, [d for d in rec_dhcp if d])
         subnets = by_role(self.ec2.describe_subnets(Filters=[{"Name": "vpc-id", "Values": [vpc_id]}])["Subnets"])
         work, tgw_subnets = [], []
         for l in lay:
@@ -799,6 +880,11 @@ class Tenant:
                "egress": net.get("egress"), "ipv6": out6}
         if only:
             out["placeholderV4"] = placeholder
+        # what carries the placement's tag in the account and no status records: reported, never taken or deleted
+        left += self.tagged_left(placement, vpc_id, pool_id, [dhcp_id] if dhcp_id else [],
+                                 v6=bool(v6) and v6["source"] == "Network", only=only)
+        if left:
+            out["left"] = left
         return out
 
     def place_public(self, placement, state, vpc_id=None):
@@ -937,8 +1023,8 @@ class Tenant:
             self.changed.append("deleted vpc " + vpc_id)
         elif dhcp_ids:  # the recorded VPC is gone: its recorded option set still goes
             self.dhcp_down(None, dhcp_ids)
-        if with6:  # the placement's recorded pool and, with its last pool, the IPAM
-            out6 = self.pool_down(pool_id)
+        if with6:  # the placement's recorded pool and, with its last pool, the IPAM it recorded
+            out6 = self.pool_down(pool_id, str(rec6.get("ipam") or "").strip())
         # the network's hub side goes with its last tenant attachment
         tgw_id = edge.tgw()["TransitGatewayId"]
         # (the network's own NAT egress VPC carries the network's tag as well: it is not a tenant's)

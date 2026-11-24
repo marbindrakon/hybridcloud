@@ -405,11 +405,13 @@ def ipv6(source="Network", internet=True, prefix=BLOCK, net6=(NET6,)):
 
 
 def recorded6(ec2, placement):
-    """The IPv6 objects a placement's status records after its runs (place-up's ipv6.pool and ipv6.dhcpOptions)."""
+    """The IPv6 objects a placement's status records after its runs (place-up's ipv6.pool, ipv6.dhcpOptions and
+    ipv6.ipam: the job writes them at once). The fake's objects here were all made by place-up."""
     out = {}
     pool = next((p["IpamPoolId"] for p in ec2.pools.values() if T.tagmap(p).get("shc-placement") == placement), None)
     if pool:
         out["pool"] = pool
+        out["ipam"] = next(i for i, x in ec2.ipams.items() if x["IpamArn"] == ec2.pools[pool]["IpamArn"])
     dhcp = next((d["DhcpOptionsId"] for d in ec2.__dict__.get("dhcp", {}).values()
                  if T.tagmap(d).get("shc-placement") == placement), None)
     if dhcp:
@@ -428,7 +430,10 @@ class AwsTenantIpv6Test(unittest.TestCase):
         self.ec2 = FakeEc2()
 
     def up(self, v6, placement=PLACEMENT, egress=False):
+        """As the job calls it: the placement's recorded objects and the IPAMs the account's placements record."""
         t = tenant(self.ec2)
+        if v6:
+            v6 = dict(v6, ipams=list(self.ec2.ipams), **recorded6(self.ec2, placement))
         r = t.place_up(placement, 1001, list(V4), egress, v6, vpc_id=self.recorded(placement))
         return r, t.changed
 
@@ -687,6 +692,92 @@ class AwsTenantIpv6Test(unittest.TestCase):
         self.assertIsNone(r["ipv6"])
         self.assertEqual([n for n, _ in self.ec2.calls[before:] if "ipam" in n or "egress_only" in n], [])
 
+    # ---- place-up takes only what status records (an IPAM, a pool); a tagged one nothing records is never taken
+    def stray(self, placement=PLACEMENT):
+        """An IPAM tagged as the platform's and a pool tagged for the placement that no status records (anyone in
+        the account can write tags)."""
+        t = tenant(self.ec2)
+        ipam = t.ensure_ipam()
+        pool = t.ensure_pool(ipam, placement, BLOCK, "x", {"shc-placement": placement})
+        return ipam["IpamId"], pool
+
+    def test_place_up_with_what_status_records(self):
+        """(an IPAM: none | recorded by this placement | by another placement | only a tagged one nothing records) x
+        (the pool: none | recorded | recorded and gone | only a tagged one nothing records)."""
+        for ipam_state in ("none", "own", "another's", "tagged"):
+            for pool_state in ("none", "recorded", "gone", "tagged"):
+                with self.subTest(ipam=ipam_state, pool=pool_state):
+                    self.ec2 = FakeEc2()
+                    rec = {}
+                    if ipam_state != "none" or pool_state in ("recorded", "gone", "tagged"):
+                        ipam_id, pool_id = self.stray()
+                        if pool_state in ("gone", "none"):
+                            del self.ec2.pools[pool_id]
+                        if pool_state in ("recorded", "gone"):
+                            rec["pool"] = pool_id
+                        if ipam_state == "own":
+                            rec["ipam"] = ipam_id
+                        elif ipam_state == "another's":
+                            rec["ipams"] = [ipam_id]
+                    T.MADE.clear()
+                    ipams_before, pools_before = set(self.ec2.ipams), set(self.ec2.pools)
+                    before = len(self.ec2.calls)
+                    t = tenant(self.ec2)
+                    if pool_state == "tagged":
+                        out = self.refused(lambda: t.place_up(PLACEMENT, 1001, list(V4), False, dict(ipv6(), **rec)))
+                        self.assertEqual(out["reason"], "NameTakenOnSite")
+                        self.assertIn(pool_id, out["error"])
+                        self.assertEqual(self.ec2.vpcs, {})
+                        self.assertNotIn("create_ipam_pool", [n for n, _ in self.ec2.calls[before:]])
+                    else:
+                        r = t.place_up(PLACEMENT, 1001, list(V4), False, dict(ipv6(), **rec))
+                        # the recorded pool's IPAM is taken with it (the pool names it)
+                        took_ipam = ipam_state in ("own", "another's") or pool_state == "recorded"
+                        self.assertEqual(r["ipv6"]["ipam"] in ipams_before, took_ipam)
+                        self.assertEqual(r["ipv6"]["pool"] in pools_before, pool_state == "recorded")
+                        made = {k: v for k, v in T.MADE.items() if k in ("ipam", "ipamPool")}
+                        self.assertEqual(made, dict({} if took_ipam else {"ipam": r["ipv6"]["ipam"]},
+                                                    **({} if pool_state == "recorded" else {"ipamPool": r["ipv6"]["pool"]})))
+                    # nothing is ever deleted by place-up, and nothing that was there is changed but the recorded
+                    self.assertEqual([n for n, _ in self.ec2.calls[before:] if n.startswith("delete_")], [])
+                    self.assertTrue(ipams_before <= set(self.ec2.ipams))
+
+    def test_an_ipam_nothing_records_is_named_when_aws_refuses_another(self):
+        ipam_id, _ = self.stray(placement="someone/else")
+        refuse = mock.patch.object(FakeEc2, "h_create_ipam",
+                                   side_effect=client_error("IpamLimitExceeded", "one IPAM per region"))
+        with refuse:
+            out = self.refused(lambda: tenant(self.ec2).place_up(PLACEMENT, 1001, list(V4), False, ipv6()))
+        self.assertEqual(out["reason"], "NameTakenOnSite")
+        self.assertIn(ipam_id, out["error"])
+        self.assertEqual(self.ec2.vpcs, {})
+
+    def test_a_failed_place_up_reports_what_it_made(self):
+        T.MADE.clear()
+        with mock.patch.object(FakeEc2, "h_create_vpc", side_effect=client_error("VpcLimitExceeded", "no more")):
+            with self.assertRaises(botocore.exceptions.ClientError):
+                tenant(self.ec2).place_up(PLACEMENT, 1001, list(V4), False, ipv6())
+        self.assertEqual(T.MADE, {"ipam": next(iter(self.ec2.ipams)), "ipamPool": next(iter(self.ec2.pools))})
+
+    def test_teardown_deletes_only_the_recorded_ipam(self):
+        r, _ = self.up(ipv6())
+        t = tenant(self.ec2)
+        out = t.place_down(PLACEMENT, 1001, {"source": "Network", "pool": r["ipv6"]["pool"]}, vpc_id=r["vpcId"])
+        self.assertEqual(out["ipv6"], {"pool": r["ipv6"]["pool"], "ipamDeleted": False})   # the IPAM not recorded
+        self.assertEqual(list(self.ec2.ipams), [r["ipv6"]["ipam"]])
+
+    def test_place_up_lists_a_tagged_pool_beside_the_recorded_one(self):
+        r, _ = self.up(ipv6())
+        ipam = self.ec2.ipams[r["ipv6"]["ipam"]]                 # a second pool tagged for the placement
+        other = self.ec2.create_ipam_pool(
+            IpamScopeId=ipam["PrivateDefaultScopeId"], AddressFamily="ipv6", Locale=REGION,
+            TagSpecifications=[{"ResourceType": "ipam-pool", "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}]}]
+        )["IpamPool"]["IpamPoolId"]
+        r2, _ = self.up(ipv6())
+        self.assertEqual(r2["ipv6"]["pool"], r["ipv6"]["pool"])
+        self.assertEqual(r2["left"], ["ipam pool " + other])
+        self.assertIn(other, self.ec2.pools)
+
     # ---- the command line
     def test_cli_passes_ipv6(self):
         seen = {}
@@ -888,6 +979,59 @@ class AwsPlacementTasksTest(unittest.TestCase):
         args = self.teardown_args({"ipv4": {"prefixLength": 24}, "ipv6": {"source": "Provider"}},
                                   site={"ipv6": {"source": "Provider", "prefix": AMAZON}})
         self.assertEqual(json.loads(args[-1]), {"source": "Provider", "prefix": AMAZON})
+
+
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class AwsPlacementRecordsTest(unittest.TestCase):
+    """The placement job gives place-up what status records (its own ipv6 pool, option set and IPAM; the IPAMs the
+    other placements of the same account and region record) and records at once what a run made, also from a failed
+    run's "made"."""
+
+    def test_the_request_carries_the_records(self):
+        task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The IPv6 objects recorded")
+        def pl(ns, name, account, region, ipam):
+            return {"metadata": {"namespace": ns, "name": name}, "status": {"realization": {"site": {
+                "account": account, "region": region, "ipv6": {"ipam": ipam}}}}}
+        others = [pl("acme", "p2", ACCOUNT, REGION, "ipam-a"), pl("other", "p9", ACCOUNT, REGION, "ipam-a"),
+                  pl("acme", "p3", ACCOUNT, "xx-other-1", "ipam-b"), pl("acme", "p4", "222222222222", REGION, "ipam-c"),
+                  pl("acme", "p5", ACCOUNT, REGION, ""), {"metadata": {"namespace": "acme", "name": "p6"}}]
+        own = {"realization": {"site": {"ipv6": {"pool": "ipam-pool-1", "dhcpOptions": "dopt-1", "ipam": "ipam-a"}}}}
+        # (the request as a fact: an extra var would win over the task's set_fact)
+        start = {"ansible.builtin.set_fact": {"np_aws_ipv6": ipv6()}}
+        out = run_play([start, task, write_out("np_aws_ipv6")],
+                       {"np_aws_cfg": {"account": ACCOUNT, "region": REGION},
+                        "_np_aws_all": {"resources": others}, "fab_st": own})
+        self.assertEqual(out, dict(ipv6(), pool="ipam-pool-1", dhcpOptions="dopt-1", ipam="ipam-a", ipams=["ipam-a"]))
+        out = run_play([start, task, write_out("np_aws_ipv6")],
+                       {"np_aws_cfg": {"account": ACCOUNT, "region": REGION},
+                        "_np_aws_all": {"resources": []}, "fab_st": {}})
+        self.assertEqual(out, dict(ipv6(), pool="", dhcpOptions="", ipam="", ipams=[]))
+
+    def test_what_a_run_made_reaches_status_at_once(self):
+        tasks = load(os.path.join(NP, "backend_cloudaws.yml"))
+        made = by_name(tasks, "What the run made")
+        rec = by_name(tasks, "Record what the run made")
+        probe = {"vars": {"_v6": rec["vars"]["_v6"]},
+                 "ansible.builtin.set_fact": {"_out": {"when": "{{ %s }}" % rec["when"],
+                                                       "body": rec["vars"]["cr_status_body"]}}}
+        base = {"np_aws_cfg": {"account": ACCOUNT, "region": REGION}, "np_aws_vpc_id": "",
+                "np_aws_ipv6": {"pool": "", "dhcpOptions": "", "ipam": ""}}
+        # a failed first run that made an IPAM and a pool, not the VPC
+        out = run_play([made, probe, write_out("_out")], dict(base, aws_error="refused",
+                       aws_result={"made": {"ipam": "ipam-1", "ipamPool": "ipam-pool-1"}}))
+        self.assertTrue(out["when"])
+        self.assertEqual(out["body"], {"realization": {"site": {"account": ACCOUNT, "region": REGION,
+                                                                "ipv6": {"pool": "ipam-pool-1", "ipam": "ipam-1"}}}})
+        # a successful run: its result's ids
+        ok = {"result": {"vpcId": "vpc-1", "ipv6": {"pool": "ipam-pool-1", "ipam": "ipam-1", "dhcpOptions": "dopt-1"}}}
+        out = run_play([made, probe, write_out("_out")], dict(base, aws_error="", aws_result=ok))
+        self.assertEqual(out["body"]["realization"]["site"],
+                         {"account": ACCOUNT, "region": REGION, "vpc": "vpc-1",
+                          "ipv6": {"pool": "ipam-pool-1", "ipam": "ipam-1", "dhcpOptions": "dopt-1"}})
+        # a re-run that made nothing new: no write
+        out = run_play([made, probe, write_out("_out")], dict(base, aws_error="", aws_result=ok, np_aws_vpc_id="vpc-1",
+                       np_aws_ipv6={"pool": "ipam-pool-1", "ipam": "ipam-1", "dhcpOptions": "dopt-1"}))
+        self.assertFalse(out["when"])
 
 
 class CrdFieldsTest(unittest.TestCase):

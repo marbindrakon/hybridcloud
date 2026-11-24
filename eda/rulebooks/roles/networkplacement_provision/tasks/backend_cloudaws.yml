@@ -170,6 +170,41 @@
       {{ (((fab_st | default({}, true)).realization | default({}, true)).site | default({}, true)).vpc
          | default('', true) | string | trim }}
 
+# the IPv6 objects the placement's status records (status.realization.site.ipv6: its IPAM pool, DHCP option set and
+# the account's IPAM it used), and the IPAMs the other placements in the same account and region record (one IPAM
+# serves every placement there): place-up takes, changes or deletes only those, never one found by its tag
+- name: The placements that record an IPAM in this account and region
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: NetworkPlacement
+  register: _np_aws_all
+  when: np_aws_ipv6 | length > 0
+
+- name: The IPv6 objects recorded
+  vars:
+    _rec6: "{{ (((fab_st | default({}, true)).realization | default({}, true)).site | default({}, true)).ipv6 | default({}, true) }}"
+    _ipams: >-
+      {%- set out = [] -%}
+      {%- for p in _np_aws_all.resources | default([], true) -%}
+        {%- set _s = ((p.status | default({}, true)).realization | default({}, true)).site | default({}, true) -%}
+        {%- set _i = (_s.ipv6 | default({}, true)).ipam | default('', true) | string | trim -%}
+        {%- if _i | length > 0 and (_s.account | default('', true) | string) == (np_aws_cfg.account | string)
+              and (_s.region | default('', true)) == np_aws_cfg.region and _i not in out -%}
+          {%- set _ = out.append(_i) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+  ansible.builtin.set_fact:
+    np_aws_ipv6: >-
+      {{ np_aws_ipv6 | combine({'pool': _rec6.pool | default('', true) | string | trim,
+                                'dhcpOptions': _rec6.dhcpOptions | default('', true) | string | trim,
+                                'ipam': _rec6.ipam | default('', true) | string | trim,
+                                'ipams': _ipams | list}) }}
+  when: np_aws_ipv6 | length > 0
+
 - name: The placement's VPC and its attachment to the network
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
   vars:
@@ -183,15 +218,32 @@
          + (['--ipv6', np_aws_ipv6 | to_json] if np_aws_ipv6 | length > 0 else []) }}
     aws_soft: true
 
-# the VPC reaches status at once, before anything else can fail (a failed place-up reports it under "made"), so a
-# deletion removes it. A job that made a VPC and stopped before this write leaves it refused on the next run: the
-# platform team removes it.
-- name: Record the VPC the run made
+# the VPC, IPAM pool, DHCP option set and IPAM reach status at once, before anything else can fail (a failed place-up
+# reports them under "made"), so a deletion removes them and the next run takes them. A job that made one and
+# stopped before this write leaves it refused or listed on the next run: the platform team removes it.
+- name: What the run made
+  vars:
+    _r: "{{ aws_result.result | default({}, true) }}"
+    _m: "{{ aws_result.made | default({}, true) }}"
+    _r6: "{{ _r.ipv6 | default({}, true) }}"
+  ansible.builtin.set_fact:
+    np_aws_made: >-
+      {{ {'vpc': (_m.vpcId if aws_error | length > 0 else _r.vpcId) | default('', true) | string | trim,
+          'pool': (_m.ipamPool if aws_error | length > 0 else _r6.pool) | default('', true) | string | trim,
+          'dhcpOptions': (_m.dhcpOptions if aws_error | length > 0 else _r6.dhcpOptions) | default('', true) | string | trim,
+          'ipam': (_m.ipam if aws_error | length > 0 else _r6.ipam) | default('', true) | string | trim} }}
+    np_aws_had: >-
+      {{ {'vpc': np_aws_vpc_id,
+          'pool': (np_aws_ipv6 | default({}, true)).pool | default('', true),
+          'dhcpOptions': (np_aws_ipv6 | default({}, true)).dhcpOptions | default('', true),
+          'ipam': (np_aws_ipv6 | default({}, true)).ipam | default('', true)} }}
+
+- name: Record what the run made
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:
-    _made: >-
-      {{ (aws_result.made | default({}, true)).vpcId | default('', true) if aws_error | length > 0
-         else (aws_result.result | default({}, true)).vpcId | default('', true) }}
+    _v6: >-
+      {{ {'pool': np_aws_made.pool, 'dhcpOptions': np_aws_made.dhcpOptions, 'ipam': np_aws_made.ipam}
+         | dict2items | rejectattr('value', 'equalto', '') | items2dict }}
     cr_api_version: hybridsovereign.redhat/v1alpha1
     cr_plural: networkplacements
     cr_name: "{{ fab_name }}"
@@ -200,8 +252,15 @@
     patch_ignore_not_found: true
     cr_status_body:
       realization:
-        site: {vpc: "{{ _made | trim }}", account: "{{ np_aws_cfg.account }}", region: "{{ np_aws_cfg.region }}"}
-  when: (_made | trim | length) > 0 and (_made | trim) != np_aws_vpc_id
+        site: >-
+          {{ {'account': np_aws_cfg.account, 'region': np_aws_cfg.region}
+             | combine({'vpc': np_aws_made.vpc} if np_aws_made.vpc | length > 0 else {})
+             | combine({'ipv6': _v6} if _v6 | length > 0 else {}) }}
+  when: >-
+    (np_aws_made.vpc | length > 0 and np_aws_made.vpc != np_aws_had.vpc)
+    or (np_aws_made.pool | length > 0 and np_aws_made.pool != np_aws_had.pool)
+    or (np_aws_made.dhcpOptions | length > 0 and np_aws_made.dhcpOptions != np_aws_had.dhcpOptions)
+    or (np_aws_made.ipam | length > 0 and np_aws_made.ipam != np_aws_had.ipam)
 
 # a VPC tagged for the placement that no status records
 - name: Refuse a VPC the platform did not make
@@ -263,6 +322,10 @@
       connectAttachment: "{{ aws_result.result.connectAttachment }}"
       egress: "{{ ('nat-vpc ' ~ aws_result.result.egress.publicIp) if aws_result.result.egress else 'none' }}"
     np_backend_changed: "{{ aws_result.changed | default([]) | length > 0 }}"
+    # what carries the placement's tag in the account and no status records: reported, never taken or deleted
+    np_backend_note: >-
+      {{ ('; left in the account, as no status records them: ' ~ (aws_result.result.left | join(', ')))
+         if aws_result.result.left | default([], true) | length > 0 else '' }}
 
 # {source, prefix, subnets (the /64 per AZ), internet, path, pool, ipam, egressOnlyGateway, routes}
 - name: Record the site side's IPv6
