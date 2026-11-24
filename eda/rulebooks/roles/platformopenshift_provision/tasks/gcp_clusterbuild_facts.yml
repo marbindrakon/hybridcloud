@@ -44,9 +44,10 @@
     cb_acm_cloud_label: Google
     cb_publish: "{{ gcp_publish }}"
     cb_network: "{{ gcp_network }}"
+    # the placement's VPC is added by gcp_clusterbuild_network.yml, read from the placement's status
     cb_dns_alias_argv: >-
       {{ ['python3', role_path ~ '/../../../common/files/shc_gcp_cluster.py', '--config', {'project': gcp_project, 'region': gcp_region} | to_json,
-          'dns-alias', '--state', 'up', '--zone', gcp_domain, '--name', ansible_operator_meta.name, '--network', 'shc-' ~ ((ansible_operator_meta.namespace ~ '-' ~ gcp_network ~ '-' ~ gcp_env_name) | regex_replace('[^a-z0-9-]', '-')),
+          'dns-alias', '--state', 'up', '--zone', gcp_domain, '--name', ansible_operator_meta.name,
           '--wait-seconds', '6600'] }}
 
 - name: Derive the build's paths and the project entry
