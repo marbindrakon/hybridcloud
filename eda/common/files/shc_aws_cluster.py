@@ -387,7 +387,9 @@ class Cluster:
         try:
             r = self.iam.get_role(RoleName=name)["Role"]
             if r["Path"] != self.path:
-                fail("role exists outside this cluster's path", role=name, path=r["Path"])
+                fail("An IAM role %s already exists in the account outside this cluster's path and was not made by the "
+                     "platform for this cluster; it was left untouched." % name, role=name, path=r["Path"],
+                     reason="NameTakenOnSite")
             if not same(r["AssumeRolePolicyDocument"], trust):
                 self.iam.update_assume_role_policy(RoleName=name, PolicyDocument=json.dumps(trust))
                 self.changed.append("trust " + name)

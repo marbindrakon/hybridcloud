@@ -357,7 +357,12 @@ class Edge:
             {"Effect": "Allow", "Action": "kms:Decrypt", "Resource": "*",
              "Condition": {"StringEquals": {"kms:ViaService": "ssm.%s.amazonaws.com" % c["region"]}}}]}
         try:
-            self.iam.get_role(RoleName=self.prefix)
+            role = self.iam.get_role(RoleName=self.prefix)["Role"]
+            # a role of this name the platform did not make for this site (its tag and description are the mark)
+            # is refused: its policy is never overwritten
+            if tagmap(role).get("shc-managed") != "true" or role.get("Description") != "SHC edge router " + self.site:
+                fail("An IAM role %s already exists in the account and was not made by the platform for this gateway; "
+                     "it was left untouched." % self.prefix, reason="NameTakenOnSite")
         except self.iam.exceptions.NoSuchEntityException:
             self.changed.append("iam role " + self.prefix)
             self.iam.create_role(RoleName=self.prefix, Tags=tags(self.prefix), Description="SHC edge router " + self.site,

@@ -576,5 +576,200 @@ class AwsPlacementObjects(unittest.TestCase):
         self.assertEqual(A.tagmap(list(self.ec2.vpcs.values())[0])["Name"], "acme_p1")
 
 
+# ---- refuse, do not adopt: a cluster's and a gateway's identities ---------------------------------------------------
+
+import shc_gcp_cluster as GC  # noqa: E402
+import shc_gcp_edge as GE  # noqa: E402
+
+BUILD = "shc-gcp-acme-web-41df0c0d"
+
+
+class FakeIam:
+    """Service accounts, custom roles and a pool of one project, as the IAM REST API returns them."""
+
+    def __init__(self, sas=None, roles=None, pool=None):
+        self.sas, self.roles, self.pool, self.calls = dict(sas or {}), dict(roles or {}), pool, []
+
+    def http(self, method, url, body=None, token=None, ok404=False, **_):
+        self.calls.append((method, url.split("/v1/", 1)[-1]))
+        if "/serviceAccounts/" in url and method == "GET":
+            return self.sas.get(url.rsplit("/", 1)[-1].split("@")[0])
+        if url.endswith("/serviceAccounts") and method == "POST":
+            self.sas[body["accountId"]] = dict(body["serviceAccount"])
+            return {}
+        if "/roles/" in url and method == "GET":
+            return self.roles.get(url.rsplit("/", 1)[-1])
+        if url.endswith("/roles") and method == "POST":
+            self.roles[body["roleId"]] = dict(body["role"], name="projects/p/roles/" + body["roleId"])
+            return {}
+        if "workloadIdentityPools/" in url and method == "GET" and "/providers/" not in url:
+            return self.pool
+        raise AssertionError((method, url))
+
+
+def cluster(fake):
+    c = GC.Cluster.__new__(GC.Cluster)
+    c.cluster, c.project, c.tok, c.changed = BUILD, "p", "tok", []
+    c.pool_id = GC.pool_id(BUILD)
+    c.pool = "https://iam.googleapis.com/v1/projects/p/locations/global/workloadIdentityPools/" + c.pool_id
+    c.provider = c.pool + "/providers/oidc"
+    return c
+
+
+def refusal(fn):
+    buf = io.StringIO()
+    with contextlib.redirect_stdout(buf):
+        try:
+            fn()
+        except SystemExit:
+            return json.loads(buf.getvalue().splitlines()[-1])
+    return None
+
+
+class GcpClusterOwnership(unittest.TestCase):
+    """exists ours / exists unmarked / exists another cluster's / absent, for each identity a cluster gets."""
+    REF = {"namespace": "openshift-ingress-operator", "name": "cloud-credentials"}
+
+    def sa_case(self, existing):
+        aid = GC.sa_account_id(BUILD, self.REF["namespace"], self.REF["name"])
+        f = FakeIam(sas={aid: existing} if existing is not None else {})
+        with mock.patch.object(GC.g, "http", f.http), mock.patch.object(GC.time, "sleep", lambda s: None):
+            return refusal(lambda: cluster(f).ensure_sa(aid, self.REF)), f, aid
+
+    def test_service_account(self):
+        r, f, aid = self.sa_case(None)                                                   # absent: made, marked
+        self.assertIsNone(r)
+        self.assertEqual(f.sas[aid]["description"], "shc-cluster=" + BUILD)
+        r, f, _ = self.sa_case({"description": "shc-cluster=" + BUILD})                  # ours: used
+        self.assertIsNone(r)
+        self.assertNotIn("POST", [m for m, _ in f.calls])
+        for other in ({"email": aid}, {"description": "made by hand"},
+                      {"description": "shc-cluster=shc-gcp-acme-api-1234abcd"}):
+            r, f, _ = self.sa_case(other)                                                # unmarked / another's
+            self.assertEqual(r["reason"], "NameTakenOnSite", other)
+            self.assertNotIn("POST", [m for m, _ in f.calls])
+            self.assertNotIn("acme-api", r["error"])
+
+    def role_case(self, existing):
+        rid = GC.role_id(BUILD, self.REF["namespace"], self.REF["name"])
+        f = FakeIam(roles={rid: existing} if existing is not None else {})
+        with mock.patch.object(GC.g, "http", f.http):
+            return refusal(lambda: cluster(f).custom_role_up(rid, ["compute.x.get"], BUILD + " a/b")), f
+
+    def test_custom_role(self):
+        rid = GC.role_id(BUILD, self.REF["namespace"], self.REF["name"])
+        self.assertIsNone(self.role_case(None)[0])
+        self.assertIsNone(self.role_case({"name": "projects/p/roles/" + rid, "title": BUILD + " a/b",
+                                          "includedPermissions": ["compute.x.get"]})[0])
+        for other in ({"name": "projects/p/roles/" + rid, "title": "by hand"},
+                      {"name": "projects/p/roles/" + rid, "title": "by hand", "deleted": True},
+                      {"name": "projects/p/roles/" + rid, "title": BUILD + "-other a/b"}):
+            r, f = self.role_case(other)
+            self.assertEqual(r["reason"], "NameTakenOnSite", other)
+            self.assertEqual([m for m, _ in f.calls], ["GET"])                           # not undeleted, not patched
+
+    def test_pool(self):
+        for pool, refused in ((None, False), ({"state": "ACTIVE", "description": GC.pool_description(BUILD)}, False),
+                              ({"state": "ACTIVE", "description": "by hand"}, True),
+                              ({"state": "DELETED", "description": "OpenShift cluster other (SHC)"}, True)):
+            f = FakeIam(pool=pool)
+            with mock.patch.object(GC.g, "http", f.http):
+                c = cluster(f)
+                if not refused:
+                    continue                                    # the create path waits on Google: covered live
+                r = refusal(lambda: c.pool_up("https://issuer.example.com/" + BUILD))
+            self.assertEqual(r["reason"], "NameTakenOnSite", pool)
+            self.assertEqual([m for m, _ in f.calls], ["GET"])
+
+
+class GcpEdgeAccount(unittest.TestCase):
+    def case(self, existing):
+        e = GE.Edge.__new__(GE.Edge)
+        e.project, e.site, e.prefix, e.tok, e.changed = "hub", "gcp-a", "shc-edge-gcp-a", "tok", []
+        e.sa_email = "shc-edge-gcp-a@hub.iam.gserviceaccount.com"
+        f = FakeIam(sas={"shc-edge-gcp-a": existing} if existing is not None else {})
+        with mock.patch.object(GE.g, "http", f.http), mock.patch.object(GE.time, "sleep", lambda s: None):
+            return refusal(e.ensure_sa), f
+
+    def test_states(self):
+        r, f = self.case(None)
+        self.assertIsNone(r)
+        self.assertEqual(f.sas["shc-edge-gcp-a"]["displayName"], "SHC edge router gcp-a")
+        self.assertIsNone(self.case({"displayName": "SHC edge router gcp-a"})[0])
+        for other in ({"email": "shc-edge-gcp-a@hub"}, {"displayName": "SHC edge router gcp-b"}):
+            r, f = self.case(other)
+            self.assertEqual(r["reason"], "NameTakenOnSite")
+            self.assertNotIn("POST", [m for m, _ in f.calls])
+
+
+@unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
+class AwsRoleOwnership(unittest.TestCase):
+    """The gateway's IAM role and a cluster's operator roles: ours / unmarked / another's / absent."""
+
+    class Iam:
+        class exceptions:
+            NoSuchEntityException = type("NoSuchEntity", (Exception,), {})
+
+        def __init__(self, role):
+            self.role, self.calls = role, []
+
+        def get_role(self, RoleName):
+            if self.role is None:
+                raise self.exceptions.NoSuchEntityException(RoleName)
+            return {"Role": dict(self.role, RoleName=RoleName)}
+
+        def __getattr__(self, name):
+            def call(**kw):
+                self.calls.append(name)
+                if name == "get_instance_profile":
+                    return {"InstanceProfile": {"Roles": [{"RoleName": "shc-edge-aws-a"}]}}
+                if name == "create_role":
+                    return {"Role": {"Arn": "arn"}}
+                return {}
+            return call
+
+    def test_gateway_role(self):
+        import shc_aws_edge as AE
+        ours = {"Description": "SHC edge router aws-a", "Tags": [{"Key": "shc-managed", "Value": "true"}]}
+        for role, refused in ((None, False), (ours, False), ({"Description": "by hand", "Tags": []}, True),
+                              ({"Description": "SHC edge router aws-b", "Tags": ours["Tags"]}, True)):
+            e = AE.Edge.__new__(AE.Edge)
+            e.site, e.prefix, e.changed, e.iam = "aws-a", "shc-edge-aws-a", [], self.Iam(role)
+            e.param, e.cfg = "/shc/edge/aws-a/config", {"account": "111111111111", "region": "r"}
+            # only the role step of up(): run it through a slice that stops before the instance profile
+            r = refusal(lambda: self.role_step(e))
+            if refused:
+                self.assertEqual(r["reason"], "NameTakenOnSite", role)
+                self.assertNotIn("put_role_policy", e.iam.calls)
+            else:
+                self.assertIsNone(r, role)
+                self.assertIn("put_role_policy", e.iam.calls)
+
+    @staticmethod
+    def role_step(e):
+        """The role part of Edge.up as it is written (read from the source, run on its own)."""
+        import inspect
+        import textwrap
+        import shc_aws_edge as AE
+        src = inspect.getsource(AE.Edge.up)
+        start = src.index("        # the routers' role")
+        end = src.index("        # the routers' config")
+        body = textwrap.dedent(src[start:end])
+        exec(compile(body, "role_step", "exec"), dict(vars(AE), self=e, c=e.cfg, json=json))
+
+    def test_cluster_role_outside_its_path(self):
+        A2 = __import__("shc_aws_cluster")
+        c = A2.Cluster.__new__(A2.Cluster)
+        c.cluster, c.path, c.issuer, c.changed = "shc-aws-acme-web-41df0c0d", "/shc/shc-aws-acme-web-41df0c0d/", \
+            "https://issuer.example.com/x", []
+        c.provider_arn, c.account = "arn:aws:iam::1:oidc-provider/issuer.example.com/x", "1"
+        cr = {"metadata": {"name": "x"}, "spec": {"secretRef": {"namespace": "ns", "name": "n"},
+                                                  "serviceAccountNames": ["sa"], "providerSpec": {}}}
+        c.iam = self.Iam({"Path": "/elsewhere/", "AssumeRolePolicyDocument": {}})
+        r = refusal(lambda: c.role_up(cr))
+        self.assertEqual(r["reason"], "NameTakenOnSite")
+        self.assertEqual(c.iam.calls, [])
+
+
 if __name__ == "__main__":
     unittest.main()
