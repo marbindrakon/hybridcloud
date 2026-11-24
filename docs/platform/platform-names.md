@@ -178,5 +178,11 @@ as before (the organizations' `status.orgName`, an environment's `status.project
 `status.realization.site.networkId` and `routerId`, a VM environment's `status.namespaces[]`, a zone's id). Where an
 older object's status lacks the id the job now needs, the job looks for the object by the exact old form of its name
 inside a scope only the platform writes (the platform's own project; the site's namespaces with the environment's
-guarded labels), takes it, records it, and never makes a second one. Label and annotation keys of the platform are under `hybridsovereign.redhat/`; objects made with the
-earlier keys of the same word under another domain are still found by a teardown, which looks for both keys.
+guarded labels), takes it, records it, and never makes a second one. Label and annotation keys of the platform are
+under `hybridsovereign.redhat/`; objects made with the earlier keys of the same word under another domain are still
+found by a teardown, which looks for both keys.
+
+The short name an earlier release wrote in `status.slug` is no longer written or read. An OpenStack environment's
+next run removes it; on a cluster and on an AWS or Google Cloud environment it stays in status as it was, with no
+effect: no job reads it, and no page shows it except the JSON view of the object on the admin pages (tenant pages
+never receive it).

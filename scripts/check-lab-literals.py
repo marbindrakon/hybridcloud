@@ -63,8 +63,23 @@ EARLIER_KEYS = re.compile(r"\bshc\.signal9\.gg/(?:oidc-static|oidc-name|oidc-fet
                           r"cloud-identity|spiffe-id)(?![A-Za-z0-9_-])")
 
 
-def checked(line):
-    """The line as the patterns see it: the earlier release's keys removed."""
+# Exact lines (file, line without its indentation) that name a retired annotation under the lab's domain in order to
+# remove it from objects an earlier release annotated: the key is gone from the product, the removal must still
+# find it. Nothing else in those files, and these lines in no other file, are allowed.
+RETIRED_REMOVALS = {
+    ("eda/rulebooks/roles/hybridnetwork_provision/tasks/main.yml",
+     "shc.signal9.gg/platform-reach: null"):
+        "removes the retired platform-reach annotation an earlier release wrote on HybridNetworks",
+    ("eda/rulebooks/roles/hybridnetwork_provision/tasks/main.yml",
+     "when: \"'shc.signal9.gg/platform-reach' in (fab_obj.metadata.annotations | default({}, true))\""):
+        "the same removal, only when the annotation is there",
+}
+
+
+def checked(line, rel=""):
+    """The line as the patterns see it: the earlier release's keys removed; an allowed retired removal is empty."""
+    if (rel, line.strip()) in RETIRED_REMOVALS:
+        return ""
     return EARLIER_KEYS.sub("", line)
 
 
@@ -79,6 +94,16 @@ if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
         if got != lab:
             print(f"self-test: {line!r}: lab literal {got}, want {lab}")
             sys.exit(1)
+    removal = "eda/rulebooks/roles/hybridnetwork_provision/tasks/main.yml"
+    for rel, line, lab in [(removal, "              shc.signal9.gg/platform-reach: null", False),
+                           ("eda/rulebooks/roles/cloudvirt_provision/tasks/main.yml",
+                            "shc.signal9.gg/platform-reach: null", True),
+                           (removal, "shc.signal9.gg/platform-reach: 'yes'", True),
+                           (removal, "host: api.central.shc.signal9.gg", True)]:
+        got = bool(PATTERNS["lab domain"].search(checked(line, rel)))
+        if got != lab:
+            print(f"self-test: {rel}: {line!r}: lab literal {got}, want {lab}")
+            sys.exit(1)
     print("self-test: ok")
     sys.exit(0)
 
@@ -86,8 +111,9 @@ root = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().paren
 hits = 0
 for pattern in SCOPE:
     for path in sorted(root.glob(pattern)):
+        rel = path.relative_to(root).as_posix()
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
-            line = checked(line)
+            line = checked(line, rel)
             for what, rx in PATTERNS.items():
                 if rx.search(line):
                     print(f"{path.relative_to(root)}:{lineno}: {what}: {line.strip()}")
