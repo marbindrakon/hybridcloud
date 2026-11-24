@@ -14,4 +14,12 @@ plugin_rbac_automation_clients:
   - purpose: clients
     suffix: "-clients"
     roles: [manage-clients, view-clients, query-clients, view-users]
+# Protocol mapper types the clients automation client may add to, change on or remove from a client. The sign-in
+# directory lets an account that manages clients but not the realm touch only the mapper types its realm lists
+# (realm attribute allowedProtocolMapperTypesForClientAdministrators; without it such an account is refused every
+# mapper). The platform's jobs use exactly these two: group membership for the tools' sign-in clients, client roles
+# for a cluster's and a site's sign-in client. Types an administrator listed there by hand are kept.
+plugin_rbac_automation_mapper_types:
+  - oidc-group-membership-mapper
+  - oidc-usermodel-client-role-mapper
 keycloak_automation_vault_prefix: keycloak-automation

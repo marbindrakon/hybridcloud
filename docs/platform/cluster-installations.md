@@ -174,6 +174,15 @@ cluster, or without a mark when the cluster's `status.oidcClientId` does not rec
 sign-in step (the cluster's console is not known yet) leaves the recorded client as it is. The delete removes the recorded client only (when it carries the cluster's mark or none); a
 cluster that recorded no client deletes nothing in the sign-in directory and says so.
 
+**What the sign-in directory must allow.** The jobs manage a cluster's sign-in client with the realm's own account
+for clients, which may manage clients but not the realm. The directory lets such an account add or change only the
+protocol mapper types its realm lists (realm attribute `allowedProtocolMapperTypesForClientAdministrators`; with
+none listed every mapper is refused). The job of the directory's connection (`RbacConfig`) lists the two types
+the platform uses and keeps any an administrator added: group membership, for the tools' sign-in clients, and
+client roles, for a cluster's and a site's sign-in client. After an upgrade of the directory that brings this
+rule, run that connection's job once (Retry now on the `RbacConfig`) before a cluster or a secrets store is made;
+until then their sign-in step stops with the directory's refusal.
+
 ## The names the platform gives a cluster
 
 - **Build name** (`status.buildName`, the cluster's identity on the hub): `shc-<oso|aws|gcp>-<cluster>-<tenant>-<8

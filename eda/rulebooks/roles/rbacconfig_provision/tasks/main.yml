@@ -96,6 +96,45 @@
         validate_certs: false
         status_code: [201, 409]
 
+    # The mapper types the clients automation client may manage (role defaults say why). Read after the realm
+    # exists; the realm's other attributes are sent back as they are, since the directory drops attributes a
+    # realm update does not name.
+    - name: Read the realm's attributes
+      ansible.builtin.uri:
+        url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}"
+        method: GET
+        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
+        validate_certs: false
+        status_code: [200]
+      register: _rbac_realm
+      retries: 5
+      delay: 3
+      until: _rbac_realm.status == 200
+
+    - name: Work out the mapper types the clients automation client may manage
+      vars:
+        _attrs: "{{ _rbac_realm.json.attributes | default({}, true) }}"
+        _key: allowedProtocolMapperTypesForClientAdministrators
+        _have: "{{ (_attrs[_key] | default('', true)).split(',') | map('trim') | reject('equalto', '') | list }}"
+        # in the order given (reject keeps it; difference and unique do not promise an order)
+        _missing: "{{ plugin_rbac_automation_mapper_types | default([], true) | reject('in', _have) | list }}"
+      ansible.builtin.set_fact:
+        rbac_mapper_types_missing: "{{ _missing }}"
+        rbac_realm_attributes: "{{ _attrs | combine({_key: (_have + _missing) | join(',')}) }}"
+
+    - name: Let the clients automation client manage the platform's mapper types
+      ansible.builtin.uri:
+        url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}"
+        method: PUT
+        headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token, 'Content-Type': 'application/json'} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
+        body_format: json
+        body:
+          realm: "{{ plugin_rbac_keycloak_realm }}"
+          attributes: "{{ rbac_realm_attributes }}"
+        validate_certs: false
+        status_code: [204]
+      when: rbac_mapper_types_missing | length > 0
+
     # Realm automation: the membership client (this RbacConfig's name; users, groups, group role mappings) and the
     # clients client (<name>-clients; clients, client roles, mappers), each a service account with exactly its
     # realm-management roles (role defaults). Their credentials go to central Vault for the jobs that manage the

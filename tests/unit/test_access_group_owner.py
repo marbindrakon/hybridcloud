@@ -158,6 +158,55 @@ class AutomationClient(unittest.TestCase):
         self.assertEqual(got, ["example-identity", "example-identity-clients", "", ""])
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class MapperTypes(unittest.TestCase):
+    """The realm lists the mapper types the clients automation client may manage: the platform's two are added, what
+    an administrator listed is kept, the realm's other attributes are sent back as they are, and a realm that
+    already lists them is not written."""
+    MAIN = os.path.join(ROLES, "rbacconfig_provision", "tasks", "main.yml")
+    KEY = "allowedProtocolMapperTypesForClientAdministrators"
+    OURS = ["oidc-group-membership-mapper", "oidc-usermodel-client-role-mapper"]
+
+    def test_every_state(self):
+        tasks = load(self.MAIN)
+        step = dict(by_name(tasks, "Work out the mapper types the clients automation client may manage"))
+        step["vars"] = dict(step["vars"], _rbac_realm="{{ {'json': case} }}", plugin_rbac_automation_mapper_types=self.OURS)
+        cases = [{},
+                 {"attributes": {}},
+                 {"attributes": {"frontendUrl": "https://sso.example.com"}},
+                 {"attributes": {self.KEY: " oidc-audience-mapper , ", "x": "y"}},
+                 {"attributes": {self.KEY: "oidc-usermodel-client-role-mapper,oidc-group-membership-mapper"}},
+                 {"attributes": {self.KEY: "oidc-group-membership-mapper"}}]
+        got = run_cases([step], cases, "{'missing': rbac_mapper_types_missing, 'attrs': rbac_realm_attributes}")
+        both = ",".join(self.OURS)
+        self.assertEqual(got[0], {"missing": self.OURS, "attrs": {self.KEY: both}})
+        self.assertEqual(got[1], {"missing": self.OURS, "attrs": {self.KEY: both}})
+        self.assertEqual(got[2]["attrs"], {"frontendUrl": "https://sso.example.com", self.KEY: both})
+        self.assertEqual(got[3], {"missing": self.OURS, "attrs": {self.KEY: "oidc-audience-mapper," + both, "x": "y"}})
+        self.assertEqual(got[4]["missing"], [])
+        self.assertEqual(got[5]["missing"], ["oidc-usermodel-client-role-mapper"])
+        self.assertEqual(got[5]["attrs"][self.KEY], both)
+        # what is listed keeps its place; what is added follows in the order of the setting
+        self.assertEqual(got[4]["attrs"][self.KEY], "oidc-usermodel-client-role-mapper,oidc-group-membership-mapper")
+
+    def test_written_only_when_a_type_is_missing_and_with_all_attributes(self):
+        tasks = load(self.MAIN)
+        put = by_name(tasks, "Let the clients automation client manage the platform's mapper types")
+        self.assertEqual(put["when"], "rbac_mapper_types_missing | length > 0")
+        self.assertEqual(put["ansible.builtin.uri"]["body"]["attributes"], "{{ rbac_realm_attributes }}")
+        names = [t.get("name") for t in walk(tasks)]
+        self.assertLess(names.index("Let the clients automation client manage the platform's mapper types"),
+                        names.index("Maintain the realm automation clients"))
+
+    def test_the_two_types_are_the_ones_the_jobs_use(self):
+        defaults = load(os.path.join(ROLES, "rbacconfig_provision", "defaults", "main.yml"))
+        self.assertEqual(defaults["plugin_rbac_automation_mapper_types"], self.OURS)
+        mapper = load(os.path.join(ROOT, "eda", "common", "vars", "keycloak_group_mapper.yml"))
+        self.assertIn(mapper["keycloak_group_mapper"]["protocolMapper"], self.OURS)
+        with open(os.path.join(ROLES, "platformopenshift_provision", "files", "cluster_signin.py")) as f:
+            self.assertIn('MAPPER_TYPE = "oidc-usermodel-client-role-mapper"', f.read())
+
+
 class NamesBeforeAnything(unittest.TestCase):
     """Each job of the access kinds checks the names it uses before its first change."""
     FIRST_CHANGE = {"entity_provision": "Create entity namespace with labels",
