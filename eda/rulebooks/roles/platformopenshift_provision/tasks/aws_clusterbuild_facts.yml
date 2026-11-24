@@ -1,5 +1,5 @@
 ---
-# shc (design/P8-PLAN.md §12): the build name shc-aws-<entity>-<name>-<digest> (build_name.yml) is the cluster's
+# shc (design/P8-PLAN.md §12): the build name shc-aws-<name>-<entity>-<digest> (build_name.yml) is the cluster's
 # identity on the platform: Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, IAM role path and Vault prefix. Hive's
 # install and uninstall pods in that namespace are the ones the platform's Hive role trusts (namespaces shc-aws-*).
 # The OpenShift cluster itself is <name>.<environment's domain>.
@@ -74,16 +74,6 @@
     fail_msg: >-
       Set clusterIssuer.baseURL (an https address) and clusterIssuer.namespace in the AWS realization (AWS_REALIZATION): the
       installation setting is missing.
-
-- name: Refuse a build name that can't serve as namespace, issuer path and IAM path
-  ansible.builtin.assert:
-    that:
-      - cb_app_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
-      - cb_app_name | length <= 40
-      - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
-    fail_msg: >-
-      The cluster's build name {{ cb_app_name }} must be at most 40 characters of a-z, 0-9 and hyphens, and the
-      cluster's name a DNS label; create the cluster with a shorter name.
 
 - name: Fail without a cluster-build chart
   ansible.builtin.assert:

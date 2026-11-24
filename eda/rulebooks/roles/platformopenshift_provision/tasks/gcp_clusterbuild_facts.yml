@@ -1,5 +1,5 @@
 ---
-# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<entity>-<name>-<digest> (build_name.yml) is the
+# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<name>-<entity>-<digest> (build_name.yml) is the
 # cluster's identity on the platform: Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, workload identity pool and Vault
 # prefix. Hive's install and uninstall pods in that namespace are the ones the hub's shc-central pool trusts
 # (namespaces shc-gcp-*). The OpenShift cluster itself is <name>.<environment's domain>.
@@ -86,16 +86,6 @@
     fail_msg: >-
       Set clusterIssuer.baseURL (an https address) and clusterIssuer.namespace in the Google Cloud realization (GCP_REALIZATION): the
       installation setting is missing.
-
-- name: Refuse a build name that can't serve as namespace, issuer path and pool id
-  ansible.builtin.assert:
-    that:
-      - cb_app_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
-      - cb_app_name | length <= 40
-      - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
-    fail_msg: >-
-      The cluster's build name {{ cb_app_name }} must be at most 40 characters of a-z, 0-9 and hyphens, and the
-      cluster's name a DNS label; create the cluster with a shorter name.
 
 - name: Fail without a cluster-build chart
   ansible.builtin.assert:
