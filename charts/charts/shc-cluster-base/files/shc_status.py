@@ -215,7 +215,8 @@ def apply_delivery(cur_status, body, action, event_id, job, partial, now):
         else:
             body["delivery"] = {"completedEventId": event_id, "completedAt": now}
     if not partial and job is not None:
-        entry = dict(job)
+        # name, jobId, status and timestamp only: no address of the automation platform in status
+        entry = {k: v for k, v in dict(job).items() if k in ("name", "jobId", "timestamp")}
         entry.setdefault("timestamp", now)
         entry["status"] = _JOB_STATUS.get(action, "running")
         body["edaJobs"] = [entry]

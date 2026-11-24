@@ -10,4 +10,3 @@ assignment_acm_policy_name: ""
 acm_policy_name_max_length: ""
 assignment_provisioned: false
 
-eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"

@@ -1,3 +1,2 @@
 ---
-
-eda_dashboard_host: "https://sovereign-aap-aap.apps.central.shc.signal9.gg"
+# No defaults: this role takes every value from the job.
