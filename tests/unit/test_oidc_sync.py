@@ -43,6 +43,8 @@ FAKE_OC = textwrap.dedent(r'''
         out(json.dumps(st["cm"]))
     if a[:2] == ["get", "configmap"] and "-l" in a:
         key = a[a.index("-l") + 1].split("=", 1)[0]
+        if key in st.get("list_fails", []):
+            sys.exit(1)
         out(json.dumps({"items": [c for c in st.get("static", []) if c["metadata"]["labels"].get(key) == "true"]}))
     if a[:2] == ["get", "secret"]:
         ns = a[a.index("-n") + 1]
@@ -193,6 +195,22 @@ class OidcSync(unittest.TestCase):
         for n in ("aws-new", "aws-old", "aws-both"):
             self.assertEqual(json.loads(applied["data"][n + "__keys.json"])["keys"][0]["kid"], n)
         self.assertIsNone(term)
+
+    def test_a_failed_static_list_changes_nothing(self):
+        """Either static list failing: nothing is applied (no issuer of that list dropped), the run fails and says so."""
+        self.state["static"] = [
+            self.static_cm("aws-new", {"static": "true", "static-name": "aws-new"}),
+            self.static_cm("aws-old", {"old-static": "true", "old-static-name": "aws-old"})]
+        for failing in ("static", "old-static"):
+            with self.subTest(failing=failing):
+                self.state["list_fails"] = [failing]
+                if os.path.exists(os.path.join(self.d, "applied.json")):
+                    os.remove(os.path.join(self.d, "applied.json"))
+                p, applied, term = self.run_sync(**self.PREVIOUS)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIsNone(applied)
+                self.assertIn("static issuers: list failed", term)
+                self.assertIn("oidc-documents: not changed", term)
 
     def test_without_the_previous_keys_only_the_new_ones_count(self):
         self.state["static"] = [self.static_cm("aws-old", {"old-static": "true", "old-static-name": "aws-old"})]

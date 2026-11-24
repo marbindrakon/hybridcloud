@@ -181,6 +181,42 @@
     - _mark | length > 0
     - _mark != ocp_oidc_mark
 
+# A client of the name without a mark was made by the release before for this cluster: its status records the client
+# (status.oidcClientId), or the build the client is named after was recorded before this run (status.buildName). An
+# unmarked client that neither proves is not taken.
+- name: Refuse an unmarked sign-in client this cluster did not record
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: the sign-in directory already holds a
+      client {{ ocp_oidc_client_id }} that this cluster did not record; nothing was changed. The platform team must
+      check it.
+  vars:
+    _mark: "{{ ((_kc_client_info.json[0].attributes | default({}, true)).platformopenshift | default('', true)) }}"
+    _st: >-
+      {{ ((platformopenshift_cr | default({}, true)).resources | default([{}], true) | first | default({}, true)).status
+         | default({}, true) }}
+  when:
+    - not (skip_oidc_setup | bool)
+    - _kc_client_info.json | length > 0
+    - _mark | length == 0
+    - (_st.oidcClientId | default('', true)) != ocp_oidc_client_id
+    - (_st.buildName | default('', true)) != cluster_name
+
+# The client is recorded as soon as it exists (the teardown deletes the recorded client only)
+- name: Record the cluster's sign-in client
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ cluster_cr_name | default(cluster_name, true) }}"
+    cr_namespace: "{{ cluster_namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      oidcClientId: "{{ ocp_oidc_client_id }}"
+  when:
+    - not (skip_oidc_setup | bool)
+    - _kc_client_info.json | length > 0
+
 # The client is converged in place: the exact callback (a client made before it, or for another domain), no password
 # or implicit grant (the cluster's OAuth server uses the code flow only), and the cluster's mark; other fields are kept.
 - name: Converge an existing OIDC client
@@ -329,8 +365,9 @@
                       metadata:
                         name: cluster
                       spec:
-                        tokenConfig:
-                          accessTokenMaxAgeSeconds: "{{ ocp_oauth_token_max_age | int }}"
+                        # one expression, so that the number stays a number on the automation's ansible-core 2.16
+                        # (a nested "{{ x | int }}" comes out as a string there, and the field is an integer)
+                        tokenConfig: "{{ {'accessTokenMaxAgeSeconds': ocp_oauth_token_max_age | int} }}"
                         identityProviders:
                           - name: "{{ platformopenshift_oidc_idp_name }}"
                             mappingMethod: claim

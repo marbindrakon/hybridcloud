@@ -26,6 +26,7 @@ class Keycloak(fake_keycloak.Keycloak):
         self.realm_default = []  # names of the realm's default client scopes (linked to a client when it is made)
         self.realm_optional = []
         self.secrets = {}        # client uuid -> secret
+        self.composites = {}     # realm role -> [(client id, client role)] it holds (made by a realm administrator)
 
     def add_client(self, client_id, mappers=None, default_scopes=(), optional_scopes=(), **fields):
         cid = super().add_client(client_id)
@@ -58,6 +59,8 @@ class Keycloak(fake_keycloak.Keycloak):
                 g = self.groups.get("/".join(parts[:i]))
                 if g:
                     out.update(g["mappings"].get(client["id"], []))
+        for realm_role in self.users[user]["realmRoles"]:     # a realm role that is a composite of client roles
+            out.update(r for cid, r in self.composites.get(realm_role, []) if cid == client_id)
         return {r for r in out if r in client["roles"]}
 
     def _mapped(self, user, mapper):

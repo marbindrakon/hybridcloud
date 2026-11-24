@@ -2,8 +2,10 @@
 # The public subnets, route table and internet gateway of an AWS placement are the placement's, made for its External
 # clusters (place-public up); two clusters on one network share them. They go with the last External cluster of the
 # placement: a delete leaves them while another cluster object of the namespace records the same placement as
-# External (being deleted or not: the last delete removes them). Inputs: po_placement, platformopenshift_cr_name,
-# platformopenshift_cr_namespace, po_aws_account, po_aws_region.
+# External (being deleted or not: the last delete removes them). They are removed from the VPC the placement's status
+# records (status.realization.site.vpc), never from one found by its tag (a tag anyone in the account can write): a
+# placement that records no VPC stops the step and nothing is deleted; a placement that is gone took its VPC with it.
+# Inputs: po_placement, platformopenshift_cr_name, platformopenshift_cr_namespace, po_aws_account, po_aws_region.
 - name: The clusters of the namespace
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -31,6 +33,46 @@
       {{ 'uses' if _psd_others | length == 1 else 'use' }} them; the last External cluster's delete removes them.
   when: _psd_others | length > 0
 
+- name: The placement
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: NetworkPlacement
+    namespace: "{{ po_placement.split('/', 1)[0] }}"
+    name: "{{ po_placement.split('/', 1)[1] | default('', true) }}"
+  register: _psd_placement
+  when: _psd_others | length == 0
+
+- name: The VPC the placement records
+  vars:
+    _p: "{{ _psd_placement.resources | default([], true) }}"
+  ansible.builtin.set_fact:
+    _psd_found: "{{ _p | length > 0 }}"
+    _psd_vpc: >-
+      {{ ((((_p | first | default({})).status | default({}, true)).realization | default({}, true)).site
+          | default({}, true)).vpc | default('', true) | trim }}
+  when: _psd_others | length == 0
+
+- name: Say that the placement is gone
+  ansible.builtin.debug:
+    msg: >-
+      Placement {{ po_placement }} no longer exists; its VPC went with it, so there are no public subnets to remove.
+  when:
+    - _psd_others | length == 0
+    - not (_psd_found | bool)
+
+- name: Stop when the placement records no VPC
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('deletion', true)) }}"
+  vars:
+    shc_step: "Remove the cluster's public subnets on AWS"
+  when:
+    - _psd_others | length == 0
+    - _psd_found | bool
+    - _psd_vpc | length == 0
+
 - name: The placement's public subnets go
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
   vars:
@@ -42,5 +84,8 @@
       memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
       entry: automation
       azs: []
-    aws_args: [place-public, --placement, "{{ po_placement }}", --state, down]
-  when: _psd_others | length == 0
+    aws_args: [place-public, --placement, "{{ po_placement }}", --state, down, --vpc-id, "{{ _psd_vpc }}"]
+  when:
+    - _psd_others | length == 0
+    - _psd_found | bool
+    - _psd_vpc | length > 0

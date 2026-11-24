@@ -189,8 +189,8 @@ fabric_realization_defaults:
       editRole: edit
       viewRole: view
   # a tenant's OpenShift cluster: how long its OAuth access tokens live, in seconds (OpenShift's default, 86400, is one
-  # day). Groups come from the sign-in directory at each sign-in, so a person taken out of an access group keeps the
-  # cluster's group until their token ends.
+  # day). Groups come from the sign-in directory at each sign-in and nothing on the cluster is bound to a person, so a
+  # person taken out of an access group keeps the cluster's group until their token ends, and nothing after it.
   tenantCluster:
     oauthAccessTokenMaxAgeSeconds: 86400
   # address management of the HybridNetworks (files/shc_ipam.py): where each network's space and its placements'

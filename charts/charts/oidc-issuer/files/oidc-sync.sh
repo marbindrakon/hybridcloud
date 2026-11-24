@@ -103,10 +103,11 @@ done 3<<<"$CLUSTERS"
 # label STATIC_NAME_LABEL (else STATIC_NAME_LABEL_PREVIOUS), key
 # set in data keys.json (an issuer whose signing key exists before its cluster does, e.g. an AWS cluster in STS mode).
 # Names of the issuers above are not taken.
-static=""
+static=""; static_unread=0
 : > static.jsonl; rm -f static.raw
 for sel in "$STATIC_LABEL" ${STATIC_LABEL_PREVIOUS:+"$STATIC_LABEL_PREVIOUS"}; do
-  oc get configmap -n "$NAMESPACE" -l "$sel=true" -o json > list.json || { fault "static issuers: list failed"; continue; }
+  oc get configmap -n "$NAMESPACE" -l "$sel=true" -o json > list.json \
+    || { fault "static issuers: list failed"; static_unread=1; continue; }
   jq -c '.items[]' list.json >> static.raw || true
 done
 # one entry per ConfigMap (a ConfigMap with both keys is listed twice)
@@ -114,7 +115,7 @@ if [ -s static.raw ]; then
   jq -sc --arg l "$STATIC_NAME_LABEL" --arg p "${STATIC_NAME_LABEL_PREVIOUS:-}" \
     'unique_by(.metadata.name)[] | {n: (.metadata.labels[$l] // (if $p != "" then .metadata.labels[$p] else null end) // ""),
                                     k: (.data["keys.json"] // "")}' static.raw > static.jsonl \
-    || fault "static issuers: list failed"
+    || { fault "static issuers: list failed"; static_unread=1; }
 fi
 rm -f list.json static.raw
 while read -r -u 3 e; do
@@ -128,6 +129,11 @@ while read -r -u 3 e; do
   if jq -e '.keys | length > 0' "new/${n}__keys.json" >/dev/null 2>&1; then static="$static $n"
   else fault "$n: static key set invalid"; rm -f "new/${n}__keys.json" "new/${n}__openid-configuration"; fi
 done 3< static.jsonl
+
+# a static list that could not be read: nothing is applied (applying would drop that list's issuers)
+if [ "$static_unread" -ne 0 ]; then
+  note "oidc-documents: not changed, as the static issuers could not all be listed"; finish
+fi
 
 # assemble: fetched documents, else the last published ones; one line per issuer
 args=(); ann="{}"; published=""

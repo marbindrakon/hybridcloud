@@ -1,9 +1,10 @@
 ---
 # The cluster's two floating IPs (DESIGN cnet §4.2 step 4, §4.3), recorded in status.floatingIPs (address and id)
 # before anything else uses them. A cluster whose record holds both is the owner of those two (found by the recorded
-# ids; nothing is asked of the site and nothing is found by a description). Otherwise they are made with the site
-# account scoped to the environment's project on the chosen network and recorded at once (the teardown releases them
-# by the recorded ids). Their description says the cluster's name in words, for people: "OpenShift cluster <cluster>:
+# ids; nothing is asked of the site and nothing is found by a description). With nothing recorded both are made
+# (create_only: the site finds nothing by description) with the site account scoped to the environment's project on
+# the chosen network and recorded at once (the teardown releases them by the recorded ids); a record of only part of
+# the pair stops the job. Their description says the cluster's name in words, for people: "OpenShift cluster <cluster>:
 # API (platform build <build>)" and "...: ingress (...)"; it is never read back. Inputs:
 #   cf_project_id    the environment's project (CloudOSO status.projectId)
 #   cf_network_id    the network the floating IPs come from (placement status.realization.site.networkId, or the
@@ -26,6 +27,20 @@
       {{ (cf_recorded.api.id | default('', true) | length > 0) and (cf_recorded.api.address | default('', true) | length > 0)
          and (cf_recorded.ingress.id | default('', true) | length > 0)
          and (cf_recorded.ingress.address | default('', true) | length > 0) }}
+
+# A record that holds part of the pair (one floating IP, or an id without its address) is not completed by guessing:
+# nothing is made, and the platform team completes or clears status.floatingIPs.
+- name: Refuse a record of half the floating IPs
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: its status records only part of the cluster's floating IPs;
+      nothing was made. The platform team must complete or clear the record.
+  when:
+    - not (cf_have_record | bool)
+    - >-
+      (cf_recorded.api.id | default('', true) | length > 0) or (cf_recorded.api.address | default('', true) | length > 0)
+      or (cf_recorded.ingress.id | default('', true) | length > 0)
+      or (cf_recorded.ingress.address | default('', true) | length > 0)
 
 - name: Require the environment's project and the network
   ansible.builtin.assert:
@@ -59,6 +74,8 @@
           state: present
           project_id: "{{ cf_project_id }}"
           network_id: "{{ cf_network_id }}"
+          # nothing is recorded: both are made, none is found by its description (a description is for people)
+          create_only: true
           descriptions:
             api: "OpenShift cluster {{ ansible_operator_meta.name }}: API (platform build {{ cb_app_name }})"
             ingress: "OpenShift cluster {{ ansible_operator_meta.name }}: ingress (platform build {{ cb_app_name }})"

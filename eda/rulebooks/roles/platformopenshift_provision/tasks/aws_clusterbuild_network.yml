@@ -42,7 +42,7 @@
       {{ ((cb_placement.status.subnets | default([], true) | selectattr('family', 'defined')
            | selectattr('family', 'equalto', 4) | map(attribute='prefix') | list)
           + (cb_placement.status.prefixes | default([], true) | reject('search', ':') | list) + ['']) | first }}
-    cb_vpc_id: "{{ _site.vpc }}"
+    cb_vpc_id: "{{ _site.vpc | default('', true) | trim }}"
     cb_subnet_ids: "{{ _site.subnets | map(attribute='id') | list }}"
     cb_tenant_cfg:
       account: "{{ aws_account }}"
@@ -86,13 +86,22 @@
 - name: External - public subnets in the placement for the internet-facing load balancers
   when: aws_publish == 'External'
   block:
+    # the public subnets go into the VPC the placement's status records, never one found by its tag (a tag anyone in
+    # the account can write); a placement that records none: nothing is made
+    - name: Stop when the placement records no VPC
+      ansible.builtin.fail:
+        msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+      vars:
+        shc_step: "Prepare the cluster's public subnets on AWS"
+      when: cb_vpc_id | length == 0
+
     - name: The placement's public subnets
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
       vars:
         shc_step: "Prepare the cluster's public subnets on AWS"
         aws_helper: shc_aws_tenant.py
         aws_config: "{{ cb_tenant_cfg }}"
-        aws_args: [place-public, --placement, "{{ cb_placement_ref }}", --state, up]
+        aws_args: [place-public, --placement, "{{ cb_placement_ref }}", --state, up, --vpc-id, "{{ cb_vpc_id }}"]
 
     - name: The public subnets
       ansible.builtin.set_fact:
