@@ -38,6 +38,23 @@
         msg: Entity CR {{ entity_cr_name }} not found in {{ entity_cr_namespace }}
       when: entity_cr_lookup.resources | length == 0
 
+    # the rule for names, for an object made before the API carried it: refused before anything is made
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items: [{value: "{{ entity_cr_name }}", what: tenant}]
+
+    - name: Refuse a name the rule does not allow
+      when: name_check_message | length > 0
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            entity_failure_reason: NameNotAllowed
+
+        - name: Stop before anything is made
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Set derived facts from CR spec
       ansible.builtin.set_fact:
         entity_namespace: "entity-{{ entity_cr_name }}"
