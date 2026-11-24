@@ -32,9 +32,15 @@
 # ─── Build object-templates list for ConfigurationPolicy ─────────────────────
 # Every tier's binding is exact: mustonlyhave replaces the subjects (a binding of an older run that named other
 # groups keeps none of them), and a tier without groups has no binding (mustnothave). The default binding
-# self-provisioners is managed the same way (below), so that only the cluster's own groups may create projects.
+# self-provisioners is managed the same way (below), so that only the cluster's own groups may create projects, and
+# the cluster's project template binds a new project to those groups, never to the person who asked.
 - name: Assemble RBAC object templates
   vars:
+    cluster_project_template: project-request
+    cluster_project_request_message: >-
+      {{ 'Projects on this cluster are requested by its operator access groups and belong to those groups.'
+         if operator_subjects | length > 0 else
+         'Projects on this cluster are made by its admins: it has no operator access group.' }}
     _tiers:
       - {subjects: "{{ admin_subjects }}", suffix: cluster-admin, role: cluster-admin}
       - {subjects: "{{ operator_subjects }}", suffix: cluster-operator, role: self-provisioner}
@@ -66,7 +72,40 @@
                          'annotations': {'rbac.authorization.kubernetes.io/autoupdate': 'false'}},
             'roleRef': {'kind': 'ClusterRole', 'name': 'self-provisioner', 'apiGroup': 'rbac.authorization.k8s.io'},
             'subjects': operator_subjects}}) -%}
+      {#- A new project belongs to the cluster's groups, not to the person who asked: OpenShift's default project template
+          makes the requesting user the project's admin, which would outlast the person's group. The cluster's project
+          template (openshift-config/project-request, named by the cluster's project configuration: OpenShift
+          "Configuring project creation") binds admin to the operator tier's groups instead; with no operator group it
+          binds nobody (and nobody but the cluster's admins can request a project then). -#}
+      {%- set objects = [{'apiVersion': 'project.openshift.io/v1', 'kind': 'Project',
+            'metadata': {'name': '${PROJECT_NAME}',
+                         'annotations': {'openshift.io/description': '${PROJECT_DESCRIPTION}',
+                                         'openshift.io/display-name': '${PROJECT_DISPLAYNAME}',
+                                         'openshift.io/requester': '${PROJECT_REQUESTING_USER}'}}}] -%}
+      {%- if operator_subjects | length > 0 -%}
+        {%- set _ = objects.append({'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding',
+              'metadata': {'name': 'admin', 'namespace': '${PROJECT_NAME}'},
+              'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': 'admin'},
+              'subjects': operator_subjects}) -%}
+      {%- endif -%}
+      {%- set _ = out.append({'complianceType': 'mustonlyhave', 'objectDefinition': {
+            'apiVersion': 'template.openshift.io/v1', 'kind': 'Template',
+            'metadata': {'name': cluster_project_template, 'namespace': 'openshift-config'},
+            'objects': objects,
+            'parameters': [{'name': 'PROJECT_NAME'}, {'name': 'PROJECT_DISPLAYNAME'}, {'name': 'PROJECT_DESCRIPTION'},
+                           {'name': 'PROJECT_ADMIN_USER'}, {'name': 'PROJECT_REQUESTING_USER'}]}}) -%}
+      {%- set _ = out.append({'complianceType': 'musthave', 'objectDefinition': {
+            'apiVersion': 'config.openshift.io/v1', 'kind': 'Project', 'metadata': {'name': 'cluster'},
+            'spec': {'projectRequestTemplate': {'name': cluster_project_template},
+                     'projectRequestMessage': cluster_project_request_message}}}) -%}
       {{ out }}
+
+- name: Say that nobody can request a project on the cluster
+  ansible.builtin.debug:
+    msg: >-
+      PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: the cluster has no operator access group,
+      so nobody but its admins can request a project, and a new project is bound to no group.
+  when: operator_subjects | length == 0
 
 # ─── Idempotent create-or-update for RBAC Policy ─────────────────────────────
 - name: Check if cluster RBAC Policy already exists

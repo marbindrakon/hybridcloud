@@ -7,7 +7,12 @@ vault_kv_read.yml) run in ansible-playbook (po_harness.py) against an identity p
 (fake_keycloak_signin.py) and a Vault over HTTP (fake_vault.py). The realm is shared by two tenants that both have
 access groups named admins, devs and operators; the cluster is the first tenant's. What is judged, for every person
 and every way to finish a sign-in: the groups claim of the cluster's token, the bindings that name one of those
-groups, and whether the person may create a project. Names are examples."""
+groups, whether the person may create a project, and whether the person holds a project an operator asked for earlier
+(the cluster's project template binds it to groups, never to the person). Names are examples.
+
+The same tests run on the execution image (ansible-core 2.16, where a nested number renders as a string):
+podman run --rm --entrypoint python3 --userns=keep-id -e HOME=/tmp -e PYTHONDONTWRITEBYTECODE=1 -v $PWD:/w:ro,z -w /w
+<the automation's execution image> -m unittest tests.unit.test_platformopenshift_signin"""
 import os
 import sys
 import unittest
@@ -75,11 +80,28 @@ def bindings(templates):
     out = {}
     for t in templates:
         o = t["objectDefinition"]
+        if o["kind"] != "ClusterRoleBinding":
+            continue
         name = o["metadata"]["name"]
         key = name.rsplit("-cluster-", 1)[1] if "-cluster-" in name else name
         out[key] = (t["complianceType"], [s["name"] for s in o.get("subjects", [])],
                     (o.get("roleRef") or {}).get("name"))
     return out
+
+
+def project_template(templates):
+    """(the cluster's project template, the cluster's project configuration) of the policy."""
+    tpl = [t for t in templates if t["objectDefinition"]["kind"] == "Template"]
+    cfg = [t for t in templates if t["objectDefinition"]["kind"] == "Project"]
+    assert len(tpl) == 1 and len(cfg) == 1, templates
+    return tpl[0], cfg[0]
+
+
+def project_admins(templates):
+    """The groups a project made through the cluster's template binds admin to (none: no binding)."""
+    tpl, _ = project_template(templates)
+    rbs = [o for o in tpl["objectDefinition"]["objects"] if o["kind"] == "RoleBinding"]
+    return sorted(s["name"] for rb in rbs if rb["roleRef"]["name"] == "admin" for s in rb["subjects"])
 
 
 def oidc_tasks():
@@ -130,10 +152,13 @@ class TenantCluster(unittest.TestCase):
         self.kc.add_client(CLIENT, mappers=[OLD_MAPPER], default_scopes=self.kc.realm_default,
                            optional_scopes=self.kc.realm_optional, **fields)
 
-    def run_cluster(self, tool=None, ok=True, realization=None):
+    def run_cluster(self, tool=None, ok=True, realization=None, recorded=None):
+        """recorded: the cluster's status as read at the job's start (default: its build recorded, as every cluster
+        that reaches its sign-in has)."""
         rbac_tasks = load(os.path.join(ROLE, "tasks", "cluster_rbac.yml"))
         build = [t for t in rbac_tasks if t["name"] in ("Build the subjects of each binding",
-                                                        "Assemble RBAC object templates")]
+                                                        "Assemble RBAC object templates",
+                                                        "Say that nobody can request a project on the cluster")]
         extra = {"services_api_host": "https://services.example.org", "services_bearer_token": "services-token",
                  "central_token": "central-token", "central_api_server": "https://hub.example.org",
                  "keycloak_realm": "sovereign-tenants", "platformopenshift_oidc_idp_name": "keycloak-sso",
@@ -142,7 +167,10 @@ class TenantCluster(unittest.TestCase):
                  "cluster_api_url": "https://api.web.prod.acme-corp.example.org:6443",
                  "cluster_apps_url": "https://apps.web.prod.acme-corp.example.org",
                  "cluster_domain": "web.prod.acme-corp.example.org",
-                 "resolved_entity": "acme-corp", "shc_step": "Configure the cluster's sign-in"}
+                 "resolved_entity": "acme-corp", "shc_step": "Configure the cluster's sign-in",
+                 "platformopenshift_cr": {"resources": [{"metadata": {"name": "web", "namespace": NS},
+                                                         "status": {"buildName": BUILD} if recorded is None
+                                                         else recorded}]}}
         if realization is not None:
             extra["fabric_realization"] = realization
         k8s = {"Route/services-rhbk/": [{"spec": {"host": self.kc.host}}], f"Rbac/{NS}/": self.rbacs,
@@ -158,10 +186,13 @@ class TenantCluster(unittest.TestCase):
             self.assertNotIn(secret, H.LAST_OUTPUT)
         for tok in self.kc.tokens:
             self.assertNotIn(tok, H.LAST_OUTPUT)
+        self.trace = trace
         return rc, (trace[-1]["result"] if trace and "result" in trace[-1] else None), out
 
-    def outcome(self, res, person, path, scope):
-        """(groups claim, bindings that name one of them, may create a project) of a person's token."""
+    def outcome(self, res, person, path="browser", scope=(), projects=False):
+        """(groups claim, bindings that name one of them, may create a project) of a person's token; with projects,
+        also whether the person is admin of a project an operator made earlier through the cluster's template (or
+        is the cluster's admin, who holds every project)."""
         claim = self.kc.token_claims(person, CLIENT, path, scope)
         if claim is None:
             return None
@@ -170,7 +201,10 @@ class TenantCluster(unittest.TestCase):
                        if ct == "mustonlyhave" and set(subjects) & set(claim) and k != "self-provisioners")
         sp = b["self-provisioners"][1]
         project = bool(set(sp) & set(claim)) or "admin" in bound
-        return claim, bound, project
+        if not projects:
+            return claim, bound, project
+        holds = bool(set(project_admins(res["templates"])) & set(claim)) or "admin" in bound
+        return claim, bound, project, holds
 
     def test_two_tenants_same_group_names_a_cluster_of_one(self):
         """The enumeration: each person x each way to sign in x each scope asked for -> (claim, bindings, project)."""
@@ -227,6 +261,8 @@ class TenantCluster(unittest.TestCase):
 
     def test_a_new_client_is_made_marked_with_the_claim_from_its_roles(self):
         self.run_cluster()
+        # recorded as soon as it exists, before the cluster is given the identity provider
+        self.assertEqual([p["body"] for p in H.patches(self.trace)], [{"oidcClientId": CLIENT}])
         client = self.kc.clients[CLIENT]
         self.assertEqual(client["attributes"]["platformopenshift"], MARK)
         self.assertEqual([m["protocolMapper"] for m in client["protocolMappers"]], ["oidc-usermodel-client-role-mapper"])
@@ -283,14 +319,88 @@ class TenantCluster(unittest.TestCase):
         self.assertEqual(client["roles"], {})
         self.assertEqual(client["protocolMappers"], [OLD_MAPPER])
 
+    def test_an_unmarked_client_is_taken_only_when_this_cluster_recorded_it(self):
+        """A client of the name without a mark (the release before made it): taken when the status records it or the
+        build it is named after; otherwise refused and nothing changed."""
+        for recorded, taken in (({"oidcClientId": CLIENT}, True), ({"buildName": BUILD}, True), ({}, False),
+                                ({"buildName": "shc-oso-web-acme-corp-99999999"}, False)):
+            with self.subTest(recorded=recorded):
+                self.kc.clients.pop(CLIENT, None)
+                self.old_client()
+                rc, _, out = self.run_cluster(ok=taken, recorded=recorded)
+                client = self.kc.clients[CLIENT]
+                if taken:
+                    self.assertEqual(client["attributes"]["platformopenshift"], MARK)
+                else:
+                    self.assertNotEqual(rc, 0)
+                    self.assertIn("that this cluster did not record", out)
+                    self.assertEqual(client["attributes"], {})
+                    self.assertEqual(client["protocolMappers"], [OLD_MAPPER])
+                    self.assertEqual(H.patches(self.trace), [])
+
+    def test_a_project_belongs_to_the_groups_not_to_the_person_who_asked(self):
+        """opal (operators) asks for a project; then opal leaves the group, or moves to the other tenant: nothing of
+        the project is left to opal. The cluster's project template binds admin to the operator groups."""
+        _, res, _ = self.run_cluster()
+        tpl, cfg = project_template(res["templates"])
+        self.assertEqual(tpl["complianceType"], "mustonlyhave")
+        self.assertEqual(tpl["objectDefinition"]["metadata"], {"name": "project-request", "namespace": "openshift-config"})
+        self.assertEqual(cfg["objectDefinition"]["spec"]["projectRequestTemplate"], {"name": "project-request"})
+        self.assertEqual(project_admins(res["templates"]), ["acme-corp.operators"])
+        self.assertNotIn("PROJECT_ADMIN_USER}", str(tpl["objectDefinition"]["objects"]))
+        rbs = [o for o in tpl["objectDefinition"]["objects"] if o["kind"] == "RoleBinding"]
+        self.assertEqual([s["kind"] for rb in rbs for s in rb["subjects"]], ["Group"])
+        self.assertEqual(self.outcome(res, "opal", projects=True),
+                         (["acme-corp.operators"], ["operator"], True, True))
+        # alice is the cluster's admin (cluster-admin holds every project); dave, olga and the other tenant: nothing
+        self.assertEqual(self.outcome(res, "alice", projects=True)[3], True)
+        for person in ("dave", "olga", "gina", "gus", "otto", "nora"):
+            self.assertEqual(self.outcome(res, person, projects=True)[2:], (False, False), person)
+        for groups in ((), ("/globex/operators",), ("/acme-corp/others",)):
+            with self.subTest(opal_now_in=groups):
+                self.kc.add_user("opal", *groups)
+                for path in ("browser", "reset-credentials", "brokered"):
+                    for scope in SCOPES:
+                        self.assertEqual(self.outcome(res, "opal", path, scope, projects=True),
+                                         ([], [], False, False), (groups, path, scope))
+
+    def test_an_operator_tier_without_a_group_nobody_requests_projects(self):
+        tool = dict(CLUSTER_TOOL)
+        del tool["clusterOperatorRbac"]
+        _, res, _ = self.run_cluster(tool=tool)
+        b = bindings(res["templates"])
+        self.assertEqual(b["operator"], ("mustnothave", [], None))
+        self.assertEqual(b["self-provisioners"], ("mustonlyhave", [], "self-provisioner"))
+        tpl, cfg = project_template(res["templates"])
+        # no binding to nobody, and none to the person who asked
+        self.assertEqual([o["kind"] for o in tpl["objectDefinition"]["objects"]], ["Project"])
+        self.assertEqual(project_admins(res["templates"]), [])
+        self.assertIn("no operator access group", cfg["objectDefinition"]["spec"]["projectRequestMessage"])
+        self.assertIn("nobody but its admins can request a project", H.LAST_OUTPUT)
+        for person in PEOPLE:
+            got = self.outcome(res, person, projects=True)
+            self.assertEqual(got[2:], (True, True) if person == "alice" else (False, False), person)
+
+    def test_a_realm_role_made_a_composite_of_the_clusters_role_gives_it(self):
+        """What stays open, for the realm's administrators only: a realm role that holds this client's role (a
+        composite) gives that role, and so the group, to everyone who has the realm role. The job does not make or
+        undo composites; this test says what the identity provider does with one."""
+        _, res, _ = self.run_cluster()
+        self.assertEqual(self.outcome(res, "gina")[0], [])
+        self.kc.composites["admins"] = [(CLIENT, "acme-corp.admins")]
+        self.assertEqual(self.outcome(res, "gina")[:2], (["acme-corp.admins"], ["admin"]))
+
     def test_the_token_lifetime_is_a_setting_with_openshifts_default(self):
         def lifetime(res):
             oauth = res["policy"]["spec"]["policy-templates"][2]["objectDefinition"]["spec"]["object-templates"][0]
             return oauth["objectDefinition"]["spec"]["tokenConfig"]
         _, res, _ = self.run_cluster()
         self.assertEqual(lifetime(res), {"accessTokenMaxAgeSeconds": 86400})
+        # an integer, also on ansible-core 2.16 (the OAuth field is an integer: a string is refused by the API)
+        self.assertIs(type(lifetime(res)["accessTokenMaxAgeSeconds"]), int)
         _, res, _ = self.run_cluster(realization={"tenantCluster": {"oauthAccessTokenMaxAgeSeconds": 28800}})
         self.assertEqual(lifetime(res), {"accessTokenMaxAgeSeconds": 28800})
+        self.assertIs(type(lifetime(res)["accessTokenMaxAgeSeconds"]), int)
 
 
 @unittest.skipUnless(H.HAVE_ANSIBLE and HAVE_CRYPTO, "ansible-playbook / cryptography not installed")
@@ -308,13 +418,13 @@ class TeardownClient(unittest.TestCase):
         env.start()
         self.addCleanup(env.stop)
 
-    def run_teardown(self):
+    def run_teardown(self, recorded=CLIENT):
         block = load(os.path.join(TEARDOWN, "tasks", "main.yml"))[0]["block"]
         names = [t.get("name") for t in block]
-        a = names.index("Open a Keycloak admin session")
+        a = names.index("Say that no sign-in client is recorded")
         b = names.index("Say that a client of the name is another cluster's")
         tasks = [dict(t) for t in block[a:b + 1]]
-        extra = {"keycloak_realm": "sovereign-tenants", "po_oidc_client_id": CLIENT,
+        extra = {"keycloak_realm": "sovereign-tenants", "po_oidc_client_id": recorded,
                  "services_api_host": "https://services.example.org", "services_bearer_token": "services-token",
                  "platformopenshift_cr_name": "web", "platformopenshift_cr_namespace": NS}
         k8s = {"Route/services-rhbk/": [{"spec": {"host": self.kc.host}}]}
@@ -331,6 +441,21 @@ class TeardownClient(unittest.TestCase):
         self.kc.add_client(CLIENT)
         self.run_teardown()
         self.assertNotIn(CLIENT, self.kc.clients)
+
+    def test_nothing_recorded_nothing_deleted(self):
+        """A cluster whose status records no client deletes none, not even one of its build's name."""
+        self.kc.add_client(CLIENT, attributes={"platformopenshift": MARK})
+        out = self.run_teardown(recorded="")
+        self.assertIn(CLIENT, self.kc.clients)
+        self.assertIn("records no sign-in client", out)
+        self.assertFalse([x for x in self.kc.log if x[0] == "DELETE"])
+
+    def test_the_client_comes_from_the_status_alone(self):
+        tasks = load(os.path.join(TEARDOWN, "tasks", "main.yml"))[0]["block"]
+        facts = [t for t in tasks if t.get("name") == "Set platform type and recorded status facts"][0]
+        expr = facts["ansible.builtin.set_fact"]["po_oidc_client_id"]
+        self.assertIn("_st.oidcClientId", expr)
+        self.assertNotIn("keycloak-oidc", expr)
 
     def test_one_marked_for_another_cluster_is_left(self):
         self.kc.add_client(CLIENT, attributes={"platformopenshift": "entity-globex/web"})
@@ -353,7 +478,10 @@ class Wiring(unittest.TestCase):
     def test_no_binding_cuts_the_tenant_off(self):
         body = text(os.path.join(ROLE, "tasks", "cluster_rbac.yml"))
         self.assertNotIn("regex_replace', '^.*/'", body)
-        self.assertNotIn("complianceType': 'musthave'", body)
+        # musthave (a merge) only for the cluster's project configuration, never for a binding
+        i = body.index("complianceType': 'musthave'")
+        self.assertEqual(body.count("complianceType': 'musthave'"), 1)
+        self.assertIn("'config.openshift.io/v1', 'kind': 'Project'", body[i:i + 200])
 
     def test_the_request_with_the_token_is_not_logged(self):
         tasks = load(os.path.join(ROLE, "tasks", "cluster_groups_claim.yml"))
