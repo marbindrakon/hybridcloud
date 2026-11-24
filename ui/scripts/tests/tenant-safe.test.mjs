@@ -257,3 +257,15 @@ test('NetworkPlacement: status.siteNetwork reaches the placement page by name an
   assert.deepEqual(m.tenantSafe('NetworkPlacement', np).status, want);
   assert.deepEqual(m.transformBody('/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-t1/networkplacements/p1', np, {}).status, want);
 });
+
+test('NetworkPlacement: a network that kept its earlier name reaches the tenant by the name it has', () => {
+  const np = { kind: 'NetworkPlacement', status: {
+    siteNetwork: { name: 'hn10042', id: 'n1' },
+    realization: { site: { networkName: 'hn10042', networkId: 'n1', networkNameKept: 'the network keeps its name hn10042: the tenant already sees a network named acme_core' } },
+  } };
+  // the name the tenant uses is siteNetwork.name; the realization (and the reason, which names the other network)
+  // stays on the admin pages
+  const st = m.tenantSafe('NetworkPlacement', np).status;
+  assert.deepEqual(st.siteNetwork, { name: 'hn10042', id: 'n1' });
+  assert.deepEqual(st.realization, { site: {} });
+});

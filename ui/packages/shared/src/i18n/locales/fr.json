@@ -1894,6 +1894,8 @@
     "unreadableReport": "Le rapport de {{cluster}} ne peut pas être lu",
     "unreadableReportBody": "Le rapport de santé de ce cluster n'a pas pu être lu ou a une forme que cette page ne connaît pas (une autre version, ou une heure dans le futur) ; ses défauts n'apparaissent donc pas ici. Vérifiez la couche d'exploitation du cluster.",
     "unreadableIndex": "La liste des clusters qui rapportent leur santé ne peut pas être lue",
-    "unreadableIndexBody": "Aucun défaut de cluster ne peut être affiché ici tant que la liste n'est pas réparée. Vérifiez la couche d'exploitation du cluster de services."
+    "unreadableIndexBody": "Aucun défaut de cluster ne peut être affiché ici tant que la liste n'est pas réparée. Vérifiez la couche d'exploitation du cluster de services.",
+    "indexFailed": "La santé de la plateforme ne peut pas être lue",
+    "indexFailedBody": "Le cluster de services a répondu par une erreur quand cette page a lu la santé de la plateforme : aucun défaut de cluster ne peut être affiché ici. La page la relit d'elle-même ; si cela persiste, vérifiez l'API du cluster de services."
   }
 }

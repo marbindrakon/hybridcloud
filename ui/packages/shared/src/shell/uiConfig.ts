@@ -8,6 +8,10 @@ export interface UiConfig {
   consoleUrl?: string;
   /** Link to an automation job, with "{jobId}" (no default: the admin's diagnostics show the job id without a link). */
   automationJobUrlTemplate?: string;
+  /** The platform namespace of the services cluster, where the platform-health banner reads (admin dashboard). */
+  platformNamespace?: string;
+  /** The longest report interval the platform-health banner believes, in minutes (null: the banner's default). */
+  platformHealthMaxReportIntervalMinutes?: number | null;
 }
 
 let cached: Promise<UiConfig> | null = null;

@@ -74,9 +74,16 @@ test('none: nothing is shown when every report is fresh and has no fault', () =>
   assert.equal(m.banner(read({}), NOW), '');
 });
 
-test('index absent or not fetched: nothing is shown', () => {
+test('index absent or refused (reporting off, no read): nothing is shown', () => {
   assert.equal(m.banner(null, NOW), '');
   assert.equal(m.banner(undefined, NOW), '');
+});
+
+test('index answered with an error: "platform health cannot be read", not the silence of reporting off', () => {
+  const html = m.banner({ clusters: null, reports: {}, indexFailed: true }, NOW);
+  assert.match(html, /data-index-failed="true"/);
+  assert.ok(text(html).includes(P.indexFailed));
+  assert.doesNotMatch(html, /data-index-unreadable/);
 });
 
 test('index answered with a list that cannot be read: one notice, nothing dropped silently', () => {
@@ -158,6 +165,11 @@ const STATES = [
   ['no interval', ok(JSON.stringify({ schemaVersion: 1, cluster: 'hub', writtenAt: at(1), faults: [] })), 'unreadable'],
   ['faults not a list', ok(JSON.stringify({ schemaVersion: 1, cluster: 'hub', writtenAt: at(1), intervalSeconds: 300, faults: 'many' })), 'unreadable'],
   ['missing from the reads', undefined, 'unreadable'],
+  // the report's own interval counts only up to the longest believed one (default five minutes)
+  ['interval claimed 1e9 s, written 16 min ago: late', ok(report('hub', [], { writtenMinAgo: 16, intervalSeconds: 1e9 })), 'late'],
+  ['interval claimed 1e9 s, written 14 min ago', ok(report('hub', [], { writtenMinAgo: 14, intervalSeconds: 1e9 })), 'nothing'],
+  ['interval 10 min, written 16 min ago, default ceiling: late', ok(report('hub', [], { writtenMinAgo: 16, intervalSeconds: 600 })), 'late'],
+  ['interval 1 min, written 4 min ago: late', ok(report('hub', [], { writtenMinAgo: 4, intervalSeconds: 60 })), 'late'],
 ];
 
 test('every state of a cluster\'s report shows as the ruling says, beside a healthy cluster', () => {
@@ -185,6 +197,25 @@ test('every state of a cluster\'s report shows as the ruling says, beside a heal
     if (want === 'unreadable') assert.ok(s.includes(fill(P.unreadableReport, { cluster: 'hub' })), name);
     if (want === 'late+fault') assert.ok(html.indexOf('data-late-report') < html.indexOf('data-fault-id="ShcBackupStale"'), name);
   }
+});
+
+test('the longest believed interval comes from the dashboard\'s setting', () => {
+  const r = (writtenMinAgo, intervalSeconds, maxIntervalSeconds) => ({
+    clusters: ['hub'], reports: { hub: ok(report('hub', [], { writtenMinAgo, intervalSeconds })) },
+    ...(maxIntervalSeconds === undefined ? {} : { maxIntervalSeconds }),
+  });
+  const late = (x) => /data-late-report="hub"/.test(m.banner(x, NOW));
+  assert.equal(m.DEFAULT_MAX_INTERVAL_SECONDS, 300);
+  // a 30-minute writer with the setting at 30 minutes: late only after 90 minutes
+  assert.equal(late(r(60, 1800, 1800)), false);
+  assert.equal(late(r(91, 1800, 1800)), true);
+  // the same writer with the default: late after 15 minutes
+  assert.equal(late(r(16, 1800)), true);
+  // a forged interval with the setting at 30 minutes: late after 90 minutes, not never
+  assert.equal(late(r(91, 1e9, 1800)), true);
+  // a five-minute writer is late after fifteen whatever the setting
+  assert.equal(late(r(16, 300, 1800)), true);
+  assert.equal(late(r(14, 300, 1800)), false);
 });
 
 test('a fault without an id is dropped, the report still shows', () => {
@@ -218,8 +249,9 @@ test('the sentences name no internals', () => {
   }
 });
 
-test('the read: the index, then each listed report, through the configured API base', async () => {
-  const base = '/api/kubernetes/api/v1/namespaces/sovereign-cloud/configmaps/';
+test('the read: the index, then each listed report, through the configured API base and namespace', async () => {
+  const base = '/api/kubernetes/api/v1/namespaces/acme-platform/configmaps/';
+  const SETTINGS = { namespace: 'acme-platform', maxReportIntervalMinutes: 30 };
   const answers = (table) => {
     const calls = [];
     const fn = async (url) => {
@@ -239,8 +271,9 @@ test('the read: the index, then each listed report, through the configured API b
     'shc-platform-health-far': new Error('console fetch refused'),
   });
   m.configureK8sClient({ baseUrl: '/api/kubernetes', fetchFn: fn });
-  const r = await m.readPlatformHealth();
+  const r = await m.readPlatformHealth(SETTINGS);
   assert.equal(calls[0], `${base}shc-platform-health`);
+  assert.equal(r.maxIntervalSeconds, 1800);
   assert.deepEqual(calls.slice(1).sort(), ['edge', 'far', 'hub', 'services'].map((c) => `${base}shc-platform-health-${c}`));
   assert.deepEqual(r.clusters, ['services', 'hub', 'edge', 'far']);
   assert.equal(r.reports.services.state, 'read');
@@ -252,18 +285,64 @@ test('the read: the index, then each listed report, through the configured API b
   assert.deepEqual(view.unreadable, ['far', 'hub']);
   assert.deepEqual(view.neverWritten, [{ cluster: 'edge' }]);
 
-  // the index absent, refused, failing or not a ConfigMap's answer: nothing (and no report is read)
-  for (const idx of [[404, { kind: 'Status', code: 404 }], [403, { kind: 'Status', code: 403 }], new Error('down')]) {
+  // every answer to the index: absent, refused or no session: nothing; an error or a failed read: indexFailed
+  // (and no report is read)
+  const INDEX_STATES = [
+    ['absent (reporting off)', [404, { kind: 'Status', code: 404 }], 'nothing'],
+    ['refused (no read)', [403, { kind: 'Status', code: 403 }], 'nothing'],
+    ['no session', [401, { kind: 'Status', code: 401 }], 'nothing'],
+    ['server error', [500, { kind: 'Status', code: 500 }], 'failed'],
+    ['unavailable', [503, { kind: 'Status', code: 503 }], 'failed'],
+    ['too many requests', [429, { kind: 'Status', code: 429 }], 'failed'],
+    ['read failed (network)', new Error('down'), 'failed'],
+  ];
+  for (const [name, idx, want] of INDEX_STATES) {
     const a = answers({ 'shc-platform-health': idx });
     m.configureK8sClient({ baseUrl: '/api/k8s', fetchFn: a.fn });
-    assert.equal(await m.readPlatformHealth(), null);
-    assert.equal(a.calls.length, 1);
+    const got = await m.readPlatformHealth({ namespace: 'acme-platform' });
+    if (want === 'nothing') assert.equal(got, null, name);
+    else {
+      assert.deepEqual(got, { clusters: null, reports: {}, indexFailed: true }, name);
+      assert.match(m.banner(got, NOW), /data-index-failed="true"/, name);
+    }
+    assert.equal(a.calls.length, 1, name);
   }
+  // no platform namespace in the dashboard's settings (they could not be read): indexFailed, nothing fetched
+  const none = answers({});
+  m.configureK8sClient({ fetchFn: none.fn });
+  assert.deepEqual(await m.readPlatformHealth({}), { clusters: null, reports: {}, indexFailed: true });
+  assert.equal(none.calls.length, 0);
   // the index answered without a readable list: the notice, no report read
   const bad = answers({ 'shc-platform-health': cm({ 'clusters.json': 'hub,services' }) });
   m.configureK8sClient({ fetchFn: bad.fn });
-  assert.deepEqual(await m.readPlatformHealth(), { clusters: null, reports: {} });
+  assert.deepEqual(await m.readPlatformHealth({ namespace: 'acme-platform' }), { clusters: null, reports: {} });
   assert.equal(bad.calls.length, 1);
   // a report answered with something that is not a ConfigMap cannot be read
   assert.deepEqual(m.reportReadOf({ kind: 'Status' }), { state: 'unreadable' });
+});
+
+// The dashboard chart: the platform namespace and the longest believed report interval reach the server.
+const chart = path.join(UI, '..', 'charts/charts/sovereign-cloud-dashboard');
+function helmAvailable() {
+  try {
+    execFileSync('helm', ['version', '--short'], { stdio: 'ignore' });
+    return true;
+  } catch {
+    return false;
+  }
+}
+const render = (sets = []) =>
+  execFileSync('helm', ['template', 't', chart, ...sets.flatMap((x) => ['--set', x])], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'pipe'] });
+
+test('chart: the namespace and the longest report interval (5 minutes by default) reach the server', { skip: helmAvailable() ? false : 'helm not installed' }, () => {
+  const values = fs.readFileSync(path.join(chart, 'values.yaml'), 'utf8');
+  assert.match(values, /^platformHealthMaxReportIntervalMinutes: 5$/m);
+  const out = render(['namespace=acme-platform']);
+  assert.match(out, /- name: SHC_PLATFORM_NAMESPACE\n\s+value: "acme-platform"/);
+  assert.match(out, /- name: SHC_PLATFORM_HEALTH_MAX_REPORT_INTERVAL_MINUTES\n\s+value: "5"/);
+  assert.match(render(['platformHealthMaxReportIntervalMinutes=30']), /SHC_PLATFORM_HEALTH_MAX_REPORT_INTERVAL_MINUTES\n\s+value: "30"/);
+  for (const bad of ['0', '31', '2.5']) {
+    assert.throws(() => render([`platformHealthMaxReportIntervalMinutes=${bad}`]), /must be a whole number of minutes from 1 to 30/, bad);
+  }
+  assert.throws(() => render(['namespace=']), /namespace is required/);
 });

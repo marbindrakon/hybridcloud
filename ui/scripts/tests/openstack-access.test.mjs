@@ -379,6 +379,18 @@ test('placement: the network on the site, the sentence and the copyable command'
   assert.equal(m.serverCreateCommand("my net's"), `openstack server create --network 'my net'\\''s' --flavor <flavor> --image <image> --key-name <key> <server name>`);
 });
 
+test('placement: a network that kept its earlier name shows the name it has, not the scheme\'s', () => {
+  // the rename would have given the tenant two networks of one name: the site keeps the present name and records
+  // why (realization.site.networkNameKept); status.siteNetwork.name holds the name the network has
+  const np = placement({ name: 'hn10042', id: '3e2b7c1d' });
+  np.status.realization = { site: { networkName: 'hn10042', networkNameKept: 'the network keeps its name hn10042: the tenant already sees a network named acme_core' } };
+  const html = pages.details('NetworkPlacement', np);
+  assert.ok(text(html).includes('Network on the site: hn10042 (3e2b7c1d)'));
+  const input = [...html.matchAll(/<input[^>]*>/g)].map((x) => x[0]).find((tag) => tag.includes(`aria-label="${en.detail.siteNetworkCommand}"`));
+  assert.equal(text(/value="([^"]*)"/.exec(input)[1]), 'openstack server create --network hn10042 --flavor <flavor> --image <image> --key-name <key> <server name>');
+  assert.ok(!html.includes('acme_core'));
+});
+
 const cluster = ({ credential, conditions } = {}) => ({
   apiVersion: 'hybridsovereign.redhat/v1alpha1',
   kind: 'PlatformOpenshift',

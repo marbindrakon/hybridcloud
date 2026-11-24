@@ -16,9 +16,21 @@ test('token object name is sha256~ + base64url(sha256(body))', () => {
   assert.ok(!want.includes('='));
 });
 
+const EMPTY = { helpBaseUrl: '', consoleUrl: '', automationJobUrlTemplate: '', platformNamespace: '', platformHealthMaxReportIntervalMinutes: null };
+
 test('ui-config takes only https URLs from env, empty by default', () => {
-  assert.deepEqual(s.uiConfigFromEnv({}), { helpBaseUrl: '', consoleUrl: '', automationJobUrlTemplate: '' });
-  assert.deepEqual(s.uiConfigFromEnv({ SHC_HELP_BASE_URL: 'https://docs.example/docs/', SHC_CONSOLE_URL: 'javascript:alert(1)' }), { helpBaseUrl: 'https://docs.example/docs', consoleUrl: '', automationJobUrlTemplate: '' });
+  assert.deepEqual(s.uiConfigFromEnv({}), EMPTY);
+  assert.deepEqual(s.uiConfigFromEnv({ SHC_HELP_BASE_URL: 'https://docs.example/docs/', SHC_CONSOLE_URL: 'javascript:alert(1)' }), { ...EMPTY, helpBaseUrl: 'https://docs.example/docs' });
+});
+
+test('ui-config: the platform namespace is a DNS label; the longest believed report interval 1 to 30 minutes', () => {
+  assert.equal(s.uiConfigFromEnv({ SHC_PLATFORM_NAMESPACE: ' acme-platform ' }).platformNamespace, 'acme-platform');
+  for (const bad of ['Acme', 'a/b', '-a', 'a'.repeat(64), '']) {
+    assert.equal(s.uiConfigFromEnv({ SHC_PLATFORM_NAMESPACE: bad }).platformNamespace, '', bad);
+  }
+  for (const [v, want] of [['5', 5], ['1', 1], ['30', 30], ['0', null], ['31', null], ['2.5', null], ['five', null], ['', null]]) {
+    assert.equal(s.uiConfigFromEnv({ SHC_PLATFORM_HEALTH_MAX_REPORT_INTERVAL_MINUTES: v }).platformHealthMaxReportIntervalMinutes, want, v);
+  }
 });
 
 let api; let app; let base; const deleted = [];

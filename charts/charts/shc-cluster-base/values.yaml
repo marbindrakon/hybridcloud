@@ -330,8 +330,8 @@ ops:
       cluster: ""                   # the cluster's name as the banner shows it; empty = cluster.name
       intervalMinutes: 5            # one of 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30
       image: registry.redhat.io/ubi9/python-312-minimal:latest
-      # the platform namespace of the services cluster, where the dashboard reads the banner's ConfigMaps: the
-      # dashboard's platform namespace (sovereign-cloud)
+      # the platform namespace of the services cluster, where the dashboard reads the banner's ConfigMaps: the admin
+      # dashboard chart's `namespace`
       namespace: ""
       # true on the services cluster (the writer uses its own service account); false on any other cluster, which
       # then needs servicesCluster. No default.
