@@ -73,29 +73,29 @@
                                               'ipam': {'lifecycle': 'Persistent'}}}}} }}
       register: _np_cudn
 
+    # the route advertisement is the placement's alone: it is written whole (a replace, not a merge), so that its
+    # FRRConfiguration selector is exactly the realization's (a merge would keep a label key the realization no longer
+    # names, and the selector would then need both labels). A replace carries the resourceVersion the site read above.
     - name: "RouteAdvertisements {{ np_names.routeAdvertisement }}"
       kubernetes.core.k8s:
         kubeconfig: "{{ site_kubeconfig }}"
         state: present
-        definition:
-          apiVersion: k8s.ovn.org/v1
-          kind: RouteAdvertisements
-          metadata:
-            name: "{{ np_names.routeAdvertisement }}"
-            labels: "{{ np_names.labels }}"
-            # the names people chose (tenant, network, placement) beside the number
-            annotations: "{{ np_names.annotations | default({}, true) }}"
-          spec:
-            advertisements: [PodNetwork]
-            nodeSelector: {}
-            targetVRF: auto
-            frrConfigurationSelector:
-              matchLabels: "{{ fab_real.openshift.frrConfigurationSelector | default({}, true) }}"
-            networkSelectors:
-              - networkSelectionType: ClusterUserDefinedNetworks
-                clusterUserDefinedNetworkSelector:
-                  networkSelector:
-                    matchLabels: {hybridsovereign.redhat/l3vni: "{{ np_real.l3Vni | string }}"}
+        force: true
+        definition: >-
+          {{ {'apiVersion': 'k8s.ovn.org/v1', 'kind': 'RouteAdvertisements',
+              'metadata': {'name': np_names.routeAdvertisement, 'labels': np_names.labels,
+                           'annotations': np_names.annotations | default({}, true)}
+                          | combine({'resourceVersion': _np_ra_have.metadata.resourceVersion}
+                                    if _np_ra_have.metadata.resourceVersion | default('', true) | length > 0 else {}),
+              'spec': {'advertisements': ['PodNetwork'], 'nodeSelector': {}, 'targetVRF': 'auto',
+                       'frrConfigurationSelector': {'matchLabels': np_ra_selector},
+                       'networkSelectors': [{'networkSelectionType': 'ClusterUserDefinedNetworks',
+                                             'clusterUserDefinedNetworkSelector': {'networkSelector': {'matchLabels':
+                                               {'hybridsovereign.redhat/l3vni': np_real.l3Vni | string}}}}]}} }}
+      vars:
+        # the names people chose (tenant, network, placement) go beside the number, in the annotation
+        _np_ra_have: "{{ (_np_site_existing.results[1].resources | default([], true) + [{'metadata': {}}]) | first }}"
+        np_ra_selector: "{{ fab_real.openshift.frrConfigurationSelector | default({}, true) }}"
       register: _np_ra
 
     - name: Wait for the network to be created on the site
