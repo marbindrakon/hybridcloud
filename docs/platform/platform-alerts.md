@@ -201,8 +201,9 @@ reports. They read, with the signed-in person's own rights, in the platform name
 
 The services cluster's operations layer makes all of them (the index and one report ConfigMap for itself and for each
 name in `writers`); a writer only fills its own report. Nothing in the dashboard reads monitoring. The namespace the
-banner reads is the dashboard's platform namespace, `sovereign-cloud`: set `report.namespace` to it on every cluster,
-or the banner finds nothing and shows nothing.
+banner reads is the admin dashboard chart's `namespace` (its platform namespace, served to the pages with the
+dashboard's settings): set `report.namespace` to the same name on every cluster, or the banner finds nothing and shows
+nothing.
 
 **What feeds it.** On each reporting cluster the CronJob `platform-health-report` (in `ops.namespace`) runs every
 `report.intervalMinutes` and
@@ -244,10 +245,18 @@ its own `for` time. A cleared alert leaves the banner at the run after Alertmana
 | never written (the ConfigMap has no `report.json`, or does not exist) | "No report from <cluster> since <time the ConfigMap was made>" |
 | cannot be read: the read is refused or fails, it is not JSON, not of `schemaVersion` 1, names another cluster, or its time of writing is more than ten minutes in the future | "The report from <cluster> cannot be read" |
 
-When the index itself cannot be read (not a list of cluster names) the banner says so; when it is absent, or the
-signed-in person may not read it, the banner shows nothing. A writer that stopped, a cluster that cannot reach the
-services cluster, a writer with a wrong token and a report changed by hand all show; none of them can hide behind a
-time in the future. The services cluster has no alert of its own for a late report: a report's age is no metric its
+The interval is the one the report states, but at most the admin dashboard chart's
+`platformHealthMaxReportIntervalMinutes` (5 by default, 1 to 30): with the default, a report written every five
+minutes is shown late after fifteen, and a report cannot keep itself from ever being late by stating a long interval.
+Set it to the largest `intervalMinutes` of the reporting clusters: below that, a cluster that writes less often is
+shown late between its writes (with 30, a report that states 30 minutes is late after 90).
+
+When the index answers but is not a list of cluster names, the banner says so. When the services cluster's API answers
+the read of the index with an error (other than "not found" or "forbidden"), or the read fails, the banner shows
+"Platform health cannot be read": nothing about the clusters is known then, which is not the same as no fault. When
+the index is absent (reporting is off), or the signed-in person may not read it, the banner shows nothing. A writer
+that stopped, a cluster that cannot reach the services cluster, a writer with a wrong token and a report changed by
+hand all show; none of them can hide behind a time in the future or a long interval. The services cluster has no alert of its own for a late report: a report's age is no metric its
 monitoring has; the writer's own cluster raises `ShcPlatformHealthReportFailed`.
 
 **What it does not replace.** The banner is for the platform admins who open the dashboard. It sends nothing to
@@ -263,7 +272,7 @@ platform's `Shc` alerts, not OpenShift's own.
 | `cluster` | `cluster.name` | the cluster's name as the banner shows it, and the name of its report (`shc-platform-health-<cluster>`); lower-case letters, digits and `-` |
 | `intervalMinutes` | `5` | how often it writes: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 |
 | `image` | the Python image of the checks | Python 3.9 or later; the script uses its standard library only |
-| `namespace` | none, required | the platform namespace of the services cluster: the dashboard's, `sovereign-cloud` |
+| `namespace` | none, required | the platform namespace of the services cluster: the admin dashboard chart's `namespace` |
 | `onServicesCluster` | none, required | `true` on the services cluster, `false` on every other |
 | `servicesCluster.secret`, `.serverKey`, `.tokenKey` | none, required when `onServicesCluster` is `false` | the Secret in `ops.namespace` and its keys holding the services cluster's API address (`https://…`) and a writer's token |
 | `servicesCluster.caKey` | empty | the key holding the CA bundle of the services cluster's API, when its certificate is not publicly trusted |

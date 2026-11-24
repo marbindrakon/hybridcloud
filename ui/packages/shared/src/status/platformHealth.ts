@@ -13,21 +13,30 @@
  *    "alertsDelivered": null}
  *
  * Every cluster of the index shows, nothing is dropped silently: its faults;
- * "no report since" when the report is older than three of its intervals or
+ * "no report since" when the report is older than three of its intervals (the
+ * report's own interval, at most the dashboard's longest believed interval) or
  * was never written; "cannot be read" when it cannot be fetched, does not
  * parse, has another schemaVersion or another cluster's name, or its writtenAt
- * is more than ten minutes in the future.
+ * is more than ten minutes in the future. The index absent (reporting off) or
+ * refused: nothing; the index answered with an error: "platform health cannot
+ * be read".
+ *
+ * The namespace is the dashboard's setting (served at /api/ui-config), the one
+ * the operations layer writes to.
  */
 
 export const PLATFORM_HEALTH_INDEX = 'shc-platform-health';
 export const PLATFORM_HEALTH_INDEX_KEY = 'clusters.json';
 export const PLATFORM_HEALTH_REPORT_PREFIX = 'shc-platform-health-';
 export const PLATFORM_HEALTH_REPORT_KEY = 'report.json';
-/** The platform namespace of the services cluster (where the platform's own objects live). */
-export const PLATFORM_HEALTH_NAMESPACE = 'sovereign-cloud';
 export const PLATFORM_HEALTH_SCHEMA_VERSION = 1;
-/** A report is late when it is older than this many of its own intervals. */
+/** A report is late when it is older than this many of its intervals. */
 export const LATE_AFTER_INTERVALS = 3;
+/**
+ * The longest report interval believed when the dashboard's setting is not read
+ * (the setting's default): a report written every five minutes is late after fifteen.
+ */
+export const DEFAULT_MAX_INTERVAL_SECONDS = 5 * 60;
 /** A report written further ahead than this is not believed (a clock far off, or a forged time). */
 export const FUTURE_TOLERANCE_MS = 10 * 60 * 1000;
 /** At most this many clusters are read from the index. */
@@ -55,7 +64,7 @@ export interface PlatformHealthReport {
   faults: PlatformFault[];
   /** true / false when the cluster reports whether its alerts reach a receiver; null when it does not say. */
   alertsDelivered: boolean | null;
-  /** writtenAt is older than LATE_AFTER_INTERVALS intervals. */
+  /** writtenAt is older than LATE_AFTER_INTERVALS intervals (its own, at most the longest believed). */
   late: boolean;
 }
 
@@ -67,9 +76,13 @@ export type ReportRead =
 
 /** What the banner reads: the index and each listed cluster's report. */
 export interface PlatformHealthRead {
-  /** The index's clusters; null when the index answered but its list cannot be read. */
+  /** The index's clusters; null when the index answered but its list cannot be read, or could not be read. */
   clusters: string[] | null;
   reports: Record<string, ReportRead>;
+  /** The index could not be read: the server answered with an error, or the read failed. */
+  indexFailed?: boolean;
+  /** The longest report interval believed, in seconds (default DEFAULT_MAX_INTERVAL_SECONDS). */
+  maxIntervalSeconds?: number;
 }
 
 export interface NeverWritten {
@@ -89,6 +102,8 @@ export interface PlatformHealthView {
   unreadable: string[];
   /** The index answered but its list of clusters cannot be read. */
   indexUnreadable: boolean;
+  /** The index could not be read (an error, not its absence). */
+  indexFailed: boolean;
   /** Reports that say their alerts reach no receiver. */
   undelivered: PlatformHealthReport[];
 }
@@ -140,11 +155,23 @@ export function parseIndex(data: unknown): string[] | null {
   return [...new Set(list as string[])].slice(0, MAX_CLUSTERS);
 }
 
+/** The longest believed interval: a positive number of seconds, else the default. */
+function maxInterval(v: unknown): number {
+  return typeof v === 'number' && Number.isFinite(v) && v > 0 ? v : DEFAULT_MAX_INTERVAL_SECONDS;
+}
+
 /**
  * One cluster's report from its value, or null when it cannot be read: not JSON, not the report's shape, another
- * schemaVersion, another cluster's name, or a writtenAt more than FUTURE_TOLERANCE_MS ahead of now.
+ * schemaVersion, another cluster's name, or a writtenAt more than FUTURE_TOLERANCE_MS ahead of now. Lateness uses
+ * the report's interval, but at most maxIntervalSeconds: a report cannot keep itself from being late by claiming
+ * a long interval.
  */
-export function parseReport(cluster: string, value: unknown, nowMs: number = Date.now()): PlatformHealthReport | null {
+export function parseReport(
+  cluster: string,
+  value: unknown,
+  nowMs: number = Date.now(),
+  maxIntervalSeconds: number = DEFAULT_MAX_INTERVAL_SECONDS,
+): PlatformHealthReport | null {
   let obj: unknown = value;
   if (typeof value === 'string') {
     try {
@@ -171,7 +198,7 @@ export function parseReport(cluster: string, value: unknown, nowMs: number = Dat
     intervalSeconds: interval,
     faults,
     alertsDelivered: typeof obj.alertsDelivered === 'boolean' ? obj.alertsDelivered : null,
-    late: ageMs > LATE_AFTER_INTERVALS * interval * 1000,
+    late: ageMs > LATE_AFTER_INTERVALS * Math.min(interval, maxInterval(maxIntervalSeconds)) * 1000,
   };
 }
 
@@ -186,17 +213,22 @@ export function compareFaults(a: PlatformFault, b: PlatformFault): number {
 }
 
 function emptyView(): PlatformHealthView {
-  return { faults: [], late: [], neverWritten: [], unreadable: [], indexUnreadable: false, undelivered: [] };
+  return { faults: [], late: [], neverWritten: [], unreadable: [], indexUnreadable: false, indexFailed: false, undelivered: [] };
 }
 
 /** What the banner shows for what was read (null: the index is absent or not readable, nothing is shown). */
 export function platformHealthView(read: PlatformHealthRead | null | undefined, nowMs: number = Date.now()): PlatformHealthView {
   const view = emptyView();
   if (!read) return view;
+  if (read.indexFailed) {
+    view.indexFailed = true;
+    return view;
+  }
   if (read.clusters === null) {
     view.indexUnreadable = true;
     return view;
   }
+  const max = maxInterval(read.maxIntervalSeconds);
   for (const cluster of [...read.clusters].sort()) {
     const r = read.reports[cluster];
     if (!r || r.state === 'unreadable') {
@@ -212,7 +244,7 @@ export function platformHealthView(read: PlatformHealthRead | null | undefined, 
       view.neverWritten.push({ cluster, ...(validTime(r.createdAt) ? { since: r.createdAt } : {}) });
       continue;
     }
-    const report = parseReport(cluster, value, nowMs);
+    const report = parseReport(cluster, value, nowMs, max);
     if (!report) {
       view.unreadable.push(cluster);
       continue;
@@ -229,6 +261,7 @@ export function platformHealthView(read: PlatformHealthRead | null | undefined, 
 export function hasPlatformHealthNews(view: PlatformHealthView): boolean {
   return (
     view.indexUnreadable ||
+    view.indexFailed ||
     view.faults.length > 0 ||
     view.late.length > 0 ||
     view.neverWritten.length > 0 ||
@@ -237,9 +270,9 @@ export function hasPlatformHealthNews(view: PlatformHealthView): boolean {
   );
 }
 
-/** A ConfigMap's path below the API base (`/api/k8s`, or the console's `/api/kubernetes`). */
-export function platformHealthPath(base: string, name: string = PLATFORM_HEALTH_INDEX): string {
-  return `${base.replace(/\/+$/, '')}/api/v1/namespaces/${PLATFORM_HEALTH_NAMESPACE}/configmaps/${encodeURIComponent(name)}`;
+/** A ConfigMap's path below the API base (`/api/k8s`, or the console's `/api/kubernetes`), in the platform namespace. */
+export function platformHealthPath(base: string, namespace: string, name: string = PLATFORM_HEALTH_INDEX): string {
+  return `${base.replace(/\/+$/, '')}/api/v1/namespaces/${encodeURIComponent(namespace)}/configmaps/${encodeURIComponent(name)}`;
 }
 
 /** The ConfigMap name of a cluster's report. */

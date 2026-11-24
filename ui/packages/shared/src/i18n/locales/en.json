@@ -1894,6 +1894,8 @@
     "unreadableReport": "The report from {{cluster}} cannot be read",
     "unreadableReportBody": "This cluster's health report could not be read or has a form this page does not know (another version, or a time in the future), so its faults do not show here. Check the cluster's operations layer.",
     "unreadableIndex": "The list of clusters that report their health cannot be read",
-    "unreadableIndexBody": "No cluster's faults can be shown here until the list is repaired. Check the services cluster's operations layer."
+    "unreadableIndexBody": "No cluster's faults can be shown here until the list is repaired. Check the services cluster's operations layer.",
+    "indexFailed": "Platform health cannot be read",
+    "indexFailedBody": "The services cluster answered with an error when this page read the platform's health, so no cluster's faults can be shown here. The page reads it again on its own; if this stays, check the services cluster's API."
   }
 }
