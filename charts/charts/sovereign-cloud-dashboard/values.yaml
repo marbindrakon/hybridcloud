@@ -61,6 +61,12 @@ resources:
     cpu: 50m
     memory: 128Mi
 
+# Link from the admin's diagnostics to an automation job: an https URL with {jobId} where the job's id
+# goes, for example https://automation.example.com/execution/jobs/playbook/{jobId}/output. Empty = the
+# diagnostics show the job's id without a link (objects' status carries no address of the automation
+# platform).
+automationJobUrlTemplate: ""
+
 env:
   NODE_ENV: production
   # Base URL of the documentation for the Help menu (empty = "not configured").

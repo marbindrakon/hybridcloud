@@ -17,8 +17,8 @@ test('token object name is sha256~ + base64url(sha256(body))', () => {
 });
 
 test('ui-config takes only https URLs from env, empty by default', () => {
-  assert.deepEqual(s.uiConfigFromEnv({}), { helpBaseUrl: '', consoleUrl: '' });
-  assert.deepEqual(s.uiConfigFromEnv({ SHC_HELP_BASE_URL: 'https://docs.example/docs/', SHC_CONSOLE_URL: 'javascript:alert(1)' }), { helpBaseUrl: 'https://docs.example/docs', consoleUrl: '' });
+  assert.deepEqual(s.uiConfigFromEnv({}), { helpBaseUrl: '', consoleUrl: '', automationJobUrlTemplate: '' });
+  assert.deepEqual(s.uiConfigFromEnv({ SHC_HELP_BASE_URL: 'https://docs.example/docs/', SHC_CONSOLE_URL: 'javascript:alert(1)' }), { helpBaseUrl: 'https://docs.example/docs', consoleUrl: '', automationJobUrlTemplate: '' });
 });
 
 let api; let app; let base; const deleted = [];

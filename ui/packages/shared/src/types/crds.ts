@@ -100,7 +100,6 @@ export interface CloudOSOAccessStatus {
 export interface EdaJobStatus {
   name?: string;
   jobId?: string;
-  url?: string;
   timestamp?: string;
   status?: 'running' | 'waiting' | 'success' | 'failed' | string;
 }

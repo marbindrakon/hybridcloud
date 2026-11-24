@@ -856,7 +856,8 @@
     "siteUserActions": "Actions by this user in the project are this cluster's.",
     "siteCredentialMade": "Credential made",
     "clusterCredentialRefused": "The cluster has no credential on the site",
-    "clusterCredentialSecretMissing": "The cluster's credential needs the platform team"
+    "clusterCredentialSecretMissing": "The cluster's credential needs the platform team",
+    "jobWithId": "{{name}} (job {{id}})"
   },
   "networkOverview": {
     "loading": "Loading the network overview",

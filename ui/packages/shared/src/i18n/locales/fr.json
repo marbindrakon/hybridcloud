@@ -856,7 +856,8 @@
     "siteUserActions": "Les actions de cet utilisateur dans le projet sont celles de ce cluster.",
     "siteCredentialMade": "Identifiant créé",
     "clusterCredentialRefused": "Le cluster n'a pas d'identifiant sur le site",
-    "clusterCredentialSecretMissing": "L'identifiant du cluster attend l'équipe plateforme"
+    "clusterCredentialSecretMissing": "L'identifiant du cluster attend l'équipe plateforme",
+    "jobWithId": "{{name}} (tâche {{id}})"
   },
   "networkOverview": {
     "loading": "Chargement de la vue réseau",
