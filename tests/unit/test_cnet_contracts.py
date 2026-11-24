@@ -216,7 +216,7 @@ class NetworkRowsAndTheServicePlan(unittest.TestCase):
 class PlatformReachableAndThePreflight(unittest.TestCase):
     """The network job's condition, as the cluster job's preflight reads it."""
 
-    def judge(self, decision, space=SPACE):
+    def judge(self, decision, space=SPACE, site_network=True):
         net = network_object("acme/n1", decision["prefixes"], space)
         net["status"]["conditions"] = [dict(decision["condition"], lastTransitionTime="2001-01-01T00:00:00Z")]
         placement = {"metadata": {"name": "p1", "namespace": "acme"},
@@ -225,6 +225,8 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
                                 "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
+        if not site_network:
+            del placement["status"]["siteNetwork"]
         real = realization()
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
@@ -234,6 +236,15 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
         return P.network({"kind": "CloudOSO", "environment": "env1", "namespace": "acme", "network": "n1",
                           "networkObj": net, "placements": [placement], "fabric": fab, "needPlatform": True,
                           "needRouterAttachments": True, "hubApi": ""})
+
+    def test_a_placement_that_recorded_no_network_says_so(self):
+        """A placement of the release before has no status.siteNetwork until its own job runs again: the cluster waits
+        and says that, not that the router attachments are not ready."""
+        d = network_decision("acme/n1", [], Ledger(), {"circuits": CIRCUIT_STATUS}, realization())
+        out = self.judge(d, site_network=False)
+        self.assertEqual(out["reason"], "WaitingForPlacement")
+        self.assertIn("has not recorded its network on the site yet", out["message"])
+        self.assertNotIn("router attachments", out["message"])
 
     def test_reasons(self):
         real, led = realization(), Ledger()
