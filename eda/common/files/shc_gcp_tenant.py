@@ -3,13 +3,23 @@
 platform identity by impersonating the project's member account. Idempotent; prints one JSON line.
 
   shc_gcp_tenant.py --config '<json>' check                              the project is usable (label, APIs)
-  shc_gcp_tenant.py --config '<json>' zone-up --zone FQDN                the environment's Cloud DNS public zone
-  shc_gcp_tenant.py --config '<json>' zone-down --zone FQDN
-  shc_gcp_tenant.py --config '<json>' place-up --placement NAME --vni N --prefixes '[cidr]' --edge '<json>' [--egress fabric|cloudNat] [--known-peers '<json>'] [--ipv6 '<json>']
+  shc_gcp_tenant.py --config '<json>' zone-up --zone FQDN --zone-name NAME   the environment's Cloud DNS public zone
+  shc_gcp_tenant.py --config '<json>' zone-down --zone FQDN [--zone-name NAME]
+      NAME: the zone's resource name (the one the environment's status records, else the platform's names
+      function's). A zone of that name or of that DNS name that does not carry the platform's labels
+      (shc-managed=true and this tenant's shc-entity) is refused (reason NameTakenOnSite), never taken over, never
+      deleted.
+  shc_gcp_tenant.py --config '<json>' place-up --placement NAME --vpc VPC --vni N --prefixes '[cidr]' --edge '<json>' [--egress fabric|cloudNat] [--known-peers '<json>'] [--ipv6 '<json>']
       the placement's VPC, subnet, Cloud Router, HA VPN gateway and tunnels to the site's routers; prints the
       routers' tunnel parameters (PSKs go to SHC_EDGE_VPN_TUNNELS_FILE, never to stdout)
-  shc_gcp_tenant.py --config '<json>' place-down --placement NAME
-  shc_gcp_tenant.py --config '<json>' place-status --placement NAME
+  shc_gcp_tenant.py --config '<json>' place-down --placement NAME --vpc VPC [--external-gateway NAME]
+  shc_gcp_tenant.py --config '<json>' place-status --placement NAME --vpc VPC
+      VPC: the placement's VPC name, as the placement's status records it (status.realization.site.vpc), else the
+      platform's names function's; every other object of the placement is named from it (<vpc>-t0, <vpc>-fabric,
+      ...). Without --vpc: shc-<placement> (the form older jobs passed). An existing VPC of that name whose
+      description is not the platform's is refused (NameTakenOnSite). The site's external VPN gateway is deleted
+      only by name (the one the placement's tunnels point at, and --external-gateway: the one its status records)
+      and only while it carries the platform's labels and no tunnel of the project points at it.
 
 config: {"project", "region", "labels": {..}, "vpcMtu", "linkLocalPool", "cloudRouterAsn", "ipv6Edge"}
   ipv6Edge: the site's routers carry IPv6, so a new HA VPN gateway is created dual-stack (IPV4_IPV6, IPv4 outer
@@ -74,8 +84,14 @@ def fail(msg, **extra):
     g.fail(msg, **extra)
 
 
-def zone_name(fqdn):
-    return "shc-" + fqdn.rstrip(".").replace(".", "-")[:55]
+# what the platform writes into a placement VPC's description: its mark (VPC networks take no labels)
+VPC_MARK = "SHC placement "
+
+
+def taken(what, reason="NameTakenOnSite"):
+    """The refusal for an object of the wanted name that the platform did not make: never taken over or deleted."""
+    fail("%s already exists in the project and was not made by the platform for this; it was left untouched." % what,
+         reason=reason)
 
 
 def truthy(v):
@@ -144,12 +160,38 @@ class Tenant:
                 return z
         return None
 
-    def zone_up(self, fqdn):
-        z = self.find_zone(fqdn)
+    def zone_owner(self, z):
+        """ours | unmarked | other: whether a zone carries the platform's labels, and this tenant's."""
+        lab = z.get("labels") or {}
+        if lab.get("shc-managed") != "true":
+            return "unmarked"
+        mine = self.labels.get("shc-entity")
+        if mine and lab.get("shc-entity") != mine:
+            return "other"
+        return "ours"
+
+    def zone_get(self, fqdn, name):
+        """The environment's zone: by its resource name, else by its DNS name; refused when it is not ours."""
+        dns = fqdn.rstrip(".") + "."
+        z = None
+        if name:
+            z = g.http("GET", "%s/projects/%s/managedZones/%s" % (DNS, self.project, name), token=self.tok, ok404=True)
+            if z and z.get("dnsName") != dns:
+                taken("A Cloud DNS zone named %s (for another DNS name)" % name)
+        if not z:
+            z = self.find_zone(fqdn)
+        if z and self.zone_owner(z) != "ours":
+            taken("The DNS zone %s" % fqdn.rstrip("."))
+        return z
+
+    def zone_up(self, fqdn, name):
+        if not name:
+            fail("zone-up needs the zone's resource name (--zone-name)")
+        z = self.zone_get(fqdn, name)
         if not z:
             self.changed.append("zone " + fqdn)
             z = g.http("POST", "%s/projects/%s/managedZones" % (DNS, self.project), {
-                "name": zone_name(fqdn), "dnsName": fqdn.rstrip(".") + ".", "description": "SHC environment zone",
+                "name": name, "dnsName": fqdn.rstrip(".") + ".", "description": "SHC environment zone",
                 "visibility": "public", "labels": self.labels}, token=self.tok)
         # keep negative answers short-lived in resolvers (names appear all the time: clusters' API and ingress)
         rrs = g.list_all("%s/projects/%s/managedZones/%s/rrsets" % (DNS, self.project, z["name"]), "rrsets", self.tok,
@@ -163,8 +205,8 @@ class Tenant:
                 self.changed.append("zone %s negative TTL 60 s" % fqdn)
         return {"zone": fqdn, "zoneId": z["name"], "nameServers": sorted(z["nameServers"])}
 
-    def zone_down(self, fqdn):
-        z = self.find_zone(fqdn)
+    def zone_down(self, fqdn, name=None):
+        z = self.zone_get(fqdn, name)
         if not z:
             return {"zone": fqdn, "deleted": False}
         rrs = g.list_all("%s/projects/%s/managedZones/%s/rrsets" % (DNS, self.project, z["name"]), "rrsets", self.tok)
@@ -176,8 +218,37 @@ class Tenant:
         return {"zone": fqdn, "deleted": True}
 
     # ---- a placement's VPC and its HA VPN to the site's routers
-    def names(self, placement):
-        return "shc-%s" % placement
+    @staticmethod
+    def names(placement, vpc=None):
+        """The placement's VPC name: the one given (status, or the names function), else the older form."""
+        return vpc or "shc-%s" % placement
+
+    def vpc_get(self, n):
+        """The placement's VPC, refused when a VPC of that name was not made by the platform."""
+        net = self.get("/global/networks/" + n)
+        if net and not str(net.get("description") or "").startswith(VPC_MARK):
+            taken("A VPC network named %s" % n)
+        return net
+
+    def vpc_description(self, placement, vni):
+        """The VPC's description: the platform's mark, then the person's names in full."""
+        lab = self.labels
+        names = [lab.get("shc-entity"), lab.get("shc-environment"), lab.get("shc-network")]
+        if all(names):
+            return "%sof tenant %s, environment %s, network %s: %s (VNI %d)" % (VPC_MARK, names[0], names[1], names[2],
+                                                                                placement, vni)
+        return "%s%s (VNI %d)" % (VPC_MARK, placement, vni)
+
+    @staticmethod
+    def edge_owner(e, site):
+        """ours | unmarked | other: an external VPN gateway carries shc-managed=true and, when it names one, this
+        site's shc-edge-site."""
+        lab = e.get("labels") or {}
+        if lab.get("shc-managed") != "true":
+            return "unmarked"
+        if lab.get("shc-edge-site") not in (None, site):
+            return "other"
+        return "ours"
 
     @staticmethod
     def nexthops6(n, rt):
@@ -269,9 +340,9 @@ class Tenant:
                 return ips[0] if ips else None
         return None
 
-    def place_status(self, placement):
-        n = self.names(placement)
-        net = self.get("/global/networks/" + n)
+    def place_status(self, placement, vpc=None):
+        n = self.names(placement, vpc)
+        net = self.vpc_get(n)
         out = {"placement": placement, "vpc": n if net else None}
         if net:
             sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n)) or {}
@@ -300,24 +371,25 @@ class Tenant:
                 out["ipv6"]["nat64"]["addresses"] = sorted(st.get("autoAllocatedNatIps") or [])
         return out
 
-    def place_up(self, placement, vni, prefixes, edge, egress="fabric", known=None, ipv6=None):
+    def place_up(self, placement, vni, prefixes, edge, egress="fabric", known=None, ipv6=None, vpc=None):
         c = self.cfg
-        n = self.names(placement)
+        n = self.names(placement, vpc)
         v6 = ipv6_request(ipv6)
         # an IPv6-only placement: no IPv4 range anywhere in the VPC (an IPV6_ONLY subnet)
         only6 = not prefixes
         if only6 and not v6:
             fail("placement %s has neither an IPv4 prefix nor IPv6" % placement)
-        labels = dict(self.labels, **{"shc-placement": placement, "shc-vni": str(vni)})
+        labels = dict({"shc-placement": placement}, **self.labels)
+        labels["shc-vni"] = str(vni)
         mtu = int(c.get("vpcMtu", 1370))
-        net = self.get("/global/networks/" + n)
+        net = self.vpc_get(n)
         if net and net.get("mtu") != mtu:
             fail("VPC %s exists with MTU %s, want %s" % (n, net.get("mtu"), mtu))
         if not net:
             self.changed.append("vpc " + n)
             self.op("POST", "/global/networks", {"name": n, "autoCreateSubnetworks": False, "mtu": mtu,
                                                   "routingConfig": {"routingMode": "REGIONAL"},
-                                                  "description": "SHC placement %s (VNI %d)" % (placement, vni)})
+                                                  "description": self.vpc_description(placement, vni)})
             net = self.get("/global/networks/" + n)
         sn = self.get("/regions/%s/subnetworks/%s" % (self.region, n))
         if sn and only6 and (sn.get("stackType") != "IPV6_ONLY" or sn.get("ipCidrRange")):
@@ -398,13 +470,16 @@ class Tenant:
         ext_name = "shc-edge-" + edge["site"]
         routers = sorted(edge["routers"], key=lambda r: r["name"])[:2]
         ext = self.get("/global/externalVpnGateways/" + ext_name)
+        if ext and self.edge_owner(ext, edge["site"]) != "ours":
+            taken("An external VPN gateway named %s" % ext_name)
         want_if = [{"id": i, "ipAddress": r["publicIp"]} for i, r in enumerate(routers)]
         if ext and [{"id": i["id"], "ipAddress": i["ipAddress"]} for i in ext.get("interfaces", [])] != want_if:
             fail("external VPN gateway %s has other addresses than the site's routers (replace it when no tunnel uses it)" % ext_name)
         if not ext:
             self.changed.append("external vpn gateway " + ext_name)
             self.op("POST", "/global/externalVpnGateways", {"name": ext_name, "redundancyType": "TWO_IPS_REDUNDANCY" if len(routers) == 2 else "SINGLE_IP_INTERNALLY_REDUNDANT",
-                                                             "interfaces": want_if, "labels": self.labels})
+                                                             "interfaces": want_if,
+                                                             "labels": {"shc-managed": "true", "shc-edge-site": edge["site"]}})
             ext = self.get("/global/externalVpnGateways/" + ext_name)
         # link-local /30s for this network: a slice of the pool by VNI (two /30s per placement)
         pool = ipaddress.ip_network(c.get("linkLocalPool", "169.254.0.0/16"))
@@ -556,16 +631,22 @@ class Tenant:
             tr["ipv4Source"] = addr
         return tr
 
-    def place_down(self, placement):
-        n = self.names(placement)
+    def place_down(self, placement, vpc=None, external_gateway=None):
+        n = self.names(placement, vpc)
+        self.vpc_get(n)  # a VPC of that name the platform did not make is refused, never emptied
         # workload guard: any instance on the VPC refuses the teardown
         agg = g.http("GET", self.base + "/aggregated/instances?filter=" + urllib.parse.quote('status != "TERMINATED"'), token=self.tok)
         using = [i["name"] for scope in (agg.get("items") or {}).values() for i in scope.get("instances", [])
                  if any(nic.get("network", "").endswith("/networks/" + n) for nic in i.get("networkInterfaces", []))]
         if using:
             fail("Deletion waits for workloads: VPC %s still has instances %s" % (n, ", ".join(sorted(using))), waiting=True)
+        # the external VPN gateways this placement's tunnels point at, by name, before the tunnels go
+        exts = {external_gateway} if external_gateway else set()
         for i in range(2):
-            if self.get("/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i)):
+            t = self.get("/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i))
+            if t:
+                if t.get("peerExternalGateway"):
+                    exts.add(t["peerExternalGateway"].rsplit("/", 1)[-1])
                 self.op("DELETE", "/regions/%s/vpnTunnels/%s-t%d" % (self.region, n, i))
                 self.changed.append("deleted tunnel %s-t%d" % (n, i))
         rt = self.get("/regions/%s/routers/%s" % (self.region, n))
@@ -598,13 +679,18 @@ class Tenant:
                 self.changed.append("deleted route %s-default6" % n)
             self.op("DELETE", "/global/networks/" + n)
             self.changed.append("deleted vpc " + n)
-        # the site's external VPN gateway goes with the project's last tunnel
-        exts = g.list_all(self.base + "/global/externalVpnGateways", "items", self.tok)
-        tunnels_left = g.list_all(self.base + "/regions/%s/vpnTunnels" % self.region, "items", self.tok)
-        for e in exts:
-            if e["name"].startswith("shc-edge-") and not any(t.get("peerExternalGateway", "").endswith("/" + e["name"]) for t in tunnels_left):
-                self.op("DELETE", "/global/externalVpnGateways/" + e["name"])
-                self.changed.append("deleted external vpn gateway " + e["name"])
+        # the site's external VPN gateway goes with the project's last tunnel: only the one(s) this placement used,
+        # by name, and only while it carries the platform's labels (an unmarked one of that name is left alone)
+        if exts:
+            tunnels_left = g.list_all(self.base + "/regions/%s/vpnTunnels" % self.region, "items", self.tok)
+            for name in sorted(exts):
+                e = self.get("/global/externalVpnGateways/" + name)
+                if not e or (e.get("labels") or {}).get("shc-managed") != "true":
+                    continue
+                if any(t.get("peerExternalGateway", "").rsplit("/", 1)[-1] == name for t in tunnels_left):
+                    continue
+                self.op("DELETE", "/global/externalVpnGateways/" + name)
+                self.changed.append("deleted external vpn gateway " + name)
         return {"placement": placement, "deleted": True}
 
 
@@ -613,7 +699,10 @@ def main():
     ap.add_argument("--config", required=True)
     ap.add_argument("command", choices=["check", "zone-up", "zone-down", "place-up", "place-down", "place-status"])
     ap.add_argument("--zone")
+    ap.add_argument("--zone-name")
     ap.add_argument("--placement")
+    ap.add_argument("--vpc", help="the placement's VPC name (status.realization.site.vpc or the names function's)")
+    ap.add_argument("--external-gateway", help="place-down: the external VPN gateway the placement's status records")
     ap.add_argument("--vni", type=int)
     ap.add_argument("--prefixes")
     ap.add_argument("--edge")
@@ -628,11 +717,13 @@ def main():
     t = None
     try:
         t = Tenant(json.loads(a.config))
-        r = {"check": t.check, "zone-up": lambda: t.zone_up(a.zone), "zone-down": lambda: t.zone_down(a.zone),
+        r = {"check": t.check, "zone-up": lambda: t.zone_up(a.zone, a.zone_name),
+             "zone-down": lambda: t.zone_down(a.zone, a.zone_name),
              "place-up": lambda: t.place_up(a.placement, a.vni, json.loads(a.prefixes or "[]"), json.loads(a.edge or "{}"), a.egress,
                                              json.loads(a.known_peers) if a.known_peers else None,
-                                             json.loads(a.ipv6) if a.ipv6 else None),
-             "place-down": lambda: t.place_down(a.placement), "place-status": lambda: t.place_status(a.placement)}[a.command]()
+                                             json.loads(a.ipv6) if a.ipv6 else None, vpc=a.vpc),
+             "place-down": lambda: t.place_down(a.placement, vpc=a.vpc, external_gateway=a.external_gateway),
+             "place-status": lambda: t.place_status(a.placement, vpc=a.vpc)}[a.command]()
     except g.GcpError as ex:
         fail(str(ex), code=ex.code, changed=t.changed if t else [])
     print(json.dumps({"ok": True, "changed": t.changed, "result": r}, default=str))

@@ -1,8 +1,9 @@
 ---
 # shc (design/P11-GCP-PLAN.md §3.4, §3.5): the site side of a placement on a CloudGCP. One VPC in the environment's
-# project (shc_gcp_tenant.py place-up): the placement's allocated IPv4 prefix as one regional subnet (MTU 1370, the
-# WireGuard leg's), a Cloud Router and an HA VPN gateway whose two tunnels dial the site's two edge routers (the
-# external VPN gateway), BGP over a /30 link-local per tunnel; then the routers' VRF and XFRM tunnels
+# project (shc_gcp_tenant.py place-up), named shc-<tenant>--<placement> by the names function, recorded as
+# status.realization.site.vpc and kept from there for the placement's life: the placement's allocated IPv4 prefix as
+# one regional subnet (MTU 1370, the WireGuard leg's), a Cloud Router and an HA VPN gateway whose two tunnels dial
+# the site's two edge routers (the external VPN gateway), BGP over a /30 link-local per tunnel; then the routers' VRF and XFRM tunnels
 # (shc_gcp_edge.py net-up; the shared secrets travel in a file and the routers' config secret, never on a command
 # line). The routers learn the VPC's prefix from the Cloud Router and advertise it to the gateway as EVPN Type-5
 # (checked by gateway_routes.yml). Egress: fabric (the VPC's default internet route removed; 0/0 learned from the
@@ -33,17 +34,62 @@
     gcp_edge_cidr: "{{ np_gateway.spec.siteUnderlay.cidr }}"
     gcp_edge_asn: "{{ np_asn }}"
 
+# the names the cloud objects carry (labels, the VPC's name and description) obey the rule for names, so every label
+# value fits Google's 63 characters of [a-z0-9_-]; an object made before the rule is refused here, before anything
+# is made
+- name: Check the names the placement's cloud objects carry
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+  vars:
+    name_check_items:
+      - {value: "{{ fab_entity }}", what: tenant}
+      - {value: "{{ np_backend_name }}", what: environment}
+      - {value: "{{ fab_spec.network }}", what: network}
+      - {value: "{{ fab_name }}", what: placement}
+
+- name: Refuse a name that breaks the rule
+  ansible.builtin.set_fact:
+    fab_fail_reason: NameNotAllowed
+    fab_fail_msg: "NetworkPlacement {{ fab_name }}: {{ name_check_message }}"
+  when: name_check_message | length > 0
+
+- name: Stop on a refused name
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: name_check_message | length > 0
+
+# the VPC's name: the one the placement's status records (an existing placement keeps its names), else
+# shc-<tenant>--<placement>, cut with a derived ending so that the longest ending the helper appends still fits
+- name: The VPC name the placement recorded
+  ansible.builtin.set_fact:
+    np_gcp_vpc: >-
+      {{ (((fab_st | default({}, true)).realization | default({}, true)).site | default({}, true)).vpc
+         | default('', true) | string | trim }}
+
+- name: The VPC name from the names function
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request: {action: name, kind: gcp-placement, parts: ["{{ fab_entity }}", "{{ fab_name }}"]}
+  when: np_gcp_vpc | length == 0
+
+- name: Keep the new VPC name
+  ansible.builtin.set_fact:
+    np_gcp_vpc: "{{ names_result.name }}"
+  when: np_gcp_vpc | length == 0
+
 - name: The environment's project and the placement's names
   ansible.builtin.set_fact:
     np_gcp_cfg:
       project: "{{ (np_backend.status | default({}, true)).project | default('') }}"
       region: "{{ (np_backend.status | default({}, true)).region | default('') }}"
-      labels: {shc-entity: "{{ fab_entity }}", shc-network: "{{ fab_spec.network }}"}
+      labels:
+        shc-entity: "{{ fab_entity }}"
+        shc-environment: "{{ np_backend_name }}"
+        shc-network: "{{ fab_spec.network }}"
+        shc-placement: "{{ fab_name }}"
       vpcMtu: "{{ (gcp_real.placement | default({})).vpcMtu | default(1370) }}"
       linkLocalPool: "{{ (gcp_real.edge.vpn | default({})).linkLocalPool | default('169.254.0.0/16') }}"
       cloudRouterAsn: "{{ (gcp_real.edge.vpn | default({})).cloudRouterAsn | default(65020) }}"
       ipv6Edge: "{{ ((gcp_real.edge | default({}, true)).ipv6 | default({}, true)).enabled | default(false) | bool }}"
-    np_gcp_placement: "{{ (fab_namespace ~ '-' ~ fab_name) | regex_replace('[^a-z0-9-]', '-') | truncate(55, true, '') }}"
     np_gcp_egress: >-
       {{ fab_spec.egress | default((gcp_real.placement | default({})).defaultEgress | default('fabric')) }}
     np_gcp_edge:
@@ -119,10 +165,30 @@
     gcp_helper: shc_gcp_tenant.py
     gcp_config: "{{ np_gcp_cfg }}"
     gcp_args: >-
-      {{ ['place-up', '--placement', np_gcp_placement, '--vni', np_l3vni | string, '--prefixes', np_prefixes_v4 | to_json,
+      {{ ['place-up', '--placement', fab_name, '--vpc', np_gcp_vpc, '--vni', np_l3vni | string, '--prefixes', np_prefixes_v4 | to_json,
           '--edge', np_gcp_edge | to_json, '--egress', np_gcp_egress, '--known-peers', np_gcp_known | to_json]
          + (['--ipv6', np_gcp_ipv6 | to_json] if np_gcp_ipv6 | length > 0 else []) }}
     gcp_env: {SHC_EDGE_VPN_TUNNELS_FILE: "{{ _np_gcp_tunnels.path }}"}
+    gcp_soft: true
+
+# an object of the wanted name in the project that the platform did not make (a VPC without the platform's
+# description, an external VPN gateway without its labels) is refused, never taken over
+- name: Refuse an object the platform did not make
+  ansible.builtin.set_fact:
+    fab_fail_reason: NameTakenOnSite
+    fab_fail_msg: "NetworkPlacement {{ fab_name }}: {{ gcp_error }}"
+  when: gcp_error | length > 0 and gcp_result.reason | default('') == 'NameTakenOnSite'
+
+- name: Forget the secrets file after a failed place-up
+  ansible.builtin.file:
+    path: "{{ _np_gcp_tunnels.path }}"
+    state: absent
+  when: gcp_error | length > 0
+
+- name: Stop on a site side error
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg if gcp_result.reason | default('') == 'NameTakenOnSite' else 'GCP place-up failed: ' ~ gcp_error }}"
+  when: gcp_error | length > 0
 
 - name: Keep the cloud side
   ansible.builtin.set_fact:

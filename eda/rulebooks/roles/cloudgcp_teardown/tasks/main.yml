@@ -53,8 +53,12 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
           vars:
             gcp_helper: shc_gcp_tenant.py
-            gcp_config: {project: "{{ cad_account }}", region: "{{ cad_region }}"}
-            gcp_args: [zone-down, --zone, "{{ cad_dns.zone }}"]
+            # only the zone the environment recorded, and only while it carries the platform's labels and this
+            # tenant's: an unmarked zone of that name is refused, never deleted
+            gcp_config: {project: "{{ cad_account }}", region: "{{ cad_region }}", labels: {shc-entity: "{{ fab_entity }}"}}
+            gcp_args: >-
+              {{ ['zone-down', '--zone', cad_dns.zone]
+                 + (['--zone-name', cad_dns.zoneId] if cad_dns.zoneId | default('', true) | length > 0 else []) }}
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
