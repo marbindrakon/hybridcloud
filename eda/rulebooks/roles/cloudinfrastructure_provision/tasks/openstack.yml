@@ -173,17 +173,18 @@
          + (['Keystone domain ' ~ ci_os.projectDomain ~ ' is disabled'] if ((ci_probe.project_domain | default({})).found | default(false)) and not ((ci_probe.project_domain | default({})).enabled | default(true)) else []) }}
 
 # the DNS project the platform makes is its own by the id its status records; a site that refuses the write of its
-# mark (a project tag) does not stop the site: the message and the PlatformMarks condition say what the account needs
+# mark (a project tag) does not stop the site: the message and the PlatformMarks condition (Unknown with a ready-class
+# reason: the phase stays Ready) say what the account needs
 - name: The platform's mark on the DNS project
   vars:
-    _refused: "{{ ci_probe.notes | default([], true) | select('search', 'may not write project tags') | list }}"
+    _refused: "{{ ci_probe.notes | default([], true) | select('search', 'the site account may not update projects') | list }}"
   ansible.builtin.set_fact:
     ci_notes: "{{ ci_notes + _refused }}"
     ci_mark_conditions:
       - type: PlatformMarks
-        status: "{{ 'False' if _refused | length > 0 else 'True' }}"
-        reason: "{{ 'CredentialsInvalid' if _refused | length > 0 else 'Verified' }}"
-        message: "{{ _refused | first if _refused | length > 0 else 'The platform marked the projects it made on the site.' }}"
+        status: "{{ 'Unknown' if _refused | length > 0 else 'True' }}"
+        reason: "{{ 'NotReported' if _refused | length > 0 else 'Verified' }}"
+        message: "{{ (_refused | first ~ '.') if _refused | length > 0 else 'The platform marked the projects it made on the site.' }}"
   when: ci_dns.createProject | default(false) | bool
 
 - name: The site's global external networks

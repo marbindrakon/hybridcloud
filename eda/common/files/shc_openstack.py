@@ -216,12 +216,19 @@ def mark_refused(what):
                    f"team gives the site account the right to create and update projects in the domain.")
 
 
-def mark_not_written(what):
+# the words every note of a refused mark write carries (callers select the note by them)
+MARK_NOT_WRITTEN = "the site account may not update projects"
+
+
+def mark_not_written(what, mark=True, how="recorded"):
     """The note for a project that is ours by its record (or already carries the mark) when the site refuses the
-    write of the mark or the description: reported, the job goes on."""
-    return (f"the site account may not write project tags: the {what}'s project is the platform's by its record, but "
-            f"its mark (a Keystone project tag) and description could not be written. The account needs the right to "
-            f"update projects in the domain (Keystone update_project with tags)")
+    write of the mark, or of the description alone (mark False): reported in product words and the job goes on. It
+    is for the platform team: it names the right the site account lacks and carries no text of the site's answer."""
+    part = "its mark (a project tag) and description" if mark else "its description"
+    why = "the id it recorded" if how == "recorded" else "its mark"
+    return (f"The platform could not write {part} on the {what}'s project: {MARK_NOT_WRITTEN} in their domain. "
+            f"Nothing is wrong with the {what}: the project is the platform's by {why}. The platform team gives the "
+            f"site account the right to update projects, with their tags, in that domain")
 
 
 def ensure_owned_project(conn_d, domain_id, name, tag, description, recorded_id="", what="environment"):
@@ -245,7 +252,7 @@ def ensure_owned_project(conn_d, domain_id, name, tag, description, recorded_id=
             project = conn_d.identity.update_project(project, description=description or have,
                                                      tags=tags + ([tag] if tag not in tags else []))
         except openstack.exceptions.ForbiddenException:
-            return project, False, how, mark_not_written(what)
+            return project, False, how, mark_not_written(what, mark=tag not in tags, how=how)
     return project, False, how, ""
 
 

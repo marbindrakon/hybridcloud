@@ -182,13 +182,35 @@ class EnvironmentProject(Base):
                     continue
                 out = S.provision(req)
                 self.assertEqual(out["project"]["id"], pid)
-                self.assertIn("may not write project tags", out["project"]["markNote"])
+                self.assertIn(S.MARK_NOT_WRITTEN, out["project"]["markNote"])
                 self.assertEqual(self.ks.projects[pid], before)          # unchanged: the write was refused
                 self.assertTrue(self.roles_on(pid))                      # and the job went on
         # the same site allowing the write: the mark is written and no note
         self.ks.deny_project_writes = False
         out = S.provision(req)
         self.assertEqual(out["project"]["markNote"], "")
+
+    def test_the_note_of_a_refused_mark_is_product_text(self):
+        """The note names the right the site account lacks, says whether the mark or only the description could not
+        be written and why the project is still the platform's, and carries nothing of the site's answer."""
+        for site, recorded in (("unmarked", "that"), ("ours", "none"), ("ours", "that")):
+            with self.subTest(site=site, recorded=recorded):
+                self.tearDown()
+                self.ks.stop()
+                self.setUp()
+                pid, rec = self.arrange(site, recorded, NAME, OWNER, OTHER)
+                self.ks.deny_project_writes = True
+                note = S.provision({"clouds_yaml": self.clouds, "domain": "tenants", "project": NAME,
+                                    "project_id": rec, "owner": OWNER, "description": DESC})["project"]["markNote"]
+                self.assertIn(S.MARK_NOT_WRITTEN, note)
+                self.assertIn("the right to update projects", note)
+                for raw in ("identity:", "403", "Forbidden", "Keystone", "update_project", NAME, pid):
+                    self.assertNotIn(raw, note)
+                if site == "unmarked":
+                    self.assertIn("its mark (a project tag) and description", note)
+                else:                                    # the mark is there: only the description was refused
+                    self.assertIn("could not write its description", note)
+                self.assertIn("by the id it recorded" if recorded == "that" else "by its mark", note)
 
     def test_the_tag_obeys_keystone(self):
         tag = S.owner_tag(OWNER)
@@ -234,7 +256,7 @@ class PlatformProject(Base):
         self.ks.deny_project_writes = True
         out = S.platform_project(self.req(pid))
         self.assertEqual(out["id"], pid)
-        self.assertIn("may not write project tags", out["markNote"])
+        self.assertIn(S.MARK_NOT_WRITTEN, out["markNote"])
         self.assertEqual(self.ks.projects[pid]["tags"], [])
         with self.assertRaises(S.Refusal) as cm:                        # nothing recorded: stops, nothing made
             S.platform_project(dict(self.req(""), name="hybrid-fabric-2"))
@@ -280,7 +302,7 @@ class DnsProject(Base):
                                    "description": "Tenant DNS"}, notes)
         self.assertEqual(out["id"], pid)
         self.assertEqual(len(notes), 1)
-        self.assertIn("may not write project tags", notes[0])
+        self.assertIn(S.MARK_NOT_WRITTEN, notes[0])
 
     def test_the_operators_own_project_is_used_as_it_is(self):
         pid = self.ks.add_project("tenant-dns", self.tenants)
