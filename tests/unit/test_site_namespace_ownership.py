@@ -53,13 +53,23 @@ class Ownership(unittest.TestCase):
         "another tenant's": labels("acme", "corp-prod"),
         "unlabelled": {},
         "the site's own": {"kubernetes.io/metadata.name": "acme-corp--prod--vms"},
+        # one of the platform's two labels removed, the other still this environment's
+        "only the tenant label": {"hybridsovereign.redhat/entity": "acme-corp"},
+        "only the environment label": {"hybridsovereign.redhat/cloudvirt": labels("acme-corp", "prod")[
+            "hybridsovereign.redhat/cloudvirt"]},
+        "the tenant's label, another environment's": {"hybridsovereign.redhat/entity": "acme-corp",
+                                                      "hybridsovereign.redhat/cloudvirt": labels("acme-corp", "test")[
+                                                          "hybridsovereign.redhat/cloudvirt"]},
     }
     EXPECTED = {"nothing": "", "ours": "", "tenant's other environment": "NamespaceTaken",
-                "another tenant's": "NameTakenOnSite", "unlabelled": "NameTakenOnSite", "the site's own": "NameTakenOnSite"}
+                "another tenant's": "NameTakenOnSite", "unlabelled": "NameTakenOnSite", "the site's own": "NameTakenOnSite",
+                "only the tenant label": "NamespaceTaken", "only the environment label": "NameTakenOnSite",
+                "the tenant's label, another environment's": "NamespaceTaken"}
 
-    # recorded by this environment's status and without the platform's labels (someone with rights on the site's
-    # Namespace objects removed them): the environment's, labelled again by the apply
-    RECORDED = dict(EXPECTED, unlabelled="", **{"the site's own": ""})
+    # recorded by this environment's status and no label of another tenant or environment (someone with rights on the
+    # site's Namespace objects removed one or both): the environment's, labelled again by the apply
+    RELABELLED = ("unlabelled", "the site's own", "only the tenant label", "only the environment label")
+    RECORDED = dict(EXPECTED, **{k: "" for k in RELABELLED})
 
     def test_every_state(self):
         for recorded in (False, True):
@@ -76,7 +86,7 @@ class Ownership(unittest.TestCase):
                         self.assertEqual(out["refused"], ["acme-corp--prod--vms"])
                         self.assertNotIn("acme ", out["message"])      # another tenant is never named
                     else:
-                        relabel = recorded and site in ("unlabelled", "the site's own")
+                        relabel = recorded and site in self.RELABELLED
                         self.assertEqual(out["relabelled"], ["acme-corp--prod--vms"] if relabel else [])
 
     def test_one_foreign_namespace_stops_them_all(self):
@@ -236,6 +246,33 @@ class Readers(unittest.TestCase):
                                     "np_backend_kind": "CloudVirt", "fab_spec": {"network": "core"}})
         self.assertEqual(got[0], ["acme-corp-prod-vms"])
         self.assertEqual(got[1], [])
+
+    def test_the_placement_names_the_namespaces_it_waits_for(self):
+        """A namespace of the spec on this network that the environment has not made yet: the placement waits for it
+        by name (its message and waitingFor, which the environment's ready run matches to wake it); with every one
+        recorded it does not wait for them."""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from play_helper import HAVE_ANSIBLE, by_name, load, run_cases
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        role = os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_provision")
+        tasks = load(os.path.join(role, "tasks", "main.yml"))
+        steps = [by_name(tasks, "Map the CloudVirt's namespaces on this network"),
+                 by_name(tasks, "Record the namespaces the network serves (CloudVirt)"),
+                 by_name(tasks, "Wait for the namespaces the CloudVirt has not made yet")]
+        spec = {"namespaces": [{"name": "vms", "network": "core"}, {"name": "db", "network": "core"}]}
+        both = [{"name": "vms", "namespace": "acme-corp-prod-vms"}, {"name": "db", "namespace": "acme-corp--prod--db"}]
+        cases = [{"spec": spec, "status": {"namespaces": both}},
+                 {"spec": spec, "status": {"namespaces": both[:1]}},
+                 {"spec": spec, "status": {"namespaces": [{"name": "vms"}, {"name": "db"}]}}]
+        got = run_cases([{"ansible.builtin.set_fact": {"np_status": {}, "np_waiting": [],
+                                                       "np_backend": "{{ case }}"}}] + steps,
+                        cases, "np_waiting",
+                        extra_vars={"role_path": role, "fab_entity": "acme-corp", "np_backend_name": "prod",
+                                    "np_backend_kind": "CloudVirt", "fab_spec": {"network": "core"}})
+        self.assertEqual(got, [[], ["CloudVirt prod (namespace db not made yet)"],
+                               ["CloudVirt prod (namespaces vms, db not made yet)"]])
+
 
 if __name__ == "__main__":
     unittest.main()
