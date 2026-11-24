@@ -771,5 +771,51 @@ class AwsRoleOwnership(unittest.TestCase):
         self.assertEqual(c.iam.calls, [])
 
 
+# ---- the environment jobs: the rule for names, then one name per tenant across the four kinds --------------------
+
+class EnvironmentJobs(unittest.TestCase):
+    ROLES = {"CloudAWS": "cloudaws_provision", "CloudGCP": "cloudgcp_provision"}
+
+    def block(self, role):
+        return load(os.path.join(ROLES, role, "tasks", "main.yml"))[0]["block"]
+
+    def test_checks_come_first_and_in_order(self):
+        for kind, role in self.ROLES.items():
+            tasks = self.block(role)
+            names = [t.get("name") for t in tasks]
+            first = names.index("Check the environment's names")
+            unique = names.index("Check that the tenant has no other environment of this name")
+            self.assertEqual(names[:first], ["Read the %s" % kind], role)          # before anything else
+            self.assertLess(first, unique)
+            self.assertLess(unique, names.index("Resolve the site"))
+            inc = tasks[unique]
+            self.assertTrue(inc["ansible.builtin.include_tasks"].endswith("environment_name_unique.yml"))
+            self.assertEqual(inc["vars"]["enu_kind"], kind)
+            stop = by_name(tasks, "Refuse a name another of the tenant's environments holds")
+            self.assertEqual(stop["ansible.builtin.set_fact"]["fab_fail_reason"], "EnvironmentNameTaken")
+
+    def test_no_dashboard_host_and_no_slug(self):
+        for role in list(self.ROLES.values()) + ["cloudaws_teardown", "cloudgcp_teardown"]:
+            for dirpath, _, files in os.walk(os.path.join(ROLES, role)):
+                for f in files:
+                    text = read(os.path.join(dirpath, f))
+                    self.assertNotIn("eda_dashboard_host", text, f)
+                    self.assertNotIn("slug", text.lower(), f)
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_a_name_made_before_the_rule_is_refused(self):
+        for kind, role in self.ROLES.items():
+            tasks = self.block(role)
+            names = [t.get("name") for t in tasks]
+            part = tasks[names.index("Check the environment's names"): names.index("Stop on a refused name") + 1]
+            steps = [{"ansible.builtin.set_fact": {"fab_name": "{{ case }}", "_refused": ""}},
+                     {"block": part, "rescue": [{"ansible.builtin.set_fact": {"_refused": "{{ fab_fail_reason }}: {{ fab_fail_msg }}"}}]}]
+            got = run_cases(steps, ["prod", "Prod", "prod.eu", "p" * 31], "_refused",
+                            extra_vars={"role_path": os.path.join(ROLES, role), "fab_entity": "acme-corp"})
+            self.assertEqual(got[0], "")
+            for g in got[1:]:
+                self.assertTrue(g.startswith("NameNotAllowed: %s " % kind), g)
+
+
 if __name__ == "__main__":
     unittest.main()

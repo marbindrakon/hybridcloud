@@ -13,6 +13,48 @@
       vars:
         fab_read_entity: true
 
+    # before anything is made: the environment's and the tenant's names obey the rule for names (an object made
+    # before the rule), then the name is the tenant's only environment of that name across the four kinds (they all
+    # get the zone <environment>.<tenant>.<domain>)
+    - name: Check the environment's names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ fab_name }}", what: environment}
+          - {value: "{{ fab_entity }}", what: tenant}
+
+    - name: Refuse a name that breaks the rule
+      ansible.builtin.set_fact:
+        fab_fail_reason: NameNotAllowed
+        fab_fail_msg: "CloudGCP {{ fab_name }}: {{ name_check_message }}"
+      when: name_check_message | length > 0
+
+    - name: Stop on a refused name
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: name_check_message | length > 0
+
+    - name: Check that the tenant has no other environment of this name
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/environment_name_unique.yml"
+      vars:
+        enu_kind: CloudGCP
+        enu_name: "{{ fab_name }}"
+        enu_namespace: "{{ fab_namespace }}"
+        enu_created: "{{ fab_obj.metadata.creationTimestamp }}"
+
+    - name: Refuse a name another of the tenant's environments holds
+      ansible.builtin.set_fact:
+        fab_fail_reason: EnvironmentNameTaken
+        fab_fail_msg: >-
+          CloudGCP {{ fab_name }}: the tenant already has an environment named {{ fab_name }} ({{ enu_holder_kind }});
+          create this one with another name
+      when: enu_taken | bool
+
+    - name: Stop on a name already in use
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: enu_taken | bool
+
     - name: Start with nothing to wait for
       ansible.builtin.set_fact:
         ca_waiting: []
