@@ -2530,10 +2530,11 @@ def namespace_ownership(req):
     """Whether the environment may apply its site namespaces. namespaces: [{namespace, labels}] (what it wants, from
     cloudvirt-namespaces); existing: {namespace: its labels} for those the site already has. A namespace is the
     environment's when it carries the environment's tenant and environment labels, or when this environment's status
-    records it (recorded: the site namespace names of status.namespaces) and it carries neither label: someone with
-    rights on the site's Namespace objects removed them, and the apply writes them again (listed in relabelled). One
-    of the tenant with another environment's label is the tenant's own clash (NamespaceTaken); any other (no labels
-    and not recorded, another tenant's, the site's own) is refused with NameTakenOnSite. Nothing is merged into a
+    records it (recorded: the site namespace names of status.namespaces) and neither label names another tenant or
+    environment: someone with rights on the site's Namespace objects removed one or both, and the apply writes them
+    again (listed in relabelled). One of the tenant with another environment's label is the tenant's own clash
+    (NamespaceTaken); any other (no labels and not recorded, another tenant's, the site's own) is refused with
+    NameTakenOnSite. Nothing is merged into a
     namespace that is not the environment's. Returns {ok, reason, message, refused: [namespace], relabelled}."""
     keys = ("hybridsovereign.redhat/entity", "hybridsovereign.redhat/cloudvirt")
     existing = req.get("existing") or {}
@@ -2546,7 +2547,8 @@ def namespace_ownership(req):
         want = n.get("labels") or {}
         if all(have.get(k) == want.get(k) for k in keys):
             continue
-        if n["namespace"] in recorded and not any(have.get(k) for k in keys):
+        # recorded and no label names another tenant or environment (one or both removed): the environment's
+        if n["namespace"] in recorded and not any(have.get(k) and have.get(k) != want.get(k) for k in keys):
             relabelled.append(n["namespace"])
             continue
         (tenant_clash if have.get(keys[0]) == want.get(keys[0]) else foreign).append(n["namespace"])

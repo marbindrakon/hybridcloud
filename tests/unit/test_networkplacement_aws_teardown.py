@@ -1,5 +1,6 @@
-"""An AWS placement's teardown (networkplacement_teardown main.yml): the VPC, the IPAM pool and the DHCP option set
-are the ones the placement's status records (status.realization.site.vpc, .ipv6.pool, .ipv6.dhcpOptions), passed to
+"""An AWS placement's teardown (networkplacement_teardown main.yml): the VPC, the IPAM pool, the DHCP option set and
+the IPAM are the ones the placement's status records (status.realization.site.vpc, .ipv6.pool, .ipv6.dhcpOptions,
+.ipv6.ipam), passed to
 place-down, which deletes nothing else in the account; with no VPC recorded the helper deletes nothing there and the
 deletion message names what carries the placement's tag. Names are examples."""
 import json
@@ -24,7 +25,7 @@ class AwsTeardownReadsStatus(unittest.TestCase):
     def test_arguments(self):
         site = {"account": "111111111111", "region": "r1"}
         v6site = dict(site, vpc="vpc-1", ipv6={"source": "Network", "prefix": "3fff:0:4000:10::/60",
-                                               "pool": "ipam-pool-1", "dhcpOptions": "dopt-1"})
+                                               "pool": "ipam-pool-1", "dhcpOptions": "dopt-1", "ipam": "ipam-1"})
         cases = [
             {"st": {"realization": {"site": dict(site, vpc="vpc-1")}}, "spec": {"ipv4": {}}},
             {"st": {"realization": {"site": v6site}}, "spec": {"ipv6": {"source": "Network"}}},
@@ -40,8 +41,8 @@ class AwsTeardownReadsStatus(unittest.TestCase):
         self.assertEqual(out[0], head + ["--vpc-id", "vpc-1"])
         self.assertEqual(out[1][:7], head + ["--vpc-id", "vpc-1"])
         v6 = json.loads(out[1][8])
-        self.assertEqual((out[1][7], v6["pool"], v6["dhcpOptions"], v6["only"]),
-                         ("--ipv6", "ipam-pool-1", "dopt-1", True))
+        self.assertEqual((out[1][7], v6["pool"], v6["dhcpOptions"], v6["ipam"], v6["only"]),
+                         ("--ipv6", "ipam-pool-1", "dopt-1", "ipam-1", True))
         # nothing recorded: no --vpc-id, and the helper then deletes nothing in the account
         self.assertEqual(out[2], head)
         self.assertEqual(out[3], head)

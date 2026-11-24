@@ -19,7 +19,8 @@ group `devs`.
    The platform also writes marks: descriptions, tags, labels and attributes that name the tenant and the object.
    They are for people and for clean-up. A mark counts as proof of ownership only where nobody but the platform can
    write it: a Keystone project tag in a domain tenants do not administer, an attribute of a client or a group in the
-   sign-in directory, labels on a namespace that the platform's admission policy guards. A description or a tag that a
+   sign-in directory, labels on a site namespace (tenants have no right on a site's Namespace objects: only the
+   platform's account writes them). A description or a tag that a
    tenant could write (on a DNS record, or on a cloud object in the tenant's own account or project), the registry
    organization's contact address and the automation organization's description are never a reason to take over or
    to delete an object.
@@ -93,14 +94,14 @@ An environment's name is unique within its tenant across the four environment ki
 | A cluster's OpenStack user and application credential | `<tenant>_<environment>_<cluster>` | PlatformOpenshift `status.credential.user`, `.userId`, `.id` | the user's description `User of OpenShift cluster <tenant> / <environment> / <cluster> (build <build>)`, the credential's `OpenShift cluster <tenant> / <environment> / <cluster>` |
 | A cluster's floating IPs | (no name) | PlatformOpenshift `status.floatingIPs.api.id`, `.ingress.id` | descriptions `OpenShift cluster <cluster>: API (platform build <build>)` and `…: ingress (…)` (written for people, never read back) |
 | A cluster's DNS records | `api.<cluster>.<environment zone>`, `*.apps.<cluster>.<environment zone>` | PlatformOpenshift `status.dns.records` | the record's description `shc:PlatformOpenshift/<namespace>/<cluster>` |
-| Namespace of a VM environment on an OpenShift Virtualization site | `<tenant>--<environment>--<namespace>` (63; cut with the ending) | CloudVirt `status.namespaces[].namespace` | the labels `hybridsovereign.redhat/entity`, `/cloudvirt`, `/cloudvirt-namespace` (guarded by the site's admission policy) |
+| Namespace of a VM environment on an OpenShift Virtualization site | `<tenant>--<environment>--<namespace>` (63; cut with the ending) | CloudVirt `status.namespaces[].namespace` | the labels `hybridsovereign.redhat/entity`, `/cloudvirt`, `/cloudvirt-namespace` (only the platform's account may write them: tenants have no right on the site's Namespace objects) |
 | Access group on the services cluster, OpenStack and VM sites, tenant clusters | `<tenant>.<group>` (never cut) | the client role's attributes (`entity`, `owner`) in the sign-in directory | the client role's description |
 | Access group in the sign-in directory | `/<tenant>/<group>` under `/<tenant>` | Rbac `status.groupId`; the group's attribute `entity` | Rbac `status.group` |
 | Quay organization | `<tenant>_<name>` | QuayOrg `status.orgName` | the contact address `<organization>@<mail domain>` (a setting of the installation) |
 | AAP organization | `<tenant>_<name>` | AAPOrg `status.orgName`, `status.orgId`, `status.gatewayOrgId`; its sign-in maps in `status.signInMaps` | the description `Automation organization <name> of tenant <tenant>, made by the platform (AAPOrg <namespace>/<name>)` |
 | Sign-in client of a Vault | `vault_<tenant>_<name>` | Vault `status.oidcClientId` | the client's name `Vault <tenant>/<name>` |
 | Address of a Vault on the services cluster | the route's default `<instance>-<namespace>` when it fits a DNS label (63), else `vault-<tenant>--<name>` (cut with the ending) | Vault `status.vaultUrl` | — |
-| Network placement on AWS (VPC, subnets, route tables, attachments) | `Name` tag `<tenant>_<placement>` | NetworkPlacement `status.realization.site` (the VPC's and its objects' ids) | tags naming the tenant, the environment, the network and the placement |
+| Network placement on AWS (VPC, subnets, route tables, attachments; with IPv6 its address pool, the account's address manager (IPAM) and, IPv6-only, its DHCP option set) | `Name` tag `<tenant>_<placement>` | NetworkPlacement `status.realization.site` (the VPC's id; `.ipv6.pool`, `.ipv6.ipam`, `.ipv6.dhcpOptions`); the account's address manager also by the other placements of the account and region that record it | tags naming the tenant, the environment, the network and the placement |
 | Network placement on Google Cloud | `shc-<tenant>--<placement>` (63, with room for the longest ending `-default6`; cut with the ending) | NetworkPlacement `status.realization.site.vpc` | the labels `shc-entity`, `shc-network` and the VPC's description |
 | Google Cloud DNS zone of an environment (resource name) | `shc-<tenant>--<environment>` | CloudGCP `status.dnsZoneId` | the zone's labels |
 | DNS zone of an environment | `<environment>.<tenant>.<tenant DNS domain>` | the zone id in the environment's status (`status.dns.zoneId`, `status.dnsZoneId`, `status.route53ZoneId`) | — |
@@ -178,7 +179,7 @@ as before (the organizations' `status.orgName`, an environment's `status.project
 `status.realization.site.networkId` and `routerId`, a VM environment's `status.namespaces[]`, a zone's id). Where an
 older object's status lacks the id the job now needs, the job looks for the object by the exact old form of its name
 inside a scope only the platform writes (the platform's own project; the site's namespaces with the environment's
-guarded labels), takes it, records it, and never makes a second one. Label and annotation keys of the platform are
+labels, which only the platform's account writes), takes it, records it, and never makes a second one. Label and annotation keys of the platform are
 under `hybridsovereign.redhat/`; objects made with the earlier keys of the same word under another domain are still
 found by a teardown, which looks for both keys.
 
@@ -186,3 +187,29 @@ The short name an earlier release wrote in `status.slug` is no longer written or
 next run removes it; on a cluster and on an AWS or Google Cloud environment it stays in status as it was, with no
 effect: no job reads it, and no page shows it except the JSON view of the object on the admin pages (tenant pages
 never receive it).
+
+## When a deletion leaves something
+
+A deletion never says "Deleted" for something it kept. Its last message says what it deleted and what it left, and
+why:
+
+- **A network placement on AWS or Google Cloud whose status recorded no network** (a run that stopped before it
+  could record): nothing is deleted in the tenant's account or project, because a tag or a label there is anyone's
+  to write. The message ends with "the placement recorded no VPC, so nothing was deleted in account …" or "no Google
+  Cloud network was recorded for the placement, so nothing was deleted there", and lists what carries the
+  placement's tag and no status records ("left in the account, as no status records them: vpc vpc-…, ipam pool
+  ipam-pool-…, dhcp options dopt-…"). The same list can appear on a placement that is ready: its creation never takes
+  or deletes such an object either. Check each one in the account or project: if it is the platform's (the tags name
+  the tenant, the environment and the placement), delete it by hand; if not, leave it.
+- **A placement whose recorded network is gone** (deleted by hand): "the VPC … the placement recorded no longer
+  exists", with what was left beside it (on Google Cloud, objects of the network's names that are not in the
+  recorded network: "left in the project, as they are not in the network the placement recorded: …").
+- **An AWS or Google Cloud environment's DNS zone**: "Zone … deleted", "… was not deleted: the environment recorded
+  no zone id, so nothing was deleted in the account" (or project), or "… was already gone"; then whether its
+  delegation in the tenant zone was deleted, kept (it was not the one the platform wrote for this environment), not
+  found, or not looked for (the platform's tenant DNS configuration was not found).
+- **A place-up refused because something carries the placement's tag**: an AWS address pool tagged for the placement
+  that no status records is refused (`NameTakenOnSite`), never taken; an AWS account whose address manager (IPAM)
+  no placement records, where AWS refuses a second one, is refused with the address manager's id. The platform team
+  removes the object, or, when it is the platform's from a run that could not record it, deletes it so that the next
+  run makes and records a new one.

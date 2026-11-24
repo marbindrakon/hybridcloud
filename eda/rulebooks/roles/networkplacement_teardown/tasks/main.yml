@@ -342,6 +342,21 @@
                 msg: "{{ gcp_error }}"
               when: gcp_error | length > 0
 
+            # the recorded VPC gone, or objects of the VPC's names outside it: the message says what was not deleted
+            - name: Note what was not deleted in the project
+              vars:
+                _r: "{{ gcp_result.result | default({}, true) }}"
+              ansible.builtin.set_fact:
+                npd_note: >-
+                  {{ npd_note | default('') ~ (('; ' ~ _r.note) if _r.note | default('', true) | length > 0 else '')
+                     ~ (('; left in the project, as they are not in the network the placement recorded: ' ~ (_r.left | join(', ')))
+                        if _r.left | default([], true) | length > 0 else '') }}
+              when:
+                - npd_gcp_vpc | length > 0
+                - >-
+                  (gcp_result.result | default({}, true)).note | default('', true) | length > 0
+                  or (gcp_result.result | default({}, true)).left | default([], true) | length > 0
+
             - name: The routers' VRF for this network goes with the placement
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
               vars:
@@ -371,8 +386,8 @@
                 aws_edge_cidr: "{{ npd_gw.spec.siteUnderlay.cidr }}"
                 aws_edge_asn: 65000
 
-            # the VPC, IPAM pool and DHCP option set the placement's status records (status.realization.site.vpc,
-            # .ipv6.pool, .ipv6.dhcpOptions) are the only ones deleted; with no VPC recorded nothing is deleted in the
+            # the VPC, IPAM pool, DHCP option set and IPAM the placement's status records (status.realization.site.vpc,
+            # .ipv6.pool, .ipv6.dhcpOptions, .ipv6.ipam) are the only ones deleted (the IPAM with its last pool); with no VPC recorded nothing is deleted in the
             # account (a tag there is anyone's to write) and the message names what carries the placement's tag.
             # The account and region the placement recorded (the environment's, if it never got that far)
             - name: Remove the placement's VPC (and the network's hub side with its last placement)
@@ -388,7 +403,7 @@
                   entry: automation
                   edge: "{{ aws_edge_cfg }}"
                 # with spec.ipv6 the IPv6 side goes too (routes, egress-only gateway, the VPC's block, the
-                # placement's IPAM pool and the IPAM with its last pool); the source the site side recorded, else the
+                # placement's IPAM pool and the recorded IPAM with its last pool); the source the site side recorded, else the
                 # spec's; an IPv6-only placement (no spec.ipv4) also has its VPC's DHCP option set removed
                 _v6: >-
                   {{ {} if fab_spec.ipv6 is not defined
@@ -397,6 +412,8 @@
                           | combine({'pool': _site_st.ipv6.pool} if (_site_st.ipv6 | default({}, true)).pool | default('', true) | length > 0 else {})
                           | combine({'dhcpOptions': _site_st.ipv6.dhcpOptions}
                                     if (_site_st.ipv6 | default({}, true)).dhcpOptions | default('', true) | length > 0 else {})
+                          | combine({'ipam': _site_st.ipv6.ipam}
+                                    if (_site_st.ipv6 | default({}, true)).ipam | default('', true) | length > 0 else {})
                           | combine({'only': true} if fab_spec.ipv4 is not defined else {}) }}
                 _vpc: "{{ _site_st.vpc | default('', true) | string | trim }}"
                 aws_args: >-
@@ -527,7 +544,10 @@
           ready: false
           deletionComplete: true
           deletionBlockedBy: []
-          message: "Deleted{{ npd_note | default('') }}"
+          # "Deleted" alone only when nothing was kept; else what was deleted and what was left
+          message: >-
+            {{ 'Deleted' if npd_note | default('', true) | length == 0
+               else 'The placement is deleted on the platform' ~ npd_note }}
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     # the circuits' policy (advertise list) holds the network's placement prefixes

@@ -662,6 +662,47 @@ class AwsShareStays(unittest.TestCase):
         self.assertEqual(got, [True, False, False, True, True, True])
 
 
+@unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+class ZoneTeardownSaysWhatItLeft(unittest.TestCase):
+    """CloudAWS and CloudGCP teardowns: the deletion message says what was deleted and what was left (the helper's
+    deleted/note for the zone, the DNS helper's deleted/kept for the delegation), never "removed" for a zone or a
+    delegation that was kept, not recorded or not found."""
+
+    def test_states(self):
+        for kind, where in (("aws", "account"), ("gcp", "project")):
+            tasks = load(os.path.join(ROLES, "cloud%s_teardown" % kind, "tasks", "main.yml"))[0]["block"]
+            done = by_name(tasks, "What the teardown deleted and left")
+            zone = {"zone": "prod.acme-corp.example.com", "dnsConfig": "dns"}
+            cases = [
+                {"dns": zone, "z": {"deleted": True}, "d": {"deleted": True}},
+                {"dns": zone, "z": {"deleted": False, "note": "no zone was recorded"}, "d": {"deleted": False}},
+                {"dns": zone, "z": {"deleted": False}, "d": {"deleted": False, "kept": "not made by the platform"}},
+                {"dns": zone, "z": {}, "d": {}},
+                {"dns": {"zone": "prod.acme-corp.example.com"}, "z": {"deleted": True}, "d": {}},
+                {"dns": {}, "z": {}, "d": {}},
+            ]
+            steps = [{"ansible.builtin.set_fact": {"cad_dns": "{{ case.dns }}", "cad_zone": "{{ case.z }}",
+                                                   "cad_deleg": "{{ case.d }}"}}, done]
+            got = run_cases(steps, cases, "cad_done", extra_vars={"cad_account_shared": False})
+            z = "Zone prod.acme-corp.example.com"
+            self.assertEqual(got, [
+                z + " deleted; its delegation in the tenant zone deleted",
+                z + " was not deleted: the environment recorded no zone id, so nothing was deleted in the %s; no "
+                    "delegation of it was found in the tenant zone" % where,
+                z + " was already gone; its delegation in the tenant zone was kept (not made by the platform)",
+                z + " was not deleted: the environment recorded no %s; its delegation in the tenant zone was not "
+                    "deleted: the platform's tenant DNS configuration was not found" % where,
+                z + " deleted; no delegation in a tenant zone was recorded",
+                "No DNS zone was recorded for the environment, so none was deleted",
+            ], kind)
+            for g in got[1:4]:
+                self.assertNotIn("removed", g)
+            if kind == "aws":   # the account kept in the hub's share for another environment
+                got = run_cases(steps, cases[:1], "cad_done", extra_vars={"cad_account_shared": True})
+                self.assertEqual(got[0], z + " deleted; its delegation in the tenant zone deleted; the account stays "
+                                             "in the hub's transit gateway share, as another environment records it")
+
+
 class HubNames(unittest.TestCase):
     def created(self, ec2, call):
         return [E.tagmap({"Tags": kw["TagSpecifications"][0]["Tags"]}) for n, kw in ec2.calls if n == call]
