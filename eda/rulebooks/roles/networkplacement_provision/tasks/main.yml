@@ -211,6 +211,9 @@
           namespaces: >-
             {{ ((np_backend.spec | default({}, true)).namespaces | default([], true))
                | selectattr('network', 'defined') | selectattr('network', 'equalto', fab_spec.network) | list }}
+          # the site namespaces the CloudVirt's status records (an earlier release's names among them): read, never
+          # rebuilt
+          recorded: "{{ (np_backend.status | default({}, true)).namespaces | default([], true) }}"
       when: np_backend_kind == 'CloudVirt' and np_backend | length > 0
 
     - name: Record the namespaces the network serves (CloudVirt)

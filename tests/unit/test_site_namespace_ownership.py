@@ -57,6 +57,10 @@ class Ownership(unittest.TestCase):
     EXPECTED = {"nothing": "", "ours": "", "tenant's other environment": "NamespaceTaken",
                 "another tenant's": "NameTakenOnSite", "unlabelled": "NameTakenOnSite", "the site's own": "NameTakenOnSite"}
 
+    # recorded by this environment's status and without the platform's labels (someone with rights on the site's
+    # Namespace objects removed them): the environment's, labelled again by the apply
+    RECORDED = dict(EXPECTED, unlabelled="", **{"the site's own": ""})
+
     def test_every_state(self):
         for recorded in (False, True):
             rec = [{"name": "vms", "namespace": "acme-corp--prod--vms"}] if recorded else []
@@ -64,12 +68,16 @@ class Ownership(unittest.TestCase):
             for site, have in self.ON_SITE.items():
                 with self.subTest(site=site, recorded=recorded):
                     existing = {} if have is None else {"acme-corp--prod--vms": have}
-                    out = F.namespace_ownership({"namespaces": ns, "existing": existing})
-                    want = self.EXPECTED[site]
+                    out = F.namespace_ownership({"namespaces": ns, "existing": existing,
+                                                 "recorded": [r["namespace"] for r in rec]})
+                    want = (self.RECORDED if recorded else self.EXPECTED)[site]
                     self.assertEqual((out["ok"], out["reason"]), (want == "", want))
                     if want:
                         self.assertEqual(out["refused"], ["acme-corp--prod--vms"])
                         self.assertNotIn("acme ", out["message"])      # another tenant is never named
+                    else:
+                        relabel = recorded and site in ("unlabelled", "the site's own")
+                        self.assertEqual(out["relabelled"], ["acme-corp--prod--vms"] if relabel else [])
 
     def test_one_foreign_namespace_stops_them_all(self):
         ns = wanted("acme-corp", "prod", names=("vms", "db"))
@@ -178,6 +186,43 @@ class RecordLost(unittest.TestCase):
                         main.index("Map the namespaces to the site's namespaces"))
         self.assertLess(main.index("Map the namespaces to the site's namespaces"),
                         main.index("Ensure the site namespaces"))
+
+
+
+class Readers(unittest.TestCase):
+    """What others read in a virtualization environment's status.namespaces: only site namespaces it made (a run
+    that only waits writes no name it has not made), and a placement reads those names instead of rebuilding them."""
+
+    def test_a_waiting_run_records_only_names_it_made(self):
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from play_helper import HAVE_ANSIBLE, by_name, load, run_cases
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        task = by_name(load(os.path.join(ROOT, "eda", "rulebooks", "roles", "cloudvirt_provision", "tasks",
+                                         "main.yml")), "Report what the environment waits for")
+        probe = {"ansible.builtin.set_fact": {"_got": task["vars"]["fab_status"]},
+                 "vars": {k: v for k, v in task["vars"].items() if k in ("_recorded", "_ns")}}
+        status = [{"name": "vms", "namespace": "acme-corp-prod-vms", "ready": True, "message": "m"},
+                  {"name": "db", "namespace": "acme-corp--prod--db", "ready": False, "message": "w"}]
+        cases = [{"rec": [{"name": "vms", "namespace": "acme-corp-prod-vms"}]}, {"rec": []}]
+        got = run_cases([probe], cases, "_got.namespaces",
+                        extra_vars={"cv_ns_status": status, "cv_status": {"entity": "acme-corp"},
+                                    "fab_st": "{{ {'namespaces': case.rec} }}"})
+        self.assertEqual(got[0], [status[0], {"name": "db", "ready": False, "message": "w"}])
+        self.assertEqual(got[1], [{"name": "vms", "ready": True, "message": "m"},
+                                  {"name": "db", "ready": False, "message": "w"}])
+
+    def test_the_placement_reads_the_recorded_names(self):
+        with open(os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_provision", "tasks", "main.yml")) as f:
+            main = f.read()
+        part = main[main.index("Map the CloudVirt's namespaces on this network"):]
+        part = part[:part.index("- name:", 10)]
+        self.assertIn("recorded: \"{{ (np_backend.status | default({}, true)).namespaces", part)
+        # the function then keeps an earlier release's recorded name instead of the new form
+        out = F.cloudvirt_namespaces({"entity": "acme-corp", "cloudvirt": "prod", "network": "core",
+                                      "namespaces": [{"name": "vms", "network": "core"}],
+                                      "recorded": [{"name": "vms", "namespace": "acme-corp-prod-vms"}]})
+        self.assertEqual(out["namespaces"][0]["namespace"], "acme-corp-prod-vms")
 
 
 if __name__ == "__main__":

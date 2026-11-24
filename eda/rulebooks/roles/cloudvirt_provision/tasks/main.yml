@@ -219,14 +219,25 @@
               'storageClass': fab_spec.storageClass | default((ci_spec.openshift | default({})).storageClass | default(''), true),
               'namespaces': cv_ns_status} }}
 
+    # a run that only waits has not read the site: it records no site namespace it has not made (only the recorded
+    # ones keep their name; the others are listed without one until the run that makes them)
     - name: Report what the environment waits for
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_finish.yml"
       vars:
+        _recorded: >-
+          {{ fab_st.namespaces | default([], true) | select('mapping') | selectattr('namespace', 'defined')
+             | map(attribute='namespace') | list }}
+        _ns: >-
+          {%- set out = [] -%}
+          {%- for n in cv_ns_status -%}
+            {%- set _ = out.append(n if n.namespace in _recorded else (n | dict2items | rejectattr('key', 'equalto', 'namespace') | items2dict)) -%}
+          {%- endfor -%}
+          {{ out }}
         fab_outcome: pending
         fab_reason: "{{ cv_reason }}"
         fab_message: "Waiting for {{ cv_waiting | join('; ') }}"
         fab_waiting_for: "{{ cv_waiting }}"
-        fab_status: "{{ cv_status }}"
+        fab_status: "{{ cv_status | combine({'namespaces': _ns}) }}"
       when: cv_waiting | length > 0
 
     - name: End the job while waiting
@@ -329,6 +340,10 @@
             fab_check:
               action: namespace-ownership
               namespaces: "{{ cv_namespaces }}"
+              # a namespace the status records whose labels someone removed is the environment's: labelled again
+              recorded: >-
+                {{ fab_st.namespaces | default([], true) | select('mapping') | selectattr('namespace', 'defined')
+                   | map(attribute='namespace') | list }}
               existing: >-
                 {%- set out = {} -%}
                 {%- for r in _cv_ns_existing.results | default([]) if r.resources | default([]) | length > 0 -%}
@@ -346,6 +361,10 @@
           ansible.builtin.fail:
             msg: "{{ fab_fail_msg }}"
           when: not (fab_check_result.ok | bool)
+
+        - name: The recorded namespaces that get their labels again
+          ansible.builtin.set_fact:
+            cv_relabelled: "{{ fab_check_result.relabelled | default([], true) }}"
 
         - name: Ensure the site namespaces
           kubernetes.core.k8s:
@@ -486,7 +505,9 @@
           holding VMs: ' ~ cv_kept | difference(cv_claimed_kept | default([], true)) | join(', ')
           if cv_kept | difference(cv_claimed_kept | default([], true)) | length > 0 else '' }}{{ '; kept, as they carry
           the labels of a namespace still in the spec: ' ~ cv_claimed_kept | join(', ')
-          if cv_claimed_kept | default([], true) | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
+          if cv_claimed_kept | default([], true) | length > 0 else '' }}{{ '; labelled again, as the status records
+          them and their labels had been removed: ' ~ cv_relabelled | join(', ')
+          if cv_relabelled | default([], true) | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
           | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}{{ cv_dns_note | default('') }}{{
           ('; access for ' ~ cv_access.groups | join(', ')) if cv_access.groups | default([]) | length > 0 else '; no tenant access granted' }}{{
           ('; ' ~ cv_access_waiting | join('; ')) if cv_access_waiting | default([]) | length > 0 else '' }}
