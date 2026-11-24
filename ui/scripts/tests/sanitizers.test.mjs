@@ -168,9 +168,11 @@ test('projects keep all three access lists; assignments keep toolRbac', () => {
 });
 
 test('platform-only fields are never sent and an edit keeps their stored values', () => {
-  const oso = san.sanitizeCloudOSOSpec({ project: 'p', vaultPath: 'oso/x', route53VaultPath: 'r53' });
-  assert.deepEqual(oso.spec, { project: 'p' });
-  assert.deepEqual(san.keepPlatformOnlyFields('CloudOSO', oso.spec, { project: 'old', vaultPath: 'oso/x' }), { project: 'p', vaultPath: 'oso/x' });
+  const oso = san.sanitizeCloudOSOSpec({ landingzone: 'lz', vaultPath: 'oso/x', route53VaultPath: 'r53' });
+  assert.deepEqual(oso.spec, { landingzone: 'lz' });
+  assert.deepEqual(san.keepPlatformOnlyFields('CloudOSO', oso.spec, { landingzone: 'old', vaultPath: 'oso/x' }), { landingzone: 'lz', vaultPath: 'oso/x' });
+  // the project is made by the platform: a project in the request is not sent
+  assert.deepEqual(san.sanitizeCloudOSOSpec({ project: 'p', landingzone: 'lz' }).spec, { landingzone: 'lz' });
   const po = san.sanitizePlatformOpenshiftSpec({ type: 'openstack', openstack: { environment: 'e', sshKeyVaultPath: 'k' } });
   assert.deepEqual(po.spec.openstack, { environment: 'e' });
   const kept = san.keepPlatformOnlyFields('PlatformOpenshift', po.spec, { openstack: { environment: 'e', sshKeyVaultPath: 'k' } });

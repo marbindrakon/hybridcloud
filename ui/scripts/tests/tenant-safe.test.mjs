@@ -238,7 +238,7 @@ test('PlatformOpenshift: keys added later to status.install or lastFailure do no
 test('PlatformOpenshift: the install keys are the only status keys this round adds', () => {
   const keys = m.TENANT_STATUS_ALLOW.PlatformOpenshift.map((e) => (Array.isArray(e) ? e[0] : e));
   assert.deepEqual(keys, [
-    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'slug', 'domain', 'apiURL', 'appsURL',
+    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'domain', 'apiURL', 'appsURL',
     'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth', 'provisionStatus', 'acmAvailable',
     'clusterInstalled', 'buildName', 'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
     'serviceAccountIssuer', 'network', 'placement', 'publish', 'machineNetwork', 'oidcClientId',

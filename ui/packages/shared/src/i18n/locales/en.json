@@ -562,7 +562,6 @@
     "clusterDeveloperRbac": "Cluster developers (access groups)",
     "clusterViewerRbacTool": "Cluster viewers (access groups)",
     "clusterViewerRbac": "Who can view this cluster object (access groups)",
-    "osoProject": "OpenStack project",
     "projectDomain": "Project domain",
     "route53VaultPath": "Route53 vault path",
     "landingzone": "Landing zone",

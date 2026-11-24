@@ -33,7 +33,7 @@ export const TENANT_STATUS_ALLOW = {
     // appCredentialId is not kept: it named the platform's own credential, nothing a tenant can use
     'name', 'namespace', 'entity', 'cloudInfrastructure', 'projectId', 'projectName', 'domainId', 'domainName',
     'apiFloatingIPId', 'ingressFloatingIPId', 'apiVIP', 'ingressVIP', 'externalNetwork',
-    'slug', 'domain', 'dnsProvider', 'dnsZoneId', 'dnsZoneName', 'dnsProjectId', 'route53ZoneId',
+    'domain', 'dnsProvider', 'dnsZoneId', 'dnsZoneName', 'dnsProjectId', 'route53ZoneId',
     'leftoverDefaultSecurityGroups',
     ['dns', ['mode', 'zone', 'zoneId', 'ownerProjectId', 'sharedWith', 'shareId', 'nameservers', 'delegated',
       'dnsConfig', 'globalProjectId', 'globalZoneId']],
@@ -47,12 +47,12 @@ export const TENANT_STATUS_ALLOW = {
       ['apiCredentials', ['state', 'validMinutesAfterSignIn', 'source']]]],
   ],
   PlatformOpenshift: [
-    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'slug', 'domain', 'apiURL', 'appsURL',
+    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'domain', 'apiURL', 'appsURL',
     'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth', 'provisionStatus', 'acmAvailable',
     'clusterInstalled', 'buildName', 'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
     'serviceAccountIssuer', 'network', 'placement', 'publish', 'machineNetwork', 'oidcClientId',
     'externalNetwork', 'clusterNetwork', 'serviceNetwork', 'platformPrefixes', 'installStarted',
-    ['floatingIPs', ['network', 'api', 'ingress']],
+    ['floatingIPs', ['api', 'ingress']],
     ['dns', ['provider', 'projectId', 'records']],
     ['site', ['name', 'console']],
     // OpenStack clusters: the cluster's own user and credential on the site, ids and names only

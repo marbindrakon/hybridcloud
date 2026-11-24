@@ -302,7 +302,6 @@ export function CreateResourceForm({
   // CloudOSO: the site comes from spec.cloudRef (or the installation default); the other site
   // settings are used only when no Cloud Infrastructure is in effect.
   const [cloudRefName, setCloudRefName] = useState('');
-  const [osoProject, setOsoProject] = useState('');
   const [osoLegacyOpen, setOsoLegacyOpen] = useState(false);
   const [osoVaultPath, setOsoVaultPath] = useState('');
   const [osoRegionName, setOsoRegionName] = useState('');
@@ -631,7 +630,6 @@ export function CreateResourceForm({
       case 'cloudoso':
         return buildCloudOsoSpec({
           site: cloudRefName,
-          project: osoProject,
           landingzone,
           baseDomain,
           projectDomain,
@@ -713,7 +711,6 @@ export function CreateResourceForm({
     // Entity-scoped kinds cannot be created without a resolved tenant namespace.
     if (entityScoped && !entityNs) return false;
     if (type === 'assignment' && !teamRef) return false;
-    if (type === 'cloudoso' && !osoProject.trim()) return false;
     if (type === 'cloudaws' && !awsSiteRef.trim()) return false;
     if (type === 'cloudgcp' && !gcpSiteRef.trim()) return false;
     if (type === 'platformopenshift' && !clusterEnv) return false;
@@ -1119,9 +1116,6 @@ export function CreateResourceForm({
                   <p className="sc-text-muted" style={{ marginTop: '-0.75rem' }}>
                     {t('fields.cloudOsoSiteHelp')}
                   </p>
-                  <FormGroup label={t('fields.osoProject')} fieldId="oso-project" isRequired>
-                    <TextInput id="oso-project" value={osoProject} onChange={(_e, v) => setOsoProject(v)} isRequired />
-                  </FormGroup>
                   <FormGroup label={t('fields.landingzone')} fieldId="oso-lz">
                     <TextInput id="oso-lz" value={landingzone} onChange={(_e, v) => setLandingzone(v)} />
                   </FormGroup>
