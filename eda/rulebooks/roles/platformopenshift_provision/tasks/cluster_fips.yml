@@ -70,15 +70,23 @@
       loop: [clouds.yaml, ca.crt]
       when: not (cf_have_record | bool)
 
-- name: Keep the floating IPs
-  vars:
-    _src: "{{ cf_recorded if cf_have_record | bool else os_result }}"
+- name: Keep the recorded floating IPs
   ansible.builtin.set_fact:
     cb_fips:
-      api: {address: "{{ _src.api.address }}", id: "{{ _src.api.id }}"}
-      ingress: {address: "{{ _src.ingress.address }}", id: "{{ _src.ingress.id }}"}
-    cb_api_vip: "{{ _src.api.address }}"
-    cb_ingress_vip: "{{ _src.ingress.address }}"
+      api: {address: "{{ cf_recorded.api.address }}", id: "{{ cf_recorded.api.id }}"}
+      ingress: {address: "{{ cf_recorded.ingress.address }}", id: "{{ cf_recorded.ingress.id }}"}
+    cb_api_vip: "{{ cf_recorded.api.address }}"
+    cb_ingress_vip: "{{ cf_recorded.ingress.address }}"
+  when: cf_have_record | bool
+
+- name: Keep the floating IPs made now
+  ansible.builtin.set_fact:
+    cb_fips:
+      api: {address: "{{ os_result.api.address }}", id: "{{ os_result.api.id }}"}
+      ingress: {address: "{{ os_result.ingress.address }}", id: "{{ os_result.ingress.id }}"}
+    cb_api_vip: "{{ os_result.api.address }}"
+    cb_ingress_vip: "{{ os_result.ingress.address }}"
+  when: not (cf_have_record | bool)
 
 - name: Record the floating IPs
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

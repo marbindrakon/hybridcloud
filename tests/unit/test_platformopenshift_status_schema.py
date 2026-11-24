@@ -136,7 +136,7 @@ class StatusKeysAgainstTheSchema(unittest.TestCase):
 
     def test_the_floating_ips_record_holds_address_and_id(self):
         known = facts(load_all())
-        self.assertEqual([sorted(v["api"]) for v in known["cb_fips"]], [["address", "id"]])
+        self.assertEqual({tuple(sorted(v[k])) for v in known["cb_fips"] for k in ("api", "ingress")}, {("address", "id")})
 
 
 

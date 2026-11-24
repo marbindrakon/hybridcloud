@@ -179,6 +179,8 @@ SOURCES = {
     "cd_info.resources[0].status.webConsoleURL": "the cluster's own console address",
     "cd_info.resources[0].status.conditions": "only the Provisioned reason, kept when it matches [A-Za-z]{2,40}",
     "os_result.api.address": "the cluster's own floating address", "os_result.ingress.address": "the same",
+    "cf_recorded.api.address": "the cluster's own recorded floating address (cluster_fips.yml)",
+    "cf_recorded.ingress.address": "the same",
     "os_result.records": "the cluster's own DNS record names",
     "cid_cred.user": "the cluster's own site user", "cid_recorded": "the cluster's recorded build",
     "fabric_realization": "the installation's settings", "fabric_realization_defaults": "the platform's defaults",
