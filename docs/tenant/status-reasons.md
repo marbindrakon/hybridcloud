@@ -266,7 +266,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
 | `MappingFailed` | The sign-in mapping could not be set up. The platform team is looking at it. | The platform team |
-| `NameInUse` | This name is already used by an OpenStack environment of another tenant. Create it with another name. | You (the tenant) |
+| `NameInUse` | An earlier release refused this name because another tenant used it. Names are now per tenant: use Retry now. | You (the tenant) |
 | `NameNotAllowed` | This name is not allowed: a letter first, then lower-case letters, digits and single hyphens; the message says the limit. Create it again. | You (the tenant) |
 | `NameTakenOnSite` | Something of this name already exists on the site and was not made by the platform. The platform team is looking at it. | The platform team |
 | `NamespaceNotOwned` | The tenant namespace already exists and was not created for this tenant. The platform team must remove or rename it. | The platform team |
