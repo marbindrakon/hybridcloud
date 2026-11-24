@@ -225,13 +225,15 @@ test('a VM environment lists the VMs its site namespaces hold, with the count wh
 const ext = (p) => p.sections.filter((s) => s.key === 'external').flatMap((s) => s.entries.map((e) => [e.detail, e.name, e.args ?? {}]));
 
 test('tool objects name what their teardown removes and ask for the name, realized or not', () => {
+  // the organization's name is the one its provision recorded (status.orgName), never built from the tenant's
   const quay = m.deletePreview('QuayOrg', obj('QuayOrg', 'registry'));
-  assert.deepEqual(ext(quay), [['quayOrg', 'x-registry', {}]]);
+  assert.deepEqual(ext(quay), [['quayOrgNotRecorded', '', {}]]);
   assert.equal(quay.realized, true);
-  assert.deepEqual(ext(m.deletePreview('QuayOrg', obj('QuayOrg', 'registry', {}, { orgName: 'org-1' }))), [['quayOrg', 'org-1', {}]]);
+  assert.deepEqual(ext(m.deletePreview('QuayOrg', obj('QuayOrg', 'registry', {}, { orgName: 'x_registry' }))), [['quayOrg', 'x_registry', {}]]);
   const aap = m.deletePreview('AAPOrg', obj('AAPOrg', 'automation'));
-  assert.deepEqual(ext(aap), [['aapOrg', 'x-automation', {}]]);
+  assert.deepEqual(ext(aap), [['aapOrgNotRecorded', '', {}]]);
   assert.equal(aap.realized, true);
+  assert.deepEqual(ext(m.deletePreview('AAPOrg', obj('AAPOrg', 'automation', {}, { orgName: 'x_automation' }))), [['aapOrg', 'x_automation', {}]]);
   const kv = m.deletePreview('VaultKV', obj('VaultKV', 'apps', { vault: 'v1' }, { kvPath: 'apps' }));
   assert.deepEqual(ext(kv), [['kvEngine', 'apps', { vault: 'v1' }]]);
   assert.equal(kv.realized, true);

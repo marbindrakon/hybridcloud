@@ -331,10 +331,9 @@ function vmNamespacesUsing(env: K8sResource, network: string): string[] {
     .filter(Boolean);
 }
 
-function tenantPrefixed(item: K8sResource, status: Record<string, unknown>): string {
-  const ns = item.metadata.namespace ?? '';
-  const tenant = ns.startsWith('entity-') ? ns.slice('entity-'.length) : '';
-  return (status.orgName as string | undefined) || (tenant ? `${tenant}-${item.metadata.name}` : item.metadata.name);
+/** The organization's name as its provision recorded it (status.orgName); never built here. */
+function recordedOrg(status: Record<string, unknown>): string {
+  return typeof status.orgName === 'string' ? status.orgName.trim() : '';
 }
 
 function external(key: string, name = '', args?: Record<string, string>): PreviewSection[] {
@@ -393,7 +392,8 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
       // No guard: the site namespaces are removed only once they hold no VMs (the delete waits while any VM
       // remains). The placements on it are not deleted: they wait for the environment and are deleted separately.
       const nsRows: PreviewEntry[] = ((status.namespaces as { name?: string; namespace?: string }[] | undefined) ?? [])
-        .map((n) => ({ name: n.namespace || n.name || '' }))
+        // the site namespace as the platform recorded it (never rebuilt from the short name)
+        .map((n) => ({ name: n.namespace || '' }))
         .filter((n) => n.name);
       // PGT2-F2: the VMs each site namespace holds, including a namespace that left the spec but still holds VMs.
       const vmRows = vmsByNamespace(status);
@@ -518,8 +518,15 @@ function kindPreview(kind: string, item: K8sResource, ctx: PreviewContext): Dele
     };
   }
 
-  if (kind === 'QuayOrg') return { sections: external('quayOrg', tenantPrefixed(item, status)), realized: true };
-  if (kind === 'AAPOrg') return { sections: external('aapOrg', tenantPrefixed(item, status)), realized: true };
+  // without a recorded name the platform has not made the organization yet: the row says so, it names nothing
+  if (kind === 'QuayOrg') {
+    const org = recordedOrg(status);
+    return { sections: org ? external('quayOrg', org) : external('quayOrgNotRecorded'), realized: true };
+  }
+  if (kind === 'AAPOrg') {
+    const org = recordedOrg(status);
+    return { sections: org ? external('aapOrg', org) : external('aapOrgNotRecorded'), realized: true };
+  }
   if (kind === 'VaultKV') {
     return {
       sections: external('kvEngine', (status.kvPath as string | undefined) || name, { vault: (spec.vault as string | undefined) ?? '' }),

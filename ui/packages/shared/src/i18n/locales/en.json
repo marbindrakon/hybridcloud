@@ -1439,7 +1439,9 @@
       "gateway": "The gateway on its site, with its edge and tunnel endpoint",
       "fabric": "The fabric's routing on its border gateways",
       "site": "The site's link to the platform (the delete waits while any object uses the site)",
-      "acmPolicy": "ACM policy {{name}}, which put it there"
+      "acmPolicy": "ACM policy {{name}}, which put it there",
+      "quayOrgNotRecorded": "The Quay organization, once the platform has made it (no name is recorded yet)",
+      "aapOrgNotRecorded": "The AAP organization, once the platform has made it (no name is recorded yet)"
     },
     "typeHelp": {
       "access": "The members of the access groups listed lose that access with it.",

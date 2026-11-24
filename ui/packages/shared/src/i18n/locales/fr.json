@@ -1439,7 +1439,9 @@
       "gateway": "La passerelle sur son site, avec sa bordure et son point de terminaison de tunnel",
       "fabric": "Le routage de la fabric sur ses passerelles de bordure",
       "site": "Le lien du site avec la plateforme (la suppression attend tant qu'un objet utilise le site)",
-      "acmPolicy": "La stratégie ACM {{name}}, qui l'y a mis"
+      "acmPolicy": "La stratégie ACM {{name}}, qui l'y a mis",
+      "quayOrgNotRecorded": "L'organisation Quay, une fois créée par la plateforme (aucun nom n'est encore enregistré)",
+      "aapOrgNotRecorded": "L'organisation AAP, une fois créée par la plateforme (aucun nom n'est encore enregistré)"
     },
     "typeHelp": {
       "access": "Les membres des groupes d'accès listés perdent cet accès avec lui.",
