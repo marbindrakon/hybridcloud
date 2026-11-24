@@ -153,8 +153,8 @@ class TenantCluster(unittest.TestCase):
                            optional_scopes=self.kc.realm_optional, **fields)
 
     def run_cluster(self, tool=None, ok=True, realization=None, recorded=None):
-        """recorded: the cluster's status as read at the job's start (default: its build recorded, as every cluster
-        that reaches its sign-in has)."""
+        """recorded: the cluster's status as read at the job's start (default: its build and its sign-in client
+        recorded, as a cluster of the release before that reaches its sign-in has)."""
         rbac_tasks = load(os.path.join(ROLE, "tasks", "cluster_rbac.yml"))
         build = [t for t in rbac_tasks if t["name"] in ("Build the subjects of each binding",
                                                         "Assemble RBAC object templates",
@@ -169,7 +169,8 @@ class TenantCluster(unittest.TestCase):
                  "cluster_domain": "web.prod.acme-corp.example.org",
                  "resolved_entity": "acme-corp", "shc_step": "Configure the cluster's sign-in",
                  "platformopenshift_cr": {"resources": [{"metadata": {"name": "web", "namespace": NS},
-                                                         "status": {"buildName": BUILD} if recorded is None
+                                                         "status": {"buildName": BUILD, "oidcClientId": CLIENT}
+                                                         if recorded is None
                                                          else recorded}]}}
         if realization is not None:
             extra["fabric_realization"] = realization
@@ -320,10 +321,12 @@ class TenantCluster(unittest.TestCase):
         self.assertEqual(client["protocolMappers"], [OLD_MAPPER])
 
     def test_an_unmarked_client_is_taken_only_when_this_cluster_recorded_it(self):
-        """A client of the name without a mark (the release before made it): taken when the status records it or the
-        build it is named after; otherwise refused and nothing changed."""
-        for recorded, taken in (({"oidcClientId": CLIENT}, True), ({"buildName": BUILD}, True), ({}, False),
-                                ({"buildName": "shc-oso-web-acme-corp-99999999"}, False)):
+        """A client of the name without a mark (the release before made it): taken only when the status records that
+        client; otherwise refused and nothing changed. The recorded build name is no proof (the cluster writes it
+        itself in its first run)."""
+        for recorded, taken in (({"oidcClientId": CLIENT}, True), ({"buildName": BUILD}, False), ({}, False),
+                                ({"buildName": BUILD, "oidcClientId": "shc-oso-web-acme-corp-99999999-keycloak-oidc"},
+                                 False)):
             with self.subTest(recorded=recorded):
                 self.kc.clients.pop(CLIENT, None)
                 self.old_client()
@@ -337,6 +340,21 @@ class TenantCluster(unittest.TestCase):
                     self.assertEqual(client["attributes"], {})
                     self.assertEqual(client["protocolMappers"], [OLD_MAPPER])
                     self.assertEqual(H.patches(self.trace), [])
+
+    def test_an_unmarked_client_stays_refused_on_the_next_run(self):
+        """A new cluster finds an unmarked client of its name. Run 1 (nothing recorded) refuses; by run 2 the cluster
+        has recorded its build name itself (in run 1, before the sign-in step): run 2 must refuse as well."""
+        self.old_client()
+        for run, recorded in ((1, {}), (2, {"buildName": BUILD})):
+            with self.subTest(run=run):
+                rc, _, out = self.run_cluster(ok=False, recorded=recorded)
+                self.assertNotEqual(rc, 0)
+                self.assertIn("that this cluster did not record", out)
+                client = self.kc.clients[CLIENT]
+                self.assertEqual(client["attributes"], {})
+                self.assertEqual(client["protocolMappers"], [OLD_MAPPER])
+                self.assertEqual(client["roles"], {})
+                self.assertEqual(H.patches(self.trace), [])
 
     def test_a_project_belongs_to_the_groups_not_to_the_person_who_asked(self):
         """opal (operators) asks for a project; then opal leaves the group, or moves to the other tenant: nothing of
@@ -462,6 +480,32 @@ class TeardownClient(unittest.TestCase):
         out = self.run_teardown()
         self.assertIn(CLIENT, self.kc.clients)
         self.assertIn("is marked for another cluster", out)
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class RecordedClientOnASkippedRun(unittest.TestCase):
+    """The status write after the sign-in step (OpenStack, AWS, Google Cloud): a run that skipped the step leaves the
+    recorded client as it is (the write is a merge patch: a key that is absent is not changed)."""
+
+    def write(self, platform, skipped):
+        sets = [t for t in load(os.path.join(ROLE, "tasks", "keycloak_oidc.yml"))
+                if t.get("name") == "Set OIDC configured fact"]
+        status = [t for t in load(os.path.join(ROLE, "tasks", platform + ".yml"))
+                  if t.get("name") == "Update PlatformOpenshift status with OIDC info"]
+        self.assertEqual((len(sets), len(status)), (1, 1))
+        extra = {"skip_oidc_setup": skipped, "ocp_oidc_client_id": CLIENT, "cb_cluster_installed": True,
+                 "cb_acm_available": True, "ansible_operator_meta": {"name": "web", "namespace": NS}}
+        rc, trace, out = H.run("platformopenshift_provision", "x.yml", extra, tasks=sets + status)
+        self.assertEqual(rc, 0, out)
+        p = H.patches(trace)
+        self.assertEqual(len(p), 1, out)
+        return p[0]["body"]
+
+    def test_skipped_run_keeps_the_record(self):
+        for platform in ("openstack", "aws", "gcp"):
+            with self.subTest(platform=platform):
+                self.assertEqual(self.write(platform, True), {"oidcConfigured": False})
+                self.assertEqual(self.write(platform, False), {"oidcConfigured": True, "oidcClientId": CLIENT})
 
 
 class Wiring(unittest.TestCase):

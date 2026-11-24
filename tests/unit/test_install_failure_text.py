@@ -581,7 +581,8 @@ class TeardownWithoutSettings(unittest.TestCase):
             rc, tr, out = self.run_file("public_subnets_down.yml", k8s, **common)
             self.assertNotEqual(rc, 0, out)
             self.assertEqual([t for t in tr if "aws" in t], [])
-            self.assertIn("Remove the cluster's public subnets on AWS", out)
+            self.assertIn("its network placement records no VPC, so nothing was deleted", out)
+            self.assertIn("The platform team must check the placement's network", out)
 
 
 # ---- 4. refusals: the tenant's own sentence, the same in the message and the condition ---------------------------------

@@ -303,7 +303,9 @@
     cr_plural: platformopenshifts
     cr_name: "{{ ansible_operator_meta.name }}"
     cr_namespace: "{{ ansible_operator_meta.namespace }}"
-    cr_status_body:
-      oidcConfigured: "{{ oidc_configured | default(false) | bool }}"
-      oidcClientId: "{{ oidc_client_id | default('') }}"
+    # one expression (types kept on ansible-core 2.16); a run that skipped the sign-in step has no client id and
+    # leaves the recorded one as it is
+    cr_status_body: >-
+      {{ {'oidcConfigured': oidc_configured | default(false) | bool}
+         | combine({'oidcClientId': oidc_client_id} if (oidc_client_id | default('', true) | length > 0) else {}) }}
   when: cb_cluster_installed | default(false) | bool

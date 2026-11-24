@@ -63,11 +63,14 @@
     - _psd_others | length == 0
     - not (_psd_found | bool)
 
+# The cluster makes public subnets only in the VPC its placement records, so with none on record it made none; the
+# delete still stops: nothing is deleted by a tag in an account others can reach, and the platform team decides.
 - name: Stop when the placement records no VPC
   ansible.builtin.fail:
-    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('deletion', true)) }}"
-  vars:
-    shc_step: "Remove the cluster's public subnets on AWS"
+    msg: >-
+      Cannot remove the cluster's public subnets on AWS: its network placement records no VPC, so nothing was
+      deleted. The cluster makes public subnets only in the VPC its placement records. The platform team must check
+      the placement's network and put its VPC back on the placement's record; the delete goes on at its next try.
   when:
     - _psd_others | length == 0
     - _psd_found | bool
