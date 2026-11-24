@@ -342,6 +342,21 @@
                 msg: "{{ gcp_error }}"
               when: gcp_error | length > 0
 
+            # the recorded VPC gone, or objects of the VPC's names outside it: the message says what was not deleted
+            - name: Note what was not deleted in the project
+              vars:
+                _r: "{{ gcp_result.result | default({}, true) }}"
+              ansible.builtin.set_fact:
+                npd_note: >-
+                  {{ npd_note | default('') ~ (('; ' ~ _r.note) if _r.note | default('', true) | length > 0 else '')
+                     ~ (('; left in the project, as they are not in the network the placement recorded: ' ~ (_r.left | join(', ')))
+                        if _r.left | default([], true) | length > 0 else '') }}
+              when:
+                - npd_gcp_vpc | length > 0
+                - >-
+                  (gcp_result.result | default({}, true)).note | default('', true) | length > 0
+                  or (gcp_result.result | default({}, true)).left | default([], true) | length > 0
+
             - name: The routers' VRF for this network goes with the placement
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
               vars:
@@ -527,7 +542,10 @@
           ready: false
           deletionComplete: true
           deletionBlockedBy: []
-          message: "Deleted{{ npd_note | default('') }}"
+          # "Deleted" alone only when nothing was kept; else what was deleted and what was left
+          message: >-
+            {{ 'Deleted' if npd_note | default('', true) | length == 0
+               else 'The placement is deleted on the platform' ~ npd_note }}
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     # the circuits' policy (advertise list) holds the network's placement prefixes
