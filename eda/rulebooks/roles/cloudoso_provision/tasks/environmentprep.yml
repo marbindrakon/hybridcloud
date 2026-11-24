@@ -101,9 +101,12 @@
           {{ os_result.message if (os_result.reason | default('', true)) | length > 0
              else 'OpenStack provision failed: ' ~ os_result.error }}
 
+# a project ours by its recorded id (or already marked) whose mark the site refused to write: the job goes on and
+# the ready status says what the site account needs (oso_mark_note: the PlatformMarks condition)
 - name: Keep the provision result
   ansible.builtin.set_fact:
     ep_os: "{{ os_result }}"
+    oso_mark_note: "{{ (os_result.project | default({}, true)).markNote | default('', true) }}"
 
 # the legacy credential is gone from the site: its copy in the secrets store goes too. That path is made of the
 # environment's name alone; it is this environment's because its status recorded the credential (the release that

@@ -8,7 +8,9 @@
 # common/tasks/openstack_account.yml, and fab_real must hold the realization, common/tasks/fabric_realization.yml).
 # Inputs:  ra_state (present|absent), ra_router_id, ra_network_id (the placement's status.realization.site.routerId
 #          and networkId), ra_site (the CloudInfrastructure name), ra_domain and ra_platform_project (the platform
-#          project the placement's router is in), optional ra_region, optional ra_held_before (the last record said
+#          project the placement's router is in), ra_platform_project_id (that project's recorded id: the
+#          placement's status.realization.site.projectId, else the gateway's status.site.project.id; required: without
+#          it nothing is asked and ra_failed is HelperFailed naming it), optional ra_region, optional ra_held_before (the last record said
 #          the service holds it: a failed call keeps that), optional ra_before (the last record: a call that got no
 #          answer about the port keeps its nat, restores, lastRestoredAt and confirmedAt, marked stale).
 # Sets:    ra_result (the helper's result), ra_record ({mode, nat, wanted, restores, lastRestoredAt, checkedAt,
@@ -37,7 +39,8 @@
       network_id: "{{ ra_network_id }}"
       domain: "{{ ra_domain }}"
       platformProject: "{{ ra_platform_project }}"
-      # the platform project by its recorded id when the caller has it, else by the platform's tag
+      # the platform project by its recorded id (the placement's or the gateway's record); without it the helper
+      # changes nothing and the call fails naming the missing id
       platformProjectId: "{{ ra_platform_project_id | default('', true) }}"
       service_url: "{{ ra_url }}"
       site: "{{ ra_site }}"

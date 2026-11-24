@@ -38,11 +38,12 @@ actions:
                   node (network address + (nodeOrdinal << 16) + index, /128), else ""; with core.srv6.block and
                   nodeOrdinal the SRv6 locator (the /48 of the block with node field locatorNode = nodeOrdinal * 256 +
                   index, both 1-255; unique across nodes), else "" / 0
-  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?, recorded?}
+  cloudvirt-namespaces {entity, cloudvirt, namespaces: [{name, network?}], network?, recorded?, site?, readOnly?}
                   the site namespace of each CloudVirt namespace: <entity>--<cloudvirt>--<name> (shc_names,
                   kind site-namespace; cut with a derived ending beyond 63), or the one status.namespaces recorded,
                   with its labels; selector = all of the environment's namespaces, networkSelector = those naming
-                  network
+                  network. readOnly (a reader such as the placement): only the recorded names, never a name built
+                  here; a namespace the environment has not recorded yet is left out (listed in unrecorded)
   namespace-ownership {namespaces, existing}  may the environment apply its site namespaces (see the function)
   site-object-ownership {objects: [{kind, name, existing}], labels}  may a placement apply its objects on a site
   placement-names {namespace, name, entity, network, l3Vni}  names and labels of a placement's realized objects
@@ -2493,9 +2494,13 @@ def cloudvirt_namespaces(req):
         if o.get("name") and all(labels.get(k) == v for k, v in mine.items()):
             on_site.setdefault(labels.get(CV_NAMESPACE_LABEL, ""), []).append(o["name"])
     site_names = {name for names in on_site.values() for name in names}
-    out, errors, seen, claimed = [], [], {}, set()
+    out, errors, seen, claimed, unrecorded = [], [], {}, set(), []
+    read_only = str(req.get("readOnly", "")).lower() in ("true", "1", "yes")
     for n in req.get("namespaces") or []:
         name = n.get("name", "")
+        if read_only and not kept.get(name):
+            unrecorded.append(name)
+            continue
         labelled = sorted(on_site.get(label_value(name), []))
         claimed.update(labelled)
         rec = kept.get(name)
@@ -2515,7 +2520,7 @@ def cloudvirt_namespaces(req):
         labels = site_labels(req.get("entity", ""), req.get("cloudvirt", ""), n.get("network") or "")
         labels[CV_NAMESPACE_LABEL] = label_value(n.get("name"))
         out.append({"name": n.get("name"), "namespace": ns, "network": n.get("network") or "", "labels": labels})
-    return {"errors": errors, "namespaces": out, "claimed": sorted(claimed),
+    return {"errors": errors, "namespaces": out, "claimed": sorted(claimed), "unrecorded": unrecorded,
             "selector": site_labels(req.get("entity", ""), req.get("cloudvirt", "")),
             "networkSelector": site_labels(req.get("entity", ""), req.get("cloudvirt", ""), req.get("network") or "")
             if req.get("network") else {}}
@@ -2524,19 +2529,25 @@ def cloudvirt_namespaces(req):
 def namespace_ownership(req):
     """Whether the environment may apply its site namespaces. namespaces: [{namespace, labels}] (what it wants, from
     cloudvirt-namespaces); existing: {namespace: its labels} for those the site already has. A namespace is the
-    environment's when it carries the environment's tenant and environment labels; one of the tenant with another
-    environment's label is the tenant's own clash (NamespaceTaken); any other (no labels, another tenant's, the
-    site's own) is refused with NameTakenOnSite. Nothing is merged into a namespace that is not the environment's.
-    Returns {ok, reason, message, refused: [namespace]}."""
+    environment's when it carries the environment's tenant and environment labels, or when this environment's status
+    records it (recorded: the site namespace names of status.namespaces) and it carries neither label: someone with
+    rights on the site's Namespace objects removed them, and the apply writes them again (listed in relabelled). One
+    of the tenant with another environment's label is the tenant's own clash (NamespaceTaken); any other (no labels
+    and not recorded, another tenant's, the site's own) is refused with NameTakenOnSite. Nothing is merged into a
+    namespace that is not the environment's. Returns {ok, reason, message, refused: [namespace], relabelled}."""
     keys = ("hybridsovereign.redhat/entity", "hybridsovereign.redhat/cloudvirt")
     existing = req.get("existing") or {}
-    tenant_clash, foreign = [], []
+    recorded = set(req.get("recorded") or [])
+    tenant_clash, foreign, relabelled = [], [], []
     for n in req.get("namespaces") or []:
         if n["namespace"] not in existing:
             continue
         have = existing[n["namespace"]] or {}
         want = n.get("labels") or {}
         if all(have.get(k) == want.get(k) for k in keys):
+            continue
+        if n["namespace"] in recorded and not any(have.get(k) for k in keys):
+            relabelled.append(n["namespace"])
             continue
         (tenant_clash if have.get(keys[0]) == want.get(keys[0]) else foreign).append(n["namespace"])
     if foreign:
@@ -2548,7 +2559,7 @@ def namespace_ownership(req):
         return {"ok": False, "reason": "NamespaceTaken", "refused": tenant_clash,
                 "message": "Namespace(s) " + ", ".join(tenant_clash) + " on the site belong to another of your "
                            "environments; use other namespace names."}
-    return {"ok": True, "reason": "", "message": "", "refused": []}
+    return {"ok": True, "reason": "", "message": "", "refused": [], "relabelled": relabelled}
 
 
 def site_object_ownership(req):

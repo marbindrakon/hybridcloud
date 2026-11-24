@@ -189,6 +189,21 @@ class RouterAdvertisement(unittest.TestCase):
         self.outputs.append(out)
         return out
 
+    def test_without_the_platform_projects_recorded_id_nothing_is_asked(self):
+        # the router's project comes from the caller (project_id) or the platform project's recorded id; without
+        # either the call is refused before any token is made or the service is asked
+        for state in ("present", "absent"):
+            self.acct.reset_mock()
+            with mock.patch.object(S, "Account", return_value=self.acct):
+                with self.assertRaises(RuntimeError) as e:
+                    S.ACTIONS["router-advertisement"]({
+                        "action": "router-advertisement", "state": state, "router_id": ROUTER, "network_id": NET,
+                        "service_url": self.svc.url, "site": "site-a", "domain": "shc", "platformProject": "hybrid-fabric",
+                        "platformProjectId": ""})
+            self.assertIn("is not recorded", str(e.exception))
+            self.acct.project.assert_not_called()
+        self.assertEqual(self.svc.calls, [])
+
     def test_no_service_url_means_no_service(self):
         with mock.patch.object(S, "Account", side_effect=AssertionError("no account needed")):
             out = S.router_advertisement({"state": "present", "router_id": ROUTER, "network_id": NET, "service_url": ""})

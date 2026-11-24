@@ -371,7 +371,10 @@
                 aws_edge_cidr: "{{ npd_gw.spec.siteUnderlay.cidr }}"
                 aws_edge_asn: 65000
 
-            # the account and region the placement recorded (the environment's, if it never got that far)
+            # the VPC, IPAM pool and DHCP option set the placement's status records (status.realization.site.vpc,
+            # .ipv6.pool, .ipv6.dhcpOptions) are the only ones deleted; with no VPC recorded nothing is deleted in the
+            # account (a tag there is anyone's to write) and the message names what carries the placement's tag.
+            # The account and region the placement recorded (the environment's, if it never got that far)
             - name: Remove the placement's VPC (and the network's hub side with its last placement)
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
               vars:
@@ -391,9 +394,14 @@
                   {{ {} if fab_spec.ipv6 is not defined
                      else {'source': (_site_st.ipv6 | default({}, true)).source | default(fab_spec.ipv6.source | default('Network', true), true)}
                           | combine({'prefix': _site_st.ipv6.prefix} if (_site_st.ipv6 | default({}, true)).prefix is defined else {})
+                          | combine({'pool': _site_st.ipv6.pool} if (_site_st.ipv6 | default({}, true)).pool | default('', true) | length > 0 else {})
+                          | combine({'dhcpOptions': _site_st.ipv6.dhcpOptions}
+                                    if (_site_st.ipv6 | default({}, true)).dhcpOptions | default('', true) | length > 0 else {})
                           | combine({'only': true} if fab_spec.ipv4 is not defined else {}) }}
+                _vpc: "{{ _site_st.vpc | default('', true) | string | trim }}"
                 aws_args: >-
                   {{ ['place-down', '--placement', fab_namespace ~ '/' ~ fab_name, '--vni', npd_real.l3Vni | string]
+                     + (['--vpc-id', _vpc] if _vpc | length > 0 else [])
                      + (['--ipv6', _v6 | to_json] if _v6 | length > 0 else []) }}
                 aws_soft: true
 
@@ -421,6 +429,19 @@
               ansible.builtin.fail:
                 msg: "AWS place-down failed: {{ aws_error }}"
               when: aws_error | length > 0
+
+            # nothing recorded (or the recorded VPC gone): the message says what may be left in the account
+            - name: Note what was not deleted in the account
+              vars:
+                _r: "{{ aws_result.result | default({}, true) }}"
+              ansible.builtin.set_fact:
+                npd_note: >-
+                  {{ npd_note | default('') ~ (('; ' ~ _r.note) if _r.note | default('', true) | length > 0 else '')
+                     ~ (('; left in the account, as no status records them: ' ~ (_r.left | join(', ')))
+                        if _r.left | default([], true) | length > 0 else '') }}
+              when: >-
+                (aws_result.result | default({}, true)).note | default('', true) | length > 0
+                or (aws_result.result | default({}, true)).left | default([], true) | length > 0
 
     # before the subnets go back: the next holder of the prefix never inherits a name
     - name: Remove the IPv6 gateway's names

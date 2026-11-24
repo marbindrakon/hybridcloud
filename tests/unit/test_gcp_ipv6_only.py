@@ -176,7 +176,7 @@ class Base(unittest.TestCase):
     def down(self):
         t = self.tenant()
         with fake(self.f):
-            return t.place_down(PLACEMENT, external_gateway="shc-edge-" + V.EDGE["site"]), t.changed
+            return t.place_down(PLACEMENT, vpc=N, external_gateway="shc-edge-" + V.EDGE["site"]), t.changed
 
     def status(self):
         t = self.tenant()
@@ -360,13 +360,15 @@ class UnchangedPlacements(Base):
     # (not the first placement's labels), place-down reads the VPC's description first (an unmarked VPC is refused)
     # and reads the one external gateway its tunnels used by name instead of listing every one; re-recorded again
     # when ownership became what status records (checked call by call against the module before): place-down reads
-    # the VPC once instead of twice and lists the project's tunnels in every region (aggregated) instead of one
+    # the VPC once instead of twice and lists the project's tunnels in every region (aggregated) instead of one;
+    # re-recorded when the tunnels went only with the placement's router in the recorded VPC: place-down reads the
+    # router before the tunnels instead of after them (the one difference, checked call by call)
     PINNED = {
-        "dual-stack": (76, "a713a2d2ee8d445b3dda07d0bd2fc11e2334eb88466dff5fb389d787de840f00"),
-        "dual-stack internet off": (77, "133b1f20345d374a60970ed9190054751ede7832e47f28798f5211a7d5cee16c"),
-        "ipv4-only": (67, "4db009e147fc9b289e8058bb8df46081627eb7e774c26b99f7fb76e243e61646"),
-        "ipv4-only ipv6Edge": (67, "2e8605bccf6f0e13771251ff14d191020ca0762cb81528ca989746495746cdd2"),
-        "dual-stack cloudNat": (75, "26d7ba7da44690f8efd58205a076b53abd2c40b4af6e86fcae0c17baff940ee5"),
+        "dual-stack": (76, "5f0748e0e734d9aac99810e090e05c866e869579e7e3169491fb576d3f53fda1"),
+        "dual-stack internet off": (77, "b662717da7fcae0e7f574615f009e83c8ce551e4c8dacfa0cd64acaddab0e1cc"),
+        "ipv4-only": (67, "68513386a164ca419d903adf243848e8e8d2bc6e39092662eb53e180dc56bcfa"),
+        "ipv4-only ipv6Edge": (67, "8c4743a0c9c53cc0e1917c98156c34a89ce015d60f1a1ed8f977f64818af9976"),
+        "dual-stack cloudNat": (75, "d416877bf99dff1221e5abe1235928e9903e6135ee2556619a01a276023cace2"),
     }
 
     def calls(self, ipv6, egress="fabric", **cfg):

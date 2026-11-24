@@ -12,11 +12,12 @@ Actions (request["action"]):
   provision     project in the domain, `member` for the account; returns every id it touched so teardown can work
                 from the record. legacy_app_cred_ids / legacy_app_cred_name (optional): application credentials an
                 earlier release made as the account for the environment are deleted (the account owns them).
-                fip_descriptions (optional, a request of an earlier release): floating IPs found or created by
-                description on external_network. Without it no external network is looked up.
+                fip_descriptions (a request of an earlier release) is refused: floating IPs are never found by
+                their description.
   check-empty   lists what is left in a project besides the recorded floating IPs (and DNS
                 records under a suffix); teardown refuses to delete a project that isn't empty.
-  teardown      deletes the recorded floating IPs, legacy application credentials of the account and the project.
+  teardown      deletes the recorded floating IPs (fip_ids; never by a description), legacy application credentials of
+                the account and the project.
   access-groups the environment's access groups on the site (Keystone groups in the sign-in group domain, marked as
                 the platform's, with roles on the project): state present ensures and grants the wanted ones and
                 reports the platform's groups with a role on the project that are no longer wanted; state absent
@@ -64,9 +65,9 @@ Actions (request["action"]):
                 project (listed in blocked).
                 recreateRouter: delete and recreate the router (the site fills its gateway chassis at creation).
   cluster-fips  a cluster's API and ingress floating IPs in the environment's project (site account scoped
-                to project_id): state present finds each by description (descriptions {api, ingress}) on
-                network_id, else creates it; state absent releases them by recorded ids and by description (a
-                missing id counts as released).
+                to project_id): state present (create_only: true, required) creates both on network_id with the
+                descriptions {api, ingress}, which are for people and never read back; state absent releases the
+                recorded ids only (a missing id counts as released).
   network-name-check  read only, with the environment's own credential (the one the installer runs with, scoped to
                 the environment's project): the networks of a name as Neutron lists them to that project, each with
                 router:external as the project sees it; unique when only the expected network id is among them (the
@@ -215,47 +216,54 @@ def mark_refused(what):
                    f"team gives the site account the right to create and update projects in the domain.")
 
 
+def mark_not_written(what):
+    """The note for a project that is ours by its record (or already carries the mark) when the site refuses the
+    write of the mark or the description: reported, the job goes on."""
+    return (f"the site account may not write project tags: the {what}'s project is the platform's by its record, but "
+            f"its mark (a Keystone project tag) and description could not be written. The account needs the right to "
+            f"update projects in the domain (Keystone update_project with tags)")
+
+
 def ensure_owned_project(conn_d, domain_id, name, tag, description, recorded_id="", what="environment"):
     """Find (owned_project) or create the owner's project; its tag and description refreshed on each run.
-    Returns (project, created, how). A site that refuses the write (HTTP 403: the account's role may not create or
-    update projects with tags) is a refusal that changed nothing: Keystone writes a project and its tags in one
-    request (project_create and project_update take "tags"), and no role is given before this step."""
+    Returns (project, created, how, note). A project to create: a site that refuses the write (HTTP 403: the
+    account's role may not create projects with tags) is a refusal that changed nothing (Keystone writes a project and
+    its tags in one request, project_create takes "tags", and no role is given before this step): the mark would be
+    the only proof that the project is the platform's. A project already ours (its id recorded, or it carries the
+    mark): a refused update is not a refusal; note says what could not be written and the caller goes on."""
     project, how = owned_project(conn_d, domain_id, name, tag, recorded_id, what)
-    try:
-        if project is None:
+    if project is None:
+        try:
             project = conn_d.identity.create_project(name=name, domain_id=domain_id, description=description,
                                                      tags=[tag])
-            return project, True, "created"
-        tags, have = _tags(project), getattr(project, "description", None) or ""
-        if tag not in tags or (description and have != description):
+        except openstack.exceptions.ForbiddenException:
+            raise mark_refused(what)
+        return project, True, "created", ""
+    tags, have = _tags(project), getattr(project, "description", None) or ""
+    if tag not in tags or (description and have != description):
+        try:
             project = conn_d.identity.update_project(project, description=description or have,
                                                      tags=tags + ([tag] if tag not in tags else []))
-    except openstack.exceptions.ForbiddenException:
-        raise mark_refused(what)
-    return project, False, how
+        except openstack.exceptions.ForbiddenException:
+            return project, False, how, mark_not_written(what)
+    return project, False, how, ""
 
 
 def provision(req):
+    if req.get("fip_descriptions"):
+        raise ValueError("refused: fip_descriptions (floating IPs found by their description) is not taken any more; "
+                         "nothing was changed")
     acct = Account(req)
     conn_d = acct.domain(req["domain"])
     user_id, domain_id, _ = token_info(conn_d)
-    project, created, how = ensure_owned_project(conn_d, domain_id, req["project"], owner_tag(req["owner"]),
-                                                 req.get("description", ""), req.get("project_id") or "")
+    project, created, how, mark_note = ensure_owned_project(conn_d, domain_id, req["project"], owner_tag(req["owner"]),
+                                                           req.get("description", ""), req.get("project_id") or "")
     role = conn_d.identity.find_role(req.get("role", "member"), ignore_missing=False)
     conn_d.identity.assign_project_role_to_user(project, user_id, role)
 
     conn_p = acct.project(project.id)
+    # floating IPs belong to the clusters (cluster-fips), found by the ids their status records
     fips = {}
-    # floating IPs belong to the clusters (cluster-fips); a request without fip_descriptions needs no external network
-    descs = req.get("fip_descriptions") or {}
-    net = conn_p.network.find_network(req["external_network"], ignore_missing=False) if descs else None
-    for key, desc in descs.items():
-        existing = list(conn_p.network.ips(description=desc, project_id=project.id))
-        if existing:
-            fips[key] = {"id": existing[0].id, "ip": existing[0].floating_ip_address, "created": False}
-        else:
-            ip = conn_p.network.create_ip(floating_network_id=net.id, description=desc)
-            fips[key] = {"id": ip.id, "ip": ip.floating_ip_address, "created": True}
 
     # an earlier release made the environment's application credential as the account (which owns it): it goes, by
     # the recorded id and by its name (a credential whose id never reached the record); Keystone refuses application
@@ -269,7 +277,7 @@ def provision(req):
         zone = {"id": z.id, "name": z.name}
 
     return {"project": {"id": project.id, "name": project.name, "domain_id": domain_id,
-                        "domain_name": req["domain"], "created": created, "found": how},
+                        "domain_name": req["domain"], "created": created, "found": how, "markNote": mark_note},
             "user_id": user_id, "role": role.name, "fips": fips, "legacy_app_creds_deleted": legacy,
             "auth_url": acct.auth.get("auth_url", ""), "region": acct.region, "dns_zone": zone}
 
@@ -360,8 +368,6 @@ def teardown(req):
         pid = project.id
         conn = acct.project(pid)
         fip_ids = set(req.get("fip_ids", []))
-        for desc in req.get("fip_descriptions", []):
-            fip_ids.update(i.id for i in conn.network.ips(description=desc, project_id=pid))
         for fid in sorted(fip_ids):
             conn.network.delete_ip(fid, ignore_missing=True)
             result["floating_ips"].append(fid)
@@ -591,9 +597,11 @@ def probe_dns_project(acct, conn, user_id, admin, dp, notes):
     if dp.get("create"):
         # the platform makes it: found by the recorded id or by the platform's tag; a project of the name the
         # platform did not make is refused (NameTakenOnSite)
-        proj, created, _ = ensure_owned_project(iconn, dom.id, dp["name"], owner_tag(DNS_PROJECT_OWNER),
-                                                dp.get("description", ""), dp.get("project_id") or "",
-                                                "site's tenant DNS")
+        proj, created, _, mark_note = ensure_owned_project(iconn, dom.id, dp["name"], owner_tag(DNS_PROJECT_OWNER),
+                                                           dp.get("description", ""), dp.get("project_id") or "",
+                                                           "site's tenant DNS")
+        if mark_note:
+            notes.append(mark_note)
     else:
         # the site's operator names a project of their own: used as it is, never changed
         proj = iconn.identity.find_project(dp["name"], domain_id=dom.id)
@@ -640,14 +648,15 @@ def platform_project(req):
             raise RuntimeError(f"project {req['name']} still holds: {', '.join(left[:10])}")
         conn.identity.delete_project(proj)
         return {"name": req["name"], "id": proj.id, "deleted": True}
-    proj, created, _ = ensure_owned_project(conn, dom.id, req["name"], tag, req.get("description", ""),
-                                            req.get("project_id") or "", "site's networks")
+    proj, created, _, mark_note = ensure_owned_project(conn, dom.id, req["name"], tag, req.get("description", ""),
+                                                       req.get("project_id") or "", "site's networks")
     member = conn.identity.find_role("member", ignore_missing=False)
     granted = False
     if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
         conn.identity.assign_project_role_to_user(proj, access.user_id, member)
         granted = True
-    return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted}
+    return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted,
+            "markNote": mark_note}
 
 
 _IFACE_OWNERS = ("network:router_interface", "network:router_interface_distributed",
@@ -871,6 +880,14 @@ def placement_network(req):
         # sit on a router this placement has not found as its own, nor while a router of the platform project
         # carries the placement's VNI
         _refuse_second_router(conn, net, proj, int(req["l3Vni"]))
+    elif net is None:
+        # the router is the placement's but its network is not found (ids lost, untagged, renamed): never a second
+        # network beside the one the router may still hold, checked before the first write
+        on = sorted({p.network_id for p in _router_ports(conn, router.id)})
+        raise RuntimeError(f"the placement's router {router.id} was found but not its network"
+                           + (f"; the router holds interfaces on network {', '.join(on)}" if on else "")
+                           + ": the platform does not make a second network for the placement. Nothing was changed; "
+                             "the platform team records or tags the placement's network, or removes the router")
     created, changed = [], []
     desc = req.get("description", "")
     name_kept = ""
@@ -1060,11 +1077,23 @@ def _visible_namesakes(conn, name, own_id, platform_project_id, tenant):
     return out
 
 
-def _platform_proj(conn, req):
-    """The site's platform project (the CloudGateway makes it): by the id recorded for it (platformProjectId: the
-    placement's own record, else the site's gateway's), else by the platform's tag; a project of the name that the
-    platform did not make is refused (NameTakenOnSite). None when there is none."""
+def _platform_proj(conn, req, report_only=False):
+    """The site's platform project (the CloudGateway makes it and records it): by the id recorded for it
+    (platformProjectId: the placement's own record, else the site's gateway's). Without that id nothing is changed
+    there: refused before any write. Only a read-only report (report_only) finds it by the platform's tag; a project
+    of the name that the platform did not make is refused (NameTakenOnSite). None when there is none."""
+    recorded = (req.get("platformProjectId") or "").strip()
+    if not report_only and not recorded:
+        raise RuntimeError(f"the id of the site's platform project {req.get('platformProject', '')} is not recorded "
+                           "(the site's CloudGateway records it in status.site.project.id); nothing was changed")
     dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
+    if not report_only:
+        # the recorded project only (a project of another owner's tag is refused); gone = None
+        p = find_project(conn, dom.id, project_id=recorded)
+        if p is not None and any(t.startswith(PROJECT_TAG_PREFIX) and t != owner_tag(PLATFORM_PROJECT_OWNER)
+                                 for t in _tags(p)):
+            raise name_taken("site's networks", p.name)
+        return p
     proj, _ = owned_project(conn, dom.id, req["platformProject"], owner_tag(PLATFORM_PROJECT_OWNER),
                             req.get("platformProjectId") or "", "site's networks")
     return proj
@@ -1079,19 +1108,18 @@ def cluster_fips(req):
     present: {project_id, network_id, descriptions: {api, ingress}} -> {network, api: {address, id, created},
     ingress: {...}, released: [ids of duplicates]}; each found by description first (a re-run after a failure
     creates nothing twice), else created on network_id. One found on another network is refused (the cluster's
-    network is fixed). create_only: true (a caller whose record holds no floating IP) creates both and reads no
-    description back: a description is for people, and an object is the cluster's only when its status records it.
-    absent: {project_id, ids: [recorded ids], descriptions (optional)} -> {released, missing}; a
-    recorded id that no longer exists counts as released (missing); floating IPs of other projects are never
-    touched."""
+    network is fixed). create_only: true is required (a caller whose record does not hold both floating IPs): both
+    are created and no description is read back, since a description in the tenant's project is anyone's to write
+    and a floating IP is the cluster's only when its status records it; a request without it is refused before any
+    call. absent: {project_id, ids: [recorded ids]} -> {released, missing}; only the recorded ids (descriptions are
+    not read); a recorded id that no longer exists counts as released (missing); floating IPs of other projects are
+    never touched."""
     acct = Account(req)
     pid = req["project_id"]
     conn = acct.project(pid)
     descs = req.get("descriptions") or {}
     if req.get("state", "present") == "absent":
         ids = {i for i in (req.get("ids") or []) if i}
-        for desc in descs.values():
-            ids.update(i.id for i in conn.network.ips(description=desc, project_id=pid))
         released, missing = [], []
         for fid in sorted(ids):
             try:
@@ -1107,27 +1135,13 @@ def cluster_fips(req):
     net_id = req["network_id"]
     if set(descs) != {"api", "ingress"}:
         raise ValueError("descriptions needs api and ingress")
+    if str(req.get("create_only", "")).lower() not in ("true", "1", "yes"):
+        raise ValueError("refused: cluster-fips present needs create_only: true; floating IPs are never found by "
+                         "their description (the cluster's are the ones its status records), nothing was changed")
     out = {"network": net_id, "released": []}
     for key in ("api", "ingress"):
-        desc = descs[key]
-        create_only = str(req.get("create_only", "")).lower() in ("true", "1", "yes")
-        found = [] if create_only else list(conn.network.ips(description=desc, project_id=pid))
-        other = [i for i in found if i.floating_network_id != net_id]
-        if other:
-            raise RuntimeError(f"floating IP {desc} ({other[0].floating_ip_address}) is on network "
-                               f"{other[0].floating_network_id}, not {net_id}")
-        if found:
-            # one per description: the associated one (or the first by id) stays, unassociated duplicates go
-            found.sort(key=lambda i: (not getattr(i, "port_id", None), i.id))
-            keep = found[0]
-            for extra in found[1:]:
-                if not getattr(extra, "port_id", None):
-                    conn.network.delete_ip(extra.id, ignore_missing=True)
-                    out["released"].append(extra.id)
-            out[key] = {"address": keep.floating_ip_address, "id": keep.id, "created": False}
-        else:
-            ip = conn.network.create_ip(floating_network_id=net_id, description=desc)
-            out[key] = {"address": ip.floating_ip_address, "id": ip.id, "created": True}
+        ip = conn.network.create_ip(floating_network_id=net_id, description=descs[key])
+        out[key] = {"address": ip.floating_ip_address, "id": ip.id, "created": True}
     return out
 
 
@@ -1352,7 +1366,7 @@ def platform_inventory(req):
     """The cloud admin's own scope, read only: what the platform project holds."""
     acct = Account(req)
     conn = acct.own_scope()
-    proj = _platform_proj(conn, req)
+    proj = _platform_proj(conn, req, report_only=True)
     if proj is None:
         return {"found": False, "networks": [], "routers": []}
     nets = []

@@ -47,6 +47,20 @@
       when: aaporg_spec.aapConfig | length > 0
       ignore_errors: true
 
+    # the recorded organization lives in the automation platform of the recorded connection: with that connection
+    # gone (or not readable) nothing can be deleted there, so the deletion does not complete; it says what was left
+    # and waits (the rescue reports TeardownFailed, the finalizer stays) until the platform team restores the
+    # connection or removes the organization and the finalizer by hand
+    - name: Stop when the recorded automation connection is gone
+      ansible.builtin.fail:
+        msg: >-
+          AAPOrg {{ aaporg_cr_name }}: the automation connection {{ aaporg_spec.aapConfig | default('', true) or '(none recorded)' }}
+          {{ 'could not be read' if _aap_config.failed | default(false) | bool else 'no longer exists' }}, so the
+          automation organization {{ fin_org_name or fin_org_id }} was left in place with its teams and sign-in maps,
+          and the deletion waits. The platform team restores the connection, or removes the organization in the
+          automation platform and then this object's finalizer.
+      when: (fin_org_id ~ fin_org_name) | length > 0 and _aap_config.resources | default([]) | length == 0
+
     - name: Delete AAP org and teams
       when: _aap_config.resources | default([]) | length > 0
       block:

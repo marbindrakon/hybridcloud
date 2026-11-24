@@ -17,8 +17,12 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
       --vpc-id: the VPC the placement's status records (status.realization.site.vpc). place-up: that VPC is the
       placement's whatever its tags say; without it a VPC tagged shc-placement=NS/NAME is refused (NameTakenOnSite),
       never taken over (the tenant can write tags in its account). A failed place-up prints "made": {"vpcId"} when it
-      created the VPC, so the job records it. place-down and place-public use the recorded VPC; without --vpc-id
-      they fall back to the tag (callers of the release before).
+      created the VPC, so the job records it (also after a failure that is not an AWS answer, such as a waiter's
+      time-out). place-down and place-public change and delete only inside the recorded VPC, and nothing without
+      --vpc-id: place-public up is refused, place-public down and place-down delete nothing in the account and list
+      under "left" what carries the placement's tag (a tag is never the reason to change or delete anything there).
+      place-down's --ipv6 may name the recorded "pool" (the placement's IPAM pool) and "dhcpOptions" (its DHCP option
+      set): only those are deleted (the IPAM with its last pool); one found only by its tag is listed under "left".
       public /28s (one per AZ, below the attachment /28s) with an internet gateway, for internet-facing load
       balancers of a DMZ-like workload; the workload subnets keep leaving through the network
   shc_aws_tenant.py --config '<json>' share-down        stop sharing the hub's transit gateway with this account
@@ -26,7 +30,8 @@ the hub through shc_aws_edge.py for the network's transit gateway side. Idempote
 config: {"account", "region", "memberRole", "entry", "azs": [..], "tags": {..},
          "edge": <shc_aws_edge.py config of the region's edge site>}
 
-A placement is one VPC in the tenant account, found by its tag shc-placement=NS/NAME (never by its name). Its Name
+A placement is one VPC in the tenant account, found by the id its status records (never by its name; its tag
+shc-placement=NS/NAME is written for people and for the report of what may be left). Its Name
 tag is NAME (the platform's names function: <tenant>_<placement>) when the VPC is made, and the Name tag it carries
 afterwards; the other objects are named from it (<name>-work-<zone letter>, <name>-tgw-<zone letter>,
 <name>-public-<zone letter>, <name>-public) and found by their tags (shc-role and the subnet's own zone, the route
@@ -319,19 +324,36 @@ class Tenant:
         return {"zone": zone, "deleted": True}
 
     # ---- a placement's VPC
-    def find_vpc(self, placement, vpc_id=None):
-        """The placement's VPC: the one its status records (vpc_id), else (callers of the release before) the one
-        tagged shc-placement=NS/NAME."""
-        if vpc_id:
-            try:
-                v = self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"]
-            except botocore.exceptions.ClientError as e:
-                if "InvalidVpcID.NotFound" not in str(e):
-                    raise
-                v = []
-            return v[0] if v else None
-        v = self.ec2.describe_vpcs(Filters=[{"Name": "tag:shc-placement", "Values": [placement]}])["Vpcs"]
+    def find_vpc(self, vpc_id):
+        """The placement's VPC: the one its status records (vpc_id); None without a record or when it is gone."""
+        if not vpc_id:
+            return None
+        try:
+            v = self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"]
+        except botocore.exceptions.ClientError as e:
+            if "InvalidVpcID.NotFound" not in str(e):
+                raise
+            v = []
         return v[0] if v else None
+
+    def tagged_vpcs(self, placement):
+        """The ids of the VPCs that carry the placement's tag. Only reported or refused: anyone in the account can
+        write the tag, so it never makes a VPC the placement's."""
+        return sorted(v["VpcId"] for v in
+                      self.ec2.describe_vpcs(Filters=[{"Name": "tag:shc-placement", "Values": [placement]}])["Vpcs"])
+
+    def tagged_left(self, placement, vpc_id=None, pool_id=None, dhcp_ids=(), v6=False, only=False):
+        """What carries the placement's tag in the account and is not recorded: listed, never deleted (the IPAM pool
+        only for a placement with IPv6, the DHCP option set only for an IPv6-only one)."""
+        left = ["vpc %s" % v for v in self.tagged_vpcs(placement) if v != vpc_id]
+        if only:
+            left += ["dhcp options %s" % d["DhcpOptionsId"] for d in self.find_dhcp(placement)
+                     if d["DhcpOptionsId"] not in dhcp_ids]
+        if v6:
+            left += ["ipam pool %s" % p["IpamPoolId"] for p in self.ec2.describe_ipam_pools()["IpamPools"]
+                     if tagmap(p).get("shc-placement") == placement and p["State"] not in GONE
+                     and p["IpamPoolId"] != pool_id]
+        return left
 
     def tgw_visible(self, tgw_id):
         try:
@@ -518,16 +540,21 @@ class Tenant:
             self.ec2.delete_egress_only_internet_gateway(EgressOnlyInternetGatewayId=g)
             self.changed.append("deleted egress-only internet gateway " + g)
 
-    def pool_down(self, placement):
-        """The placement's pool (cascade, see the module doc), then the IPAM when no other pool is left in it."""
-        pool = self.find_pool(placement)
+    def pool_down(self, pool_id):
+        """The placement's recorded pool (cascade, see the module doc), then the IPAM that holds it when no other pool
+        is left in it."""
         out = {"pool": None, "ipamDeleted": False}
+        pool = next((p for p in self.ec2.describe_ipam_pools()["IpamPools"]
+                     if pool_id and p["IpamPoolId"] == pool_id and p["State"] not in GONE), None)
         if not pool:
             return out
         self.ec2.delete_ipam_pool(IpamPoolId=pool["IpamPoolId"], Cascade=True)
         self.changed.append("deleted ipam pool " + pool["IpamPoolId"])
         out["pool"] = pool["IpamPoolId"]
-        ipam = self.find_ipam()
+        # the IPAM that holds the recorded pool (the pool names it)
+        ipam = (next((i for i in self.ec2.describe_ipams()["Ipams"]
+                      if i.get("IpamArn") == pool["IpamArn"] and i["State"] not in GONE), None)
+                if pool.get("IpamArn") else self.find_ipam())
         if ipam and ipam["IpamArn"] == pool.get("IpamArn", ipam["IpamArn"]):
             left = [x for x in self.ec2.describe_ipam_pools()["IpamPools"]
                     if x.get("IpamArn") == ipam["IpamArn"] and x["State"] not in GONE
@@ -563,9 +590,9 @@ class Tenant:
                 self.changed.append("deleted dhcp options " + d["DhcpOptionsId"])
         return mine["DhcpOptionsId"]
 
-    def dhcp_down(self, vpc_id, placement):
-        """The placement's option sets: the VPC back on the default set, then deleted."""
-        sets = self.find_dhcp(placement)
+    def dhcp_down(self, vpc_id, dhcp_ids):
+        """The placement's recorded option sets: the VPC back on the default set, then deleted."""
+        sets = [d for d in self.ec2.describe_dhcp_options()["DhcpOptions"] if d["DhcpOptionsId"] in dhcp_ids]
         if sets and vpc_id:
             cur = self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0].get("DhcpOptionsId")
             if cur in {d["DhcpOptionsId"] for d in sets}:
@@ -609,8 +636,8 @@ class Tenant:
         if only:
             extra["shc-ipv6-only"] = "true"
         # the recorded VPC is the placement's; one tagged for it that no status records is refused, never taken over
-        vpc = self.find_vpc(placement, vpc_id) if vpc_id else None
-        if not vpc and self.find_vpc(placement):
+        vpc = self.find_vpc(vpc_id)
+        if not vpc and self.tagged_vpcs(placement):
             fail("A VPC tagged for placement %s already exists in the account and was not made by the platform for "
                  "this; it was left untouched." % placement, reason="NameTakenOnSite")
         name = vpc_name(vpc, name, placement)
@@ -775,9 +802,17 @@ class Tenant:
         return out
 
     def place_public(self, placement, state, vpc_id=None):
-        vpc = self.find_vpc(placement, vpc_id)
+        """Public subnets in the recorded VPC only. Without a record (or with the recorded VPC gone): up is refused,
+        down deletes nothing and lists what carries the placement's tag."""
+        vpc = self.find_vpc(vpc_id)
         if not vpc:
-            fail("placement %s has no VPC" % placement)
+            why = ("the VPC %s that placement %s recorded no longer exists" % (vpc_id, placement) if vpc_id
+                   else "placement %s has no recorded VPC (status.realization.site.vpc)" % placement)
+            if state == "up":
+                fail("%s; nothing was changed in the account" % why)
+            return {"placement": placement, "public": [], "deleted": False,
+                    "note": "%s; nothing was deleted in the account" % why,
+                    "left": ["vpc %s" % v for v in self.tagged_vpcs(placement) if v != vpc_id]}
         vpc_id = vpc["VpcId"]
         name = vpc_name(vpc, None, placement)
         extra = dict(self.cfg.get("tags", {}), **{"shc-placement": placement, "shc-role": "public"})
@@ -838,21 +873,32 @@ class Tenant:
         return {"placement": placement, "public": out, "internetGateway": igw_id}
 
     def place_down(self, placement, vni, ipv6=None, vpc_id=None):
+        """The recorded VPC and what is inside it, the recorded IPAM pool and DHCP option set (ipv6 "pool",
+        "dhcpOptions"), then the network's hub side with its last tenant attachment. Without a recorded VPC nothing
+        in the account is deleted: the result lists under "left" what carries the placement's tag."""
         c = self.cfg
         edge = shc_aws_edge.Edge(c["edge"])
-        vpc = self.find_vpc(placement, vpc_id)
-        with6 = bool(ipv6) or bool(vpc and v6_assoc(vpc))
+        rec6 = ipv6 or {}
+        pool_id = str(rec6.get("pool") or "").strip() if vpc_id else ""
+        dhcp_ids = [str(rec6.get("dhcpOptions") or "").strip()] if vpc_id and rec6.get("dhcpOptions") else []
+        vpc = self.find_vpc(vpc_id)
+        any6 = bool(ipv6) or bool(vpc and v6_assoc(vpc))
         # IPv6-only (the request says so, or the VPC's tag): its DHCP option set goes too
         only = bool((ipv6 or {}).get("only")) or bool(vpc and tagmap(vpc).get("shc-ipv6-only") == "true")
+        left = self.tagged_left(placement, vpc_id, pool_id, dhcp_ids, v6=any6, only=only)
+        note = ("" if vpc else
+                "the VPC %s the placement recorded no longer exists" % vpc_id if vpc_id else
+                "the placement recorded no VPC, so nothing was deleted in account %s" % c["account"])
+        with6 = bool(vpc_id) and any6
         out6 = {"pool": None, "ipamDeleted": False}
         if vpc:
             vpc_id = vpc["VpcId"]
-            left = [i["InstanceId"] for r in self.ec2.describe_instances(Filters=[
+            running = [i["InstanceId"] for r in self.ec2.describe_instances(Filters=[
                 {"Name": "vpc-id", "Values": [vpc_id]},
                 {"Name": "instance-state-name", "Values": ["pending", "running", "stopping", "stopped"]}])["Reservations"]
                 for i in r["Instances"]]
-            if left:
-                fail("VPC %s still has instances %s; the tenant removes its workloads first" % (vpc_id, left),
+            if running:
+                fail("VPC %s still has instances %s; the tenant removes its workloads first" % (vpc_id, running),
                      reason="WorkloadsPresent")
             if with6:  # IPv6 in reverse: the routes, then the egress-only gateway
                 self.routes6(vpc_id, {})
@@ -878,8 +924,8 @@ class Tenant:
                         if "DependencyViolation" not in str(e):
                             raise
                         time.sleep(10)
-            if only:  # the VPC back on the default option set, ours deleted
-                self.dhcp_down(vpc_id, placement)
+            if only:  # the VPC back on the default option set, the recorded one deleted
+                self.dhcp_down(vpc_id, dhcp_ids)
             if with6:  # the VPC's IPv6 block, once no subnet holds a /64 of it
                 for a in v6_assoc(self.ec2.describe_vpcs(VpcIds=[vpc_id])["Vpcs"][0]):
                     self.ec2.disassociate_vpc_cidr_block(AssociationId=a["AssociationId"])
@@ -889,10 +935,10 @@ class Tenant:
                     self.ec2.delete_security_group(GroupId=sg["GroupId"])
             self.ec2.delete_vpc(VpcId=vpc_id)
             self.changed.append("deleted vpc " + vpc_id)
-        elif only:  # a run that stopped before the VPC: an option set without one
-            self.dhcp_down(None, placement)
-        if with6:  # the placement's pool and, with its last pool, the IPAM
-            out6 = self.pool_down(placement)
+        elif dhcp_ids:  # the recorded VPC is gone: its recorded option set still goes
+            self.dhcp_down(None, dhcp_ids)
+        if with6:  # the placement's recorded pool and, with its last pool, the IPAM
+            out6 = self.pool_down(pool_id)
         # the network's hub side goes with its last tenant attachment
         tgw_id = edge.tgw()["TransitGatewayId"]
         # (the network's own NAT egress VPC carries the network's tag as well: it is not a tenant's)
@@ -901,7 +947,13 @@ class Tenant:
         if not others:
             edge.net_down(vni)
             self.changed += edge.changed
-        return {"placement": placement, "vni": vni, "networkKept": bool(others), "ipv6": out6 if with6 else None}
+        out = {"placement": placement, "vni": vni, "networkKept": bool(others), "ipv6": out6 if with6 else None,
+               "deleted": bool(vpc)}
+        if note:
+            out["note"] = note
+        if left:
+            out["left"] = left
+        return out
 
     def check(self):
         who = boto3.client("sts").get_caller_identity()["Arn"]
@@ -944,6 +996,10 @@ def main():
     except botocore.exceptions.ClientError as e:
         # still a JSON line, so the job records what this run made before it failed
         fail("%s" % e, changed=t.changed)
+    except (botocore.exceptions.BotoCoreError, KeyError, ValueError, TypeError, OSError) as e:
+        # a waiter's time-out (WaiterError), a connection or credential error: the same, so a VPC made before it
+        # is still recorded
+        fail("%s: %s" % (type(e).__name__, e), changed=t.changed)
     print(json.dumps({"ok": True, "changed": t.changed, "result": r}, default=str))
 
 

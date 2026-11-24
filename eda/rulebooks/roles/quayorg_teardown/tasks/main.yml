@@ -44,6 +44,19 @@
       when: quayorg_spec.quayConfig | length > 0
       ignore_errors: true
 
+    # the recorded organization lives in the registry of the recorded connection: with that connection gone (or not
+    # readable) nothing can be deleted there, so the deletion does not complete; it says what was left and waits
+    # (the rescue reports TeardownFailed, the finalizer stays) until the platform team restores the connection or
+    # removes the organization and the finalizer by hand
+    - name: Stop when the recorded registry connection is gone
+      ansible.builtin.fail:
+        msg: >-
+          QuayOrg {{ quayorg_cr_name }}: the registry connection {{ quayorg_spec.quayConfig | default('', true) or '(none recorded)' }}
+          {{ 'could not be read' if _quay_config.failed | default(false) | bool else 'no longer exists' }}, so the
+          registry organization {{ fin_org_name }} was left in place and the deletion waits. The platform team restores
+          the connection, or removes the organization in the registry and then this object's finalizer.
+      when: fin_org_name | length > 0 and _quay_config.resources | default([]) | length == 0
+
     - name: Delete Quay org
       when: _quay_config.resources | default([]) | length > 0 and fin_org_name | length > 0
       block:

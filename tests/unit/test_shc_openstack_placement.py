@@ -204,7 +204,8 @@ class FakeConn:
 def request(**over):
     req = {"action": "placement-network", "clouds_yaml": "/dev/null", "domain": "shc", "platformProject": "hybrid-fabric",
            "name": "hn51001-site", "tag": "shc.np/51001", "mtu": 8952, "prefixes": [V4, V6], "l3Vni": 51001,
-           "shareProjectId": TENANT, "addressMode": MODE, "resolvers": [R4, R6]}
+           "shareProjectId": TENANT, "addressMode": MODE, "resolvers": [R4, R6],
+           "platformProjectId": "proj-platform"}   # the gateway's record, as the jobs pass it
     req.update(over)
     return req
 
@@ -904,9 +905,16 @@ class OldReleaseEnumeration(unittest.TestCase):
     # what each state gives: adopt (the old objects renamed in place), create (a new network and router), refuse
     SITES = {"nothing": "create", "old, network tagged": "adopt", "old, nothing tagged": "adopt",
              "old, another placement's tag": "refuse", "foreign of the new name": "create",
-             "another router on the subnets": "refuse", "another router with the VNI": "refuse"}
+             "another router on the subnets": "refuse", "another router with the VNI": "refuse",
+             "router of the old name, network not found": "refuse"}
 
     def state(self, conn, site):
+        if site == "router of the old name, network not found":
+            # the release before's router hn51001 with its interfaces; the network renamed and untagged by someone
+            # in the platform project, so neither its id (lost) nor its tag nor its old name finds it
+            old_release(conn)
+            conn.network.nets[0].name, conn.network.nets[0].tags = "renamed", []
+            return "", ""
         if site.startswith("old") or site == "another router on the subnets":
             nid, rid = old_release(conn)
             if site == "old, nothing tagged":
@@ -935,9 +943,12 @@ class OldReleaseEnumeration(unittest.TestCase):
                     before = {o.id: (o.name, list(getattr(o, "tags", []) or []))
                               for o in conn.network.nets + conn.network.rtrs}
                     if want == "refuse":
-                        with self.assertRaises(RuntimeError):
+                        with self.assertRaises(RuntimeError) as e:
                             run(conn, name=NEW, tag=TAG, description=DESC, oldName="hn51001", **ids)
                         self.assertEqual(ops(conn, *WRITES), [])
+                        if site == "router of the old name, network not found":   # what was found is named
+                            self.assertIn("router rtr-old was found but not its network", str(e.exception))
+                            self.assertIn("interfaces on network net-old", str(e.exception))
                         continue
                     out = run(conn, name=NEW, tag=TAG, description=DESC, oldName="hn51001", **ids)
                     self.assertEqual(len([r for r in conn.network.rtrs if r.evpn_vni == 51001]), 1,
@@ -966,8 +977,10 @@ class OldReleaseEnumeration(unittest.TestCase):
 
 
 class PlatformProject(unittest.TestCase):
-    """The platform project is found by the id recorded for it, else by the platform's tag; one of the name that the
-    platform did not make is refused before anything is read in it."""
+    """The platform project is the one whose id is recorded (the gateway's status, or the placement's own): without
+    that id nothing is changed, a project found only by name or tag is never used for a change; only the read-only
+    inventory finds it by the platform's tag. States: (id recorded | not) x (the recorded project there | gone |
+    another owner's tag) x (a project of the name: marked | unmarked)."""
 
     def test_recorded_id_first(self):
         conn = FakeConn()
@@ -975,20 +988,47 @@ class PlatformProject(unittest.TestCase):
                                           tags=[S.owner_tag(S.PLATFORM_PROJECT_OWNER)]))
         self.assertEqual(run(conn, platformProjectId="proj-platform")["projectId"], "proj-platform")
 
-    def test_unmarked_project_of_the_name_is_refused(self):
+    def test_without_the_recorded_id_nothing_is_changed(self):
+        for tags in ([S.owner_tag(S.PLATFORM_PROJECT_OWNER)], []):       # a marked or unmarked project of the name
+            conn = FakeConn()
+            conn.identity.projs = [Obj(id="proj-x", name="hybrid-fabric", domain_id="dom-1", tags=tags)]
+            for state in ("present", "absent"):
+                with self.assertRaises(RuntimeError) as e:
+                    run(conn, platformProjectId="", state=state)
+                self.assertIn("is not recorded", str(e.exception))
+                self.assertEqual(conn.calls, [])
+
+    def test_the_recorded_project_is_gone(self):
         conn = FakeConn()
-        conn.identity.projs = [Obj(id="proj-x", name="hybrid-fabric", domain_id="dom-1", tags=[])]
+        conn.identity.projs = [Obj(id="proj-x", name="hybrid-fabric", domain_id="dom-1",
+                                   tags=[S.owner_tag(S.PLATFORM_PROJECT_OWNER)])]   # a marked one of the name
+        with self.assertRaises(RuntimeError) as e:
+            run(conn)
+        self.assertIn("does not exist", str(e.exception))
+        self.assertEqual(conn.calls, [])
+
+    def test_a_recorded_project_of_another_owner_is_refused(self):
+        conn = FakeConn()
+        conn.identity.projs = [Obj(id="proj-platform", name="hybrid-fabric", domain_id="dom-1",
+                                   tags=[S.owner_tag("CloudOSO/entity-acme/web")])]
         with self.assertRaises(S.Refusal) as e:
             run(conn)
         self.assertEqual(e.exception.reason, "NameTakenOnSite")
         self.assertEqual(conn.calls, [])
 
-    def test_no_project(self):
-        conn = FakeConn()
-        conn.identity.projs = []
-        with self.assertRaises(RuntimeError):
-            run(conn)
-        self.assertEqual(conn.calls, [])
+    def test_the_inventory_reports_by_the_tag(self):
+        acct = mock.Mock()
+        for tags, found in (([S.owner_tag(S.PLATFORM_PROJECT_OWNER)], True), ([], None)):
+            conn = FakeConn()
+            acct.own_scope.return_value = conn
+            conn.identity.projs = [Obj(id="proj-x", name="hybrid-fabric", domain_id="dom-1", tags=tags)]
+            with mock.patch.object(S, "Account", return_value=acct):
+                if found:
+                    out = S.platform_inventory({"domain": "shc", "platformProject": "hybrid-fabric"})
+                    self.assertEqual(out["projectId"], "proj-x")
+                else:
+                    with self.assertRaises(S.Refusal):
+                        S.platform_inventory({"domain": "shc", "platformProject": "hybrid-fabric"})
 
 
 class RenameKeepsAUniqueName(unittest.TestCase):

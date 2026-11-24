@@ -448,7 +448,8 @@
           {{ cg_node_results | map(attribute='upstreamSessions') | map('string') | join('/') }}
           ({{ ('changed on ' ~ cg_changed_nodes | join(', ')) if cg_changed_nodes or cg_site_changed | bool else 'no change' }}){{
           ('; tunnel ' ~ cg_node_results | map(attribute='tunnel') | join('/')) if cg_instance.wireguard is defined else '' }}{{
-          cg_rdns_note | default('') }}
+          cg_rdns_note | default('') }}{{ ('; ' ~ cg_mark_note) if cg_mark_note | default('', true) | length > 0 else '' }}
+        fab_conditions: "{{ cg_mark_conditions | default([], true) }}"
         fab_status: >-
           {{ cg_status | combine({'wireguard': {'nodes': cg_wg_nodes | default([])}} if cg_instance.wireguard is defined else {})
              | combine({'site': cg_status.site | combine(cg_site_extra),
