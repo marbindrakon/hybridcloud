@@ -24,7 +24,7 @@ import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
 sys.path.insert(0, os.path.dirname(__file__))
-from play_helper import HAVE_ANSIBLE, ROOT, by_name, load, run_cases  # noqa: E402
+from play_helper import HAVE_ANSIBLE, ROOT, by_name, load, run_cases, walk  # noqa: E402
 from test_shc_names import names  # noqa: E402
 
 ROLES = os.path.join(ROOT, "eda", "rulebooks", "roles")
@@ -356,6 +356,94 @@ class AdoptionElsewhere(unittest.TestCase):
             body = text(os.path.join(ROLES, role + "_provision", "tasks", "main.yml"))
             self.assertIn('kce_owner: "%s/{{ %s_cr_namespace }}/{{ %s_cr_name }}"' % (kind, role, role), body)
             self.assertNotIn("clientId=%s-{{" % ("aap" if role == "aapconfig" else "quay"), text(TOOL_T[role]))
+
+
+# ---- every job checks the names before it makes anything -------------------------------------------------------
+
+PROVISIONS = {"quayorg_provision": ["main.yml"], "aaporg_provision": ["main.yml", "teams_and_roles.yml"],
+              "vault_provision": ["main.yml", "deploy_resources.yml", "init_unseal.yml", "configure_oidc.yml"],
+              "vaultkv_provision": ["main.yml", "kv_engine.yml", "identity.yml"],
+              "quayconfig_provision": ["main.yml"], "aapconfig_provision": ["main.yml"]}
+
+
+def flat(role, files):
+    """The role's tasks in the order they run, include_tasks of the role's own files expanded."""
+    base = os.path.join(ROLES, role, "tasks")
+
+    def expand(tasks):
+        for t in walk(tasks):
+            inc = t.get("ansible.builtin.include_tasks")
+            if isinstance(inc, str) and "/" not in inc and inc in files:
+                yield t
+                yield from expand(load(os.path.join(base, inc)))
+            elif not any(t.get(k) for k in ("block", "rescue", "always")):
+                yield t
+    return list(expand(load(os.path.join(base, "main.yml"))))
+
+
+def writes(t):
+    uri = t.get("ansible.builtin.uri")
+    if isinstance(uri, dict) and str(uri.get("method", "GET")).upper() in ("POST", "PUT", "PATCH", "DELETE"):
+        return True
+    k8s = t.get("kubernetes.core.k8s")
+    return isinstance(k8s, dict) and k8s.get("state", "present") == "present"
+
+
+class NameCheckFirst(unittest.TestCase):
+    def test_every_provision_checks_names_before_it_makes_anything(self):
+        for role, files in PROVISIONS.items():
+            tasks = flat(role, files)
+            check = [i for i, t in enumerate(tasks)
+                     if "name_check.yml" in str(t.get("ansible.builtin.include_tasks", ""))]
+            first = [i for i, t in enumerate(tasks) if writes(t)]
+            self.assertTrue(check, role)
+            self.assertTrue(first, role)
+            self.assertLess(check[0], first[0], "%s: %s before the name check" % (role, tasks[first[0]].get("name")))
+
+    def test_the_refusal_carries_its_reason(self):
+        for role in PROVISIONS:
+            body = text(os.path.join(ROLES, role, "tasks", "main.yml"))
+            self.assertIn("NameNotAllowed", body, role)
+
+
+# ---- lab strings and the realm ---------------------------------------------------------------------------------
+
+OWNED = [os.path.join(dp, f) for top in ("eda/rulebooks/roles",) for dp, _, fs in os.walk(os.path.join(ROOT, top))
+         for f in fs if f.endswith(".yml") and os.path.relpath(dp, os.path.join(ROOT, top)).split(os.sep)[0].split("_")[0]
+         in ("vault", "vaultkv", "quayorg", "quayconfig", "aaporg", "aapconfig", "dnsconfig")]
+OWNED += [os.path.join(ROOT, "eda", "common", "tasks", f) for f in os.listdir(os.path.join(ROOT, "eda", "common", "tasks"))
+          if f.startswith("keycloak_") or f in ("services_signin_groups.yml", "obtain_keycloak_realm_token.yml")]
+OWNED += [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(ROOT, "aap-config")) for f in fs if f.endswith(".yml")]
+OWNED += [os.path.join(dp, f) for dp, _, fs in os.walk(os.path.join(ROOT, "charts", "charts", "workload-identity"))
+          for f in fs]
+
+
+class LabStrings(unittest.TestCase):
+    def test_no_lab_domain_or_mail_domain(self):
+        self.assertGreater(len(OWNED), 30)
+        for path in OWNED:
+            body = text(path)
+            for word in ("shc.signal9.gg", "signal9", "sovereign.local", "eda-lab"):
+                self.assertNotIn(word, body, path)
+
+    def test_the_product_label_keys(self):
+        self.assertIn("hybridsovereign.redhat/cloud-identity", text(os.path.join(ROOT, "aap-config", "controller",
+                                                                                  "instance_groups.yml")))
+        self.assertIn("hybridsovereign.redhat/spiffe-id", text(os.path.join(
+            ROOT, "charts", "charts", "workload-identity", "templates", "serviceaccounts.yaml")))
+
+    def test_one_source_for_the_realm(self):
+        """The realm is the one whose automation clients the RbacConfig published (obtain_keycloak_realm_token.yml
+        keycloak_realm_name); no file names a realm, and one place names the default RbacConfig."""
+        holders = []
+        for path in OWNED:
+            body = text(path)
+            self.assertNotIn("KEYCLOAK_REALM", body, path)
+            self.assertNotIn("/realms/sovereign-tenants", body, path)
+            self.assertNotIn("plugin_vault_keycloak_realm", body, path)
+            if "keycloak-sovereign-tenants-services" in body:
+                holders.append(os.path.basename(path))
+        self.assertEqual(holders, ["obtain_keycloak_realm_token.yml"])
 
 
 # ---- the shared sign-in client task against a small directory over HTTP ----------------------------------------

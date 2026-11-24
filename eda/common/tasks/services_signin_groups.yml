@@ -31,7 +31,6 @@
 # ssg_faults ([{group, missing (bool), message}]).
 - name: Sign-in settings
   ansible.builtin.set_fact:
-    ssg_realm: "{{ entity_signin_realm | default('sovereign-tenants') }}"
     ssg_client_id: "{{ entity_signin_client | default('openshift-services') }}"
     ssg_legacy_owner: "Entity/{{ ssg_entity }}"
 
@@ -47,7 +46,7 @@
   ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
   vars:
     krt_purpose: clients
-    krt_rbac_config: "{{ entity_signin_rbac_config | default('keycloak-sovereign-tenants-services', true) }}"
+    krt_rbac_config: "{{ entity_signin_rbac_config | default('', true) }}"
     krt_url: "{{ ssg_kc }}"
     krt_token_fact: ssg_clients_token
 
@@ -55,9 +54,14 @@
   ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
   vars:
     krt_purpose: membership
-    krt_rbac_config: "{{ entity_signin_rbac_config | default('keycloak-sovereign-tenants-services', true) }}"
+    krt_rbac_config: "{{ entity_signin_rbac_config | default('', true) }}"
     krt_url: "{{ ssg_kc }}"
     krt_token_fact: ssg_members_token
+
+# the realm a site's caller names, else the realm whose automation clients the RbacConfig published
+- name: The tenant realm
+  ansible.builtin.set_fact:
+    ssg_realm: "{{ entity_signin_realm | default('', true) or keycloak_realm_name }}"
 
 # per group: the Rbac groups first, a group missing from the directory is that group's fault
 - name: Find the Rbac groups (per group)

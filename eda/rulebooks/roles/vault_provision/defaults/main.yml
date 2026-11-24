@@ -1,5 +1,4 @@
 ---
 plugin_vault_operator_namespace: sovereign-cloud-plugins
-plugin_vault_keycloak_realm: sovereign-tenants
 plugin_vault_keycloak_admin_secret: rhbk-services-admin
 plugin_vault_image: "{{ lookup('env', 'VAULT_IMAGE') | default('docker.io/hashicorp/vault:1.21.2', true) }}"

@@ -29,7 +29,7 @@ shc_cloud_instance_group:
     metadata:
       namespace: {{ (shc_gcp.automation | default({})).jobNamespace | default(shc_aws.jobNamespace | default('aap')) }}
       labels:
-        shc.signal9.gg/cloud-identity: "true"
+        hybridsovereign.redhat/cloud-identity: "true"
     spec:
       serviceAccountName: {{ (shc_gcp.automation | default({})).jobServiceAccount | default(shc_aws.jobServiceAccount | default('shc-aws-automation')) }}
       automountServiceAccountToken: false

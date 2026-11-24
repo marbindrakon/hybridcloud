@@ -125,6 +125,11 @@
         _kc_token: {json: {access_token: "{{ aap_kc_realm_token }}"}}
       no_log: true
 
+    # the realm is the one whose automation clients the RbacConfig published (one source for every job)
+    - name: The tenant realm
+      ansible.builtin.set_fact:
+        keycloak_realm: "{{ keycloak_realm_name }}"
+
     # the gateway's callback for this authenticator (read back from the authenticator below; same formula)
     - name: Name the gateway callback
       ansible.builtin.set_fact:

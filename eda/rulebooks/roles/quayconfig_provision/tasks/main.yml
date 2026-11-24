@@ -113,6 +113,11 @@
         _kc_token: {json: {access_token: "{{ quay_kc_realm_token }}"}}
       no_log: true
 
+    # the realm is the one whose automation clients the RbacConfig published (one source for every job)
+    - name: The tenant realm
+      ansible.builtin.set_fact:
+        keycloak_realm: "{{ keycloak_realm_name }}"
+
     # exact callbacks of the registry's external login service (quay_login_service_id), the groups claim
     - name: Ensure the Keycloak sign-in client for Quay
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_ensure.yml"
