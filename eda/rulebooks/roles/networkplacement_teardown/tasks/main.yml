@@ -11,7 +11,9 @@
 #    the VPC with its tunnels, Cloud Router (an IPv6-only placement's Cloud NAT for NAT64 with it), HA VPN gateway,
 #    firewall rules (the IPv6 one too), an IPv6-only placement's DNS64 server policy (detached, then deleted, before
 #    its subnet) and the default routes the platform put back, then the routers' VRF (shc_gcp_tenant.py place-down,
-#    shc_gcp_edge.py net-down; the external IPv6 /64 goes with the subnet; refused while instances remain);
+#    shc_gcp_edge.py net-down; the external IPv6 /64 goes with the subnet; refused while instances remain; the VPC
+#    and the external VPN gateway are the ones status.realization.site records: none recorded, nothing on Google Cloud
+#    is deleted and the message says so);
 # 3. the forward-confirmed names of the placement's IPv6 gateway (status.realization.reverseDns, design/IPV6-PLAN.md
 #    §8.3): the PTR, then the AAAA, before the subnets go back (the deletion waits while a removal fails and the
 #    DNSConfig is usable; without one the platform can remove nothing and goes on);
@@ -276,6 +278,19 @@
                 gcp_edge_cidr: "{{ npd_gw.spec.siteUnderlay.cidr }}"
                 gcp_edge_asn: 65000
 
+            # the VPC and the external VPN gateway are the ones the placement's status records
+            # (status.realization.site.vpc, .externalGateway): never rebuilt from the names. A placement that never
+            # recorded a VPC made nothing on Google Cloud: nothing to delete there, and the job says so.
+            - name: The placement's recorded Google Cloud objects
+              ansible.builtin.set_fact:
+                npd_gcp_vpc: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).vpc | default('', true) }}"
+                npd_gcp_ext: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).externalGateway | default('', true) }}"
+
+            - name: Note a placement without a recorded network
+              ansible.builtin.set_fact:
+                npd_note: "{{ npd_note | default('') ~ '; no Google Cloud network was recorded for the placement, so nothing was deleted there' }}"
+              when: npd_gcp_vpc | length == 0
+
             # the project and region the placement recorded (the environment's, if it never got that far)
             - name: Remove the placement's VPC and tunnels
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
@@ -286,8 +301,16 @@
                 gcp_config:
                   project: "{{ _site_st.project | default(_env_st.project | default(''), true) }}"
                   region: "{{ _site_st.region | default(_env_st.region | default(''), true) }}"
-                gcp_args: [place-down, --placement, "{{ (fab_namespace ~ '-' ~ fab_name) | regex_replace('[^a-z0-9-]', '-') | truncate(55, true, '') }}"]
+                gcp_args: >-
+                  {{ ['place-down', '--placement', fab_name, '--vpc', npd_gcp_vpc]
+                     + (['--external-gateway', npd_gcp_ext] if npd_gcp_ext | length > 0 else []) }}
                 gcp_soft: true
+              when: npd_gcp_vpc | length > 0
+
+            - name: No call, no error
+              ansible.builtin.set_fact:
+                gcp_error: ""
+              when: npd_gcp_vpc | length == 0
 
             - name: Report the workloads that block the deletion
               ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -477,7 +500,7 @@
           ready: false
           deletionComplete: true
           deletionBlockedBy: []
-          message: Deleted
+          message: "Deleted{{ npd_note | default('') }}"
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
 
     # the circuits' policy (advertise list) holds the network's placement prefixes
