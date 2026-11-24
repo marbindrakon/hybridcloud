@@ -162,6 +162,14 @@
     - np_aws_ipv6.source == 'Network'
     - np_aws_ipv6.prefix | default('') | length == 0
 
+# the VPC the placement's status records is the placement's (whatever its tags say); without one, a VPC tagged for
+# the placement is refused (the tenant can write tags in its account)
+- name: The VPC the placement recorded
+  ansible.builtin.set_fact:
+    np_aws_vpc_id: >-
+      {{ (((fab_st | default({}, true)).realization | default({}, true)).site | default({}, true)).vpc
+         | default('', true) | string | trim }}
+
 - name: The placement's VPC and its attachment to the network
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_call.yml"
   vars:
@@ -169,10 +177,38 @@
     aws_config: "{{ np_aws_cfg }}"
     aws_args: >-
       {{ ['place-up', '--placement', fab_namespace ~ '/' ~ fab_name, '--name', np_aws_name, '--vni', np_l3vni | string]
+         + (['--vpc-id', np_aws_vpc_id] if np_aws_vpc_id | length > 0 else [])
          + (np_prefixes_v4 | map('regex_replace', '^', '--prefix=') | list)
          + (['--egress'] if np_aws_nat_egress | bool else [])
          + (['--ipv6', np_aws_ipv6 | to_json] if np_aws_ipv6 | length > 0 else []) }}
     aws_soft: true
+
+# the VPC reaches status at once, before anything else can fail (a failed place-up reports it under "made"), so a
+# deletion removes it. A job that made a VPC and stopped before this write leaves it refused on the next run: the
+# platform team removes it.
+- name: Record the VPC the run made
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    _made: >-
+      {{ (aws_result.made | default({}, true)).vpcId | default('', true) if aws_error | length > 0
+         else (aws_result.result | default({}, true)).vpcId | default('', true) }}
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: networkplacements
+    cr_name: "{{ fab_name }}"
+    cr_namespace: "{{ fab_namespace }}"
+    cr_status_partial: true
+    patch_ignore_not_found: true
+    cr_status_body:
+      realization:
+        site: {vpc: "{{ _made | trim }}", account: "{{ np_aws_cfg.account }}", region: "{{ np_aws_cfg.region }}"}
+  when: (_made | trim | length) > 0 and (_made | trim) != np_aws_vpc_id
+
+# a VPC tagged for the placement that no status records
+- name: Refuse a VPC the platform did not make
+  ansible.builtin.set_fact:
+    fab_fail_reason: NameTakenOnSite
+    fab_fail_msg: "NetworkPlacement {{ fab_name }}: {{ aws_error }}"
+  when: aws_error | length > 0 and aws_result.reason | default('') == 'NameTakenOnSite'
 
 # the account's IPAM refuses a block AWS keeps for itself (the site's reserved ranges normally refuse it first)
 - name: Refuse a block the cloud won't hold
@@ -183,7 +219,7 @@
 
 - name: Stop on a site side error
   ansible.builtin.fail:
-    msg: "{{ fab_fail_msg if aws_result.reason | default('') == 'PrefixInvalid' else 'AWS place-up failed: ' ~ aws_error }}"
+    msg: "{{ fab_fail_msg if aws_result.reason | default('') in ['PrefixInvalid', 'NameTakenOnSite'] else 'AWS place-up failed: ' ~ aws_error }}"
   when: aws_error | length > 0
 
 # what the provider's translator reports (IPv6-only, source Provider), for the second description of status.ipv6

@@ -85,6 +85,8 @@ class FakeCompute:
             name = parts[1] if len(parts) > 1 else None
         if path.startswith("/aggregated/instances"):
             return {"items": {"zones/x": {"instances": copy.deepcopy(self.instances)}}}
+        if path.startswith("/aggregated/vpnTunnels"):
+            return {"items": {"regions/%s" % REGION: {"vpnTunnels": copy.deepcopy(list(self.tunnels.values()))}}}
         store = {"networks": self.networks, "subnetworks": self.subnets, "routes": self.routes,
                  "firewalls": self.firewalls, "routers": self.routers, "vpnGateways": self.gateways,
                  "vpnTunnels": self.tunnels, "externalVpnGateways": self.externals}[kind]
@@ -281,8 +283,10 @@ class GcpTenantIpv6Test(unittest.TestCase):
 
     def up(self, ipv6=None, known=None, egress="fabric", **cfg):
         t = tenant(self.f, **cfg)
+        # as the job runs it: after the first run the placement's status records the VPC and the external gateway
         with fake(self.f):
-            out = t.place_up(PLACEMENT, VNI, V4, EDGE, egress, known, ipv6)
+            out = t.place_up(PLACEMENT, VNI, V4, EDGE, egress, known, ipv6, vpc_recorded=N in self.f.networks,
+                             ext_recorded="shc-edge-" + EDGE["site"] in self.f.externals)
         with open(self.tfile) as fh:
             self.tunnels_file = json.load(fh)
         return out, t.changed
@@ -294,7 +298,7 @@ class GcpTenantIpv6Test(unittest.TestCase):
     def down(self):
         t = tenant(self.f)
         with fake(self.f):
-            return t.place_down(PLACEMENT), t.changed
+            return t.place_down(PLACEMENT, external_gateway="shc-edge-" + EDGE["site"]), t.changed
 
     # ---- a new dual-stack placement
     def test_new_dual_stack_placement(self):
@@ -656,6 +660,7 @@ class GcpPlacementTasksTest(unittest.TestCase):
         task = by_name(load(os.path.join(NP, "backend_cloudgcp.yml")), name)
         return run_play([task_vars(task), write_out("_out")],
                         {"np_gcp_cfg": {}, "gcp_edge_cfg": {}, "fab_name": PLACEMENT, "np_gcp_vpc": N, "np_l3vni": VNI,
+                         "np_gcp_vpc_recorded": False, "np_gcp_ext_recorded": False,
                          "np_prefixes_v4": V4, "np_gcp_edge": EDGE, "np_gcp_egress": "fabric", "np_gcp_known": {},
                          "_np_gcp_tunnels": {"path": "/tmp/x"}, "np_gcp_ipv6": v6, "np_gcp_network6": [NET6],
                          "np_gcp_place": place or {}})["gcp_args"]

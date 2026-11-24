@@ -224,21 +224,30 @@ def dual_stack_scenarios(module, ec2_cls):
                 t.cfg = {"account": V8.ACCOUNT, "region": V8.REGION, "azs": list(V8.AZS),
                          "tags": {"shc-entity": "acme", "shc-network": "core"}, "edge": {}}
                 t.ec2, t.r53, t.ram, t.changed = ec2, None, None, []
+                # the VPC the placement's status records after its first run (the job writes it at once)
+                vid = recorded_vpc(ec2, PLACEMENT)
                 if what == "up":
-                    t.place_up(PLACEMENT, 1001, list(V8.V4), True, v6)
+                    t.place_up(PLACEMENT, 1001, list(V8.V4), True, v6, vpc_id=vid)
                 else:
-                    t.place_down(PLACEMENT, 1001, v6)
+                    t.place_down(PLACEMENT, 1001, v6, vpc_id=vid)
         out[label] = {"ec2": [[n, kw] for n, kw in ec2.calls], "hub": copy.deepcopy(FakeEdge.calls)}
     return out
 
 
+def recorded_vpc(ec2, placement):
+    """The VPC id the placement's status records once a run made it."""
+    return next((v["VpcId"] for v in ec2.vpcs.values() if T.tagmap(v).get("shc-placement") == placement), None)
+
+
 # the scenarios' calls as the module made them before IPv6-only existed (sha256 of the canonical JSON)
 # re-pinned for the names rules: the placement's VPC is looked up before its IPv6 pool (its Name decides the pool's),
-# and place-public finds its route table by the role tag instead of the Name tag; every other call as before
+# and place-public finds its route table by the role tag instead of the Name tag; re-pinned again when the VPC became
+# the one the placement's status records: later runs read it by id (VpcIds) instead of by the tag; the same calls
+# in the same order otherwise (checked call by call against the module before)
 DUAL_STACK_DIGESTS = {
-    "ipv4": "6ed1628e5a1d9f61526b0d401ad51d225b4d1025db181173f7587f4ad056db7b",
-    "network": "a5b48148eb1a2369d30a253a2a75caa2282bf00f141388aa3e081c7c2781b7ce",
-    "provider": "1406b1d4dd4167c881d445b2fcf28dc859af9bbd8317d0c72191f0d4820a1d00",
+    "ipv4": "2d27ff384e41dad02da3afb29d6b50cafbf27d3f8020ff9dc15a2b11532b8c48",
+    "network": "9e20b37661dbb8b74cd86b79f4c86cac75fd5bbb8a043cd64063b534bd5b2be5",
+    "provider": "68099fac7c7fac3869265930a85ae877b2ccef2bf2c19b36117343d49f672757",
 }
 
 
@@ -285,11 +294,11 @@ class TenantIpv6OnlyTest(unittest.TestCase):
 
     def up(self, v6, egress=True):
         t = tenant(self.ec2)
-        return t.place_up(PLACEMENT, VNI, [], egress, v6), t.changed
+        return t.place_up(PLACEMENT, VNI, [], egress, v6, vpc_id=recorded_vpc(self.ec2, PLACEMENT)), t.changed
 
     def down(self, v6):
         t = tenant(self.ec2)
-        return t.place_down(PLACEMENT, VNI, v6), t.changed
+        return t.place_down(PLACEMENT, VNI, v6, vpc_id=recorded_vpc(self.ec2, PLACEMENT)), t.changed
 
     def routes6(self, vpc):
         return {r["DestinationIpv6CidrBlock"]: {k: v for k, v in r.items() if k.endswith("Id")}
@@ -382,7 +391,8 @@ class TenantIpv6OnlyTest(unittest.TestCase):
     def test_a_vpc_with_another_cidr_is_refused(self):
         self.up(only6())
         t = tenant(self.ec2)
-        self.assertIn("has CIDR", refused(lambda: t.place_up(PLACEMENT, VNI + 1, [], True, only6()))["error"])
+        self.assertIn("has CIDR", refused(lambda: t.place_up(PLACEMENT, VNI + 1, [], True, only6(),
+                                                             vpc_id=recorded_vpc(self.ec2, PLACEMENT)))["error"])
 
     def test_no_public_subnets(self):
         self.up(only6())
@@ -1018,7 +1028,8 @@ class TasksTest(unittest.TestCase):
         task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The placement's VPC and its attachment to the network")
         args = run_play([task_vars(task), write_out("_out")],
                         {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_aws_name": "acme_p1", "np_l3vni": VNI,
-                         "np_prefixes_v4": [], "np_aws_nat_egress": True, "np_aws_ipv6": only6("Provider")})["aws_args"]
+                         "np_prefixes_v4": [], "np_aws_nat_egress": True, "np_aws_ipv6": only6("Provider"),
+                         "np_aws_vpc_id": ""})["aws_args"]
         self.assertEqual(args[:8], ["place-up", "--placement", "acme/p1", "--name", "acme_p1", "--vni", str(VNI), "--egress"])
         self.assertEqual(json.loads(args[-1]), only6("Provider"))
 

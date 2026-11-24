@@ -416,12 +416,16 @@ class AwsTenantIpv6Test(unittest.TestCase):
 
     def up(self, v6, placement=PLACEMENT, egress=False):
         t = tenant(self.ec2)
-        r = t.place_up(placement, 1001, list(V4), egress, v6)
+        r = t.place_up(placement, 1001, list(V4), egress, v6, vpc_id=self.recorded(placement))
         return r, t.changed
+
+    def recorded(self, placement):
+        """The VPC the placement's status records after a run (the job writes it at once)."""
+        return next((v["VpcId"] for v in self.ec2.vpcs.values() if T.tagmap(v).get("shc-placement") == placement), None)
 
     def down(self, v6, placement=PLACEMENT):
         t = tenant(self.ec2)
-        return t.place_down(placement, 1001, v6), t.changed
+        return t.place_down(placement, 1001, v6, vpc_id=self.recorded(placement)), t.changed
 
     def refused(self, fn):
         out = io.StringIO()
@@ -677,7 +681,7 @@ class AwsTenantIpv6Test(unittest.TestCase):
                 seen["up"] = a
                 return {}
 
-            def place_down(self, *a):
+            def place_down(self, *a, **kw):
                 seen["down"] = a
                 return {}
         argv = ["x", "--config", "{}", "place-up", "--placement", PLACEMENT, "--vni", "7", "--prefix", V4[0],
@@ -784,15 +788,18 @@ class AwsPlacementTasksTest(unittest.TestCase):
                          {"source": "Provider", "internet": True, "networkPrefixes6": [NET6]})
         self.assertEqual(self.ipv6_here(None), {})
 
-    def place_args(self, v6):
+    def place_args(self, v6, vpc_id=""):
         task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The placement's VPC and its attachment to the network")
         return run_play([task_vars(task), write_out("_out")],
                         {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_aws_name": "acme_p1", "np_l3vni": 1001,
-                         "np_prefixes_v4": V4, "np_aws_nat_egress": False, "np_aws_ipv6": v6})["aws_args"]
+                         "np_prefixes_v4": V4, "np_aws_nat_egress": False, "np_aws_ipv6": v6,
+                         "np_aws_vpc_id": vpc_id})["aws_args"]
 
     def test_place_up_arguments(self):
         self.assertEqual(self.place_args({}), ["place-up", "--placement", "acme/p1", "--name", "acme_p1", "--vni", "1001",
                                                "--prefix=" + V4[0]])
+        # the VPC the placement's status records goes with every later run
+        self.assertEqual(self.place_args({}, "vpc-1")[7:9], ["--vpc-id", "vpc-1"])
         args = self.place_args({"source": "Provider", "internet": True, "networkPrefixes6": [NET6]})
         self.assertEqual(args[-2], "--ipv6")
         self.assertEqual(json.loads(args[-1]), {"source": "Provider", "internet": True, "networkPrefixes6": [NET6]})

@@ -186,10 +186,33 @@
       vars:
         gcp_helper: shc_gcp_tenant.py
         gcp_config: "{{ ca_tenant_cfg }}"
-        gcp_args: [zone-up, --zone, "{{ ca_zone }}", --zone-name, "{{ ca_zone_name }}"]
+        # --zone-recorded: the environment's status records this zone, so it is the environment's whatever its
+        # labels say; without it a zone of the name or of the DNS name is refused (labels decide nothing)
+        gcp_args: >-
+          {{ ['zone-up', '--zone', ca_zone, '--zone-name', ca_zone_name]
+             + (['--zone-recorded'] if (fab_st | default({}, true)).dnsZoneId | default('', true) | length > 0 else []) }}
         gcp_soft: true
 
-    # a zone of this name or DNS name in the project that the platform did not make for this environment
+    # the zone reaches status as soon as it is made (also when the run fails after it), so a deletion removes it; a
+    # job that made it and stopped before this write leaves it refused on the next run (the platform team removes it)
+    - name: Record the zone the run made
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        _made: "{{ (gcp_result.made | default({}, true)).zoneId | default('', true) if gcp_error | length > 0 else (gcp_result.result | default({}, true)).zoneId | default('', true) }}"
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: cloudgcps
+        cr_name: "{{ fab_name }}"
+        cr_namespace: "{{ fab_namespace }}"
+        cr_status_partial: true
+        patch_ignore_not_found: true
+        cr_status_body:
+          project: "{{ ca_account }}"
+          region: "{{ ci_spec.gcp.region }}"
+          dnsZoneId: "{{ _made }}"
+          dns: {zone: "{{ ca_zone }}", zoneId: "{{ _made }}"}
+      when: _made | length > 0 and _made != (fab_st | default({}, true)).dnsZoneId | default('', true)
+
+    # a zone of this name or DNS name in the project that no status of this environment records
     - name: Refuse a zone the platform did not make
       ansible.builtin.set_fact:
         fab_fail_reason: NameTakenOnSite
