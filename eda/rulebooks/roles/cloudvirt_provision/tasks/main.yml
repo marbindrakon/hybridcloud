@@ -246,6 +246,70 @@
           vars:
             site_kc_tag: "cv-{{ fab_namespace }}-{{ fab_name }}"
 
+        # the site namespaces that carry this environment's labels (only the platform writes them): an earlier
+        # release's namespace whose record the status lost is found here and kept, never made a second time
+        - name: List the environment's site namespaces
+          kubernetes.core.k8s_info:
+            kubeconfig: "{{ site_kubeconfig }}"
+            api_version: v1
+            kind: Namespace
+            label_selectors: "{{ cv_selector | dict2items | map(attribute='key') | zip(cv_selector.values()) | map('join', '=') | list }}"
+          register: _cv_site_ns
+
+        - name: Map the namespaces to the site's namespaces
+          ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+          vars:
+            fab_check:
+              action: cloudvirt-namespaces
+              entity: "{{ fab_entity }}"
+              cloudvirt: "{{ fab_name }}"
+              namespaces: "{{ fab_spec.namespaces | default([{'name': 'vms'}], true) }}"
+              recorded: "{{ fab_st.namespaces | default([], true) }}"
+              site: >-
+                {%- set out = [] -%}
+                {%- for o in _cv_site_ns.resources | default([]) -%}
+                  {%- set _ = out.append({'name': o.metadata.name, 'labels': o.metadata.labels | default({}, true)}) -%}
+                {%- endfor -%}
+                {{ out }}
+
+        - name: Keep the site's namespaces
+          vars:
+            _ns_of: "{{ fab_check_result.namespaces | items2dict(key_name='name', value_name='namespace') }}"
+          ansible.builtin.set_fact:
+            cv_namespaces: "{{ fab_check_result.namespaces }}"
+            cv_claimed: "{{ fab_check_result.claimed }}"
+            cv_ns_status: >-
+              {%- set out = [] -%}
+              {%- for n in cv_ns_status -%}
+                {%- set _ = out.append(n | combine({'namespace': _ns_of[n.name]})) -%}
+              {%- endfor -%}
+              {{ out }}
+            cv_taken: >-
+              {%- set out = [] -%}
+              {%- for o in _cv_lists.results[0].resources | default([]) | rejectattr('metadata.name', 'equalto', fab_name) -%}
+                {%- for n in (o.status | default({}, true)).namespaces | default([], true) if n is mapping -%}
+                  {%- if n.namespace | default('') in (fab_check_result.namespaces | map(attribute='namespace') | list) -%}
+                    {%- set _ = out.append(n.namespace ~ ' (CloudVirt ' ~ o.metadata.name ~ ')') -%}
+                  {%- endif -%}
+                {%- endfor -%}
+              {%- endfor -%}
+              {{ fab_check_result.errors + out }}
+
+        - name: Refuse clashing site namespaces
+          ansible.builtin.set_fact:
+            fab_fail_reason: NamespaceTaken
+            fab_fail_msg: "CloudVirt {{ fab_name }}: site namespace already used: {{ cv_taken | join('; ') }}"
+          when: cv_taken | length > 0
+
+        - name: Stop on clashing site namespaces
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: cv_taken | length > 0
+
+        - name: The environment's status with the site's namespaces
+          ansible.builtin.set_fact:
+            cv_status: "{{ cv_status | combine({'namespaces': cv_ns_status}) }}"
+
         # a namespace of the wanted name that is not this environment's (another tenant's, the site's own, or one
         # of the tenant's other environments) is refused before anything is applied: never merged into
         - name: Read the site namespaces of those names
@@ -332,20 +396,14 @@
             label: "{{ item.namespace }}"
           register: _cv_quota
 
-        # namespaces of this environment that left spec.namespaces: removed once they hold no VMs
-        - name: List the environment's site namespaces
-          kubernetes.core.k8s_info:
-            kubeconfig: "{{ site_kubeconfig }}"
-            api_version: v1
-            kind: Namespace
-            label_selectors: "{{ cv_selector | dict2items | map(attribute='key') | zip(cv_selector.values()) | map('join', '=') | list }}"
-          register: _cv_site_ns
-
+        # namespaces of this environment that left spec.namespaces: removed once they hold no VMs. A namespace whose
+        # label names a namespace still in the spec is never stale (it is kept and said so)
         - name: Find the namespaces to remove
           ansible.builtin.set_fact:
             cv_stale: >-
               {{ _cv_site_ns.resources | default([]) | map(attribute='metadata.name')
-                 | difference(cv_namespaces | map(attribute='namespace')) | list }}
+                 | difference(cv_namespaces | map(attribute='namespace')) | difference(cv_claimed) | list }}
+            cv_claimed_kept: "{{ cv_claimed | difference(cv_namespaces | map(attribute='namespace')) | list }}"
 
         # no_log (R2A-F2): the results are whole VirtualMachine objects (cloud-init userData can carry a password);
         # only the per-namespace counts below are logged and looped over.
@@ -382,7 +440,8 @@
         - name: Keep the removed namespaces that still hold VMs
           ansible.builtin.set_fact:
             cv_kept: >-
-              {{ cv_stale_counts | rejectattr('count', 'equalto', 0) | map(attribute='namespace') | list }}
+              {{ cv_stale_counts | rejectattr('count', 'equalto', 0) | map(attribute='namespace') | list
+                 + cv_claimed_kept }}
 
         # what the environment's namespaces hold (status.virtualMachines; the site probe refreshes it)
         - name: The VirtualMachines in the environment's namespaces
@@ -424,7 +483,9 @@
         fab_message: >-
           {{ cv_namespaces | length }} namespace(s) on {{ cv_site_name }}
           ({{ cv_ns_status | selectattr('ready') | list | length }} with their network){{ '; removed from spec but still
-          holding VMs: ' ~ cv_kept | join(', ') if cv_kept | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
+          holding VMs: ' ~ cv_kept | difference(cv_claimed_kept) | join(', ')
+          if cv_kept | difference(cv_claimed_kept) | length > 0 else '' }}{{ '; kept, as they carry the labels of a
+          namespace still in the spec: ' ~ cv_claimed_kept | join(', ') if cv_claimed_kept | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
           | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}{{ cv_dns_note | default('') }}{{
           ('; access for ' ~ cv_access.groups | join(', ')) if cv_access.groups | default([]) | length > 0 else '; no tenant access granted' }}{{
           ('; ' ~ cv_access_waiting | join('; ')) if cv_access_waiting | default([]) | length > 0 else '' }}
