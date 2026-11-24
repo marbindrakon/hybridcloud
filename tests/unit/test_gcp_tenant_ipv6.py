@@ -298,7 +298,7 @@ class GcpTenantIpv6Test(unittest.TestCase):
     def down(self):
         t = tenant(self.f)
         with fake(self.f):
-            return t.place_down(PLACEMENT, external_gateway="shc-edge-" + EDGE["site"]), t.changed
+            return t.place_down(PLACEMENT, vpc=N, external_gateway="shc-edge-" + EDGE["site"]), t.changed
 
     # ---- a new dual-stack placement
     def test_new_dual_stack_placement(self):

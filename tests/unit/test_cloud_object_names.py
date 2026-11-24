@@ -321,6 +321,28 @@ class PlacementOwnership(unittest.TestCase):
         self.assertNotIn("shc-acme--p1", self.f.networks)
         self.assertNotIn(self.EXT, self.f.externals)
 
+    def test_teardown_states(self):
+        """The teardown: (recorded VPC there | recorded VPC gone | nothing recorded) x (a VPC of the older name)."""
+        self.up(vpc="shc-p1", recorded=False)                            # a VPC of the older name, made by someone
+        before = len(self.f.mutations())
+        out = self.call("place_down", "p1", vpc=None, external_gateway=None)   # nothing recorded: nothing deleted
+        self.assertFalse(out["deleted"])
+        self.assertIn("recorded no VPC", out["note"])
+        self.assertEqual(len(self.f.mutations()), before)
+        self.assertIn("shc-p1", self.f.networks)
+        # the recorded VPC is gone, its router and subnet's names are taken by objects of another VPC: left alone
+        self.f = V.FakeCompute()
+        self.add_vpc("elsewhere", "x")
+        self.f.subnets["shc-acme--p1"] = {"name": "shc-acme--p1", "ipCidrRange": V.V4[0], "stackType": "IPV4_ONLY",
+                                          "network": self.f.networks["elsewhere"]["selfLink"]}
+        self.f.routers["shc-acme--p1"] = {"name": "shc-acme--p1", "network": self.f.networks["elsewhere"]["selfLink"]}
+        before = len(self.f.mutations())
+        out = self.call("place_down", "p1", vpc="shc-acme--p1")
+        self.assertFalse(out["deleted"])
+        self.assertIn("no longer exists", out["note"])
+        self.assertEqual(out["left"], ["router shc-acme--p1", "subnet shc-acme--p1"])
+        self.assertEqual(len(self.f.mutations()), before)
+
     def test_objects_of_the_vpcs_names_in_another_vpc(self):
         """A subnet named like the VPC that belongs to another VPC: place-up refuses, place-down leaves it alone."""
         self.add_vpc("elsewhere", "x")
@@ -703,6 +725,143 @@ class AwsPlacementObjects(unittest.TestCase):
         self.assertEqual(self.up(vpc_id=vid)["vpcId"], vid)               # recorded: still the placement's
         out = self.up(vpc_id="vpc-gone")                                  # recorded one gone, a tagged one there
         self.assertEqual(out["refused"]["reason"], "NameTakenOnSite")
+
+    def down(self, vpc_id):
+        A.MADE.clear()
+        return self.AT.tenant(self.ec2).place_down("entity-acme/p1", 1001, None, vpc_id=vpc_id)
+
+    def public(self, state, vpc_id):
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            try:
+                return self.AT.tenant(self.ec2).place_public("entity-acme/p1", state, vpc_id=vpc_id)
+            except SystemExit:
+                return {"refused": json.loads(buf.getvalue().splitlines()[-1])}
+
+    def forge(self, vid, new_id):
+        """Another VPC in the account carrying the placement's tags (anyone in the account can write them)."""
+        self.ec2.vpcs[new_id] = dict(copy.deepcopy(self.ec2.vpcs[vid]), VpcId=new_id)
+
+    def public_fake(self):
+        """The fake EC2 with an internet gateway and the public route table (place-public up and down)."""
+        base = self.AT.FakeEc2
+
+        class Ec2(base):
+            def __init__(self):
+                super().__init__()
+                self.igws, self.ptables = {}, {}
+
+            def h_create_internet_gateway(self, **kw):
+                g = self._id("igw")
+                self.igws[g] = {"InternetGatewayId": g, "Attachments": [], "Tags": self._tags(kw)}
+                return {"InternetGateway": copy.deepcopy(self.igws[g])}
+
+            def h_attach_internet_gateway(self, InternetGatewayId, VpcId, **kw):
+                self.igws[InternetGatewayId]["Attachments"] = [{"VpcId": VpcId}]
+                return {}
+
+            def h_detach_internet_gateway(self, InternetGatewayId, VpcId, **kw):
+                self.igws[InternetGatewayId]["Attachments"] = []
+                return {}
+
+            def h_delete_internet_gateway(self, InternetGatewayId, **kw):
+                del self.igws[InternetGatewayId]
+                return {}
+
+            def h_describe_internet_gateways(self, Filters=None, **kw):
+                vpc = {x["Name"]: x["Values"] for x in Filters or []}.get("attachment.vpc-id", [None])[0]
+                return {"InternetGateways": [copy.deepcopy(g) for g in self.igws.values()
+                                             if any(a["VpcId"] == vpc for a in g["Attachments"])]}
+
+            def h_create_route_table(self, VpcId, **kw):
+                r = self._id("rtb")
+                self.ptables[r] = {"RouteTableId": r, "VpcId": VpcId, "Routes": [], "Associations": [],
+                                   "Tags": self._tags(kw)}
+                return {"RouteTable": copy.deepcopy(self.ptables[r])}
+
+            def h_describe_route_tables(self, Filters=None, RouteTableIds=None, **kw):
+                f = {x["Name"]: x["Values"] for x in Filters or []}
+                if RouteTableIds:
+                    return {"RouteTables": [copy.deepcopy(self.ptables[r]) for r in RouteTableIds]}
+                if "tag:shc-role" in f:
+                    return {"RouteTables": [copy.deepcopy(t) for t in self.ptables.values()
+                                            if t["VpcId"] == f["vpc-id"][0]]}
+                return super().h_describe_route_tables(Filters=Filters, **kw)
+
+            def h_create_route(self, RouteTableId, **kw):
+                if RouteTableId in self.ptables:
+                    self.ptables[RouteTableId]["Routes"].append(dict(kw))
+                    return {"Return": True}
+                return super().h_create_route(RouteTableId=RouteTableId, **kw)
+
+            def h_associate_route_table(self, RouteTableId, SubnetId, **kw):
+                self.ptables[RouteTableId]["Associations"].append({"SubnetId": SubnetId})
+                return {"AssociationId": "rtbassoc-" + SubnetId}
+
+            def h_delete_route_table(self, RouteTableId, **kw):
+                del self.ptables[RouteTableId]
+                return {}
+        return Ec2()
+
+    def test_teardown_and_public_states(self):
+        """place-down and place-public: (recorded VPC there | recorded VPC gone | nothing recorded) x (no other VPC |
+        another VPC with the placement's tag). Only the recorded VPC is ever changed or deleted."""
+        self.ec2 = self.public_fake()
+        def mutations():
+            return [n for n, _ in self.ec2.calls if n.startswith(self.AT.MUTATING)]
+        # two VPCs with the placement's tag, one recorded: only the recorded one gets public subnets and goes
+        vid = self.up(vpc_id=None)["vpcId"]
+        self.forge(vid, "vpc-forged")
+        out = self.public("up", vid)
+        self.assertTrue(out["public"])
+        self.assertEqual({s["VpcId"] for s in self.ec2.subnets.values()}, {vid})
+        self.assertTrue(all(kw.get("VpcId", vid) == vid for n, kw in self.ec2.calls if n.startswith(self.AT.MUTATING)))
+        self.assertEqual(self.public("down", vid)["public"], [])
+        out = self.down(vid)
+        self.assertTrue(out["deleted"])
+        self.assertEqual(list(self.ec2.vpcs), ["vpc-forged"])
+        self.assertEqual(out["left"], ["vpc vpc-forged"])
+        # a tag on a VPC that no status records, nothing recorded: nothing changed or deleted, the VPC named
+        before = len(mutations())
+        out = self.down(None)
+        self.assertFalse(out["deleted"])
+        self.assertIn("recorded no VPC", out["note"])
+        self.assertEqual(out["left"], ["vpc vpc-forged"])
+        self.assertIn("no recorded VPC", self.public("up", None)["refused"]["error"])
+        out = self.public("down", None)
+        self.assertEqual((out["deleted"], out["left"]), (False, ["vpc vpc-forged"]))
+        self.assertEqual(len(mutations()), before)
+        self.assertIn("vpc-forged", self.ec2.vpcs)
+        # a record whose VPC is gone (another VPC carries the tag): nothing deleted in the account, the note says so
+        out = self.down(vid)
+        self.assertFalse(out["deleted"])
+        self.assertIn("no longer exists", out["note"])
+        self.assertEqual(out["left"], ["vpc vpc-forged"])
+        self.assertIn("no longer exists", self.public("up", vid)["refused"]["error"])
+        self.assertFalse(self.public("down", vid)["deleted"])
+        self.assertEqual(len(mutations()), before)
+
+    def test_a_waiter_error_keeps_the_record(self):
+        """A VPC made, then a waiter's time-out (not an AWS answer): the JSON line still names the VPC made."""
+        import botocore.exceptions
+
+        class Waiter:
+            def wait(self, **kw):
+                raise botocore.exceptions.WaiterError("VpcAvailable", "Max attempts exceeded", {})
+        argv = ["x", "--config", "{}", "place-up", "--placement", "entity-acme/p1", "--vni", "1001",
+                "--name", "acme_p1"] + ["--prefix=" + p for p in self.AT.V4]
+        tenant = self.AT.tenant(self.ec2)
+        tenant.cfg["tags"] = {}
+        buf = io.StringIO()
+        with mock.patch.object(A, "Tenant", lambda cfg: tenant), mock.patch.object(sys, "argv", argv), \
+                mock.patch.object(self.ec2, "get_waiter", lambda name: Waiter(), create=True), \
+                contextlib.redirect_stdout(buf), self.assertRaises(SystemExit):
+            A.MADE.clear()
+            A.main()
+        line = json.loads(buf.getvalue().splitlines()[-1])
+        self.assertFalse(line["ok"])
+        self.assertIn("WaiterError", line["error"])
+        self.assertEqual(line["made"], {"vpcId": next(iter(self.ec2.vpcs))})
 
     def test_teardown_by_the_recorded_vpc(self):
         vid = self.up(vpc_id=None)["vpcId"]

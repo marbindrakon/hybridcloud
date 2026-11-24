@@ -228,8 +228,8 @@ def dual_stack_scenarios(module, ec2_cls):
                 vid = recorded_vpc(ec2, PLACEMENT)
                 if what == "up":
                     t.place_up(PLACEMENT, 1001, list(V8.V4), True, v6, vpc_id=vid)
-                else:
-                    t.place_down(PLACEMENT, 1001, v6, vpc_id=vid)
+                else:  # with the pool its status records
+                    t.place_down(PLACEMENT, 1001, dict(v6, **V8.recorded6(ec2, PLACEMENT)) if v6 else v6, vpc_id=vid)
         out[label] = {"ec2": [[n, kw] for n, kw in ec2.calls], "hub": copy.deepcopy(FakeEdge.calls)}
     return out
 
@@ -243,11 +243,13 @@ def recorded_vpc(ec2, placement):
 # re-pinned for the names rules: the placement's VPC is looked up before its IPv6 pool (its Name decides the pool's),
 # and place-public finds its route table by the role tag instead of the Name tag; re-pinned again when the VPC became
 # the one the placement's status records: later runs read it by id (VpcIds) instead of by the tag; the same calls
-# in the same order otherwise (checked call by call against the module before)
+# in the same order otherwise (checked call by call against the module before); re-pinned when place-down acted only
+# on what status records: its two new reads list what carries the placement's tag (describe_vpcs by the tag, and
+# describe_ipam_pools with IPv6), the teardown is given the recorded pool, and every other call is as before
 DUAL_STACK_DIGESTS = {
-    "ipv4": "2d27ff384e41dad02da3afb29d6b50cafbf27d3f8020ff9dc15a2b11532b8c48",
-    "network": "9e20b37661dbb8b74cd86b79f4c86cac75fd5bbb8a043cd64063b534bd5b2be5",
-    "provider": "68099fac7c7fac3869265930a85ae877b2ccef2bf2c19b36117343d49f672757",
+    "ipv4": "574b9744b6087227a3f53980bea6c2ccb213b33de30336545c722e55657cfbbd",
+    "network": "dcd1f178697a847250128172d542d16d8354b809a67067612f5f0208ce1f85c7",
+    "provider": "d5aad2aa12c11b37f24a1b0fb6c35b4a890faee941cfcc49a34151434eab8f39",
 }
 
 
@@ -298,6 +300,7 @@ class TenantIpv6OnlyTest(unittest.TestCase):
 
     def down(self, v6):
         t = tenant(self.ec2)
+        v6 = dict(v6, **V8.recorded6(self.ec2, PLACEMENT))   # the pool and option set its status records
         return t.place_down(PLACEMENT, VNI, v6, vpc_id=recorded_vpc(self.ec2, PLACEMENT)), t.changed
 
     def routes6(self, vpc):
@@ -397,7 +400,8 @@ class TenantIpv6OnlyTest(unittest.TestCase):
     def test_no_public_subnets(self):
         self.up(only6())
         t = tenant(self.ec2)
-        self.assertIn("IPv6-only", refused(lambda: t.place_public(PLACEMENT, "up"))["error"])
+        self.assertIn("IPv6-only", refused(lambda: t.place_public(PLACEMENT, "up",
+                                                                  vpc_id=recorded_vpc(self.ec2, PLACEMENT)))["error"])
 
     # ---- source Provider
     def test_provider_source_with_translation(self):
@@ -489,12 +493,23 @@ class TenantIpv6OnlyTest(unittest.TestCase):
             out, _ = self.down({"source": "Provider", "only": True})
         self.assertTrue(out["networkKept"])
 
-    def test_teardown_finds_an_option_set_without_its_vpc(self):
+    def test_an_option_set_nothing_records_is_listed_not_deleted(self):
+        # tagged for the placement, recorded by no status: the tag is anyone's to write in the account
         t = tenant(self.ec2)
         self.ec2.dhcp["dopt-x"] = {"DhcpOptionsId": "dopt-x", "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}],
                                    "DhcpConfigurations": []}
-        t.place_down(PLACEMENT, VNI, {"source": "Network", "only": True})
+        out = t.place_down(PLACEMENT, VNI, {"source": "Network", "only": True})
+        self.assertIn("dopt-x", self.ec2.dhcp)
+        self.assertEqual(out["left"], ["dhcp options dopt-x"])
+
+    def test_the_recorded_option_set_goes_when_the_vpc_is_gone(self):
+        t = tenant(self.ec2)
+        self.ec2.dhcp["dopt-r"] = {"DhcpOptionsId": "dopt-r", "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}],
+                                   "DhcpConfigurations": []}
+        out = t.place_down(PLACEMENT, VNI, {"source": "Network", "only": True, "dhcpOptions": "dopt-r"},
+                           vpc_id="vpc-gone")
         self.assertEqual(self.ec2.dhcp, {})
+        self.assertIn("no longer exists", out["note"])
 
     def test_cli_place_up_without_prefix(self):
         seen = {}

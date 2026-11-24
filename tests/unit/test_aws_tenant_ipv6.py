@@ -404,6 +404,19 @@ def ipv6(source="Network", internet=True, prefix=BLOCK, net6=(NET6,)):
     return d
 
 
+def recorded6(ec2, placement):
+    """The IPv6 objects a placement's status records after its runs (place-up's ipv6.pool and ipv6.dhcpOptions)."""
+    out = {}
+    pool = next((p["IpamPoolId"] for p in ec2.pools.values() if T.tagmap(p).get("shc-placement") == placement), None)
+    if pool:
+        out["pool"] = pool
+    dhcp = next((d["DhcpOptionsId"] for d in ec2.__dict__.get("dhcp", {}).values()
+                 if T.tagmap(d).get("shc-placement") == placement), None)
+    if dhcp:
+        out["dhcpOptions"] = dhcp
+    return out
+
+
 @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
 class AwsTenantIpv6Test(unittest.TestCase):
     def setUp(self):
@@ -425,6 +438,8 @@ class AwsTenantIpv6Test(unittest.TestCase):
 
     def down(self, v6, placement=PLACEMENT):
         t = tenant(self.ec2)
+        if v6 is not None:  # the placement's IPAM pool as its status records it (status.realization.site.ipv6.pool)
+            v6 = dict(v6, **recorded6(self.ec2, placement))
         return t.place_down(placement, 1001, v6, vpc_id=self.recorded(placement)), t.changed
 
     def refused(self, fn):
@@ -651,14 +666,19 @@ class AwsTenantIpv6Test(unittest.TestCase):
         self.assertTrue(r["ipv6"]["ipamDeleted"])
         self.assertEqual(self.ec2.ipams, {})
 
-    def test_teardown_finds_a_pool_without_a_vpc(self):
-        # a run that stopped after the pool: the teardown with spec.ipv6 still removes it
+    def test_a_pool_nothing_records_is_listed_not_deleted(self):
+        # a run that stopped after the pool and before the VPC recorded nothing: the pool carries the placement's
+        # tag, which anyone in the account can write, so the teardown deletes nothing and names it
         t = tenant(self.ec2)
         ipam = t.ensure_ipam()
-        t.ensure_pool(ipam, PLACEMENT, BLOCK, "shc-acme-p1", {"shc-placement": PLACEMENT})
-        r, _ = self.down({"source": "Network"})
-        self.assertIsNotNone(r["ipv6"]["pool"])
-        self.assertEqual((self.ec2.pools, self.ec2.ipams), ({}, {}))
+        pool = t.ensure_pool(ipam, PLACEMENT, BLOCK, "shc-acme-p1", {"shc-placement": PLACEMENT})
+        before = len(self.ec2.calls)
+        r = tenant(self.ec2).place_down(PLACEMENT, 1001, {"source": "Network"}, vpc_id=None)
+        self.assertEqual([n for n, _ in self.ec2.calls[before:] if n.startswith(MUTATING)], [])
+        self.assertEqual(r["left"], ["ipam pool " + pool])
+        self.assertFalse(r["deleted"])
+        self.assertIn("recorded no VPC", r["note"])
+        self.assertEqual(len(self.ec2.pools), 1)
 
     def test_teardown_of_an_ipv4_placement_reads_no_ipam(self):
         self.up(None)

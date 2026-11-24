@@ -29,7 +29,9 @@ platform identity by impersonating the project's member account. Idempotent; pri
       A failed place-up prints "made": {"vpc", "externalGateway"} for what it created, so the job records it and a
       later place-down removes it.
       place-down deletes the recorded VPC and its objects, and the external VPN gateway --external-gateway (the one
-      its status records) only while no tunnel of the project, in any region, points at it.
+      its status records) only while no tunnel of the project, in any region, points at it. Without --vpc it deletes
+      nothing (the older name is never assumed for a deletion); a recorded VPC that is gone leaves every object of
+      its names alone (listed under "left").
 
 config: {"project", "region", "labels": {..}, "vpcMtu", "linkLocalPool", "cloudRouterAsn", "ipv6Edge"}
   ipv6Edge: the site's routers carry IPv6, so a new HA VPN gateway is created dual-stack (IPV4_IPV6, IPv4 outer
@@ -679,8 +681,12 @@ class Tenant:
 
     def place_down(self, placement, vpc=None, external_gateway=None):
         """The recorded VPC (vpc) and what belongs to it; the recorded external VPN gateway with the project's last
-        tunnel that points at it. Nothing is kept or refused for its description or labels (written for people)."""
-        n = self.names(placement, vpc)
+        tunnel that points at it. Nothing is kept or refused for its description or labels (written for people).
+        Without a recorded VPC nothing is deleted (the project is one the tenant can write in)."""
+        if not vpc:
+            return {"placement": placement, "deleted": False,
+                    "note": "the placement recorded no VPC, so nothing was deleted in project %s" % self.project}
+        n = vpc
         net = self.get("/global/networks/" + n)
         # workload guard: any instance on the VPC refuses the teardown
         agg = g.http("GET", self.base + "/aggregated/instances?filter=" + urllib.parse.quote('status != "TERMINATED"'), token=self.tok)
@@ -696,16 +702,18 @@ class Tenant:
             if not ok:
                 left.append(what)
             return ok
+        rt = self.get("/regions/%s/routers/%s" % (self.region, n))
+        # the tunnels go only while their router is the placement's router in the recorded VPC
+        rt_ours = bool(rt) and bool(net) and self.in_vpc(rt, net)
         for i in range(2):
             tname = "%s-t%d" % (n, i)
             t = self.get("/regions/%s/vpnTunnels/%s" % (self.region, tname))
             if t:
-                if self.link_of(t.get("router")) != self.router_link(n):
+                if not rt_ours or self.link_of(t.get("router")) != self.router_link(n):
                     left.append("tunnel " + tname)
                     continue
                 self.op("DELETE", "/regions/%s/vpnTunnels/%s" % (self.region, tname))
                 self.changed.append("deleted tunnel " + tname)
-        rt = self.get("/regions/%s/routers/%s" % (self.region, n))
         if rt and mine(rt, "router " + n):
             # the NAT64 (a Cloud NAT is part of its router) goes with it
             self.op("DELETE", "/regions/%s/routers/%s" % (self.region, n))
@@ -750,7 +758,9 @@ class Tenant:
             if e and not using:
                 self.op("DELETE", "/global/externalVpnGateways/" + external_gateway)
                 self.changed.append("deleted external vpn gateway " + external_gateway)
-        out = {"placement": placement, "deleted": True}
+        out = {"placement": placement, "deleted": bool(net)}
+        if not net:
+            out["note"] = "the VPC %s the placement recorded no longer exists" % n
         if left:
             out["left"] = sorted(left)
         return out

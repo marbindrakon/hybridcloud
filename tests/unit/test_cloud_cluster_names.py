@@ -213,8 +213,8 @@ class NothingOfAnotherCluster(unittest.TestCase):
             def __init__(self):
                 self.deleted = []
 
-            def describe_vpcs(self, Filters):
-                return {"Vpcs": [{"VpcId": "vpc-1", "Tags": []}]}
+            def describe_vpcs(self, VpcIds):
+                return {"Vpcs": [{"VpcId": v, "Tags": []} for v in VpcIds if v == "vpc-1"]}
 
             def describe_subnets(self, Filters):
                 # found by the role tag place-public gives, never by a name (a subnet named like a public one but
@@ -235,7 +235,7 @@ class NothingOfAnotherCluster(unittest.TestCase):
                 self.deleted.append(SubnetId)
         t = object.__new__(T.Tenant)
         t.ec2, t.cfg, t.changed = Ec2(), {}, []
-        t.place_public("ns/p", "down")
+        t.place_public("ns/p", "down", vpc_id="vpc-1")
         self.assertEqual(t.ec2.deleted, ["s1"])
 
 
