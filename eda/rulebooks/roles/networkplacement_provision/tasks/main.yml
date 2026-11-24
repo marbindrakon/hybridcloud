@@ -212,8 +212,10 @@
             {{ ((np_backend.spec | default({}, true)).namespaces | default([], true))
                | selectattr('network', 'defined') | selectattr('network', 'equalto', fab_spec.network) | list }}
           # the site namespaces the CloudVirt's status records (an earlier release's names among them): read, never
-          # rebuilt
+          # rebuilt; a namespace the environment has not recorded yet is left out until the placement's next run after
+          # the environment made it, so nothing is set on, or taken off, a namespace not matched by that record
           recorded: "{{ (np_backend.status | default({}, true)).namespaces | default([], true) }}"
+          readOnly: true
       when: np_backend_kind == 'CloudVirt' and np_backend | length > 0
 
     - name: Record the namespaces the network serves (CloudVirt)

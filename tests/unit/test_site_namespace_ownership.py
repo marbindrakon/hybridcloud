@@ -213,17 +213,29 @@ class Readers(unittest.TestCase):
                                   {"name": "db", "ready": False, "message": "w"}])
 
     def test_the_placement_reads_the_recorded_names(self):
-        with open(os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_provision", "tasks", "main.yml")) as f:
-            main = f.read()
-        part = main[main.index("Map the CloudVirt's namespaces on this network"):]
-        part = part[:part.index("- name:", 10)]
-        self.assertIn("recorded: \"{{ (np_backend.status | default({}, true)).namespaces", part)
-        # the function then keeps an earlier release's recorded name instead of the new form
-        out = F.cloudvirt_namespaces({"entity": "acme-corp", "cloudvirt": "prod", "network": "core",
-                                      "namespaces": [{"name": "vms", "network": "core"}],
-                                      "recorded": [{"name": "vms", "namespace": "acme-corp-prod-vms"}]})
-        self.assertEqual(out["namespaces"][0]["namespace"], "acme-corp-prod-vms")
-
+        """The release before's shape: the environment's status records its namespace under the older hyphen form;
+        a namespace of the spec it has not made yet is not recorded. The placement serves exactly the recorded one
+        (never a rebuilt <tenant>--<environment>--<namespace>), so its IPv6 annotation stays where it is."""
+        sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+        from play_helper import HAVE_ANSIBLE, by_name, load, run_cases
+        if not HAVE_ANSIBLE:
+            self.skipTest("ansible-playbook not installed")
+        role = os.path.join(ROOT, "eda", "rulebooks", "roles", "networkplacement_provision")
+        tasks = load(os.path.join(role, "tasks", "main.yml"))
+        steps = [by_name(tasks, "Map the CloudVirt's namespaces on this network"),
+                 by_name(tasks, "Record the namespaces the network serves (CloudVirt)")]
+        backend = {"spec": {"namespaces": [{"name": "vms", "network": "core"}, {"name": "db", "network": "core"},
+                                           {"name": "web", "network": "edge"}]},
+                   "status": {"namespaces": [{"name": "vms", "namespace": "acme-corp-prod-vms"},
+                                             {"name": "web", "namespace": "acme-corp-prod-web"}]}}
+        cases = [{"backend": backend},
+                 {"backend": dict(backend, status={})}]                  # nothing recorded yet
+        got = run_cases([{"ansible.builtin.set_fact": {"np_status": {}, "np_backend": "{{ case.backend }}"}}] + steps,
+                        cases, "np_status.namespaces",
+                        extra_vars={"role_path": role, "fab_entity": "acme-corp", "np_backend_name": "prod",
+                                    "np_backend_kind": "CloudVirt", "fab_spec": {"network": "core"}})
+        self.assertEqual(got[0], ["acme-corp-prod-vms"])
+        self.assertEqual(got[1], [])
 
 if __name__ == "__main__":
     unittest.main()
