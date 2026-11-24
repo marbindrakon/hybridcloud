@@ -1,13 +1,16 @@
 """The writer of the admin dashboard's platform-health banner (charts/charts/shc-cluster-base/files/
 platform_health_report.py), against a fake monitoring API (Alertmanager's /api/v2/alerts) and a fake Kubernetes API
-(the check Jobs and their pods, and the ConfigMap shc-platform-health with a JSON merge patch):
+(the check Jobs and their pods, and the writer's own ConfigMap shc-platform-health-<cluster>, key report.json, with
+a JSON merge patch):
 
 - no alert, one, several (order, prefix, silenced and inhibited left out), a check with findings, a check whose
   failed run was followed by a success, an alert without a check;
 - the monitoring unreachable or answering an error, and the write refused: exit 1 and nothing written;
-- an over-long finding, many findings, many faults (each line cut, the key bounded), web and IP addresses and a crash
-  report kept out of the object, the token never in any output;
-- another cluster's key untouched; the ConfigMap created when absent, and a create race;
+- an over-long finding, many findings, many faults (each line cut, the report bounded and the faults left out
+  counted), web addresses, host names, IP addresses and a crash report kept out of the object, the token never in any
+  output;
+- another cluster's report untouched and never read; the writer's ConfigMap absent: nothing created, the run fails
+  with what to set (the services cluster's chart makes the ConfigMaps);
 - the writer on another cluster: the services cluster's address and token from the Secret's files, a missing one
   named by its setting;
 - alertsDelivered with the receiver check off, on and quiet, on and firing;
@@ -34,10 +37,11 @@ import platform_health_report as R  # noqa: E402
 TOKEN = "s3cret-report-token"
 REMOTE_TOKEN = "s3cret-remote-token"
 NOW = 1_900_000_000
-CM = "/api/v1/namespaces/platform/configmaps/shc-platform-health"
+CM_DIR = "/api/v1/namespaces/platform/configmaps/"
+CM = CM_DIR + "shc-platform-health-services"
 CHECKS = "eda-activations|eda-api-check|identity-write-probe-.+"
 CFG = dict(R.DEFAULTS, cluster="services", opsNamespace="shc-ops", checkCronJobs=CHECKS, targetMode="local",
-           targetNamespace="platform")
+           targetNamespace="platform", targetConfigMap="shc-platform-health-services")
 
 # the banner's object as the stream rules give it (one key)
 EXAMPLE = {"schemaVersion": 1, "cluster": "hub", "writtenAt": "2030-01-01T00:00:00Z", "intervalSeconds": 300,
@@ -69,18 +73,24 @@ def pod(jobname, message, created="2030-01-01T00:00:00Z"):
 
 
 class Fake:
-    """Alertmanager and the Kubernetes API in one: alerts, Jobs and pods in shc-ops, ConfigMaps in platform."""
+    """Alertmanager and the Kubernetes API in one: alerts, Jobs and pods in shc-ops, ConfigMaps in platform.
 
-    def __init__(self, alerts=(), jobs=(), pods=(), cm=None):
+    cms: {cluster: ConfigMap} for the ConfigMaps shc-platform-health-<cluster> (the services cluster's chart makes
+    them; a writer may only patch its own). A create is refused, as the writer's Role has no create."""
+
+    def __init__(self, alerts=(), jobs=(), pods=(), cms=None):
         self.alerts = list(alerts)
         self.jobs = list(jobs)
         self.pods = list(pods)
-        self.cm = copy.deepcopy(cm)
+        self.cms = {"shc-platform-health-" + k: copy.deepcopy(v) for k, v in (cms or {}).items()}
         self.alerts_answer = None
         self.patch_answer = None
-        self.create_answer = None
         self.pods_answer = None
         self.calls = []
+
+    @property
+    def cm(self):
+        return self.cms.get("shc-platform-health-services")
 
     def handle(self, method, path, body, auth):
         self.calls.append((method, path, body, auth))
@@ -94,21 +104,16 @@ class Fake:
             sel = path.split("labelSelector=", 1)[1].replace("%3D", "=")
             want = sel.split("=", 1)[1]
             return 200, {"items": [p for p in self.pods if p["metadata"]["labels"]["job-name"] == want]}
-        if path == CM and method == "PATCH":
+        if path.startswith(CM_DIR) and method == "PATCH":
             if self.patch_answer:
                 return self.patch_answer
-            if self.cm is None:
+            cm = self.cms.get(path[len(CM_DIR):])
+            if cm is None:
                 return 404, {"reason": "NotFound"}
-            self.cm.setdefault("data", {}).update(body["data"])
-            return 200, self.cm
-        if path == "/api/v1/namespaces/platform/configmaps" and method == "POST":
-            if self.create_answer:
-                answer, self.create_answer = self.create_answer, None
-                if answer[0] == 409:
-                    self.cm = {"metadata": {"name": "shc-platform-health"}, "data": {"hub.json": "{}"}}
-                return answer
-            self.cm = copy.deepcopy(body)
-            return 201, self.cm
+            cm.setdefault("data", {}).update(body["data"])
+            return 200, cm
+        if path.rstrip("/") + "/" == CM_DIR and method == "POST":
+            return 403, {"reason": "Forbidden"}
         return 404, {"reason": "NotFound"}
 
     def writes(self):
@@ -136,13 +141,13 @@ def run(fake, cfg=CFG):
     return code, doc, out.getvalue()
 
 
-def written(fake, key="services.json"):
-    return json.loads(fake.cm["data"][key])
+def written(fake, cluster="services"):
+    return json.loads(fake.cms["shc-platform-health-" + cluster]["data"]["report.json"])
 
 
 class Report(unittest.TestCase):
     def test_no_alert(self):
-        fake = Fake(cm={"data": {}})
+        fake = Fake(cms={"services": {"data": {}}})
         code, doc, _ = run(fake)
         self.assertEqual(code, 0)
         self.assertEqual(written(fake), {"schemaVersion": 1, "cluster": "services", "writtenAt": "2030-03-17T17:46:40Z",
@@ -150,7 +155,7 @@ class Report(unittest.TestCase):
 
     def test_one_alert(self):
         fake = Fake([alert("ShcVolumeFilling", namespace="aap", persistentvolumeclaim="db-repo",
-                           summary="Volume aap/db-repo is 85 % used")], cm={"data": {}})
+                           summary="Volume aap/db-repo is 85 % used")], cms={"services": {"data": {}}})
         code, _, _ = run(fake)
         self.assertEqual(code, 0)
         self.assertEqual(written(fake)["faults"], [{
@@ -169,7 +174,7 @@ class Report(unittest.TestCase):
                      alert("ShcEtcdLeaderChanges", since="2030-01-01T00:00:00Z"),
                      alert("ShcVolumeAlmostFull", "critical", since="2030-01-01T00:00:00+02:00", namespace="q",
                            persistentvolumeclaim="r"),
-                     silenced, inhibited], cm={"data": {}})
+                     silenced, inhibited], cms={"services": {"data": {}}})
         run(fake)
         got = [(f["id"], f["severity"], f["since"], f["object"]) for f in written(fake)["faults"]]
         self.assertEqual(got, [
@@ -190,7 +195,7 @@ class Report(unittest.TestCase):
                           job("eda-api-check-9", "eda-api-check", "2030-01-01T00:20:00Z", "failed")],
                     pods=[pod("eda-activations-1", "old finding"), pod("eda-activations-3", msg),
                           pod("eda-api-check-9", "api")],
-                    cm={"data": {}})
+                    cms={"services": {"data": {}}})
         code, _, _ = run(fake)
         self.assertEqual(code, 0)
         f = written(fake)["faults"][0]
@@ -206,7 +211,7 @@ class Report(unittest.TestCase):
                               "succeeded"),
                           job("identity-write-probe-services-3", "identity-write-probe-services", "2030-01-01T00:10:00Z",
                               "running")],
-                    pods=[pod("identity-write-probe-services-1", "stale")], cm={"data": {}})
+                    pods=[pod("identity-write-probe-services-1", "stale")], cms={"services": {"data": {}}})
         run(fake)
         self.assertEqual(written(fake)["faults"][0]["details"], [])
 
@@ -218,7 +223,7 @@ class Report(unittest.TestCase):
             with self.subTest(labels=labels):
                 fake = Fake([alert("ShcBackupJobFailed", **labels)],
                             jobs=[job("j", labels.get("cronjob", ""), "2030-01-01T00:00:00Z", "failed")],
-                            pods=[pod("j", "secret-ish raw text")], cm={"data": {}})
+                            pods=[pod("j", "secret-ish raw text")], cms={"services": {"data": {}}})
                 run(fake)
                 self.assertEqual(written(fake)["faults"][0]["details"], [])
                 self.assertFalse([c for c in fake.calls if "/jobs" in c[1] or "/pods" in c[1]])
@@ -227,30 +232,34 @@ class Report(unittest.TestCase):
         for answer in ((503, {"error": "down"}), (403, {"reason": "Forbidden"}), (200, {"not": "a list"}),
                        (200, ["not an alert"])):
             with self.subTest(answer=answer):
-                fake = Fake(cm={"data": {"services.json": "old"}})
+                fake = Fake(cms={"services": {"data": {"report.json": "old"}}})
                 fake.alerts_answer = answer
                 code, doc, out = run(fake)
                 self.assertEqual((code, doc), (1, None))
                 self.assertEqual(fake.writes(), [])
-                self.assertEqual(fake.cm["data"]["services.json"], "old")
+                self.assertEqual(fake.cm["data"]["report.json"], "old")
                 self.assertIn("not written: the alerts could not be read", out)
 
     def test_write_refused(self):
         for answer in ((403, {"reason": "Forbidden"}), (422, {"reason": "Invalid"}), (500, {})):
             with self.subTest(answer=answer):
-                fake = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")], cm={"data": {}})
+                fake = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")], cms={"services": {"data": {}}})
                 fake.patch_answer = answer
                 code, doc, out = run(fake)
                 self.assertEqual((code, doc), (1, None))
                 self.assertIn("not written", out)
                 self.assertEqual(fake.cm, {"data": {}})
 
-    def test_create_refused(self):
-        fake = Fake()
-        fake.create_answer = (403, {"reason": "Forbidden"})
-        code, _, _ = run(fake)
-        self.assertEqual(code, 1)
-        self.assertIsNone(fake.cm)
+    def test_its_configmap_absent_nothing_is_created(self):
+        # the writer may not create: the services cluster's chart makes one ConfigMap per reporting cluster
+        fake = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")],
+                    cms={"hub": {"data": {}}})
+        code, doc, out = run(fake)
+        self.assertEqual((code, doc), (1, None))
+        self.assertEqual([c[0] for c in fake.writes()], ["PATCH"])
+        self.assertEqual(set(fake.cms), {"shc-platform-health-hub"})
+        self.assertIn("ConfigMap shc-platform-health-services does not exist in platform on the services cluster", out)
+        self.assertIn("ops.platformHealth.report.writers", out)
 
     def test_over_long_and_many_findings(self):
         long = "act-1: " + "x" * 2000
@@ -258,7 +267,7 @@ class Report(unittest.TestCase):
         fake = Fake([alert("ShcEventActivationsNotRunning", "critical", namespace="shc-ops", cronjob="eda-activations",
                            summary="s" * 1000)],
                     jobs=[job("j1", "eda-activations", "2030-01-01T00:00:00Z", "failed")], pods=[pod("j1", msg)],
-                    cm={"data": {}})
+                    cms={"services": {"data": {}}})
         run(fake)
         f = written(fake)["faults"][0]
         self.assertEqual(len(f["details"]), CFG["maxDetails"])
@@ -272,44 +281,59 @@ class Report(unittest.TestCase):
                         summary="y" * 400) for i in range(300)]
         alerts.append(alert("ShcEventActivationsNotRunning", "critical", namespace="shc-ops", cronjob="eda-activations"))
         fake = Fake(alerts, jobs=[job("j1", "eda-activations", "2030-01-01T00:00:00Z", "failed")],
-                    pods=[pod("j1", "\n".join("z" * 290 for _ in range(30)))], cm={"data": {}})
+                    pods=[pod("j1", "\n".join("z" * 290 for _ in range(30)))], cms={"services": {"data": {}}})
         run(fake)
-        raw = fake.cm["data"]["services.json"]
+        raw = fake.cm["data"]["report.json"]
         self.assertLessEqual(len(raw.encode()), CFG["maxKeyBytes"])
         self.assertLess(len(raw.encode()), 64 * 1024)
         doc = json.loads(raw)
         # critical first, so it stays
         self.assertEqual(doc["faults"][0]["id"], "ShcEventActivationsNotRunning")
         self.assertLess(len(doc["faults"]), 301)
+        # the faults left out are counted in one last fault
+        last = doc["faults"][-1]
+        self.assertEqual(last["id"], R.LEFT_OUT)
+        self.assertRegex(last["summary"], r"^\d+ more faults on services are not shown$")
+        self.assertEqual(int(last["summary"].split()[0]) + len(doc["faults"]) - 1, 301)
+        # under the bound, nothing is left out and there is no such fault
+        small = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")], cms={"services": {"data": {}}})
+        run(small)
+        self.assertNotIn(R.LEFT_OUT, [f["id"] for f in written(small)["faults"]])
 
     def test_addresses_crash_reports_and_tokens_stay_out(self):
         R.SECRETS.add(TOKEN)
         msg = ("the write check could not run (realm platform at https://sso.example.com/realms/x): no answer\n"
                "GET /api: no answer from 192.0.2.10:8443 and [2001:db8::5]:443 at 12:30:45\n"
+               "keycloak.ops.svc:8443 refused; alertmanager-main.openshift-monitoring.svc down; api.example.com x\n"
                "token %s leaked" % TOKEN)
         fake = Fake([alert("ShcIdentityWriteCheckFailed", "critical", namespace="shc-ops",
                            cronjob="identity-write-probe-services", summary="see http://10.0.0.1/x")],
                     jobs=[job("j1", "identity-write-probe-services", "2030-01-01T00:00:00Z", "failed")],
-                    pods=[pod("j1", msg)], cm={"data": {}})
+                    pods=[pod("j1", msg)], cms={"services": {"data": {}}})
         _, _, out = run(fake)
-        raw = fake.cm["data"]["services.json"]
-        for bad in ("sso.example.com", "192.0.2.10", "2001:db8", "10.0.0.1", TOKEN, "http"):
+        raw = fake.cm["data"]["report.json"]
+        for bad in ("sso.example.com", "192.0.2.10", "2001:db8", "10.0.0.1", TOKEN, "http", "keycloak.ops",
+                    "openshift-monitoring.svc", "api.example.com"):
             self.assertNotIn(bad, raw)
         self.assertNotIn(TOKEN, out)
         f = json.loads(raw)["faults"][0]
         self.assertEqual(f["details"][1], "GET /api: no answer from [address] and [address] at 12:30:45")
+        self.assertEqual(f["details"][2], "[address] refused; [address] down; [address] x")
         self.assertEqual(f["summary"], "see [address]")
+        # field paths, file names and versions are not host names
+        for keep in ("status.phase is Failed", "see file.py", "version 4.22.1", "activation acme-events: failed"):
+            self.assertEqual(R.clean_line(keep, 300), keep)
         # a crash: the pod's log fallback is never copied
         fake = Fake([alert("ShcEventActivationsNotRunning", namespace="shc-ops", cronjob="eda-activations")],
                     jobs=[job("j1", "eda-activations", "2030-01-01T00:00:00Z", "failed")],
                     pods=[pod("j1", 'Traceback (most recent call last):\n  File "/x.py", line 1\nKeyError: url')],
-                    cm={"data": {}})
+                    cms={"services": {"data": {}}})
         run(fake)
         self.assertEqual(written(fake)["faults"][0]["details"], [R.CRASHED])
 
     def test_unreadable_findings_are_written_and_fail_the_run(self):
         fake = Fake([alert("ShcEventActivationsNotRunning", namespace="shc-ops", cronjob="eda-activations")],
-                    jobs=[job("j1", "eda-activations", "2030-01-01T00:00:00Z", "failed")], cm={"data": {}})
+                    jobs=[job("j1", "eda-activations", "2030-01-01T00:00:00Z", "failed")], cms={"services": {"data": {}}})
         fake.pods_answer = (403, {"reason": "Forbidden"})
         code, _, out = run(fake)
         self.assertEqual(code, 1)
@@ -318,38 +342,24 @@ class Report(unittest.TestCase):
         self.assertTrue(details[0].startswith("the check's findings could not be read: "))
         self.assertIn("findings not read", out)
 
-    def test_another_clusters_key_is_untouched(self):
+    def test_another_clusters_report_is_untouched(self):
         hub = json.dumps(dict(EXAMPLE, cluster="hub"))
         fake = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")],
-                    cm={"metadata": {"name": "shc-platform-health"}, "data": {"hub.json": hub}})
-        run(fake)
-        self.assertEqual(fake.cm["data"]["hub.json"], hub)
-        self.assertEqual(set(fake.cm["data"]), {"hub.json", "services.json"})
-        # the patch carries this cluster's key only, as a merge patch; the other key is never read
+                    cms={"hub": {"data": {"report.json": hub}}, "services": {"data": {"other": "kept"}}})
+        code, _, _ = run(fake)
+        self.assertEqual(code, 0)
+        self.assertEqual(fake.cms["shc-platform-health-hub"], {"data": {"report.json": hub}})
+        self.assertEqual(set(fake.cm["data"]), {"other", "report.json"})
+        # one merge patch of the report key of its own ConfigMap; no ConfigMap is ever read
         (method, path, body, _), = fake.writes()
-        self.assertEqual((method, path, list(body["data"])), ("PATCH", CM, ["services.json"]))
+        self.assertEqual((method, path, list(body["data"])), ("PATCH", CM, ["report.json"]))
         self.assertFalse([c for c in fake.calls if c[0] == "GET" and "configmaps" in c[1]])
-
-    def test_created_when_absent_and_a_create_race(self):
-        fake = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")])
-        code, _, _ = run(fake)
-        self.assertEqual(code, 0)
-        self.assertEqual([c[0] for c in fake.writes()], ["PATCH", "POST"])
-        self.assertEqual((fake.cm["metadata"]["name"], fake.cm["metadata"]["namespace"], list(fake.cm["data"])),
-                         ("shc-platform-health", "platform", ["services.json"]))
-        # another writer created it between the patch and the create: patched again, its key kept
-        fake = Fake()
-        fake.create_answer = (409, {"reason": "AlreadyExists"})
-        code, _, _ = run(fake)
-        self.assertEqual(code, 0)
-        self.assertEqual([c[0] for c in fake.writes()], ["PATCH", "POST", "PATCH"])
-        self.assertEqual(set(fake.cm["data"]), {"hub.json", "services.json"})
 
     def test_alerts_delivered(self):
         receiver = alert("AlertmanagerReceiversNotConfigured", namespace="openshift-monitoring")
         for check, alerts, want in ((False, [receiver], None), (True, [], True), (True, [receiver], False)):
             with self.subTest(check=check, firing=bool(alerts)):
-                fake = Fake(alerts, cm={"data": {}})
+                fake = Fake(alerts, cms={"services": {"data": {}}})
                 run(fake, dict(CFG, receiverCheck=check))
                 doc = written(fake)
                 self.assertIs(doc["alertsDelivered"], want)
@@ -358,9 +368,9 @@ class Report(unittest.TestCase):
     def test_shape_matches_the_banner_example(self):
         fake = Fake([alert("ShcEventActivationsNotRunning", namespace="shc-ops", cronjob="eda-activations")],
                     jobs=[job("j1", "eda-activations", "2030-01-01T00:00:00Z", "failed")],
-                    pods=[pod("j1", "act-1 (acme-web): CannotRun")], cm={"data": {}})
-        run(fake, dict(CFG, cluster="hub"))
-        doc = json.loads(fake.cm["data"]["hub.json"])
+                    pods=[pod("j1", "act-1 (acme-web): CannotRun")], cms={"hub": {"data": {}}})
+        run(fake, dict(CFG, cluster="hub", targetConfigMap="shc-platform-health-hub"))
+        doc = written(fake, "hub")
 
         def shape(x):
             if isinstance(x, dict):
@@ -380,8 +390,9 @@ class Main(unittest.TestCase):
         self.tmp = tempfile.mkdtemp(prefix="platform-health-report-")
         with open(os.path.join(self.tmp, "token"), "w") as f:
             f.write(TOKEN)
-        self.local = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")], cm={"data": {}})
-        self.remote = Fake(cm={"data": {"services.json": "theirs"}})
+        self.local = Fake([alert("ShcVolumeFilling", namespace="a", persistentvolumeclaim="b")],
+                          cms={"services": {"data": {}}})
+        self.remote = Fake(cms={"services": {"data": {"report.json": "theirs"}}, "hub": {}})
         self.servers = [self.serve(self.local), self.serve(self.remote)]
 
     def tearDown(self):
@@ -421,7 +432,7 @@ class Main(unittest.TestCase):
 
     def config(self, **kw):
         cfg = {"cluster": "hub", "opsNamespace": "shc-ops", "checkCronJobs": CHECKS, "targetMode": "remote",
-               "targetNamespace": "platform", "targetDir": os.path.join(self.tmp, "sc"), "targetServerKey": "server",
+               "targetNamespace": "platform", "targetConfigMap": "shc-platform-health-hub", "targetDir": os.path.join(self.tmp, "sc"), "targetServerKey": "server",
                "targetTokenKey": "token", "kubeURL": self.url(0), "alertmanagerURL": self.url(0),
                "kubeTokenFile": os.path.join(self.tmp, "token"), "kubeCAFile": "/nonexistent",
                "alertmanagerCAFile": "/nonexistent"}
@@ -460,20 +471,21 @@ class Main(unittest.TestCase):
         self.secret(server=self.url(1) + "\n", token=REMOTE_TOKEN)
         code, out = self.main(self.config())
         self.assertEqual(code, 0)
-        doc = json.loads(self.remote.cm["data"]["hub.json"])
+        doc = written(self.remote, "hub")
         self.assertEqual(doc["faults"][0]["object"], "a/b")
-        self.assertEqual(self.remote.cm["data"]["services.json"], "theirs")
+        self.assertEqual(self.remote.cm["data"]["report.json"], "theirs")
         # the monitoring with this cluster's token, the write with the services cluster's
         self.assertEqual({c[3] for c in self.local.calls}, {"Bearer " + TOKEN})
         self.assertEqual({c[3] for c in self.remote.calls}, {"Bearer " + REMOTE_TOKEN})
         self.assertEqual(self.local.writes(), [])
         self.assertNotIn(REMOTE_TOKEN, out)
-        self.assertNotIn(self.url(1), self.remote.cm["data"]["hub.json"])
+        self.assertNotIn(self.url(1), self.remote.cms["shc-platform-health-hub"]["data"]["report.json"])
 
     def test_on_the_services_cluster_it_writes_locally(self):
-        code, _ = self.main(self.config(targetMode="local", cluster="services"))
+        code, _ = self.main(self.config(targetMode="local", cluster="services",
+                                        targetConfigMap="shc-platform-health-services"))
         self.assertEqual(code, 0)
-        self.assertIn("services.json", self.local.cm["data"])
+        self.assertIn("report.json", self.local.cm["data"])
         self.assertEqual(self.remote.calls, [])
 
     def test_a_missing_secret_names_the_setting(self):

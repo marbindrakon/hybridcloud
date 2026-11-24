@@ -1,6 +1,7 @@
 // The platform-health banner of the admin pages, rendered on the server (react-dom/server) from
-// ConfigMap data shaped as the operations layer writes it (one key <cluster>.json per cluster),
-// and its read through the API path with a fake fetch.
+// what the reader reads (the index shc-platform-health with clusters.json, and per listed cluster
+// the ConfigMap shc-platform-health-<cluster> with report.json, as the operations layer writes it),
+// and its reads through the API path with a fake fetch.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync } from 'node:child_process';
@@ -19,7 +20,7 @@ import { createElement } from 'react';
 import { PlatformHealthBannerView, readPlatformHealth } from './components/PlatformHealthBanner';
 import { configureK8sClient } from './hooks/k8s';
 export * from './status/platformHealth';
-export const banner = (data, nowMs) => renderToStaticMarkup(createElement(PlatformHealthBannerView, { data, nowMs }));
+export const banner = (read, nowMs) => renderToStaticMarkup(createElement(PlatformHealthBannerView, { read, nowMs }));
 export { readPlatformHealth, configureK8sClient };`;
 const bundle = path.join(OUT, 'platformHealthBanner.mjs');
 execFileSync(path.join(UI, 'node_modules/.bin/esbuild'), [
@@ -49,6 +50,11 @@ const at = (minAgo) => new Date(NOW - minAgo * 60000).toISOString();
 function report(cluster, faults = [], { writtenMinAgo = 1, intervalSeconds = 300, alertsDelivered = null } = {}) {
   return JSON.stringify({ schemaVersion: 1, cluster, writtenAt: at(writtenMinAgo), intervalSeconds, faults, alertsDelivered });
 }
+// What the reader reads: every cluster of the index with its report's ConfigMap data.
+const ok = (value) => ({ state: 'read', data: value === undefined ? {} : { 'report.json': value } });
+function read(reports) {
+  return { clusters: Object.keys(reports), reports };
+}
 const fault = (id, severity, extra = {}) => ({ id, severity, since: at(30), object: 'ops/check', summary: `summary of ${id}`, details: [], ...extra });
 
 // Every id the platform's alert rules define today (Shc* alerts of the cluster base chart).
@@ -64,21 +70,30 @@ function alertIds() {
 }
 
 test('none: nothing is shown when every report is fresh and has no fault', () => {
-  assert.equal(m.banner({ 'hub.json': report('hub'), 'services.json': report('services') }, NOW), '');
-  assert.equal(m.banner({}, NOW), '');
+  assert.equal(m.banner(read({ hub: ok(report('hub')), services: ok(report('services')) }), NOW), '');
+  assert.equal(m.banner(read({}), NOW), '');
 });
 
-test('absent or unreadable object: nothing is shown', () => {
+test('index absent or not fetched: nothing is shown', () => {
   assert.equal(m.banner(null, NOW), '');
   assert.equal(m.banner(undefined, NOW), '');
-  assert.equal(m.platformHealthData({ kind: 'Status', code: 403 }), null);
-  assert.equal(m.platformHealthData('not an object'), null);
+});
+
+test('index answered with a list that cannot be read: one notice, nothing dropped silently', () => {
+  for (const data of [{}, { 'clusters.json': '{not json' }, { 'clusters.json': '{"hub": 1}' },
+    { 'clusters.json': '["Hub"]' }, { 'clusters.json': '[1]' }, { other: '[]' }]) {
+    assert.equal(m.parseIndex(data), null, JSON.stringify(data));
+  }
+  assert.deepEqual(m.parseIndex({ 'clusters.json': '["services","hub","hub"]' }), ['services', 'hub']);
+  const html = m.banner({ clusters: null, reports: {} }, NOW);
+  assert.match(html, /data-index-unreadable="true"/);
+  assert.ok(text(html).includes(P.unreadableIndex));
 });
 
 test('one warning: the product sentence, the details, since when and the cluster', () => {
-  const html = m.banner({
-    'hub.json': report('hub', [fault('ShcVolumeFilling', 'warning', { details: ['database volume 85 % used'] })]),
-  }, NOW);
+  const html = m.banner(read({
+    hub: ok(report('hub', [fault('ShcVolumeFilling', 'warning', { details: ['database volume 85 % used'] })])),
+  }), NOW);
   const s = text(html);
   assert.match(s, new RegExp(P.fault.ShcVolumeFilling.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')));
   assert.ok(!s.includes('summary of ShcVolumeFilling'), 'the summary is not shown when the id has a sentence');
@@ -90,9 +105,9 @@ test('one warning: the product sentence, the details, since when and the cluster
 });
 
 test('one critical: shown as danger and names the activation from the details', () => {
-  const html = m.banner({
-    'hub.json': report('hub', [fault('ShcEventActivationsNotRunning', 'critical', { details: ['activation acme-events: failed, not restarted'] })]),
-  }, NOW);
+  const html = m.banner(read({
+    hub: ok(report('hub', [fault('ShcEventActivationsNotRunning', 'critical', { details: ['activation acme-events: failed, not restarted'] })])),
+  }), NOW);
   assert.match(html, /pf-m-danger/);
   const s = text(html);
   assert.ok(s.includes(P.fault.ShcEventActivationsNotRunning));
@@ -100,10 +115,10 @@ test('one critical: shown as danger and names the activation from the details', 
 });
 
 test('several: critical before warning before info, across clusters', () => {
-  const html = m.banner({
-    'services.json': report('services', [fault('ShcBackupStale', 'warning'), fault('ShcFabricNodesNotRead', 'info')]),
-    'hub.json': report('hub', [fault('ShcAutomationAPIUnavailable', 'critical'), fault('ShcVolumeFilling', 'warning')]),
-  }, NOW);
+  const html = m.banner(read({
+    services: ok(report('services', [fault('ShcBackupStale', 'warning'), fault('ShcFabricNodesNotRead', 'info')])),
+    hub: ok(report('hub', [fault('ShcAutomationAPIUnavailable', 'critical'), fault('ShcVolumeFilling', 'warning')])),
+  }), NOW);
   const ids = [...html.matchAll(/data-fault-id="(\w+)"/g)].map((x) => x[1]);
   assert.deepEqual(ids.slice(0, 1), ['ShcAutomationAPIUnavailable']);
   assert.equal(ids.length, 4);
@@ -114,43 +129,74 @@ test('several: critical before warning before info, across clusters', () => {
 });
 
 test('an unknown id: the alert summary is shown; without a summary, the id', () => {
-  const s = text(m.banner({ 'hub.json': report('hub', [fault('ShcSomethingNew', 'warning', { summary: 'Something new is wrong' })]) }, NOW));
+  const s = text(m.banner(read({ hub: ok(report('hub', [fault('ShcSomethingNew', 'warning', { summary: 'Something new is wrong' })])) }), NOW));
   assert.ok(s.includes('Something new is wrong'));
-  const s2 = text(m.banner({ 'hub.json': report('hub', [fault('ShcSomethingNew', 'warning', { summary: undefined })]) }, NOW));
+  const s2 = text(m.banner(read({ hub: ok(report('hub', [fault('ShcSomethingNew', 'warning', { summary: undefined })])) }), NOW));
   assert.ok(s2.includes(fill(P.unknownFault, { id: 'ShcSomethingNew' })));
 });
 
-test('a late writer: "no report since" after three intervals, not before', () => {
-  const late = m.banner({ 'hub.json': report('hub', [], { writtenMinAgo: 16, intervalSeconds: 300 }) }, NOW);
-  assert.match(late, /data-late-report="hub"/);
-  assert.ok(text(late).includes(P.lateReport.split('{{cluster}}')[0].trim()));
-  assert.ok(text(late).includes('hub'));
-  assert.equal(m.banner({ 'hub.json': report('hub', [], { writtenMinAgo: 14, intervalSeconds: 300 }) }, NOW), '');
-  // A late report's last faults still show, after the late notice of a critical-free banner.
-  const both = m.banner({ 'hub.json': report('hub', [fault('ShcBackupStale', 'warning')], { writtenMinAgo: 60 }) }, NOW);
-  assert.ok(both.indexOf('data-late-report') < both.indexOf('data-fault-id'));
+// Every state of one cluster's report: what the banner shows for it (other clusters are unaffected).
+const CREATED = at(90);
+const STATES = [
+  // [state, report read, shown as]
+  ['fresh, no fault', ok(report('hub')), 'nothing'],
+  ['fresh, a fault', ok(report('hub', [fault('ShcVolumeFilling', 'warning')])), 'fault'],
+  ['written 14 min ago, interval 5 min', ok(report('hub', [], { writtenMinAgo: 14 })), 'nothing'],
+  ['written 16 min ago, interval 5 min: late', ok(report('hub', [], { writtenMinAgo: 16 })), 'late'],
+  ['late, with its last fault', ok(report('hub', [fault('ShcBackupStale', 'warning')], { writtenMinAgo: 60 })), 'late+fault'],
+  ['written 9 min in the future (clock skew)', ok(report('hub', [], { writtenMinAgo: -9 })), 'nothing'],
+  ['written 11 min in the future', ok(report('hub', [fault('ShcBackupStale', 'warning')], { writtenMinAgo: -11 })), 'unreadable'],
+  ['never written, ConfigMap made at a known time', { state: 'read', data: {}, createdAt: CREATED }, 'never-since'],
+  ['never written, ConfigMap without data', { state: 'read', data: null }, 'never'],
+  ['never written, empty value', ok(''), 'never'],
+  ['ConfigMap absent', { state: 'absent' }, 'never'],
+  ['not fetched (refused, failed)', { state: 'unreadable' }, 'unreadable'],
+  ['not JSON', ok('{not json'), 'unreadable'],
+  ['another schemaVersion', ok(JSON.stringify({ schemaVersion: 2, cluster: 'hub', writtenAt: at(1), intervalSeconds: 300, faults: [] })), 'unreadable'],
+  ['another cluster\'s name', ok(report('services', [fault('ShcBackupStale', 'warning')])), 'unreadable'],
+  ['no writtenAt', ok(JSON.stringify({ schemaVersion: 1, cluster: 'hub', intervalSeconds: 300, faults: [] })), 'unreadable'],
+  ['no interval', ok(JSON.stringify({ schemaVersion: 1, cluster: 'hub', writtenAt: at(1), faults: [] })), 'unreadable'],
+  ['faults not a list', ok(JSON.stringify({ schemaVersion: 1, cluster: 'hub', writtenAt: at(1), intervalSeconds: 300, faults: 'many' })), 'unreadable'],
+  ['missing from the reads', undefined, 'unreadable'],
+];
+
+test('every state of a cluster\'s report shows as the ruling says, beside a healthy cluster', () => {
+  for (const [name, r, want] of STATES) {
+    const reads = { hub: r, services: ok(report('services', [fault('ShcVaultPodsNotReady', 'critical')])) };
+    const html = m.banner(read(reads), NOW);
+    const s = text(html);
+    const shows = {
+      fault: /data-fault-id="Shc(VolumeFilling|BackupStale)"/.test(html),
+      late: /data-late-report="hub"/.test(html),
+      never: /data-never-written="hub"/.test(html),
+      unreadable: /data-unreadable-report="hub"/.test(html),
+    };
+    const expected = {
+      fault: want === 'fault' || want === 'late+fault',
+      late: want === 'late' || want === 'late+fault',
+      never: want === 'never' || want === 'never-since',
+      unreadable: want === 'unreadable',
+    };
+    assert.deepEqual(shows, expected, name);
+    // the other cluster's critical fault always shows, first
+    assert.match(html, /data-fault-id="ShcVaultPodsNotReady"/, name);
+    if (want === 'never-since') assert.ok(s.includes(P.neverWritten.split('{{cluster}}')[0].trim()) && !s.includes(fill(P.neverWrittenNoTime, { cluster: 'hub' })), name);
+    if (want === 'never') assert.ok(s.includes(fill(P.neverWrittenNoTime, { cluster: 'hub' })), name);
+    if (want === 'unreadable') assert.ok(s.includes(fill(P.unreadableReport, { cluster: 'hub' })), name);
+    if (want === 'late+fault') assert.ok(html.indexOf('data-late-report') < html.indexOf('data-fault-id="ShcBackupStale"'), name);
+  }
 });
 
-test('a malformed key is left out; the other keys still show', () => {
-  const data = {
-    'broken.json': '{not json',
-    'old.json': JSON.stringify({ schemaVersion: 2, cluster: 'old', writtenAt: at(1), intervalSeconds: 300, faults: [] }),
-    'notime.json': JSON.stringify({ schemaVersion: 1, cluster: 'x', intervalSeconds: 300, faults: [fault('ShcBackupStale', 'warning')] }),
-    'badfaults.json': JSON.stringify({ schemaVersion: 1, cluster: 'y', writtenAt: at(1), intervalSeconds: 300, faults: 'many' }),
-    'hub.json': report('hub', [fault('ShcVaultPodsNotReady', 'critical'), { severity: 'critical' }, 'junk']),
-  };
-  const view = m.platformHealthView(data, NOW);
-  assert.deepEqual(view.malformed.sort(), ['badfaults.json', 'broken.json', 'notime.json', 'old.json']);
+test('a fault without an id is dropped, the report still shows', () => {
+  const view = m.platformHealthView(read({ hub: ok(report('hub', [fault('ShcVaultPodsNotReady', 'critical'), { severity: 'critical' }, 'junk'])) }), NOW);
   assert.equal(view.faults.length, 1);
-  const s = text(m.banner(data, NOW));
-  assert.ok(s.includes(P.fault.ShcVaultPodsNotReady));
-  assert.ok(!s.includes('broken'));
+  assert.deepEqual(view.unreadable, []);
 });
 
 test('alerts that reach no receiver show only when the report says false', () => {
-  assert.equal(m.banner({ 'hub.json': report('hub', [], { alertsDelivered: null }) }, NOW), '');
-  assert.equal(m.banner({ 'hub.json': report('hub', [], { alertsDelivered: true }) }, NOW), '');
-  const s = text(m.banner({ 'hub.json': report('hub', [], { alertsDelivered: false }) }, NOW));
+  assert.equal(m.banner(read({ hub: ok(report('hub', [], { alertsDelivered: null })) }), NOW), '');
+  assert.equal(m.banner(read({ hub: ok(report('hub', [], { alertsDelivered: true })) }), NOW), '');
+  const s = text(m.banner(read({ hub: ok(report('hub', [], { alertsDelivered: false })) }), NOW));
   assert.ok(s.includes(fill(P.alertsNotDelivered, { cluster: 'hub' })));
 });
 
@@ -172,22 +218,52 @@ test('the sentences name no internals', () => {
   }
 });
 
-test('the read: the ConfigMap through the configured API base; any failure is null', async () => {
-  const calls = [];
-  const answer = (status, body) => async (url) => {
-    calls.push(url);
-    return { ok: status >= 200 && status < 300, status, json: async () => body };
+test('the read: the index, then each listed report, through the configured API base', async () => {
+  const base = '/api/kubernetes/api/v1/namespaces/sovereign-cloud/configmaps/';
+  const answers = (table) => {
+    const calls = [];
+    const fn = async (url) => {
+      calls.push(url);
+      const a = table[url.slice(url.lastIndexOf('/') + 1)];
+      if (a instanceof Error) throw a;
+      const [status, body] = a || [404, { kind: 'Status', code: 404 }];
+      return { ok: status >= 200 && status < 300, status, json: async () => body };
+    };
+    return { calls, fn };
   };
-  m.configureK8sClient({ baseUrl: '/api/kubernetes', fetchFn: answer(200, { kind: 'ConfigMap', data: { 'hub.json': report('hub') } }) });
-  const d = await m.readPlatformHealth();
-  assert.deepEqual(Object.keys(d), ['hub.json']);
-  assert.equal(calls[0], '/api/kubernetes/api/v1/namespaces/sovereign-cloud/configmaps/shc-platform-health');
-  m.configureK8sClient({ baseUrl: '/api/k8s', fetchFn: answer(404, { kind: 'Status', code: 404 }) });
-  assert.equal(await m.readPlatformHealth(), null);
-  m.configureK8sClient({ fetchFn: answer(403, { kind: 'Status', code: 403 }) });
-  assert.equal(await m.readPlatformHealth(), null);
-  m.configureK8sClient({ fetchFn: async () => { throw new Error('console fetch refused'); } });
-  assert.equal(await m.readPlatformHealth(), null);
-  m.configureK8sClient({ fetchFn: answer(200, { kind: 'ConfigMap' }) });
-  assert.equal(await m.readPlatformHealth(), null);
+  const cm = (data, extra = {}) => [200, { kind: 'ConfigMap', metadata: { creationTimestamp: CREATED }, data, ...extra }];
+  const { calls, fn } = answers({
+    'shc-platform-health': cm({ 'clusters.json': '["services","hub","edge","far"]' }),
+    'shc-platform-health-services': cm({ 'report.json': report('services') }),
+    'shc-platform-health-hub': [403, { kind: 'Status', code: 403 }],
+    'shc-platform-health-far': new Error('console fetch refused'),
+  });
+  m.configureK8sClient({ baseUrl: '/api/kubernetes', fetchFn: fn });
+  const r = await m.readPlatformHealth();
+  assert.equal(calls[0], `${base}shc-platform-health`);
+  assert.deepEqual(calls.slice(1).sort(), ['edge', 'far', 'hub', 'services'].map((c) => `${base}shc-platform-health-${c}`));
+  assert.deepEqual(r.clusters, ['services', 'hub', 'edge', 'far']);
+  assert.equal(r.reports.services.state, 'read');
+  assert.equal(r.reports.services.createdAt, CREATED);
+  assert.deepEqual(r.reports.hub, { state: 'unreadable' });
+  assert.deepEqual(r.reports.edge, { state: 'absent' });
+  assert.deepEqual(r.reports.far, { state: 'unreadable' });
+  const view = m.platformHealthView(r, NOW);
+  assert.deepEqual(view.unreadable, ['far', 'hub']);
+  assert.deepEqual(view.neverWritten, [{ cluster: 'edge' }]);
+
+  // the index absent, refused, failing or not a ConfigMap's answer: nothing (and no report is read)
+  for (const idx of [[404, { kind: 'Status', code: 404 }], [403, { kind: 'Status', code: 403 }], new Error('down')]) {
+    const a = answers({ 'shc-platform-health': idx });
+    m.configureK8sClient({ baseUrl: '/api/k8s', fetchFn: a.fn });
+    assert.equal(await m.readPlatformHealth(), null);
+    assert.equal(a.calls.length, 1);
+  }
+  // the index answered without a readable list: the notice, no report read
+  const bad = answers({ 'shc-platform-health': cm({ 'clusters.json': 'hub,services' }) });
+  m.configureK8sClient({ fetchFn: bad.fn });
+  assert.deepEqual(await m.readPlatformHealth(), { clusters: null, reports: {} });
+  assert.equal(bad.calls.length, 1);
+  // a report answered with something that is not a ConfigMap cannot be read
+  assert.deepEqual(m.reportReadOf({ kind: 'Status' }), { state: 'unreadable' });
 });

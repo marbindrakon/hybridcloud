@@ -97,8 +97,9 @@ K.CASES[:] = [
            "buildName": "shc-oso-acme-c", "network": "n1", "placement": "ns/p", "publish": "Internal",
            "machineNetwork": "10.0.0.0/16", "clusterNetwork": "10.128.0.0/14", "serviceNetwork": "172.30.0.0/16",
            "platformPrefixes": ["192.0.2.15/32", "192.0.2.16/32"],
-           "floatingIPs": {"network": "net-1", "api": {"address": "192.0.2.15", "id": "fip-1"},
-                           "ingress": {"address": "192.0.2.16", "id": "fip-2"}}}), "ok")]),
+           "floatingIPs": {"api": {"address": "192.0.2.15", "id": "fip-1", "description": "OpenShift cluster c: API"},
+                           "ingress": {"address": "192.0.2.16", "id": "fip-2",
+                                       "description": "OpenShift cluster c: ingress"}}}), "ok")]),
 ]
 
 if __name__ == "__main__":

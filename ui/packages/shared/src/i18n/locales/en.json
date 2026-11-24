@@ -456,7 +456,8 @@
     "nameRule": {
       "max": "At most {{max}} characters.",
       "rule": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters.",
-      "ruleGoogle": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters; on Google Cloud not starting with \"goog\" and without \"google\" or a look-alike."
+      "ruleGoogle": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters; on Google Cloud not starting with \"goog\" and without \"google\" or a look-alike.",
+      "ruleKubernetes": "Lower-case letters, digits, hyphens and dots, starting and ending with a letter or digit; at most {{max}} characters."
     },
     "nameHelp": "It cannot be changed later.",
     "entityNameHelp": "Becomes the tenant namespace {{namespace}}; it cannot be changed later.",
@@ -1884,7 +1885,15 @@
       "ShcFabricHealthStale": "The network fabric's health has not been checked recently. Faults of tenants' networks may not show here.",
       "ShcFabricNodesNotRead": "The network gateway nodes have not been checked recently. Faults of the nodes may not show here.",
       "ShcFabricHealthNeverChecked": "The network fabric's health check has never run. Faults of tenants' networks do not show here.",
-      "ShcPlatformPoolLow": "A platform address pool is running low. New tenant networks, placements or clusters may soon be refused."
-    }
+      "ShcPlatformPoolLow": "A platform address pool is running low. New tenant networks, placements or clusters may soon be refused.",
+      "ShcPlatformHealthReportFailed": "This cluster's health report for the admin pages is not being written, so its faults may not show here."
+    },
+    "neverWritten": "No report from {{cluster}} since {{time}}",
+    "neverWrittenNoTime": "No report from {{cluster}} yet",
+    "neverWrittenBody": "This cluster is listed as reporting its health, but its report has never been written, so its faults do not show here. Check the cluster's operations layer and the credential it writes with.",
+    "unreadableReport": "The report from {{cluster}} cannot be read",
+    "unreadableReportBody": "This cluster's health report could not be read or has a form this page does not know (another version, or a time in the future), so its faults do not show here. Check the cluster's operations layer.",
+    "unreadableIndex": "The list of clusters that report their health cannot be read",
+    "unreadableIndexBody": "No cluster's faults can be shown here until the list is repaired. Check the services cluster's operations layer."
   }
 }

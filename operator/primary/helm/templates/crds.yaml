@@ -495,6 +495,26 @@ spec:
                 orgName:
                   type: string
                   description: AAP organization name.
+                gatewayOrgId:
+                  type: string
+                  description: >-
+                    Identifier of the organization in the automation platform's gateway. The platform finds the
+                    organization by it.
+                signInMaps:
+                  type: array
+                  description: >-
+                    The sign-in maps the platform made for this organization in the automation platform's gateway.
+                    A deletion removes exactly these.
+                  items:
+                    type: object
+                    description: One sign-in map.
+                    properties:
+                      id:
+                        type: string
+                        description: Identifier of the map.
+                      name:
+                        type: string
+                        description: Name of the map.
                 aapControllerUrl:
                   type: string
                   description: External AAP controller URL.
@@ -2958,7 +2978,15 @@ spec:
                       type: object
                       description: >-
                         OpenStack sites, the declared sign-in (spec.openstack.signIn) and what the probe found.
+                        OpenShift sites, the client and the identity provider tenants sign in with.
                       properties:
+                        clientId:
+                          type: string
+                          description: OpenShift sites, the sign-in client of the tenants' directory for this site.
+                        idpName:
+                          type: string
+                          description: >-
+                            OpenShift sites, the name of the button on the site's login page that signs tenants in.
                         identityProvider:
                           type: string
                           description: Identifier of the identity provider.
@@ -3296,6 +3324,11 @@ spec:
                         type: string
                         maxLength: 63
                         pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                project:
+                  type: string
+                  description: >-
+                    Accepted and ignored. The platform names the environment's project itself; this field is
+                    kept only so that manifests that still set it apply. Leave it out.
                 vaultPath:
                   type: string
                   description: >-
@@ -8283,6 +8316,10 @@ spec:
                         id:
                           description: Identifier of the floating IP.
                           type: string
+                        description:
+                          description: The floating IP's description on the site, written for people; the platform
+                            finds the floating IP by its identifier.
+                          type: string
                     ingress:
                       description: Floating IP of the cluster's applications (ingress).
                       type: object
@@ -8292,6 +8329,10 @@ spec:
                           type: string
                         id:
                           description: Identifier of the floating IP.
+                          type: string
+                        description:
+                          description: The floating IP's description on the site, written for people; the platform
+                            finds the floating IP by its identifier.
                           type: string
                 status:
                   type: string

@@ -8,11 +8,24 @@ group `devs`.
 
 ## The scheme
 
-1. **A name is for people.** The platform never finds an object by its name. It finds it by an id it keeps in the
-   object's status, or by a mark it sets (a tag, a label, an attribute, a marked description). An object of the
-   wanted name that does not carry the platform's mark is **refused**, never taken over and never deleted: the
-   object's status says `NameTakenOnSite` (or the area's own refusal, such as `NamespaceNotOwned`), and nothing is
-   made until the platform team removes or renames the other object.
+1. **A name is for people.** The platform never finds an object by its name. An object is the platform's when the
+   status of the object that asked for it recorded it: the platform's id where the platform gives one, else the exact
+   name. The job records it in the same run that makes it. On a run whose status records nothing, the job makes the
+   object; when the platform answers that one of the name exists, the object is **refused**, never taken over and
+   never deleted: the status says `NameTakenOnSite` (or the area's own refusal, such as `NamespaceNotOwned`), and
+   nothing is made until the platform team removes or renames the other object. A deletion deletes what the status
+   recorded, and nothing when it recorded nothing.
+
+   The platform also writes marks: descriptions, tags, labels and attributes that name the tenant and the object.
+   They are for people and for clean-up. A mark counts as proof of ownership only where nobody but the platform can
+   write it: a Keystone project tag in a domain tenants do not administer, an attribute of a client or a group in the
+   sign-in directory, labels on a namespace that the platform's admission policy guards. A description or a tag that a
+   tenant could write (on a DNS record, or on a cloud object in the tenant's own account or project), the registry
+   organization's contact address and the automation organization's description are never a reason to take over or
+   to delete an object.
+
+   A job that made an object and then could not record it leaves the object to the platform team: the next run
+   refuses the name, and the platform team removes the object or records it by hand.
 2. **The person's own names, in one order**: the tenant, then the environment or the network placement, then the
    object. They are joined by a character the names cannot contain: `_` where the platform allows an underscore
    (Keystone, Neutron, AWS tags, Quay, the automation platform, client ids of the sign-in directory), `--` where
@@ -43,7 +56,10 @@ The rule is checked three times:
   NetworkPlacement, PlatformOpenshift, Rbac, Project, Team, Assignment, Vault, VaultKV, QuayOrg, AAPOrg,
   AttachmentCircuit, CloudGateway, CloudInfrastructure, HybridFabric and ProviderEdge. An object made before the
   rule keeps working (status writes, changes, deletion): the API server checks an unchanged name only when it
-  changes, and a name never changes;
+  changes, and a name never changes. This needs CRD validation ratcheting, on by default from Kubernetes 1.30 and
+  always on from 1.33: the services cluster must run **OpenShift 4.17 or later** (Kubernetes 1.30) with the default
+  feature gates. On an older API server, or with the gate turned off, every write to an old object with a name
+  outside the rule is refused, its deletion included;
 - by the dashboard's create forms;
 - by each job before it makes anything, for an object made before the rule: the job stops with the reason
   `NameNotAllowed` and the rule in the message.
@@ -57,31 +73,36 @@ experimental OpenStackMigration) and TenantProfile (always `shc`). Their names t
 
 Access group lists and references to the tenant's objects in a spec (for example `spec.toolRbac`, an
 assignment's `spec.team`, a cluster's `spec.openstack.environment`) take a DNS label of at most 63 characters, so
-that an object made before the rule can still be named there.
+that an object made before the rule can still be named there. A list is checked as a whole: when an old object's
+list holds an entry the rule refuses (an access group name with a dot, which was allowed before), the list can only
+be changed by removing that entry first; the refusal names it. The object's other fields still change.
 
 An environment's name is unique within its tenant across the four environment kinds (reason
 `EnvironmentNameTaken`); two tenants may use the same name.
 
 ## What is named how
 
-| Object | Name | Found again by | Full names written in |
+| Object | Name | Recorded in (how the platform finds it) | Full names written in (for people) |
 |---|---|---|---|
-| OpenStack project of an environment | `<tenant>_<environment>` (Keystone: 64) | CloudOSO `status.projectId`; a project tag of the platform | the project's description; CloudOSO `status.projectName` |
-| Network, router of a placement on OpenStack | `<tenant>_<placement>`; subnets `…_v4`, `…_v6` | NetworkPlacement `status.siteNetwork.id`, `status.subnets[].id` | the description of the network, the router and each subnet; `status.siteNetwork.name` |
-| A cluster's OpenStack user and application credential | `<tenant>_<environment>_<cluster>` | PlatformOpenshift `status.credential.userId`, `.id` | their descriptions |
-| A cluster's floating IPs | (no name) | `status.floatingIPs.api.id`, `.ingress.id` | description `cluster <cluster>: API`, `cluster <cluster>: applications` |
-| Namespace of a VM environment on an OpenShift Virtualization site | `<tenant>--<environment>--<namespace>` (63; cut with the ending) | its labels `hybridsovereign.redhat/entity`, `/cloudvirt`, `/cloudvirt-namespace` | the same labels |
-| Access group on the services cluster, OpenStack and VM sites, tenant clusters | `<tenant>.<group>` (never cut) | the client role's attributes (`entity`, `owner`) | the client role's description |
-| Access group in the sign-in directory | `/<tenant>/<group>` under `/<tenant>` | Rbac `status.groupId`; the group attribute `entity` | Rbac `status.group` |
-| Quay organization, AAP organization | `<tenant>_<name>` | `status.orgName` (and the AAP organization's `status.orgId`) | the organization's description |
+| OpenStack project of an environment | `<tenant>_<environment>` (Keystone: 64) | CloudOSO `status.projectId`, `status.projectName` | the project's description; the project tag `hybridsovereign.redhat:CloudOSO:<namespace>:<environment>` (a mark only the platform writes) |
+| Network, router and subnets of a placement on OpenStack | `<tenant>_<placement>`; subnets `<tenant>_<placement>_v4`, `…_v6` | NetworkPlacement `status.realization.site.networkId`, `.routerId`; the name in `status.siteNetwork.name` | the description of the network, the router and each subnet; the tag `shc-placement=<namespace>/<placement>` (in the platform's own project) |
+| A cluster's OpenStack user and application credential | `<tenant>_<environment>_<cluster>` | PlatformOpenshift `status.credential.user`, `.userId`, `.id` | the user's description `User of OpenShift cluster <tenant> / <environment> / <cluster> (build <build>)`, the credential's `OpenShift cluster <tenant> / <environment> / <cluster>` |
+| A cluster's floating IPs | (no name) | PlatformOpenshift `status.floatingIPs.api.id`, `.ingress.id` | descriptions `OpenShift cluster <cluster>: API (platform build <build>)` and `…: ingress (…)`, also in `status.floatingIPs.*.description` |
+| A cluster's DNS records | `api.<cluster>.<environment zone>`, `*.apps.<cluster>.<environment zone>` | PlatformOpenshift `status.dns.records` | the record's description `shc:PlatformOpenshift/<namespace>/<cluster>` |
+| Namespace of a VM environment on an OpenShift Virtualization site | `<tenant>--<environment>--<namespace>` (63; cut with the ending) | CloudVirt `status.namespaces[].namespace` | the labels `hybridsovereign.redhat/entity`, `/cloudvirt`, `/cloudvirt-namespace` (guarded by the site's admission policy) |
+| Access group on the services cluster, OpenStack and VM sites, tenant clusters | `<tenant>.<group>` (never cut) | the client role's attributes (`entity`, `owner`) in the sign-in directory | the client role's description |
+| Access group in the sign-in directory | `/<tenant>/<group>` under `/<tenant>` | Rbac `status.groupId`; the group's attribute `entity` | Rbac `status.group` |
+| Quay organization | `<tenant>_<name>` | QuayOrg `status.orgName` | the contact address `<organization>@<mail domain>` (a setting of the installation) |
+| AAP organization | `<tenant>_<name>` | AAPOrg `status.orgName`, `status.orgId`, `status.gatewayOrgId`; its sign-in maps in `status.signInMaps` | the description `Automation organization <name> of tenant <tenant>, made by the platform (AAPOrg <namespace>/<name>)` |
 | Sign-in client of a Vault | `vault_<tenant>_<name>` | Vault `status.oidcClientId` | the client's name `Vault <tenant>/<name>` |
-| Network placement on AWS (VPC, subnets, route tables) | `Name` tag `<tenant>_<placement>` | the tag `shc-placement=<namespace>/<placement>` | tags naming the tenant, the environment and the network |
-| Network placement on Google Cloud | `shc-<tenant>--<placement>` (63, with room for the longest ending `-default6`; cut with the ending) | NetworkPlacement `status.realization.site.vpc` | the labels `shc-entity`, `shc-network` and the description |
-| Google Cloud DNS zone of an environment (resource name) | `shc-<environment>--<tenant>` | CloudGCP `status.dnsZoneId` | the zone's description |
-| Reverse DNS labels of gateways and placements | the names joined with `--` (63, cut with the ending) | — | — |
-| A cluster's build on the hub (namespace, Helm release, cloud identities) | `status.buildName`, e.g. `shc-oso-<tenant>-<cluster>-<8 hex>`, kept for the cluster's life | `status.buildName` | the identities' descriptions and display names |
-| DNS | `<environment>.<tenant>.<tenant DNS domain>`; a cluster's `api.<cluster>.<environment>.<tenant>.<tenant DNS domain>` | the zone id in status | — |
-| The network object of a placement on an OpenShift site; the gateways' devices; the AWS hub's objects | a number: `hn<n>`, `t<n>`, `e<n>`, `shc-net-<n>` (next section) | labels and tags with the number | an annotation, FRR description lines, tags naming the tenant, the network and the placement |
+| Address of a Vault on the services cluster | the route's default `<instance>-<namespace>` when it fits a DNS label (63), else `vault-<tenant>--<name>` (cut with the ending) | Vault `status.vaultUrl` | — |
+| Network placement on AWS (VPC, subnets, route tables, attachments) | `Name` tag `<tenant>_<placement>` | NetworkPlacement `status.realization.site` (the VPC's and its objects' ids) | tags naming the tenant, the environment, the network and the placement |
+| Network placement on Google Cloud | `shc-<tenant>--<placement>` (63, with room for the longest ending `-default6`; cut with the ending) | NetworkPlacement `status.realization.site.vpc` | the labels `shc-entity`, `shc-network` and the VPC's description |
+| Google Cloud DNS zone of an environment (resource name) | `shc-<tenant>--<environment>` | CloudGCP `status.dnsZoneId` | the zone's labels |
+| DNS zone of an environment | `<environment>.<tenant>.<tenant DNS domain>` | the zone id in the environment's status (`status.dns.zoneId`, `status.dnsZoneId`, `status.route53ZoneId`) | — |
+| Reverse DNS names of a placement's IPv6 gateway and of the gateways' nodes | `<network>.<gateway label>.<environment zone>`; `<node>.<gateway>.<gateway label>.<domain>` (each label cut at 63) | `status.realization.reverseDns.names` of the placement or the gateway | — |
+| A cluster's build on the hub (namespace, Helm release, cloud identities) | `<prefix>-<cluster>-<tenant>-<8 hex>` (53; `shc-oso`, `shc-aws`, `shc-gcp`), e.g. `shc-oso-web-example-corp-1a2b3c4d`, kept for the cluster's life | PlatformOpenshift `status.buildName` | the identities' descriptions and display names |
+| The network object of a placement on an OpenShift site; the gateways' devices; the AWS hub's objects | a number: `hn<n>`, `t<n>`, `e<n>`, `shc-net-<n>` (next section) | the number in status (next section) | labels and tags with the number, an annotation, FRR description lines, tags naming the tenant, the network and the placement |
 
 What the OpenShift installer names inside a tenant's project or account (`<cluster>-<five characters>-master-0`)
 is the installer's own form; the platform adds tags naming the tenant, the environment and the cluster where the
@@ -133,7 +154,7 @@ A cut name ends in six hexadecimal digits. Three ways back, the first one first:
 
 1. **The status that recorded it.** The job wrote the name it made into the object's status (the table above:
    `status.siteNetwork.name`, `status.realization.site.vpc`, `status.buildName`, `status.orgName`,
-   `status.oidcClientId`). Search the kind for it:
+   `status.oidcClientId`, `status.namespaces[].namespace`). Search the kind for it:
 
    ```bash
    oc get networkplacements -A -o json | jq -r --arg v shc-example-corp--core-prod \
@@ -148,6 +169,10 @@ A cut name ends in six hexadecimal digits. Three ways back, the first one first:
 
 ## Old objects and earlier label keys
 
-An object made before the scheme keeps its name, recorded in its status, and is found by its id or its mark as
-before. Label and annotation keys of the platform are under `hybridsovereign.redhat/`; objects made with the
+An object made before the scheme keeps its name, recorded in its status, and is found by what its status records,
+as before (the organizations' `status.orgName`, an environment's `status.projectId`, a placement's
+`status.realization.site.networkId` and `routerId`, a VM environment's `status.namespaces[]`, a zone's id). Where an
+older object's status lacks the id the job now needs, the job looks for the object by the exact old form of its name
+inside a scope only the platform writes (the platform's own project; the site's namespaces with the environment's
+guarded labels), takes it, records it, and never makes a second one. Label and annotation keys of the platform are under `hybridsovereign.redhat/`; objects made with the
 earlier keys of the same word under another domain are still found by a teardown, which looks for both keys.

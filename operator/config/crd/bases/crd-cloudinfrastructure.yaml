@@ -393,7 +393,15 @@ spec:
                       type: object
                       description: >-
                         OpenStack sites, the declared sign-in (spec.openstack.signIn) and what the probe found.
+                        OpenShift sites, the client and the identity provider tenants sign in with.
                       properties:
+                        clientId:
+                          type: string
+                          description: OpenShift sites, the sign-in client of the tenants' directory for this site.
+                        idpName:
+                          type: string
+                          description: >-
+                            OpenShift sites, the name of the button on the site's login page that signs tenants in.
                         identityProvider:
                           type: string
                           description: Identifier of the identity provider.

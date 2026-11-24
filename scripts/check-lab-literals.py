@@ -5,7 +5,7 @@ Rulebooks, the EDA common tasks and the AAP config-as-code must take their endpo
 credentials, inventory variables or the config-as-code job's environment, never from literals.
 The scope is a ratchet: add paths here as they are cleaned.
 
-usage: scripts/check-lab-literals.py [repo-root]
+usage: scripts/check-lab-literals.py [repo-root | --self-test]
 """
 import re
 import sys
@@ -56,11 +56,38 @@ PATTERNS = {
     "lab IPv6 prefix": re.compile(r"\b2602:0{0,3}81f:", re.I),
 }
 
+# The platform's label and annotation keys of the earlier release, under the lab's domain. For one release the
+# charts and jobs carry and select them beside the same word under hybridsovereign.redhat/ (a teardown looks for
+# both), so they are product history, not a lab value. Only these exact keys are allowed.
+EARLIER_KEYS = re.compile(r"\bshc\.signal9\.gg/(?:oidc-static|oidc-name|oidc-fetched-[A-Za-z0-9_.-]*|fabric|"
+                          r"cloud-identity|spiffe-id)(?![A-Za-z0-9_-])")
+
+
+def checked(line):
+    """The line as the patterns see it: the earlier release's keys removed."""
+    return EARLIER_KEYS.sub("", line)
+
+
+if len(sys.argv) > 1 and sys.argv[1] == "--self-test":
+    for line, lab in [("loop: [hybridsovereign.redhat/oidc-name, shc.signal9.gg/oidc-name]", False),
+                      ("shc.signal9.gg/fabric: route-reflectors", False),
+                      ("selector: {shc.signal9.gg/oidc-fetched-acme: 'true'}", False),
+                      ("shc.signal9.gg/platform-reach: null", True),
+                      ("shc.signal9.gg/fabricx: y", True),
+                      ("host: api.central.shc.signal9.gg", True)]:
+        got = bool(PATTERNS["lab domain"].search(checked(line)))
+        if got != lab:
+            print(f"self-test: {line!r}: lab literal {got}, want {lab}")
+            sys.exit(1)
+    print("self-test: ok")
+    sys.exit(0)
+
 root = Path(sys.argv[1] if len(sys.argv) > 1 else Path(__file__).resolve().parents[1])
 hits = 0
 for pattern in SCOPE:
     for path in sorted(root.glob(pattern)):
         for lineno, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+            line = checked(line)
             for what, rx in PATTERNS.items():
                 if rx.search(line):
                     print(f"{path.relative_to(root)}:{lineno}: {what}: {line.strip()}")

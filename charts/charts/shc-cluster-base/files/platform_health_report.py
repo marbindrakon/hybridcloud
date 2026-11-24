@@ -9,24 +9,26 @@ Every run:
   2. for each kept alert that belongs to a check CronJob (labels namespace = opsNamespace and cronjob matching
      checkCronJobs), adds the findings of that check's last failed run: the termination message of the newest failed
      Job's pod, one line per finding, when no run of the check succeeded after it;
-  3. writes its own key <cluster>.json in the ConfigMap targetConfigMap of targetNamespace on the services cluster
-     (a JSON merge patch of that one key; the ConfigMap is created when absent). Other clusters' keys are never read
-     or written.
+  3. writes the key report.json of its own ConfigMap targetConfigMap (shc-platform-health-<cluster>) in
+     targetNamespace on the services cluster, by a JSON merge patch. The services cluster's chart makes that
+     ConfigMap (one per reporting cluster, and the index shc-platform-health that lists them); the writer may only
+     read and patch it, never create one, so a missing ConfigMap fails the run with what to set.
 
-The key: {"schemaVersion": 1, "cluster", "writtenAt", "intervalSeconds", "faults": [{"id", "severity", "since",
+The report: {"schemaVersion": 1, "cluster", "writtenAt", "intervalSeconds", "faults": [{"id", "severity", "since",
 "object", "summary", "details": [...]}], "alertsDelivered"}. Faults are ordered critical, warning, others, then by
 since. alertsDelivered is true or false (OpenShift's AlertmanagerReceiversNotConfigured not firing, or firing) when
 receiverCheck is on, else null. Only an alert's summary and the check's finding lines are written: each line is cut
-to maxLineChars, web addresses and IP addresses are replaced, a crash report is replaced by one sentence, and the key
-is kept under maxKeyBytes (details are shortened first, then the lowest faults left out).
+to maxLineChars, web addresses, host names and IP addresses are replaced, a crash report is replaced by one sentence,
+and the report is kept under maxKeyBytes (details are shortened first, then the lowest faults left out and counted in
+a last fault ShcPlatformFaultsLeftOut).
 
 The services cluster: on it (targetMode "local") the job writes with its own service account; on another cluster
 (targetMode "remote") the API address, a bearer token and optionally a CA bundle come from files in targetDir, one per
 key of the Secret the installation provides (targetServerKey, targetTokenKey, targetCAKey). A missing file fails the
 run with the setting's name.
 
-Exit 0: the key was written and the findings were read. Exit 1: the alerts could not be read or the key could not be
-written (nothing is written then: a writer that could not look never reports "no faults"), or a check's findings
+Exit 0: the report was written and the findings were read. Exit 1: the alerts could not be read or the report could
+not be written (nothing is written then: a writer that could not look never reports "no faults"), or a check's findings
 could not be read (written, with a line that says so). Standard library only (the job image's Python 3.9 or later).
 No token appears in any output.
 
@@ -57,7 +59,8 @@ DEFAULTS = {
     "checkCronJobs": "",            # a regular expression of the check CronJobs' names (whole name)
     "targetMode": "",               # local | remote
     "targetNamespace": "",
-    "targetConfigMap": "shc-platform-health",
+    "targetConfigMap": "",          # shc-platform-health-<cluster>, made by the services cluster's chart
+    "targetKey": "report.json",
     "targetDir": "/etc/services-cluster",
     "targetServerKey": "",
     "targetTokenKey": "",
@@ -81,6 +84,12 @@ SECRETS = set()
 URL_RE = re.compile(r"\b[a-zA-Z][a-zA-Z0-9+.-]*://[^\s\"'<>)]+")
 IPV4_RE = re.compile(r"\b(?:\d{1,3}\.){3}\d{1,3}(?::\d+)?\b")
 IPV6_RE = re.compile(r"\[?(?:[0-9a-fA-F]{0,4}:){2,7}[0-9a-fA-F]{0,4}(?:/\d+)?\]?(?::\d+)?")
+# a bare host name: dotted labels ending in a cluster-internal suffix, or three labels or more, or one with a port
+HOST_RE = re.compile(r"\b[a-z0-9](?:[a-z0-9-]*[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]*[a-z0-9])?)*"
+                     r"(?:\.(?:svc|local|internal|lan|localdomain)\b(?::\d+)?"
+                     r"|(?:\.[a-z](?:[a-z0-9-]*[a-z0-9])?){2,}(?::\d+)?\b"
+                     r"|\.[a-z](?:[a-z0-9-]*[a-z0-9])?:\d+\b)")
+LEFT_OUT = "ShcPlatformFaultsLeftOut"
 CONTROL_RE = re.compile(r"[\x00-\x08\x0b-\x1f\x7f]")
 
 
@@ -100,14 +109,17 @@ class ApiError(Exception):
 
 # ---- pure parts -------------------------------------------------------------------------------------------------
 
-def clean_line(text, limit):
-    """One line fit for the object: no secret, no web or IP address, no control character, at most limit chars."""
+def clean_line(text, limit, hosts=True):
+    """One line fit for the object: no secret, no web or IP address, no host name (hosts: off for an object's name,
+    such as an aggregated API's, which is dotted), no control character, at most limit chars."""
     text = redact(text)
     text = URL_RE.sub("[address]", text)
     # an IPv6 address has "::" or seven colons (a time such as 12:30:45 has neither)
     text = IPV6_RE.sub(lambda m: "[address]" if "::" in m.group(0) or m.group(0).strip("[]").count(":") >= 7
                        else m.group(0), text)
     text = IPV4_RE.sub("[address]", text)
+    if hosts:
+        text = HOST_RE.sub("[address]", text)
     text = CONTROL_RE.sub(" ", text).strip()
     if len(text) > limit:
         text = text[:max(limit - 1, 0)].rstrip() + "…"
@@ -209,8 +221,9 @@ def order(faults):
 
 
 def bound(doc, max_bytes):
-    """Keeps the serialized key under max_bytes: details shortened to 5, then 1 line, then the lowest faults left out
-    (the list is ordered, so critical faults stay longest)."""
+    """Keeps the serialized report under max_bytes: details shortened to 5, then 1 line, then the lowest faults left
+    out (the list is ordered, so critical faults stay longest) and counted in one last fault, so that a reader sees
+    that some are missing."""
     def size():
         return len(json.dumps(doc, ensure_ascii=False, sort_keys=True).encode())
     for keep in (5, 1, 0):
@@ -219,7 +232,17 @@ def bound(doc, max_bytes):
         for f in doc["faults"]:
             if len(f["details"]) > keep:
                 f["details"] = f["details"][:keep]
-    while doc["faults"] and size() > max_bytes:
+    if size() <= max_bytes:
+        return doc
+    left_out = 0
+    marker = {"id": LEFT_OUT, "severity": "warning", "since": doc["writtenAt"], "object": "",
+              "summary": "", "details": []}
+    doc["faults"].append(marker)
+    while len(doc["faults"]) > 1 and size() > max_bytes:
+        doc["faults"].pop(-2)
+        left_out += 1
+        marker["summary"] = "%d more faults on %s are not shown" % (left_out, doc["cluster"])
+    if left_out == 0:
         doc["faults"].pop()
     return doc
 
@@ -234,10 +257,10 @@ def build_report(cfg, alerts, findings_for, now):
             continue
         check = check_of(labels, cfg)
         faults.append({
-            "id": clean_line(name, 120),
-            "severity": clean_line(labels.get("severity") or "warning", 20),
+            "id": clean_line(name, 120, hosts=False),
+            "severity": clean_line(labels.get("severity") or "warning", 20, hosts=False),
             "since": timestamp(a.get("startsAt")),
-            "object": clean_line(fault_object(labels), 253),
+            "object": clean_line(fault_object(labels), 253, hosts=False),
             "summary": clean_line((a.get("annotations") or {}).get("summary") or name, cfg["maxLineChars"]),
             "details": list(findings_for(check)) if check else [],
         })
@@ -385,25 +408,18 @@ class Findings:
 
 
 def write_key(target, cfg, key, text):
-    """A merge patch of this cluster's key only; the ConfigMap is created when absent (once more as a patch when
-    another writer created it meanwhile)."""
+    """A merge patch of the report key of this cluster's own ConfigMap. The writer cannot create the ConfigMap: the
+    services cluster's chart makes it."""
     ns, name = urllib.parse.quote(cfg["targetNamespace"]), urllib.parse.quote(cfg["targetConfigMap"])
     path = "/api/v1/namespaces/%s/configmaps/%s" % (ns, name)
-    patch = {"data": {key: text}}
     try:
-        target.call("PATCH", path, patch, content_type="application/merge-patch+json")
-        return
+        target.call("PATCH", path, {"data": {key: text}}, content_type="application/merge-patch+json")
     except ApiError as e:
         if e.status != 404:
             raise
-    body = {"apiVersion": "v1", "kind": "ConfigMap",
-            "metadata": {"name": cfg["targetConfigMap"], "namespace": cfg["targetNamespace"]}, "data": {key: text}}
-    try:
-        target.call("POST", "/api/v1/namespaces/%s/configmaps" % ns, body, ok=(200, 201))
-    except ApiError as e:
-        if e.status != 409:
-            raise
-        target.call("PATCH", path, patch, content_type="application/merge-patch+json")
+        raise ApiError("ConfigMap %s does not exist in %s on the services cluster; the services cluster's chart "
+                       "makes it when ops.platformHealth.report.writers there names %s"
+                       % (cfg["targetConfigMap"], cfg["targetNamespace"], cfg["cluster"]), 404)
 
 
 def run(cfg, am, kube, target, now):
@@ -417,11 +433,11 @@ def run(cfg, am, kube, target, now):
     doc = build_report(cfg, alerts, findings, now)
     text = json.dumps(doc, ensure_ascii=False, sort_keys=True)
     try:
-        write_key(target, cfg, "%s.json" % cfg["cluster"], text)
+        write_key(target, cfg, cfg["targetKey"], text)
     except ApiError as e:
         print(redact("not written: %s" % e))
         return 1, None
-    print(json.dumps({"written": "%s.json" % cfg["cluster"], "faults": len(doc["faults"]),
+    print(json.dumps({"written": "%s/%s" % (cfg["targetConfigMap"], cfg["targetKey"]), "faults": len(doc["faults"]),
                       "alertsDelivered": doc["alertsDelivered"]}))
     for f in findings.failed:
         print(redact("findings not read: %s" % f))
@@ -435,7 +451,7 @@ def load_config(path):
             cfg.update(json.load(f) or {})
     if not re.fullmatch(r"[a-z0-9]([-a-z0-9]*[a-z0-9])?", str(cfg["cluster"])) or len(cfg["cluster"]) > 63:
         raise SystemExit("setting cluster must be lower-case letters, digits and '-', at most 63 characters")
-    for key in ("targetNamespace", "targetConfigMap", "opsNamespace"):
+    for key in ("targetNamespace", "targetConfigMap", "targetKey", "opsNamespace"):
         if not cfg.get(key):
             raise SystemExit("setting %s is required" % key)
     if cfg["targetMode"] not in ("local", "remote"):

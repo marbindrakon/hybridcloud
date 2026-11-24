@@ -121,9 +121,24 @@ class Removals(unittest.TestCase):
             cols = [c["name"] for c in d["spec"]["versions"][0].get("additionalPrinterColumns", [])]
             self.assertNotIn("Slug", cols, f)
 
-    def test_no_project_hint(self):
-        spec = crds()["CloudOSO"]["properties"]["spec"]["properties"]
-        self.assertNotIn("project", spec)
+    def test_the_project_hint_is_accepted_and_ignored(self):
+        # kept for one release so that manifests of the release before still apply (strict field validation and
+        # server-side apply refuse an undeclared field); optional, and no job reads it
+        schema = crds()["CloudOSO"]["properties"]["spec"]
+        self.assertIn("project", schema["properties"])
+        self.assertTrue(schema["properties"]["project"]["description"].startswith("Accepted and ignored."))
+        self.assertNotIn("project", schema.get("required", []))
+        roles = os.path.join(ROOT, "eda", "rulebooks", "roles")
+        readers = []
+        for dirpath, _dirs, files in os.walk(roles):
+            if "cloudoso" not in dirpath:
+                continue
+            for f in files:
+                with open(os.path.join(dirpath, f)) as fh:
+                    text = fh.read()
+                if re.search(r"spec\.project\b|\.project \|", text) or "spec.get('project'" in text:
+                    readers.append(os.path.join(dirpath, f))
+        self.assertEqual(readers, [], "a CloudOSO job reads spec.project")
 
     def test_no_job_address_and_unknown_job_fields_pruned(self):
         for kind, schema in crds().items():
