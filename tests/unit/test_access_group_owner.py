@@ -125,14 +125,37 @@ class AutomationClient(unittest.TestCase):
         block = by_name(load(CLIENT), "Refuse a {{ rac.purpose }} client this job did not make")
         cond = " and ".join("(%s)" % w for w in block["when"])
         step = {"ansible.builtin.set_fact": {"refused": "{{ %s }}" % cond},
-                "vars": {"_rac_lookup": "{{ case.lookup }}",
+                "vars": {"_rac_lookup": "{{ case.lookup }}", "_rac_client_id": "example-identity",
+                         "_rac_recorded": "{{ case.recorded | default('') }}",
                          "_rac_description": "Realm automation (membership) for RbacConfig example-identity"}}
         mine = "Realm automation (membership) for RbacConfig example-identity"
+        hand = {"json": [{"clientId": "example-identity", "description": "made by hand"}]}
+        bare = {"json": [{"clientId": "example-identity"}]}
         cases = [{"lookup": {"json": []}},
                  {"lookup": {"json": [{"clientId": "example-identity", "description": mine}]}},
-                 {"lookup": {"json": [{"clientId": "example-identity", "description": "made by hand"}]}},
-                 {"lookup": {"json": [{"clientId": "example-identity"}]}}]
-        self.assertEqual(run_cases([step], cases, "refused | bool"), [False, False, True, True])
+                 {"lookup": hand},
+                 {"lookup": bare},
+                 # the client this RbacConfig's status records is its own whatever its description (an earlier
+                 # release recorded it and wrote none); a record of another client's id is no proof
+                 {"lookup": hand, "recorded": "example-identity"},
+                 {"lookup": bare, "recorded": "example-identity"},
+                 {"lookup": bare, "recorded": "example-identity-clients"}]
+        self.assertEqual(run_cases([step], cases, "refused | bool"), [False, False, True, True, False, False, True])
+
+    def test_the_record_is_read_from_this_objects_status(self):
+        name = by_name(load(CLIENT), "Name the {{ rac.purpose }} client")
+        recorded = name["ansible.builtin.set_fact"]["_rac_recorded"]
+        self.assertIn("realmAutomation", recorded)
+        self.assertIn("rac.purpose ~ 'ClientId'", recorded)
+        step = {"ansible.builtin.set_fact": {"got": recorded}}
+        st = {"realmAutomation": {"membershipClientId": "example-identity", "clientsClientId": "example-identity-clients"}}
+        cases = [{"cr": {"resources": [{"status": st}]}, "purpose": "membership"},
+                 {"cr": {"resources": [{"status": st}]}, "purpose": "clients"},
+                 {"cr": {"resources": [{"status": {}}]}, "purpose": "membership"},
+                 {"cr": {"resources": [{}]}, "purpose": "clients"}]
+        step["vars"] = {"rbac_config_cr": "{{ case.cr }}", "rac": {"purpose": "{{ case.purpose }}"}}
+        got = [g.strip() for g in run_cases([step], cases, "got")]
+        self.assertEqual(got, ["example-identity", "example-identity-clients", "", ""])
 
 
 class NamesBeforeAnything(unittest.TestCase):
