@@ -65,7 +65,8 @@ class FakeDNS:
     def create_zone(self, **kw):
         if kw["name"] in self.elsewhere or any(z.name == kw["name"] for z in self.zs):
             raise HttpException("409 Duplicate Zone")
-        z = Obj(id=self._id("zone"), status="ACTIVE", attributes={}, **kw)
+        # Designate gives a zone and a recordset the project of the request that made it
+        z = Obj(id=self._id("zone"), status="ACTIVE", attributes={}, project_id=self.conn.scope, **kw)
         self.zs.append(z)
         self.conn.writes.append(("create_zone", kw["name"]))
         return z
@@ -94,7 +95,7 @@ class FakeDNS:
                 and (type is None or r.type == type)]
 
     def create_recordset(self, zone, **kw):
-        rs = Obj(id=self._id("rs"), zone_id=zone.id, **kw)
+        rs = Obj(id=self._id("rs"), zone_id=zone.id, project_id=self.conn.scope, **kw)
         self.sets.append(rs)
         self.conn.writes.append(("create_recordset", kw["name"], kw["type"]))
         return rs
@@ -112,20 +113,25 @@ class FakeDNS:
 class FakeConn:
     def __init__(self):
         self.writes = []
+        self.scope = ""                  # the project the account is scoped to (Account.project)
         self.dns = FakeDNS(self)
+
+    def at(self, project_id):
+        self.scope = project_id
+        return self
 
 
 def call(mod, action, conn, **req):
     acct = mock.Mock()
-    acct.project.return_value = conn
+    acct.project.side_effect = conn.at
     with mock.patch.object(mod, "Account", return_value=acct):
         fn = (D.ACTIONS if mod is D else S.ACTIONS)[action]
         return fn(dict(req, action=action))
 
 
-def ns_set(conn, zone, name, desc, records=("ns1.example.test.",)):
+def ns_set(conn, zone, name, desc, records=("ns1.example.test.",), project="p"):
     conn.dns.sets.append(Obj(id=f"ns-{len(conn.dns.sets)}", zone_id=zone.id, name=name, type="NS",
-                             records=list(records), description=desc, ttl=3600))
+                             records=list(records), description=desc, ttl=3600, project_id=project))
 
 
 class EnvironmentZone(unittest.TestCase):
@@ -148,7 +154,7 @@ class EnvironmentZone(unittest.TestCase):
                 with self.subTest(site=site, recorded=recorded):
                     conn, zid = FakeConn(), ""
                     if site in ("ours", "unmarked"):
-                        z = Obj(id="zone-old", name=NAME, status="ACTIVE", attributes={},
+                        z = Obj(id="zone-old", name=NAME, status="ACTIVE", attributes={}, project_id="proj-dns",
                                 description=DESC if site == "ours" else "someone's zone")
                         conn.dns.zs.append(z)
                     if site == "elsewhere":
@@ -172,13 +178,15 @@ class EnvironmentZone(unittest.TestCase):
 
     def test_a_recorded_zone_keeps_working_after_a_text_change(self):
         conn = FakeConn()
-        conn.dns.zs.append(Obj(id="zone-old", name=NAME, status="ACTIVE", attributes={}, description="older text"))
+        conn.dns.zs.append(Obj(id="zone-old", name=NAME, status="ACTIVE", attributes={}, description="older text",
+                               project_id="p"))
         call(D, "ensure-zone", conn, owner_project_id="p", name=NAME, zone_id="zone-old", email="h@x", description=DESC)
         self.assertEqual(conn.dns.zs[0].description, DESC)
 
     def test_delete_by_name_needs_the_mark(self):
         conn = FakeConn()
-        conn.dns.zs.append(Obj(id="zone-old", name=NAME, status="ACTIVE", attributes={}, description="someone's"))
+        conn.dns.zs.append(Obj(id="zone-old", name=NAME, status="ACTIVE", attributes={}, description="someone's",
+                               project_id="p"))
         out = call(D, "delete-zone", conn, owner_project_id="p", name=NAME, description=DESC)
         self.assertFalse(out["deleted"])
         self.assertEqual(conn.writes, [])
@@ -265,6 +273,50 @@ class ClusterRecords(unittest.TestCase):
     def test_an_owner_is_required(self):
         with self.assertRaises(ValueError):
             self.upsert(owner="")
+
+
+class MarkOfAnotherProject(unittest.TestCase):
+    """The platform's description written by another project (a project the zone is shared with may create
+    recordsets in it with any description: designate/common/policies/recordset.py) is not the platform's mark: the
+    project that made the object (Designate sets it from the request, never changes it) must be the platform's."""
+
+    def test_a_zone_of_another_project_with_our_description_is_refused(self):
+        conn = FakeConn()
+        conn.dns.zs.append(Obj(id="zone-t", name=NAME, status="ACTIVE", attributes={}, description=DESC,
+                               project_id="proj-tenant"))
+        with self.assertRaises(S.Refusal):
+            call(D, "ensure-zone", conn, owner_project_id="proj-dns", name=NAME, zone_id="", email="h@x",
+                 description=DESC)
+        self.assertEqual(conn.writes, [])
+        out = call(D, "delete-zone", conn, owner_project_id="proj-dns", name=NAME, description=DESC)
+        self.assertFalse(out["deleted"])
+
+    def test_a_delegation_a_tenant_wrote_with_our_description(self):
+        conn = FakeConn()
+        glob = Obj(id="zone-global", name="example.test.", status="ACTIVE", attributes={}, description="")
+        conn.dns.zs.append(glob)
+        ns_set(conn, glob, NAME, DELEG, project="proj-tenant")
+        with self.assertRaises(S.Refusal):
+            call(D, "ensure-delegation", conn, project_id="p", zone_id="zone-global", name=NAME,
+                 nameservers=["ns9.example.test"], description=DELEG)
+        out = call(D, "delete-delegation", conn, project_id="p", zone_id="zone-global", name=NAME, description=DELEG)
+        self.assertFalse(out["deleted"])
+        self.assertEqual(conn.writes, [])
+
+    def test_a_cluster_record_a_tenant_wrote_with_our_mark(self):
+        conn = FakeConn()
+        z = Obj(id="zone-env", name=NAME, status="ACTIVE", attributes={}, description=DESC, project_id="p")
+        conn.dns.zs.append(z)
+        api = "api.web." + NAME
+        conn.dns.sets.append(Obj(id="rs-t", zone_id=z.id, name=api, type="A", records=["192.0.2.66"], ttl=300,
+                                 description="shc:" + OWNER, project_id="proj-tenant"))
+        with self.assertRaises(S.Refusal):
+            call(S, "dns-upsert", conn, dns_project_id="p", dns_zone_id="zone-env", owner=OWNER,
+                 records=[{"name": api, "records": ["192.0.2.10"]}])
+        out = call(S, "dns-delete", conn, dns_project_id="p", dns_zone_id="zone-env", owner=OWNER,
+                   records=[{"name": api}])
+        self.assertEqual(out["kept"], [api + " A"])
+        self.assertEqual(conn.writes, [])
 
 
 if __name__ == "__main__":

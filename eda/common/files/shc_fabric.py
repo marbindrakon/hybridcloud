@@ -2545,8 +2545,10 @@ def placement_names(req):
     platform finds them by recorded id or by the tag, never by that name."""
     vni, key = int(req["l3Vni"]), f"{req['namespace']}/{req['name']}"
     os_name = shc_names.name("openstack-network", [req.get("entity", ""), req["name"]])["name"]
+    # osOldName: the exact name the release before gave the OpenStack network and router; used only to find them in
+    # the platform project when the status lost their ids (they are then renamed to osNetwork)
     return {"vrf": f"t{vni}", "cudn": f"hn{vni}", "routeAdvertisement": f"hn{vni}",
-            "osNetwork": os_name, "osRouter": os_name, "tag": f"shc-placement={key}",
+            "osNetwork": os_name, "osRouter": os_name, "osOldName": f"hn{vni}", "tag": f"shc-placement={key}",
             "display": shc_names.display([req.get("entity", ""), req.get("network", ""), req["name"]]),
             "annotations": {NAMES_ANNOTATION: json.dumps({"tenant": req.get("entity", ""),
                                                           "network": f"{req['namespace']}/{req.get('network', '')}",

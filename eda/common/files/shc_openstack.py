@@ -207,17 +207,31 @@ def owned_project(conn_d, domain_id, name, tag, recorded_id="", what="environmen
     raise name_taken(what, name)
 
 
+def mark_refused(what):
+    """The site account may not write the platform's mark (a Keystone project tag): nothing was created or changed."""
+    return Refusal("CredentialsInvalid",
+                   f"The site account may not mark OpenStack projects as the platform's (a project tag), so the "
+                   f"{what}'s project was neither created nor changed. Nothing was changed on the site. The platform "
+                   f"team gives the site account the right to create and update projects in the domain.")
+
+
 def ensure_owned_project(conn_d, domain_id, name, tag, description, recorded_id="", what="environment"):
     """Find (owned_project) or create the owner's project; its tag and description refreshed on each run.
-    Returns (project, created, how)."""
+    Returns (project, created, how). A site that refuses the write (HTTP 403: the account's role may not create or
+    update projects with tags) is a refusal that changed nothing: Keystone writes a project and its tags in one
+    request (project_create and project_update take "tags"), and no role is given before this step."""
     project, how = owned_project(conn_d, domain_id, name, tag, recorded_id, what)
-    if project is None:
-        project = conn_d.identity.create_project(name=name, domain_id=domain_id, description=description, tags=[tag])
-        return project, True, "created"
-    tags, have = _tags(project), getattr(project, "description", None) or ""
-    if tag not in tags or (description and have != description):
-        project = conn_d.identity.update_project(project, description=description or have,
-                                                 tags=tags + ([tag] if tag not in tags else []))
+    try:
+        if project is None:
+            project = conn_d.identity.create_project(name=name, domain_id=domain_id, description=description,
+                                                     tags=[tag])
+            return project, True, "created"
+        tags, have = _tags(project), getattr(project, "description", None) or ""
+        if tag not in tags or (description and have != description):
+            project = conn_d.identity.update_project(project, description=description or have,
+                                                     tags=tags + ([tag] if tag not in tags else []))
+    except openstack.exceptions.ForbiddenException:
+        raise mark_refused(what)
     return project, False, how
 
 
@@ -381,6 +395,13 @@ def record_mark(owner):
     return d
 
 
+def _record_ours(rs, mark, project_id):
+    """A cluster's recordset: made by the platform's DNS project (Designate sets a recordset's project from the
+    request that made it and never changes it; a project the zone is shared with makes recordsets of its own
+    project) and carrying the cluster's mark. The mark alone is not enough in a zone shared with tenants."""
+    return getattr(rs, "project_id", None) == project_id and (getattr(rs, "description", None) or "") == mark
+
+
 def dns_upsert(req):
     conn = Account(req).project(req["dns_project_id"])
     zone = conn.dns.get_zone(req["dns_zone_id"])
@@ -391,7 +412,7 @@ def dns_upsert(req):
         if not name.endswith(zone.name):
             raise RuntimeError(f"{name} is outside zone {zone.name}")
         existing = [rs for rs in conn.dns.recordsets(zone, name=name, type=rec.get("type", "A")) if rs.name == name]
-        if existing and (getattr(existing[0], "description", None) or "") != mark:
+        if existing and not _record_ours(existing[0], mark, req["dns_project_id"]):
             raise Refusal("NameTakenOnSite",
                           f"The DNS name {name} already has a {rec.get('type', 'A')} record that the platform did not "
                           f"make for this cluster; the platform does not change it. Remove that record from the zone, "
@@ -424,7 +445,7 @@ def dns_delete(req):
         name = rec["name"].rstrip(".") + "."
         label = f"{name} {rec.get('type', 'A')}"
         found = [rs for rs in conn.dns.recordsets(zone, name=name, type=rec.get("type", "A")) if rs.name == name]
-        mine = [rs for rs in found if (getattr(rs, "description", None) or "") == mark]
+        mine = [rs for rs in found if _record_ours(rs, mark, req["dns_project_id"])]
         for rs in mine:
             conn.dns.delete_recordset(rs, zone, ignore_missing=True)
         (deleted if mine else kept if found else missing).append(label)
@@ -800,16 +821,18 @@ def placement_network(req):
     result's gateways maps every subnet's prefix to its gateway_ip as the site reports it ("" when it has none)."""
     acct = Account(req)
     conn = acct.own_scope()
-    dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
-    proj = conn.identity.find_project(req["platformProject"], domain_id=dom.id)
+    proj = _platform_proj(conn, req)
     if proj is None:
         raise RuntimeError(f"platform project {req['platformProject']} does not exist (the CloudGateway creates it)")
     name, tag = req["name"], req["tag"]
     _require(req, "tag")
-    # found by the recorded id or by the placement's tag, never by name: a network or router of that name may be
-    # anybody's (Neutron does not keep names unique), and an object an earlier release named hn<number> is renamed
-    net = _placed(conn.network.networks(project_id=proj.id), req.get("networkId"), tag, "network")
-    router = _placed(conn.network.routers(project_id=proj.id), req.get("routerId"), tag, "router")
+    # found by the recorded id or by the placement's tag, never by the new name: a network or router of that name may
+    # be anybody's (Neutron does not keep names unique). An object an earlier release made (named hn<number>, its
+    # router untagged) whose id the status lost is found by that exact old name in the platform project, which only
+    # the platform writes, and renamed in place
+    old = req.get("oldName") or ""
+    net = _placed(conn.network.networks(project_id=proj.id), req.get("networkId"), tag, "network", old)
+    router = _placed(conn.network.routers(project_id=proj.id), req.get("routerId"), tag, "router", old)
     if req.get("state", "present") == "absent":
         out = {"name": name, "found": bool(net or router), "deleted": []}
         if net is not None:
@@ -843,14 +866,28 @@ def placement_network(req):
             out["deleted"].append(f"network {net.id}")
         return out
 
+    if router is None:
+        # never a second router for the placement, checked before the first write: not while the network's subnets
+        # sit on a router this placement has not found as its own, nor while a router of the platform project
+        # carries the placement's VNI
+        _refuse_second_router(conn, net, proj, int(req["l3Vni"]))
     created, changed = [], []
     desc = req.get("description", "")
+    name_kept = ""
     if net is None:
         net = conn.network.create_network(name=name, project_id=proj.id, mtu=int(req["mtu"]), description=desc)
         created.append("network")
     else:
-        # names and descriptions are refreshed in place (Neutron's name and description are writable)
-        upd = {k: v for k, v in (("mtu", int(req["mtu"])), ("name", name), ("description", desc))
+        # names and descriptions are refreshed in place (Neutron's name and description are writable). A rename
+        # that would give the tenant two networks of one name (the installer and the cluster checks find the
+        # placement's network by its name) keeps the network's present name and says so
+        net_name = name
+        if net.name != name:
+            clash = _visible_namesakes(conn, name, net.id, proj.id, req.get("shareProjectId") or "")
+            if clash:
+                net_name = net.name
+                name_kept = (f"the network keeps its name {net.name}: the tenant already sees a network named {name}")
+        upd = {k: v for k, v in (("mtu", int(req["mtu"])), ("name", net_name), ("description", desc))
                if getattr(net, k, None) != v}
         if upd:
             net = conn.network.update_network(net, **upd)
@@ -951,8 +988,8 @@ def placement_network(req):
         uses["routerAttachments"], prune_in_use = _router_attachments(conn, net, proj, tenant, use, external,
                                                                       created, changed)
     evpn = conn.network.get(f"/routers/{router.id}").json()["router"].get("evpn_vni")
-    out = {"name": name, "projectId": proj.id, "networkId": net.id, "routerId": router.id, "subnets": subnets,
-           "gateways": gateways, "addressMode": applied_mode, "evpnVni": evpn,
+    out = {"name": net.name, "nameKept": name_kept, "projectId": proj.id, "networkId": net.id, "routerId": router.id,
+           "subnets": subnets, "gateways": gateways, "addressMode": applied_mode, "evpnVni": evpn,
            "shareId": rbac.id if rbac else (uses.get("virtualMachines") or {}).get("policyId", ""),
            "mtu": net.mtu, "created": created, "changed": changed}
     if tenant:
@@ -963,21 +1000,74 @@ def placement_network(req):
     return out
 
 
-def _placed(objs, recorded_id, tag, what):
-    """The placement's network or router among objs: the recorded id, else the one carrying the placement's tag
-    (one at most); None when there is none. One recorded but tagged for another placement is refused."""
+def _placed(objs, recorded_id, tag, what, old_name=""):
+    """The placement's network or router among objs (the platform project's): the recorded id, else the one carrying
+    the placement's tag (one at most), else the one of the exact name an earlier release gave it (old_name, one at
+    most: the platform project is written only by the platform); None when there is none. One found but tagged for
+    another placement is refused."""
     objs = list(objs)
+
+    def not_another(o, how):
+        others = [t for t in (getattr(o, "tags", None) or []) if t.startswith(PLACEMENT_TAG) and t != tag]
+        if others:
+            raise RuntimeError(f"{what} {how} carries another placement's tag ({others[0]})")
+        return o
+
     if recorded_id:
         o = next((x for x in objs if x.id == recorded_id), None)
         if o is not None:
-            others = [t for t in (getattr(o, "tags", None) or []) if t.startswith(PLACEMENT_TAG) and t != tag]
-            if others:
-                raise RuntimeError(f"{what} {recorded_id} carries another placement's tag ({others[0]})")
-            return o
+            return not_another(o, recorded_id)
     tagged = [x for x in objs if tag in (getattr(x, "tags", None) or [])]
     if len(tagged) > 1:
         raise RuntimeError(f"{len(tagged)} {what}s in the platform project carry the tag {tag}; one is expected")
-    return tagged[0] if tagged else None
+    if tagged:
+        return tagged[0]
+    if old_name:
+        named = [x for x in objs if getattr(x, "name", None) == old_name]
+        if len(named) > 1:
+            raise RuntimeError(f"{len(named)} {what}s in the platform project are named {old_name}; one is expected")
+        if named:
+            return not_another(named[0], old_name)
+    return None
+
+
+def _refuse_second_router(conn, net, proj, vni):
+    """Before a router is made for a placement: refused while the network's subnets are attached to a router (the
+    placement did not find it as its own, so it is not taken) or a router of the platform project carries the VNI."""
+    on_net = sorted({p.device_id for p in conn.network.ports(network_id=net.id) if p.device_owner in _IFACE_OWNERS}
+                    ) if net is not None else []
+    if on_net:
+        raise RuntimeError(f"the placement's network {net.id} is attached to router {on_net[0]}, which this placement "
+                           "has not recorded or tagged; the platform does not make a second router for it")
+    for r in conn.network.routers(project_id=proj.id):
+        rv = conn.network.get(f"/routers/{r.id}").json()["router"].get("evpn_vni")
+        if int(rv or 0) == vni:
+            raise RuntimeError(f"router {r.id} of the platform project already carries evpn_vni {vni}, and this "
+                               "placement has not recorded or tagged it; the platform does not make a second one")
+
+
+def _visible_namesakes(conn, name, own_id, platform_project_id, tenant):
+    """Networks named `name` other than own_id that the tenant's project would see beside the placement's: its own,
+    the platform project's, and shared or external ones. Without a tenant project, the platform project's only."""
+    out = []
+    for n in conn.network.networks(name=name):
+        if n.id == own_id or n.name != name:
+            continue
+        pid = getattr(n, "project_id", None)
+        if pid == platform_project_id or (tenant and (pid == tenant or getattr(n, "is_shared", False)
+                                                       or getattr(n, "is_router_external", False))):
+            out.append(n.id)
+    return out
+
+
+def _platform_proj(conn, req):
+    """The site's platform project (the CloudGateway makes it): by the id recorded for it (platformProjectId: the
+    placement's own record, else the site's gateway's), else by the platform's tag; a project of the name that the
+    platform did not make is refused (NameTakenOnSite). None when there is none."""
+    dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
+    proj, _ = owned_project(conn, dom.id, req["platformProject"], owner_tag(PLATFORM_PROJECT_OWNER),
+                            req.get("platformProjectId") or "", "site's networks")
+    return proj
 
 
 # the tag every object of a placement in the platform project carries: shc-placement=<namespace>/<name>
@@ -1194,9 +1284,7 @@ def _router_advertisement(acct, req):
     origin = _ra_origin(url)
     pid = req.get("project_id")
     if not pid:
-        own = acct.own_scope()
-        dom = own.identity.find_domain(req["domain"], ignore_missing=False)
-        proj = own.identity.find_project(req["platformProject"], domain_id=dom.id)
+        proj = _platform_proj(acct.own_scope(), req)
         if proj is None:
             raise RuntimeError(f"platform project {req['platformProject']} does not exist")
         pid = proj.id
@@ -1261,8 +1349,7 @@ def platform_inventory(req):
     """The cloud admin's own scope, read only: what the platform project holds."""
     acct = Account(req)
     conn = acct.own_scope()
-    dom = conn.identity.find_domain(req["domain"], ignore_missing=False)
-    proj = conn.identity.find_project(req["platformProject"], domain_id=dom.id)
+    proj = _platform_proj(conn, req)
     if proj is None:
         return {"found": False, "networks": [], "routers": []}
     nets = []
