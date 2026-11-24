@@ -446,6 +446,40 @@ class LabStrings(unittest.TestCase):
         self.assertEqual(holders, ["obtain_keycloak_realm_token.yml"])
 
 
+# ---- the secrets store's address -------------------------------------------------------------------------------
+
+class VaultAddress(unittest.TestCase):
+    def test_the_label_fits_and_the_pair_differs(self):
+        import re
+        label = re.compile(r"^[a-z]([-a-z0-9]*[a-z0-9])?$")
+        got = [names.name("vault-route", list(p))["name"] for p in PAIRS]
+        self.assertEqual(got, ["vault-acme-corp--web", "vault-acme--corp-web"])
+        long_ = names.name("vault-route", ["t" + "x" * 29, "n" + "y" * 29])
+        self.assertFalse(long_["exact"])
+        self.assertLessEqual(len(long_["name"]), 63)
+        self.assertTrue(label.match(long_["name"]))
+        other = names.name("vault-route", ["t" + "x" * 29, "n" + "y" * 28 + "z"])
+        self.assertNotEqual(long_["name"], other["name"])
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_a_default_host_that_fits_is_kept(self):
+        """The default first label vault-<name>-entity-<tenant> passes 63 characters with two names of 30."""
+        role = os.path.join(ROLES, "vault_provision")
+        tasks = load(os.path.join(role, "tasks", "main.yml"))
+        steps = [by_name(tasks, "The address's first label when the default does not fit"),
+                 by_name(tasks, "Keep the Route's subdomain")]
+        cases = [{"t": "acme-corp", "v": "web"}, {"t": "t" + "x" * 29, "v": "n" + "y" * 29},
+                 {"t": "t" * 24, "v": "v" * 25}, {"t": "t" * 24, "v": "v" * 26}]
+        pre = [{"ansible.builtin.set_fact": {"entity_name": "{{ case.t }}", "vault_cr_name": "{{ case.v }}",
+                                             "vault_instance_name": "vault-{{ case.v }}",
+                                             "vault_cr_namespace": "entity-{{ case.t }}"}}]
+        got = run_cases(pre + steps, cases, "vault_route_subdomain", extra_vars={"role_path": role})
+        self.assertEqual(got[0], "")
+        self.assertTrue(got[1].startswith("vault-t") and len(got[1]) <= 63, got[1])
+        self.assertEqual(got[2], "")                           # 6 + 25 + 1 + 31 = 63: fits
+        self.assertEqual(got[3], "vault-" + "t" * 24 + "--" + "v" * 26)
+
+
 # ---- the shared sign-in client task against a small directory over HTTP ----------------------------------------
 
 class Directory:

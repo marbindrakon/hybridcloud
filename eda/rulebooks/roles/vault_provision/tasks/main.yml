@@ -56,6 +56,20 @@
           ansible.builtin.fail:
             msg: "{{ name_check_message }}"
 
+    # The Route's default host is <route>-<namespace>.<apps domain>, i.e. vault-<name>-entity-<tenant>; a DNS label is
+    # at most 63 characters, and the Route is refused when its first label is longer. Such a store gets the subdomain
+    # vault-<tenant>--<name> from the names function instead (cut with a derived ending when needed); a store whose
+    # default host fits keeps it.
+    - name: The address's first label when the default does not fit
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+      vars:
+        names_request: {action: name, kind: vault-route, parts: ["{{ entity_name }}", "{{ vault_cr_name }}"]}
+      when: (vault_instance_name ~ '-' ~ vault_cr_namespace) | length > 63
+
+    - name: Keep the Route's subdomain
+      ansible.builtin.set_fact:
+        vault_route_subdomain: "{{ names_result.name if (vault_instance_name ~ '-' ~ vault_cr_namespace) | length > 63 else '' }}"
+
     - name: Deploy Vault Kubernetes resources
       ansible.builtin.include_tasks: deploy_resources.yml
 

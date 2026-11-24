@@ -64,6 +64,9 @@ KINDS = {
     "registry-organization": ("plain", 255, "", 0, 2),       # <tenant>_<name>
     "automation-organization": ("plain", 255, "", 0, 2),     # <tenant>_<name>
     "identity-client": ("plain", 255, "", 0, 3),             # <service>_<tenant>_<name>, e.g. vault_acme-corp_web
+    # the first DNS label of a tenant's secrets store's address on the services cluster (an OpenShift Route's
+    # subdomain): a label is at most 63 characters (Route validation, IsDNS1123Label)
+    "vault-route": ("label", 63, "vault-", 0, 2),            # vault-<tenant>--<name>
     # DNS: one label made of several names (reverse-DNS names of gateways and placements)
     "dns-label": ("label", 63, "", 0, 0),
 }
