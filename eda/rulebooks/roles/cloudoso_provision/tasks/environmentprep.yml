@@ -86,6 +86,8 @@
       dns_zone_id: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else '' }}"
       dns_project_id: "{{ ep_designate_project_id }}"
 
+# a refusal changed nothing on the site: a project of the name the platform did not make for this environment
+# (NameTakenOnSite), or a site account that may not write the platform's mark on projects (CredentialsInvalid)
 - name: Refuse a project of that name the platform did not make for this environment
   when: os_result.error is defined
   block:
@@ -96,15 +98,25 @@
     - name: Stop before anything else is made
       ansible.builtin.fail:
         msg: >-
-          {{ os_result.message if (os_result.reason | default('', true)) == 'NameTakenOnSite'
+          {{ os_result.message if (os_result.reason | default('', true)) | length > 0
              else 'OpenStack provision failed: ' ~ os_result.error }}
 
 - name: Keep the provision result
   ansible.builtin.set_fact:
     ep_os: "{{ os_result }}"
 
+# the legacy credential is gone from the site: its copy in the secrets store goes too. That path is made of the
+# environment's name alone; it is this environment's because its status recorded the credential (the release that
+# wrote it refused a second environment of the name before any write), and only then is it deleted. The record
+# goes with this run's status write.
+- name: Delete the legacy credential's Vault path
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
+  vars:
+    vault_kv_delete_paths: ["oso/projects/{{ cloudoso_cr_name }}/clouds-config"]
+  when: ep_legacy_cred_id | length > 0
+
 # an older run allocated the environment's pair of floating IPs (status apiFloatingIPId / ingressFloatingIPId,
-# apiVIP / ingressVIP, descriptions sovereign-<name>-api / -ingress); it goes once no cluster names the environment.
+# apiVIP / ingressVIP); it goes, by the recorded ids, once no cluster names the environment.
 # No cluster takes it over: each cluster allocates its own.
 - name: The environment's legacy floating IP pair
   vars:
@@ -144,10 +156,8 @@
           action: cluster-fips
           state: absent
           project_id: "{{ ep_os.project.id }}"
+          # by the recorded ids only: a description in the tenant's project is the tenant's to write
           ids: "{{ ep_legacy_fip_ids }}"
-          descriptions:
-            api: "sovereign-{{ cloudoso_cr_name }}-api"
-            ingress: "sovereign-{{ cloudoso_cr_name }}-ingress"
 
     - name: Remove the pair from the record
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"

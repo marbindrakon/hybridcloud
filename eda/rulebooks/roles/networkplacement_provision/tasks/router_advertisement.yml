@@ -37,6 +37,8 @@
       network_id: "{{ ra_network_id }}"
       domain: "{{ ra_domain }}"
       platformProject: "{{ ra_platform_project }}"
+      # the platform project by its recorded id when the caller has it, else by the platform's tag
+      platformProjectId: "{{ ra_platform_project_id | default('', true) }}"
       service_url: "{{ ra_url }}"
       site: "{{ ra_site }}"
   when: ra_url | length > 0

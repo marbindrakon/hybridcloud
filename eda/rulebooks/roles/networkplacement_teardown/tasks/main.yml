@@ -214,8 +214,14 @@
                   region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
                   domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
                   platformProject: "{{ fab_real.openstack.platformProject }}"
+                  # the platform project by the id recorded for it: this placement's record, else the gateway's
+                  platformProjectId: >-
+                    {{ ((fab_st.realization | default({}, true)).site | default({}, true)).projectId | default('', true)
+                       or ((((npd_gw.status | default({}, true)).site | default({}, true)).project | default({}, true)).id | default('', true) }}
                   name: "{{ npd_site_network_name }}"
-                  # found by the recorded ids or by the tag, never by name
+                  # found by the recorded ids or by the tag, never by that name; an earlier release's objects whose
+                  # ids the status lost by their exact old name (hn<number>) in the platform project
+                  oldName: "{{ npd_names.osOldName | default('', true) }}"
                   tag: "{{ npd_names.tag }}"
                   networkId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).networkId | default('', true) }}"
                   routerId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerId | default('', true) }}"

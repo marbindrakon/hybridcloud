@@ -99,5 +99,86 @@ class SiteObjects(unittest.TestCase):
                     self.assertIn("hn51003", out["message"])
 
 
+def cv_labels(entity, cv, name):
+    """The labels the platform writes on a site namespace (the release before wrote the same keys)."""
+    return dict(F.site_labels(entity, cv), **{F.CV_NAMESPACE_LABEL: name})
+
+
+class RecordLost(unittest.TestCase):
+    """A namespace the status does not record (status lost; an object restored without status; a pending write that
+    recorded the new form before the site was read): the site's namespace that carries this environment's labels and
+    names the spec's namespace is kept and recorded, never a second one made, and never removed as stale. Every
+    state: what the site has (nothing; the release before's acme-corp-prod-vms with this environment's labels; the
+    new form with them; both; the old form with another environment's or another tenant's labels; an unlabelled one
+    of the new name) x what the status recorded (nothing, the old name, the new name)."""
+    OLD, NEW = "acme-corp-prod-vms", "acme-corp--prod--vms"
+    SITE = {
+        "nothing": [],
+        "old form, ours": [("acme-corp-prod-vms", cv_labels("acme-corp", "prod", "vms"))],
+        "new form, ours": [("acme-corp--prod--vms", cv_labels("acme-corp", "prod", "vms"))],
+        "both, ours": [("acme-corp-prod-vms", cv_labels("acme-corp", "prod", "vms")),
+                       ("acme-corp--prod--vms", cv_labels("acme-corp", "prod", "vms"))],
+        "old form, another environment's": [("acme-corp-prod-vms", cv_labels("acme-corp", "test", "vms"))],
+        "old form, another tenant's": [("acme-corp-prod-vms", cv_labels("acme", "corp-prod", "vms"))],
+        "new form, unlabelled": [("acme-corp--prod--vms", {})],
+    }
+    # (site, recorded) -> (namespace chosen, error expected)
+    EXPECTED = {
+        ("nothing", "none"): (NEW, False), ("nothing", "old"): (OLD, False), ("nothing", "new"): (NEW, False),
+        ("old form, ours", "none"): (OLD, False), ("old form, ours", "old"): (OLD, False),
+        ("old form, ours", "new"): (OLD, False),
+        ("new form, ours", "none"): (NEW, False), ("new form, ours", "old"): (NEW, False),
+        ("new form, ours", "new"): (NEW, False),
+        ("both, ours", "none"): (NEW, True), ("both, ours", "old"): (OLD, False), ("both, ours", "new"): (NEW, False),
+        ("old form, another environment's", "none"): (NEW, False),
+        ("old form, another environment's", "old"): (OLD, False),
+        ("old form, another environment's", "new"): (NEW, False),
+        ("old form, another tenant's", "none"): (NEW, False), ("old form, another tenant's", "old"): (OLD, False),
+        ("old form, another tenant's", "new"): (NEW, False),
+        ("new form, unlabelled", "none"): (NEW, False), ("new form, unlabelled", "old"): (OLD, False),
+        ("new form, unlabelled", "new"): (NEW, False),
+    }
+
+    def test_every_state(self):
+        for site, objs in self.SITE.items():
+            for recorded in ("none", "old", "new"):
+                with self.subTest(site=site, recorded=recorded):
+                    rec = {"none": [], "old": [{"name": "vms", "namespace": self.OLD}],
+                           "new": [{"name": "vms", "namespace": self.NEW}]}[recorded]
+                    out = F.cloudvirt_namespaces({"entity": "acme-corp", "cloudvirt": "prod",
+                                                  "namespaces": [{"name": "vms"}], "recorded": rec,
+                                                  "site": [{"name": n, "labels": lb} for n, lb in objs]})
+                    ns, err = self.EXPECTED[(site, recorded)]
+                    self.assertEqual(out["namespaces"][0]["namespace"], ns)
+                    self.assertEqual(bool(out["errors"]), err)
+                    # what the site holds with this environment's labels for a namespace of the spec: never stale
+                    ours = [n for n, lb in objs if lb.get("hybridsovereign.redhat/cloudvirt") == "prod"
+                            and lb.get("hybridsovereign.redhat/entity") == "acme-corp"]
+                    self.assertEqual(out["claimed"], sorted(ours))
+                    # the chosen namespace is then checked as before: a foreign one is refused, never merged into
+                    have = dict(objs)
+                    own = F.namespace_ownership({"namespaces": out["namespaces"],
+                                                 "existing": {ns: have[ns]} if ns in have else {}})
+                    foreign = ns in have and not (have[ns].get("hybridsovereign.redhat/cloudvirt") == "prod"
+                                                  and have[ns].get("hybridsovereign.redhat/entity") == "acme-corp")
+                    self.assertEqual(own["ok"], not foreign)
+
+    def test_a_namespace_that_left_the_spec_is_not_claimed(self):
+        out = F.cloudvirt_namespaces({"entity": "acme-corp", "cloudvirt": "prod", "namespaces": [{"name": "db"}],
+                                      "site": [{"name": self.OLD, "labels": cv_labels("acme-corp", "prod", "vms")}]})
+        self.assertEqual(out["claimed"], [])
+        self.assertEqual(out["namespaces"][0]["namespace"], "acme-corp--prod--db")
+
+    def test_the_job_never_removes_a_claimed_namespace(self):
+        with open(os.path.join(ROOT, "eda", "rulebooks", "roles", "cloudvirt_provision", "tasks", "main.yml")) as f:
+            main = f.read()
+        self.assertIn("| difference(cv_claimed) | list", main)
+        # the site is read before the mapping that decides the names (the namespaces are applied after it)
+        self.assertLess(main.index("List the environment's site namespaces"),
+                        main.index("Map the namespaces to the site's namespaces"))
+        self.assertLess(main.index("Map the namespaces to the site's namespaces"),
+                        main.index("Ensure the site namespaces"))
+
+
 if __name__ == "__main__":
     unittest.main()

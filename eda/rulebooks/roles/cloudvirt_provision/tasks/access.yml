@@ -27,7 +27,7 @@
   ansible.builtin.set_fact:
     cv_grants: >-
       {%- set out = [] -%}
-      {%- for g in cv_grants -%}
+      {%- for g in cv_grants if g.rbac in gn_names -%}
         {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', g.rbac) | list + [{}]) | first -%}
         {%- set path = ((r.status | default({}, true)).group | default('', true)) -%}
         {%- set _ = out.append(g | combine({'path': path, 'group': gn_names[g.rbac],
@@ -36,9 +36,19 @@
       {{ out }}
     cv_client_id: "{{ fab_real.openshift.tenantSignIn.clientId | replace('{cluster}', (ci_spec.openshift | default({})).clusterRef | default(cv_site_name, true)) }}"
 
+# an access group whose name does not fit is refused alone, with the sentence of the names function; the others are
+# granted
 - name: Wait for Rbac CRs without a group yet
   ansible.builtin.set_fact:
-    cv_access_waiting: "{{ cv_grants | rejectattr('path') | map(attribute='rbac') | map('regex_replace', '^(.*)$', 'Rbac \\1 (no Keycloak group yet)') | list }}"
+    cv_access_waiting: >-
+      {%- set out = [] -%}
+      {%- for g in cv_grants if not g.path -%}
+        {%- set _ = out.append('Rbac ' ~ g.rbac ~ ' (no Keycloak group yet)') -%}
+      {%- endfor -%}
+      {%- for rbac, sentence in gn_refused.items() -%}
+        {%- set _ = out.append('Rbac ' ~ rbac ~ ' refused: ' ~ sentence) -%}
+      {%- endfor -%}
+      {{ out }}
 
 - name: Keycloak (services, tenant realm)
   when: cv_grants | selectattr('path') | list | length > 0

@@ -186,11 +186,17 @@ def _taken(what, name):
                    f"or use another environment name.")
 
 
-def _ours(obj, description):
-    """The platform's mark on a zone or a delegation it made: its description is exactly the one the platform writes
-    for this owner (Designate keeps no tags on zones or recordsets: designate/objects/zone.py, recordset.py; the
-    description, at most 160 characters, is the one free field). An empty wanted description marks nothing."""
-    return bool(description) and (getattr(obj, "description", None) or "") == description
+def _ours(obj, description, project_id):
+    """The platform's mark on a zone or a recordset it made: the project that made it is the platform's (Designate
+    sets a zone's and a recordset's project from the creating request and never changes it: designate/storage/
+    sqlalchemy create_recordset "recordset.tenant_id = context.project_id", central update_recordset refuses a
+    change of tenant_id; the API shows it as project_id), and its description is exactly the one the platform
+    writes for this owner (Designate keeps no tags on zones or recordsets: designate/objects/zone.py,
+    recordset.py). The description alone is not enough: a project a zone is shared with may create recordsets in it
+    with any description (designate/common/policies/recordset.py create_recordset allows a shared zone's target),
+    so for a name that crosses tenants only the project tells. An empty wanted description marks nothing."""
+    return (bool(description) and bool(project_id) and getattr(obj, "project_id", None) == project_id
+            and (getattr(obj, "description", None) or "") == description)
 
 
 def ensure_zone(req):
@@ -209,7 +215,7 @@ def ensure_zone(req):
             z = None                       # a recorded id of another name is not this zone
     if z is None:
         z = zone_in_project(conn, req["name"])
-        if z is not None and not _ours(z, desc):
+        if z is not None and not _ours(z, desc, req["owner_project_id"]):
             raise _taken("zone", req["name"])
     created = False
     if z is None:
@@ -246,7 +252,7 @@ def delete_zone(req):
             z = None
     elif req.get("name"):
         z = zone_in_project(conn, req["name"])
-        if z is not None and not _ours(z, (req.get("description") or "")[:DESCRIPTION_MAX]):
+        if z is not None and not _ours(z, (req.get("description") or "")[:DESCRIPTION_MAX], req["owner_project_id"]):
             return {"deleted": False, "missing": False, "kept": "not made by the platform for this environment"}
     if z is None:
         return {"deleted": False, "missing": True}
@@ -267,7 +273,7 @@ def ensure_delegation(req):
         raise ValueError("refused: description is empty; it marks the delegation as the platform's")
     want = sorted(fqdn(n) for n in req["nameservers"])
     existing = [rs for rs in conn.dns.recordsets(zone, name=name, type="NS") if rs.name == name]
-    if existing and not _ours(existing[0], desc):
+    if existing and not _ours(existing[0], desc, req["project_id"]):
         raise _taken("delegation", name)
     if existing and sorted(existing[0].records) == want:
         return {"state": "unchanged", "name": name, "nameservers": want}
@@ -286,7 +292,7 @@ def delete_delegation(req):
     name = fqdn(req["name"])
     desc = (req.get("description") or "")[:DESCRIPTION_MAX]
     found = [rs for rs in conn.dns.recordsets(zone, name=name, type="NS") if rs.name == name]
-    mine = [rs for rs in found if _ours(rs, desc)]
+    mine = [rs for rs in found if _ours(rs, desc, req["project_id"])]
     for rs in mine:
         conn.dns.delete_recordset(rs, zone, ignore_missing=True)
     out = {"deleted": bool(mine), "name": name}
@@ -317,7 +323,7 @@ def recordset_of(conn, zone, name, rtype):
     return None
 
 
-def _ensure(conn, zone, name, rtype, records, ttl, owner):
+def _ensure(conn, zone, name, rtype, records, ttl, owner, project_id):
     name = fqdn(name.lower())
     if name != zone.name and not name.endswith("." + zone.name):
         raise RuntimeError(f"{name} is not inside the zone {zone.name}")
@@ -328,7 +334,7 @@ def _ensure(conn, zone, name, rtype, records, ttl, owner):
     if rs is None:
         rs = conn.dns.create_recordset(zone, name=name, type=rtype, records=want, ttl=ttl, description=desc)
         return {**out, "changed": True, "id": rs.id}
-    if (rs.description or "") != desc:
+    if not _ours(rs, desc, project_id):
         raise RuntimeError(f"{name} {rtype} is held by another owner")
     if canonical_records(rtype, rs.records) != want or rs.ttl != ttl:
         conn.dns.update_recordset(rs, records=want, ttl=ttl)
@@ -336,13 +342,13 @@ def _ensure(conn, zone, name, rtype, records, ttl, owner):
     return {**out, "changed": False, "id": rs.id}
 
 
-def _delete(conn, zone, name, rtype, owner):
+def _delete(conn, zone, name, rtype, owner, project_id):
     name = fqdn(name.lower())
     out = {"name": name, "type": rtype}
     rs = recordset_of(conn, zone, name, rtype) if zone is not None else None
     if rs is None:
         return {**out, "changed": False, "id": ""}
-    if (rs.description or "") != owner_description(owner):
+    if not _ours(rs, owner_description(owner), project_id):
         # not this owner's: nothing of it to delete
         return {**out, "changed": False, "id": "", "kept": "held by another owner"}
     conn.dns.delete_recordset(rs, zone, ignore_missing=True)
@@ -358,13 +364,14 @@ def ensure_record(req):
     zone = project_zone(conn, req["project_id"], req["zone"])
     if zone is None:
         raise RuntimeError(f"zone {fqdn(req['zone'])} not found in project {req['project_id']}")
-    return _ensure(conn, zone, req["name"], str(req["type"]).upper(), req["records"], _ttl(req), req["owner"])
+    return _ensure(conn, zone, req["name"], str(req["type"]).upper(), req["records"], _ttl(req), req["owner"],
+                   req["project_id"])
 
 
 def delete_record(req):
     conn = Account(req).project(req["project_id"])
     zone = project_zone(conn, req["project_id"], req["zone"])
-    return _delete(conn, zone, req["name"], str(req["type"]).upper(), req["owner"])
+    return _delete(conn, zone, req["name"], str(req["type"]).upper(), req["owner"], req["project_id"])
 
 
 def _ptr_zone(conn, req):
@@ -378,13 +385,13 @@ def ensure_ptr(req):
     name, zone = _ptr_zone(conn, req)
     if zone is None:
         raise RuntimeError(f"no platform reverse zone covers {req['address']}")
-    return _ensure(conn, zone, name, "PTR", [req["target"]], _ttl(req), req["owner"])
+    return _ensure(conn, zone, name, "PTR", [req["target"]], _ttl(req), req["owner"], req["project_id"])
 
 
 def delete_ptr(req):
     conn = Account(req).project(req["project_id"])
     name, zone = _ptr_zone(conn, req)
-    return _delete(conn, zone, name, "PTR", req["owner"])
+    return _delete(conn, zone, name, "PTR", req["owner"], req["project_id"])
 
 
 def ptr_name_action(req):

@@ -1550,9 +1550,9 @@ class EnvironmentPair(unittest.TestCase):
         rc, tr, out = self.run_e(self.LEGACY, [other, aws])
         self.assertEqual(rc, 0, out)
         req = H.os_calls(tr, "cluster-fips")[0]
-        self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
-                         ("absent", "proj-1", ["fip-1", "fip-2"],
-                          {"api": "sovereign-env1-api", "ingress": "sovereign-env1-ingress"}))
+        # by the recorded ids only (a description in the tenant's project is the tenant's to write)
+        self.assertEqual((req["state"], req["project_id"], req["ids"]), ("absent", "proj-1", ["fip-1", "fip-2"]))
+        self.assertNotIn("descriptions", req)
         body = H.patches(tr, "cloudosos")[0]["body"]
         self.assertEqual(body, {k: None for k in self.LEGACY})
 

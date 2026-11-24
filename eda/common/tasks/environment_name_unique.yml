@@ -3,7 +3,9 @@
 # zone <environment>.<tenant>.<domain>, so two of one name would share it. (It is no longer unique across tenants:
 # nothing that is named from an environment lacks the tenant.) The older object keeps the name (creationTimestamp,
 # tie broken by the kind's name); an object that was itself refused for its name, or whose deletion has completed,
-# does not hold it.
+# does not hold it. An object already refused for its name stays refused while another environment of the name
+# holds it, whatever their ages: the one that works keeps working (an older CloudVirt that an earlier release refused
+# for a CloudOSO of its name does not take the name from that CloudOSO).
 # Inputs: enu_kind (CloudOSO | CloudVirt | CloudAWS | CloudGCP), enu_name, enu_namespace, enu_created (this object's
 # metadata.creationTimestamp), services_api_host, services_bearer_token.
 # Sets enu_taken (bool) and enu_holder_kind ('' or the kind that holds the name). The caller writes its status with
@@ -22,9 +24,26 @@
     loop_var: _enu_kind
   register: _enu_others
 
+- name: Read this environment's own state
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: "{{ enu_kind }}"
+    namespace: "{{ enu_namespace }}"
+    name: "{{ enu_name }}"
+  register: _enu_self
+
 - name: Decide whether an older environment holds the name
   vars:
     _my_key: "{{ enu_created ~ '|' ~ enu_kind }}"
+    _my_ready: >-
+      {{ ((((_enu_self.resources | default([], true) + [{}]) | first).status | default({}, true)).conditions
+          | default([], true)) | selectattr('type', 'equalto', 'Ready') | list }}
+    # this object is refused for its name now: it stays so while any other environment of the name holds it
+    _enu_self_refused: >-
+      {{ (_my_ready | length > 0) and ((_my_ready | first).reason | default('')) == 'EnvironmentNameTaken' }}
   ansible.builtin.set_fact:
     enu_holder_kind: >-
       {%- set ns = namespace(holder='', key='') -%}
@@ -35,7 +54,8 @@
           {%- set refused = (ready | length > 0) and ((ready | first).reason | default('')) == 'EnvironmentNameTaken' -%}
           {%- set gone = o.metadata.deletionTimestamp is defined and (st.deletionComplete | default(false) | bool) -%}
           {%- set key = o.metadata.creationTimestamp ~ '|' ~ o.kind -%}
-          {%- if key < _my_key and not refused and not gone and (ns.key == '' or key < ns.key) -%}
+          {%- if (key < _my_key or _enu_self_refused | bool) and not refused and not gone
+                and (ns.key == '' or key < ns.key) -%}
             {%- set ns.holder = o.kind -%}
             {%- set ns.key = key -%}
           {%- endif -%}

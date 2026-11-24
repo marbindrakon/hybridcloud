@@ -43,11 +43,18 @@
       {%- for n in _or_names -%}
         {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', n) | list + [{}]) | first -%}
         {%- set path = (r.status | default({}, true)).group | default('', true) -%}
-        {%- if path | length > 0 -%}
+        {%- if path | length > 0 and n in gn_names -%}
           {%- set _ = out.append({'rbac': n, 'path': path, 'group': gn_names[n]}) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ out }}
+
+# an access group whose name does not fit is refused alone (access.yml says it in AccessReady)
+- name: Note the access groups refused for their names (readers)
+  ansible.builtin.set_fact:
+    oso_reader_note: >-
+      {{ 'access group(s) ' ~ (gn_refused | list | join(', ')) ~ ' cannot read this environment: their group names do not fit'
+         if gn_refused | length > 0 else '' }}
 
 - name: The readers' groups in the services sign-in client
   block:

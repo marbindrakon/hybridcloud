@@ -108,8 +108,9 @@
         oso_domain: "{{ _st.domain | default('') }}"
         oso_base_domain: "{{ _spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
         oso_route53_vault_path: "{{ rca_route53_vault_path }}"
-        # only the paths an older release recorded in status (vaultPaths); nothing is derived from the name alone
-        oso_vault_paths: "{{ _st.vaultPaths | default([], true) | select | list }}"
+        # only the paths an older release recorded in status (vaultPaths), and the name-only path of the release
+        # that wrote it when this environment recorded that release's credential (resolve_cloudoso_accounts.yml)
+        oso_vault_paths: "{{ rca_clouds_config_paths | default([], true) | select | list }}"
         oso_dns_config_secret: "{{ rca_dns_config_secret }}"
         # who could use the environment (status.access): the site client's roles and the Keystone groups go
         oso_access: "{{ _st.access | default({}, true) }}"
@@ -195,10 +196,8 @@
               project_id: "{{ oso_project_id }}"
               project: "{{ oso_project_name }}"
               owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
+              # the recorded floating IPs only: a description in the tenant's project is the tenant's to write
               fip_ids: "{{ oso_fip_ids }}"
-              fip_descriptions:
-                - "sovereign-{{ cloudoso_cr_name }}-api"
-                - "sovereign-{{ cloudoso_cr_name }}-ingress"
               # an environment of an earlier release, not reconciled since: the site account's own credential
               legacy_app_cred_ids: "{{ oso_app_cred_ids }}"
               legacy_app_cred_name: "sovereign-{{ oso_project_name }}"

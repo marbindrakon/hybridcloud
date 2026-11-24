@@ -181,11 +181,17 @@ class FakeNetwork:
 
 
 class FakeIdentity:
+    """The platform project carries the platform's tag (the CloudGateway made it)."""
+
+    def __init__(self):
+        self.projs = [Obj(id="proj-platform", name="hybrid-fabric", domain_id="dom-1",
+                          tags=[S.owner_tag(S.PLATFORM_PROJECT_OWNER)])]
+
     def find_domain(self, name, ignore_missing=True):
         return Obj(id="dom-1", name=name)
 
-    def find_project(self, name, domain_id=None):
-        return Obj(id="proj-platform", name=name)
+    def projects(self, domain_id=None, name=None):
+        return [p for p in self.projs if p.domain_id == domain_id and (name is None or p.name == name)]
 
 
 class FakeConn:
@@ -819,13 +825,14 @@ class FoundByIdOrTag(unittest.TestCase):
     ids of objects that are gone)."""
 
     def go(self, conn, **over):
-        return run(conn, name=NEW, tag=TAG, description=DESC, **over)
+        return run(conn, name=NEW, tag=TAG, description=DESC, oldName="hn51001", **over)
 
     def test_the_old_objects_are_renamed_in_place(self):
         for recorded in ("ids", "none", "gone"):
             with self.subTest(recorded=recorded):
                 conn = FakeConn()
-                nid, rid = old_release(conn, tagged_router=(recorded != "ids"))
+                # the router as the release before left it: untagged (it tagged the network only)
+                nid, rid = old_release(conn)
                 ids = {"ids": {"networkId": nid, "routerId": rid}, "none": {},
                        "gone": {"networkId": "net-gone", "routerId": "rtr-gone"}}[recorded]
                 out = self.go(conn, **ids)
@@ -880,6 +887,128 @@ class FoundByIdOrTag(unittest.TestCase):
         with self.assertRaises(RuntimeError):
             self.go(conn)
         self.assertEqual(writes(conn), [])
+
+
+WRITES = ("create_network", "create_router", "create_subnet", "update_network", "update_subnet", "update_router",
+          "set_tags", "delete_network", "delete_router", "delete_subnet", "add_router_interface", "create_rbac_policy",
+          "delete_rbac_policy")
+
+
+class OldReleaseEnumeration(unittest.TestCase):
+    """The placement's objects, every state: what the platform project holds (nothing; the release before's network
+    and router, the network tagged or not, the router untagged as that release left it; the same objects tagged for
+    another placement; a foreign network and router of the new name; a router on the network's subnets that is not
+    the old one; a router elsewhere that carries the placement's VNI) x what the status recorded (nothing, the ids,
+    ids of objects that are gone). Ours: recorded, tagged, or the exact old name in the platform project (which only
+    the platform writes). Never a second router, never a foreign object taken."""
+    # what each state gives: adopt (the old objects renamed in place), create (a new network and router), refuse
+    SITES = {"nothing": "create", "old, network tagged": "adopt", "old, nothing tagged": "adopt",
+             "old, another placement's tag": "refuse", "foreign of the new name": "create",
+             "another router on the subnets": "refuse", "another router with the VNI": "refuse"}
+
+    def state(self, conn, site):
+        if site.startswith("old") or site == "another router on the subnets":
+            nid, rid = old_release(conn)
+            if site == "old, nothing tagged":
+                conn.network.nets[0].tags = []
+            if site == "old, another placement's tag":
+                for o in (conn.network.nets[0], conn.network.rtrs[0]):
+                    o.tags = ["shc-placement=entity-acme/corp-core-prod"]
+            if site == "another router on the subnets":
+                conn.network.rtrs[0].name = "someone-else"
+                rid = ""
+            return nid, rid
+        if site == "foreign of the new name":
+            foreign(conn)
+        if site == "another router with the VNI":
+            conn.network.rtrs.append(Obj(id="rtr-vni", name="x", project_id="proj-platform", evpn_vni=51001, tags=[]))
+        return "", ""
+
+    def test_every_state(self):
+        for site, want in self.SITES.items():
+            for recorded in ("none", "ids", "gone"):
+                with self.subTest(site=site, recorded=recorded):
+                    conn = FakeConn()
+                    nid, rid = self.state(conn, site)
+                    ids = {"none": {}, "ids": {"networkId": nid, "routerId": rid},
+                           "gone": {"networkId": "net-gone", "routerId": "rtr-gone"}}[recorded]
+                    before = {o.id: (o.name, list(getattr(o, "tags", []) or []))
+                              for o in conn.network.nets + conn.network.rtrs}
+                    if want == "refuse":
+                        with self.assertRaises(RuntimeError):
+                            run(conn, name=NEW, tag=TAG, description=DESC, oldName="hn51001", **ids)
+                        self.assertEqual(ops(conn, *WRITES), [])
+                        continue
+                    out = run(conn, name=NEW, tag=TAG, description=DESC, oldName="hn51001", **ids)
+                    self.assertEqual(len([r for r in conn.network.rtrs if r.evpn_vni == 51001]), 1,
+                                     "one router carries the placement's VNI")
+                    if want == "adopt":
+                        self.assertEqual((out["networkId"], out["routerId"]), ("net-old", "rtr-old"))
+                        self.assertEqual(ops(conn, "create_network", "create_router", "create_subnet"), [])
+                        self.assertEqual((conn.network.nets[0].name, conn.network.rtrs[0].name), (NEW, NEW))
+                        self.assertIn(TAG, conn.network.rtrs[0].tags)
+                    else:
+                        self.assertEqual(ops(conn, "create_network", "create_router"),
+                                         ["create_network", "create_router"])
+                        for oid, (name, tags) in before.items():   # a foreign object is never changed
+                            o = next(x for x in conn.network.nets + conn.network.rtrs if x.id == oid)
+                            self.assertEqual((o.name, list(o.tags or [])), (name, tags))
+
+    def test_teardown_by_the_old_name_deletes_only_the_old_objects(self):
+        conn = FakeConn()
+        old_release(conn)
+        foreign(conn)
+        out = run(conn, name=NEW, tag=TAG, oldName="hn51001", state="absent")
+        self.assertIn("router rtr-old", out["deleted"])
+        self.assertIn("network net-old", out["deleted"])
+        self.assertEqual(sorted(n.id for n in conn.network.nets), ["net-foreign"])
+        self.assertEqual(sorted(r.id for r in conn.network.rtrs), ["rtr-foreign"])
+
+
+class PlatformProject(unittest.TestCase):
+    """The platform project is found by the id recorded for it, else by the platform's tag; one of the name that the
+    platform did not make is refused before anything is read in it."""
+
+    def test_recorded_id_first(self):
+        conn = FakeConn()
+        conn.identity.projs.insert(0, Obj(id="proj-2", name="hybrid-fabric", domain_id="dom-1",
+                                          tags=[S.owner_tag(S.PLATFORM_PROJECT_OWNER)]))
+        self.assertEqual(run(conn, platformProjectId="proj-platform")["projectId"], "proj-platform")
+
+    def test_unmarked_project_of_the_name_is_refused(self):
+        conn = FakeConn()
+        conn.identity.projs = [Obj(id="proj-x", name="hybrid-fabric", domain_id="dom-1", tags=[])]
+        with self.assertRaises(S.Refusal) as e:
+            run(conn)
+        self.assertEqual(e.exception.reason, "NameTakenOnSite")
+        self.assertEqual(conn.calls, [])
+
+    def test_no_project(self):
+        conn = FakeConn()
+        conn.identity.projs = []
+        with self.assertRaises(RuntimeError):
+            run(conn)
+        self.assertEqual(conn.calls, [])
+
+
+class RenameKeepsAUniqueName(unittest.TestCase):
+    """A rename that would give the tenant two networks of one name keeps the present name and says so."""
+
+    def test_tenant_network_of_the_new_name(self):
+        conn = FakeConn()
+        nid, rid = old_release(conn)
+        conn.network.nets.append(Obj(id="net-t", name=NEW, project_id=TENANT, mtu=1500, description="", tags=[]))
+        out = run(conn, name=NEW, tag=TAG, description=DESC, networkId=nid, routerId=rid)
+        self.assertEqual(out["name"], "hn51001")
+        self.assertIn("hn51001", out["nameKept"])
+        self.assertEqual(conn.network.nets[0].name, "hn51001")
+
+    def test_another_projects_private_network_does_not_matter(self):
+        conn = FakeConn()
+        nid, rid = old_release(conn)
+        conn.network.nets.append(Obj(id="net-o", name=NEW, project_id="proj-other", mtu=1500, description="", tags=[]))
+        out = run(conn, name=NEW, tag=TAG, description=DESC, networkId=nid, routerId=rid)
+        self.assertEqual((out["name"], out["nameKept"]), (NEW, ""))
 
 
 if __name__ == "__main__":

@@ -32,6 +32,7 @@ class Unique(unittest.TestCase):
         steps = [by_name(tasks, "Decide whether an older environment holds the name"), by_name(tasks, "Keep the answer")]
         steps[0] = dict(steps[0])
         steps[0]["vars"] = dict(steps[0]["vars"], _enu_others="{{ {'results': [{'resources': case.others}]} }}",
+                                _enu_self="{{ {'resources': [case.me | default({})]} }}",
                                 enu_kind="{{ case.kind }}", enu_created="{{ case.created }}")
         steps[1] = dict(steps[1])
         return run_cases(steps, cases, "{'taken': enu_taken | bool, 'holder': enu_holder_kind}")
@@ -60,6 +61,40 @@ class Unique(unittest.TestCase):
             {"taken": False, "holder": ""},
             {"taken": True, "holder": "CloudVirt"},
         ])
+
+    def test_a_refused_environment_stays_refused_while_another_holds_the_name(self):
+        """After the upgrade: an older CloudVirt the release before refused (a CloudOSO of its name existed) does not
+        take the name from the working CloudOSO; it gets the name once no other environment holds it."""
+        refused_me = {"kind": "CloudVirt", "created": "2030-01-01T00:00:00Z",
+                      "me": env("CloudVirt", "2030-01-01T00:00:00Z", "EnvironmentNameTaken")}
+        working_me = {"kind": "CloudVirt", "created": "2030-01-01T00:00:00Z",
+                      "me": env("CloudVirt", "2030-01-01T00:00:00Z", "Ready")}
+        cases = [
+            dict(refused_me, others=[env("CloudOSO", "2030-01-02T00:00:00Z", "Ready")]),          # younger, working
+            dict(refused_me, others=[env("CloudOSO", "2030-01-02T00:00:00Z", "EnvironmentNameTaken")]),
+            dict(refused_me, others=[env("CloudOSO", "2030-01-02T00:00:00Z", deleted=True, complete=True)]),
+            dict(refused_me, others=[]),
+            dict(working_me, others=[env("CloudOSO", "2030-01-02T00:00:00Z", "Ready")]),          # older keeps it
+            # the older of two environments that worked before the upgrade keeps working, the younger is refused
+            {"kind": "CloudAWS", "created": "2030-01-02T00:00:00Z", "me": env("CloudAWS", "2030-01-02T00:00:00Z", "Ready"),
+             "others": [env("CloudOSO", "2030-01-01T00:00:00Z", "Ready")]},
+            {"kind": "CloudOSO", "created": "2030-01-01T00:00:00Z", "me": env("CloudOSO", "2030-01-01T00:00:00Z", "Ready"),
+             "others": [env("CloudAWS", "2030-01-02T00:00:00Z", "EnvironmentNameTaken")]},
+        ]
+        self.assertEqual(self.decide(cases), [
+            {"taken": True, "holder": "CloudOSO"},
+            {"taken": False, "holder": ""},
+            {"taken": False, "holder": ""},
+            {"taken": False, "holder": ""},
+            {"taken": False, "holder": ""},
+            {"taken": True, "holder": "CloudOSO"},
+            {"taken": False, "holder": ""},
+        ])
+
+    def test_it_reads_its_own_state(self):
+        t = by_name(load(UNIQUE), "Read this environment's own state")
+        self.assertEqual((t["kubernetes.core.k8s_info"]["kind"], t["kubernetes.core.k8s_info"]["name"]),
+                         ("{{ enu_kind }}", "{{ enu_name }}"))
 
     def test_it_asks_for_the_three_other_kinds_in_the_tenants_namespace(self):
         t = by_name(load(UNIQUE), "List the tenant's environments of the other kinds")

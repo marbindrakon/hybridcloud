@@ -102,7 +102,9 @@
         {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', g.rbac) | list + [{}]) | first -%}
         {%- set path = (r.status | default({}, true)).group | default('', true) -%}
         {%- set roles = oa_edit_roles if g.access == 'Edit' else oa_view_roles -%}
-        {%- set _ = out.append(g | combine({'path': path, 'exists': r | length > 0, 'group': gn_names[g.rbac],
+        {%- set _ = out.append(g | combine({'path': path, 'exists': r | length > 0,
+                                            'group': gn_names[g.rbac] | default(''),
+                                            'nameRefused': gn_refused[g.rbac] | default(''),
                                             'roles': roles, 'role': roles | join(', ')})) -%}
       {%- endfor -%}
       {{ out }}
@@ -157,13 +159,13 @@
           managed_roles: "{{ (oa_edit_roles + oa_view_roles) | unique | list }}"
           groups: >-
             {%- set out = [] -%}
-            {%- for g in oa_grants if g.path | length > 0 -%}
+            {%- for g in oa_grants if g.path | length > 0 and not g.nameRefused -%}
               {%- set _ = out.append({'group': g.group, 'roles': g.roles,
                                       'description': 'Access group ' ~ g.rbac ~ ' of tenant ' ~ entity_name}) -%}
             {%- endfor -%}
             {{ out }}
           # an access group without a directory group keeps its grant (it is not unwanted)
-          keep: "{{ oa_grants | selectattr('exists') | rejectattr('path') | map(attribute='group') | list }}"
+          keep: "{{ oa_grants | selectattr('exists') | rejectattr('path') | rejectattr('nameRefused') | map(attribute='group') | list }}"
 
     - name: Keep the site's answer
       ansible.builtin.set_fact:
@@ -353,7 +355,10 @@
         {%- set a = (_answers | selectattr('group', 'equalto', g.group) | list + [{}]) | first -%}
         {%- set rec = (oa_rec_groups | selectattr('group', 'equalto', g.group) | list + [{}]) | first -%}
         {%- set d = (_dir_faults | selectattr('group', 'equalto', g.group) | list + [{}]) | first -%}
-        {%- if not (oa_signin_ok | bool) -%}
+        {%- if g.nameRefused -%}
+          {%- set st, msg = 'Failed', g.nameRefused -%}
+          {%- set _ = refused.append({'group': g.rbac, 'message': msg, 'by': 'name'}) -%}
+        {%- elif not (oa_signin_ok | bool) -%}
           {%- set st, msg = 'Waiting', _site_msg | trim -%}
         {%- elif _fault and _fault.transient | bool -%}
           {%- set st, msg = rec.state | default('Waiting', true), 'Could not be checked this time: '
@@ -442,7 +447,9 @@
       {%- elif oa_refused | length > 0 -%}
         {%- set f = oa_refused | first -%}
         {%- set r, m = 'GrantRefused', (('The site refused the role for group ' if f.by == 'site'
-                                          else 'The sign-in directory refused group ') ~ f.group ~ ': '
+                                          else 'Access group ' if f.by == 'name'
+                                          else 'The sign-in directory refused group ') ~ f.group
+                                         ~ (' was refused: ' if f.by == 'name' else ': ')
                                          ~ (f.message | regex_replace('\\.$', '')) ~ '.') -%}
       {%- elif _unchecked | length > 0 -%}
         {%- set r, m = 'AccessNotChecked', 'Access group ' ~ (_unchecked | first).rbac ~ ' could not be checked this time: '

@@ -2469,21 +2469,53 @@ def site_labels(entity, cloudvirt, network=""):
     return out
 
 
+# the label that names, on a site namespace, the environment's own namespace it realizes
+CV_NAMESPACE_LABEL = "hybridsovereign.redhat/cloudvirt-namespace"
+
+
 def cloudvirt_namespaces(req):
-    """The site namespace of each of the environment's namespaces. recorded: the environment's status.namespaces
-    ([{name, namespace}]): a namespace the status already records keeps its name (an earlier release's form)."""
+    """The site namespace of each of the environment's namespaces.
+
+    recorded: the environment's status.namespaces ([{name, namespace}]). site: when the site was read, its namespaces
+    that carry this environment's labels ([{name, labels}]; the labels are written only by the platform: tenants have
+    no right on Namespace objects). For each namespace of the spec, in this order: the recorded name when the site has
+    it; else the site's namespace that carries this environment's labels and names this namespace (an earlier
+    release's form whose record the status lost: kept, never a second one; two of them is an error); else the
+    recorded name (made under that name); else <tenant>--<environment>--<namespace>. Returns also `claimed`: the
+    site namespaces whose label names a namespace still in the spec (never removed as stale)."""
+    entity, cv = req.get("entity", ""), req.get("cloudvirt", "")
     kept = {r.get("name"): r.get("namespace") for r in req.get("recorded") or []
             if isinstance(r, dict) and r.get("name") and r.get("namespace")}
-    out, errors, seen = [], [], {}
+    mine = site_labels(entity, cv)
+    on_site = {}
+    for o in req.get("site") or []:
+        labels = (o or {}).get("labels") or {}
+        if o.get("name") and all(labels.get(k) == v for k, v in mine.items()):
+            on_site.setdefault(labels.get(CV_NAMESPACE_LABEL, ""), []).append(o["name"])
+    site_names = {name for names in on_site.values() for name in names}
+    out, errors, seen, claimed = [], [], {}, set()
     for n in req.get("namespaces") or []:
-        ns = kept.get(n.get("name")) or site_namespace(req.get("entity", ""), req.get("cloudvirt", ""), n.get("name", ""))
+        name = n.get("name", "")
+        labelled = sorted(on_site.get(label_value(name), []))
+        claimed.update(labelled)
+        rec = kept.get(name)
+        if rec and rec in site_names:
+            ns = rec
+        elif len(labelled) > 1:
+            errors.append(f"namespace {name} has {len(labelled)} site namespaces ({', '.join(labelled)}); one is "
+                          "expected")
+            ns = labelled[0]
+        elif labelled:
+            ns = labelled[0]
+        else:
+            ns = rec or site_namespace(entity, cv, name)
         if ns in seen:
             errors.append(f"namespaces {seen[ns]} and {n.get('name')} map to the same site namespace {ns}")
         seen[ns] = n.get("name")
         labels = site_labels(req.get("entity", ""), req.get("cloudvirt", ""), n.get("network") or "")
-        labels["hybridsovereign.redhat/cloudvirt-namespace"] = label_value(n.get("name"))
+        labels[CV_NAMESPACE_LABEL] = label_value(n.get("name"))
         out.append({"name": n.get("name"), "namespace": ns, "network": n.get("network") or "", "labels": labels})
-    return {"errors": errors, "namespaces": out,
+    return {"errors": errors, "namespaces": out, "claimed": sorted(claimed),
             "selector": site_labels(req.get("entity", ""), req.get("cloudvirt", "")),
             "networkSelector": site_labels(req.get("entity", ""), req.get("cloudvirt", ""), req.get("network") or "")
             if req.get("network") else {}}
@@ -2545,8 +2577,10 @@ def placement_names(req):
     platform finds them by recorded id or by the tag, never by that name."""
     vni, key = int(req["l3Vni"]), f"{req['namespace']}/{req['name']}"
     os_name = shc_names.name("openstack-network", [req.get("entity", ""), req["name"]])["name"]
+    # osOldName: the exact name the release before gave the OpenStack network and router; used only to find them in
+    # the platform project when the status lost their ids (they are then renamed to osNetwork)
     return {"vrf": f"t{vni}", "cudn": f"hn{vni}", "routeAdvertisement": f"hn{vni}",
-            "osNetwork": os_name, "osRouter": os_name, "tag": f"shc-placement={key}",
+            "osNetwork": os_name, "osRouter": os_name, "osOldName": f"hn{vni}", "tag": f"shc-placement={key}",
             "display": shc_names.display([req.get("entity", ""), req.get("network", ""), req["name"]]),
             "annotations": {NAMES_ANNOTATION: json.dumps({"tenant": req.get("entity", ""),
                                                           "network": f"{req['namespace']}/{req.get('network', '')}",
