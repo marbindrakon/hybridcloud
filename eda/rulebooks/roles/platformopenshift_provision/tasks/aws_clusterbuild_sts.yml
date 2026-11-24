@@ -95,6 +95,9 @@
             labels:
               hybridsovereign.redhat/oidc-static: "true"
               hybridsovereign.redhat/oidc-name: "{{ cb_app_name }}"
+              # the keys of the release before as well, for one release (the issuer's sync selects either)
+              shc.signal9.gg/oidc-static: "true"
+              shc.signal9.gg/oidc-name: "{{ cb_app_name }}"
               app.kubernetes.io/managed-by: eda-platformopenshift
           data:
             keys.json: "{{ cb_jwks | to_json }}"
