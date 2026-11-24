@@ -1,4 +1,5 @@
 import type { HybridSovereignKind } from '../types/crds';
+export { filterTenantStatus, hasTenantStatusAllow, TENANT_STATUS_ALLOW } from '../../server/tenantStatusAllow.js';
 
 /**
  * Paths never shown on tenant pages: platform credentials, Vault path references and secret references (spec and

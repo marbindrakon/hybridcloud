@@ -1,67 +1,25 @@
 /**
- * Tenant-safe view of CloudOSO and PlatformOpenshift objects (status allow-list).
+ * Tenant-safe view of the objects a tenant reads (status allow-list of tenantStatusAllow.js).
  *
- * The jobs no longer write Vault paths or secret references into these objects' status; this module is the
- * second line for objects written before that, and for anything a future job adds by mistake. It keeps only the
- * listed status keys (common ones plus each kind's own), drops every key at any depth whose name looks like a
- * Vault path or a secret reference, and drops the spec fields the platform chooses.
+ * It keeps only the listed status keys of each kind (common ones plus the kind's own), drops every key at any
+ * depth whose name looks like a Vault path or a secret reference, and drops the spec fields the platform chooses.
+ * The same list serves the tenant pages in the browser, so the console plugins (which read the API directly)
+ * show what the tenant dashboard shows.
  *
  *   tenantSafe(kind, obj)            one object or a list (kind of the items)
  *   transformBody(path, obj, req)    the hook of createApiK8sProxy: filters every answer that carries one of
- *                                    the two kinds, found by the object's own kind (the object, a List and
+ *                                    the listed kinds, found by the object's own kind (the object, a List and
  *                                    its items, a watch event's object) and by the path (item, list, /status)
- *                                    for objects without a kind; refuses a watch on the two plurals with 400
+ *                                    for objects without a kind; refuses a watch on their plurals with 400
+ *   tenantSafeResponses()            Express middleware for the dashboard's own /api/<plural> routes: every
+ *                                    JSON answer (an object or an array of objects) through tenantSafe
  *
- * Other kinds pass unchanged (their status carries no Vault paths). The admin dashboard does not use this.
+ * Other kinds pass unchanged. The admin dashboard does not use this.
  */
 import { normaliseK8sPath } from './apiK8sProxy.js';
+import { COMMON_STATUS_KEYS, TENANT_STATUS_ALLOW, SECRET_KEY_RE, filterTenantStatus } from './tenantStatusAllow.js';
 
-/** Status keys every kind keeps. */
-export const COMMON_STATUS_KEYS = [
-  'phase', 'phaseSince', 'summary', 'conditions', 'observedGeneration', 'message', 'reason', 'ready', 'status',
-  'lastReconciledAt', 'lastHandledReconcileRequest', 'realization', 'deletion', 'deletionComplete',
-  'deletionBlockedBy', 'waitingFor', 'retry', 'endpoints', 'config', 'references',
-];
-
-/**
- * Per kind: status keys kept besides the common ones (a kind's entry wins over a common key of the same name). A
- * string keeps the key whole (still cleaned of secret-looking names); [key, [subkeys]] keeps only those subkeys of
- * an object, or of each object of a list; subkeys nest the same way.
- */
-export const TENANT_STATUS_ALLOW = {
-  CloudOSO: [
-    // appCredentialId is not kept: it named the platform's own credential, nothing a tenant can use
-    'name', 'namespace', 'entity', 'cloudInfrastructure', 'projectId', 'projectName', 'domainId', 'domainName',
-    'apiFloatingIPId', 'ingressFloatingIPId', 'apiVIP', 'ingressVIP', 'externalNetwork',
-    'domain', 'dnsProvider', 'dnsZoneId', 'dnsZoneName', 'dnsProjectId', 'route53ZoneId',
-    'leftoverDefaultSecurityGroups',
-    ['dns', ['mode', 'zone', 'zoneId', 'ownerProjectId', 'sharedWith', 'shareId', 'nameservers', 'delegated',
-      'dnsConfig', 'globalProjectId', 'globalZoneId']],
-    ['site', ['name', 'console']],
-    // the access groups that can use the environment on the site and their state, key by key
-    ['access', ['signInClient', 'groupDomain', 'removing',
-      ['groups', ['rbac', 'group', 'access', 'role', 'state', 'message']]]],
-    // how people and tools reach it, key by key
-    ['endpoints', ['console', ['signIn', ['method', 'idpName', 'start']], 'signInGroups', 'api', 'project',
-      'projectId', 'domain', 'domainId', 'region', 'location',
-      ['apiCredentials', ['state', 'validMinutesAfterSignIn', 'source']]]],
-  ],
-  PlatformOpenshift: [
-    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'domain', 'apiURL', 'appsURL',
-    'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth', 'provisionStatus', 'acmAvailable',
-    'clusterInstalled', 'buildName', 'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
-    'serviceAccountIssuer', 'network', 'placement', 'publish', 'machineNetwork', 'oidcClientId',
-    'externalNetwork', 'clusterNetwork', 'serviceNetwork', 'platformPrefixes', 'installStarted',
-    ['floatingIPs', ['api', 'ingress']],
-    ['dns', ['provider', 'projectId', 'records']],
-    ['site', ['name', 'console']],
-    // OpenStack clusters: the cluster's own user and credential on the site, ids and names only
-    ['credential', ['id', 'user', 'userId', 'domain', 'domainId', 'createdAt']],
-    // the installation: stage, attempts, times and the platform's sentence about the last failed attempt
-    ['install', ['stage', 'attempt', 'attemptsLimit', 'run', 'startedAt', 'endedAt', 'observedAt',
-      ['lastFailure', ['attempt', 'reason', 'message', 'time']]]],
-  ],
-};
+export { COMMON_STATUS_KEYS, TENANT_STATUS_ALLOW, SECRET_KEY_RE };
 
 /** Spec fields the platform chooses (never shown to tenants). */
 export const TENANT_HIDDEN_SPEC = {
@@ -69,73 +27,13 @@ export const TENANT_HIDDEN_SPEC = {
   PlatformOpenshift: ['openstack.pullSecretVaultPath', 'openstack.pullSecretVaultProperty', 'openstack.sshKeyVaultPath'],
 };
 
-/** Key names never sent to tenants, at any depth of the status. */
-export const SECRET_KEY_RE = /VaultPath|VaultProperty|vaultPaths|Secret$/;
-
-const PLURAL_KIND = { cloudosos: 'CloudOSO', platformopenshifts: 'PlatformOpenshift' };
-/** Object kinds (and their list kinds) that are filtered wherever they appear. */
-const FILTERED_KIND = {
-  CloudOSO: 'CloudOSO',
-  CloudOSOList: 'CloudOSO',
-  PlatformOpenshift: 'PlatformOpenshift',
-  PlatformOpenshiftList: 'PlatformOpenshift',
-};
-const PATH_RE = /^\/apis\/hybridsovereign\.redhat\/[^/]+\/(?:watch\/)?(?:namespaces\/[^/]+\/)?(cloudosos|platformopenshifts)(?:\/[^/]+)?(?:\/status)?$/;
+/** Plural of each filtered kind (every kind with a tenant allow-list), and the kinds by their own and list kind. */
+const PLURAL_KIND = Object.fromEntries(Object.keys(TENANT_STATUS_ALLOW).map((k) => [`${k.toLowerCase()}s`, k]));
+const FILTERED_KIND = Object.fromEntries(Object.keys(TENANT_STATUS_ALLOW).flatMap((k) => [[k, k], [`${k}List`, k]]));
+const PATH_RE = /^\/apis\/hybridsovereign\.redhat\/[^/]+\/(?:watch\/)?(?:namespaces\/[^/]+\/)?([a-z]+)(?:\/[^/]+)?(?:\/status)?$/;
 
 function isPlainObject(v) {
   return v !== null && typeof v === 'object' && !Array.isArray(v);
-}
-
-/** Copy without keys that look like Vault paths or secret references, at any depth. */
-function scrub(value) {
-  if (Array.isArray(value)) return value.map(scrub);
-  if (!isPlainObject(value)) return value;
-  const out = {};
-  for (const [k, v] of Object.entries(value)) {
-    if (SECRET_KEY_RE.test(k)) continue;
-    out[k] = scrub(v);
-  }
-  return out;
-}
-
-function filterStatus(kind, status) {
-  if (!isPlainObject(status)) return status;
-  const out = {};
-  const allow = new Map();
-  for (const k of COMMON_STATUS_KEYS) allow.set(k, null);
-  for (const entry of TENANT_STATUS_ALLOW[kind] || []) {
-    if (Array.isArray(entry)) allow.set(entry[0], entry[1]);
-    else allow.set(entry, null);
-  }
-  for (const [k, v] of Object.entries(status)) {
-    if (!allow.has(k) || SECRET_KEY_RE.test(k)) continue;
-    const sub = allow.get(k);
-    if (!sub) {
-      out[k] = scrub(v);
-      continue;
-    }
-    // a key with a subkey list that is not an object carries nothing tenants need
-    if (isPlainObject(v)) out[k] = pick(sub, v);
-  }
-  return out;
-}
-
-/** The listed subkeys of an object (or of each object of a list), nested entries alike; undefined otherwise. */
-function pick(sub, v) {
-  if (Array.isArray(v)) return v.filter(isPlainObject).map((item) => pick(sub, item));
-  if (!isPlainObject(v)) return undefined;
-  const out = {};
-  for (const entry of sub) {
-    const [key, inner] = Array.isArray(entry) ? entry : [entry, null];
-    if (!(key in v) || SECRET_KEY_RE.test(key)) continue;
-    if (!inner) {
-      out[key] = scrub(v[key]);
-      continue;
-    }
-    const p = pick(inner, v[key]);
-    if (p !== undefined) out[key] = p;
-  }
-  return out;
 }
 
 function dropSpecPaths(kind, spec) {
@@ -155,7 +53,7 @@ function safeItem(kind, item) {
   if (!isPlainObject(item)) return item;
   const out = { ...item };
   if ('spec' in out) out.spec = dropSpecPaths(kind, out.spec);
-  if ('status' in out) out.status = filterStatus(kind, out.status);
+  if ('status' in out) out.status = filterTenantStatus(kind, out.status);
   return out;
 }
 
@@ -171,7 +69,7 @@ export function filteredKindForPath(path) {
   const norm = normaliseK8sPath(path);
   if ('error' in norm) return null;
   const m = PATH_RE.exec(norm.pathname);
-  return m ? PLURAL_KIND[m[1]] : null;
+  return m ? PLURAL_KIND[m[1]] ?? null : null;
 }
 
 /** Filtered kind of an object by its own kind, else the fallback (the path's kind). */
@@ -211,4 +109,19 @@ export function transformBody(path, obj, _req) {
     throw err;
   }
   return safeAnswer(obj, pathKind);
+}
+
+/**
+ * Express middleware (mounted on /api): answers of the dashboard's own routes for a listed kind
+ * (/api/<plural> and /api/<plural>/<name>) go through tenantSafe, an array item by item.
+ */
+export function tenantSafeResponses() {
+  return (req, res, next) => {
+    const plural = String(req.path || '').split('/')[1] || '';
+    const kind = PLURAL_KIND[plural];
+    if (!kind) return next();
+    const json = res.json.bind(res);
+    res.json = (body) => json(Array.isArray(body) ? body.map((item) => tenantSafe(kind, item)) : tenantSafe(kind, body));
+    return next();
+  };
 }

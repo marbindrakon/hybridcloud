@@ -1,4 +1,4 @@
-// Tenant status allow-list for CloudOSO and PlatformOpenshift (shared/server/tenantSafe.js).
+// Tenant status allow-list for every kind a tenant reads (shared/server/tenantStatusAllow.js, through tenantSafe.js).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 
@@ -50,12 +50,12 @@ test('CloudOSO: no Vault paths or secret references, allowed keys untouched', ()
   const out = m.tenantSafe('CloudOSO', cloudoso());
   assert.deepEqual(secretKeys(out), []);
   assert.equal(out.status.projectId, 'p1');
-  assert.equal(out.status.dns.zoneId, 'z1');
-  assert.equal(out.status.dns.dnsConfig, 'global');
+  // the zone by name; the platform's zone id and DNS settings object do not reach tenants
+  assert.deepEqual(out.status.dns, { mode: 'native', zone: 'env1.t1.example.', delegated: true, nameservers: ['ns1.example.'] });
   assert.deepEqual(out.status.conditions, cloudoso().status.conditions);
   assert.equal(out.status.phase, 'Ready');
   assert.deepEqual(out.status.site, { name: 'site-a', console: 'https://console.example' });
-  for (const k of ['delivery', 'edaJobs', 'futureField']) assert.equal(k in out.status, false, k);
+  for (const k of ['delivery', 'edaJobs', 'futureField', 'apiFloatingIPId', 'ingressFloatingIPId']) assert.equal(k in out.status, false, k);
   assert.deepEqual(out.spec, { cloudRef: { name: 'site-a' } });
   assert.deepEqual(out.metadata, cloudoso().metadata);
 });
@@ -64,8 +64,9 @@ test('PlatformOpenshift: status and spec Vault fields removed, nested secret-loo
   const out = m.tenantSafe('PlatformOpenshift', platform());
   assert.deepEqual(secretKeys(out), []);
   assert.equal(out.status.apiURL, 'https://api.c1.example:6443');
-  assert.deepEqual(out.status.dns, { provider: 'designate', projectId: 'dp', records: [{ name: 'api', zoneId: 'z' }] });
-  assert.deepEqual(out.status.realization, { notes: { kept: 'y' } });
+  // the cluster's DNS records by name: not the platform's DNS project (dns.projectId) or zone ids
+  assert.deepEqual(out.status.dns, { provider: 'designate', records: [{ name: 'api' }] });
+  assert.equal('realization' in out.status, false);
   assert.deepEqual(out.spec.openstack, { environment: 'env1', workerCount: 3 });
 });
 
@@ -74,8 +75,8 @@ test('lists are filtered item by item; other kinds pass unchanged', () => {
   const out = m.tenantSafe('CloudOSO', list);
   assert.equal(out.items.length, 2);
   assert.deepEqual(secretKeys(out), []);
-  const other = { kind: 'CloudVirt', status: { someVaultPath: 'x' } };
-  assert.equal(m.tenantSafe('CloudVirt', other), other);
+  const other = { kind: 'HybridFabric', status: { someVaultPath: 'x' } };
+  assert.equal(m.tenantSafe('HybridFabric', other), other);
 });
 
 test('transformBody: filtered paths, watch refused, other paths untouched', () => {
@@ -88,9 +89,10 @@ test('transformBody: filtered paths, watch refused, other paths untouched', () =
   assert.deepEqual(secretKeys(all), []);
   assert.throws(() => m.transformBody(`${base}/namespaces/entity-t1/cloudosos?watch=true`, null, {}), (e) => e.status === 400);
   assert.throws(() => m.transformBody(`${base}/watch/namespaces/entity-t1/cloudosos`, null, {}), (e) => e.status === 400);
-  assert.equal(m.transformBody(`${base}/namespaces/entity-t1/cloudvirts?watch=true`, null, {}), null);
-  const other = { kind: 'CloudVirt', status: { x: 1 } };
-  assert.equal(m.transformBody(`${base}/namespaces/entity-t1/cloudvirts/v1`, other, {}), other);
+  assert.throws(() => m.transformBody(`${base}/namespaces/entity-t1/cloudvirts?watch=true`, null, {}), (e) => e.status === 400);
+  assert.equal(m.transformBody(`${base}/namespaces/sovereign-cloud/hybridfabrics?watch=true`, null, {}), null);
+  const other = { kind: 'HybridFabric', status: { x: 1 } };
+  assert.equal(m.transformBody(`${base}/namespaces/sovereign-cloud/hybridfabrics/f1`, other, {}), other);
   const statusBody = { kind: 'Status', code: 404 };
   assert.equal(m.transformBody(`${base}/namespaces/entity-t1/cloudosos/nope`, statusBody, {}), statusBody);
 });
@@ -108,7 +110,7 @@ test('transformBody: filters by object kind on paths it does not recognise', () 
   const list = m.transformBody('/apis/other/v1/things', { kind: 'PlatformOpenshiftList', items: [platform()] }, {});
   assert.deepEqual(secretKeys(list), []);
   // a generic List with mixed items: each item by its own kind
-  const virt = { kind: 'CloudVirt', status: { someVaultPath: 'x' } };
+  const virt = { kind: 'HybridFabric', status: { someVaultPath: 'x' } };
   const mixed = m.transformBody('/apis/other/v1/things', { kind: 'List', items: [cloudoso(), virt, platform()] }, {});
   assert.deepEqual(secretKeys(mixed.items[0]), []);
   assert.deepEqual(secretKeys(mixed.items[2]), []);
@@ -129,7 +131,7 @@ test('transformBody: watch events are filtered by the object kind', () => {
   }
   const err = { type: 'ERROR', object: { kind: 'Status', code: 410 } };
   assert.deepEqual(m.transformBody('/apis/other/v1/things?watch=1', err, {}), err);
-  const virt = { type: 'ADDED', object: { kind: 'CloudVirt', status: { someVaultPath: 'x' } } };
+  const virt = { type: 'ADDED', object: { kind: 'HybridFabric', status: { someVaultPath: 'x' } } };
   assert.deepEqual(m.transformBody('/apis/other/v1/things?watch=1', virt, {}), virt);
 });
 
@@ -235,20 +237,23 @@ test('PlatformOpenshift: keys added later to status.install or lastFailure do no
   assert.equal('install' in m.tenantSafe('PlatformOpenshift', obj).status, false);
 });
 
-test('PlatformOpenshift: the install keys are the only status keys this round adds', () => {
+test('PlatformOpenshift: the status keys a tenant page shows', () => {
   const keys = m.TENANT_STATUS_ALLOW.PlatformOpenshift.map((e) => (Array.isArray(e) ? e[0] : e));
   assert.deepEqual(keys, [
-    'name', 'namespace', 'entity', 'billingId', 'description', 'platformType', 'domain', 'apiURL', 'appsURL',
-    'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth', 'provisionStatus', 'acmAvailable',
-    'clusterInstalled', 'buildName', 'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
-    'serviceAccountIssuer', 'network', 'placement', 'publish', 'machineNetwork', 'oidcClientId',
-    'externalNetwork', 'clusterNetwork', 'serviceNetwork', 'platformPrefixes', 'installStarted',
-    'floatingIPs', 'dns', 'site', 'credential', 'install',
+    'platformType', 'domain', 'apiURL', 'appsURL', 'consoleURL', 'clusterVersion', 'powerState', 'clusterHealth',
+    'provisionStatus', 'acmAvailable', 'clusterInstalled', 'installStarted', 'buildName',
+    'awsAccountId', 'awsRegion', 'gcpProject', 'gcpRegion', 'gcpVpc',
+    'network', 'placement', 'publish', 'machineNetwork', 'externalNetwork', 'clusterNetwork', 'serviceNetwork',
+    'platformPrefixes', 'floatingIPs', 'dns', 'site', 'credential', 'install',
   ]);
+  // the platform's own ids and service addresses do not reach tenants
+  for (const k of ['serviceAccountIssuer', 'oidcClientId', 'slug', 'edaJobs', 'delivery']) assert.ok(!keys.includes(k), k);
 });
 
-test('NetworkPlacement is not filtered: status.siteNetwork reaches the placement page', () => {
-  const np = { kind: 'NetworkPlacement', status: { siteNetwork: { name: 'hn10042', id: 'n1', project: 'hybrid-fabric', subnets: [{ family: 4, prefix: '10.60.1.0/24', gateway: '10.60.1.1', id: 's1' }] } } };
-  assert.equal(m.tenantSafe('NetworkPlacement', np), np);
-  assert.equal(m.transformBody('/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-t1/networkplacements/p1', np, {}), np);
+test('NetworkPlacement: status.siteNetwork reaches the placement page by name and id, not the platform project', () => {
+  const sn = { name: 'acme-corp_core-prod', id: 'n1', project: 'platform-project', subnets: [{ family: 4, prefix: '10.60.1.0/24', gateway: '10.60.1.1', id: 's1' }] };
+  const np = { kind: 'NetworkPlacement', status: { siteNetwork: sn, l3Vni: 51003, l2Vni: 10007, cloudGateway: 'gw-site-a', edaJobs: [{ jobId: '1' }] } };
+  const want = { siteNetwork: { name: 'acme-corp_core-prod', id: 'n1', subnets: sn.subnets } };
+  assert.deepEqual(m.tenantSafe('NetworkPlacement', np).status, want);
+  assert.deepEqual(m.transformBody('/apis/hybridsovereign.redhat/v1alpha1/namespaces/entity-t1/networkplacements/p1', np, {}).status, want);
 });
