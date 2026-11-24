@@ -87,7 +87,7 @@
     validate_certs: false
     status_code: [200]
   register: _kce_relookup
-  when: kce_decision == 'create' and _kce_create.status | default(0) == 409
+  when: kce_decision == 'create' and (_kce_create.status | default(0) | int) == 409
 
 - name: Refuse a client that appeared meanwhile and carries no mark of this object ({{ kce_client }})
   vars:
@@ -96,7 +96,7 @@
       {{ (((_found | first).attributes | default({}, true))['hybridsovereign.redhat/owner'] | default('', true))
          if _found | length > 0 else '' }}
   when:
-    - kce_decision == 'create' and _kce_create.status | default(0) == 409
+    - kce_decision == 'create' and (_kce_create.status | default(0) | int) == 409
     - kce_owner | default('', true) | length > 0 and _mark != kce_owner
   block:
     - name: Note the refusal

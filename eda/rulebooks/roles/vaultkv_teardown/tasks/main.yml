@@ -60,7 +60,7 @@
             _desc: "{{ _m.description | default('', true) | trim }}"
           ansible.builtin.set_fact:
             kv_fin_decision: >-
-              {{ 'gone' if (_kv_fin_mount.status | default(0)) != 200
+              {{ 'gone' if (_kv_fin_mount.status | default(0) | int) != 200
                  else ('delete' if _desc.endswith(kv_fin_mark) or _desc | length == 0 else 'leave') }}
           when: kv_fin_path | length > 0
 

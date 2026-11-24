@@ -178,10 +178,10 @@
     # the mark); create: nothing of the name; refuse: anything else (never taken over, never deleted)
     - name: "Decide: ours, adopt, create or refuse"
       vars:
-        _email: "{{ (_org_existing.json | default({}, true)).email | default('', true) if _org_existing.status == 200 else '' }}"
+        _email: "{{ (_org_existing.json | default({}, true)).email | default('', true) if (_org_existing.status | int) == 200 else '' }}"
       ansible.builtin.set_fact:
         quayorg_decision: >-
-          {{ 'create' if _org_existing.status == 404
+          {{ 'create' if (_org_existing.status | int) == 404
              else ('ours' if _email == quayorg_mark_email
                    else ('adopt' if _email | length == 0 and quayorg_recorded_name == org_name else 'refuse')) }}
 
@@ -220,7 +220,7 @@
 
     # 400: a user or an organization of the name appeared meanwhile (or the registry refused the name)
     - name: Refuse when the registry did not create the organization
-      when: quayorg_decision == 'create' and _org_create.status | default(0) not in [200, 201]
+      when: quayorg_decision == 'create' and (_org_create.status | default(0) | int) not in [200, 201]
       block:
         - name: The reason of the refusal
           ansible.builtin.set_fact:

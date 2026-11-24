@@ -237,7 +237,7 @@
 
     # 400/409: an organization of the name appeared meanwhile; it is not taken over
     - name: Refuse when the gateway did not create the organization
-      when: aaporg_decision == 'create' and _gw_org_create.status | default(0) not in [200, 201]
+      when: aaporg_decision == 'create' and (_gw_org_create.status | default(0) | int) not in [200, 201]
       block:
         - name: The reason of the refusal
           ansible.builtin.set_fact:

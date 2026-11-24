@@ -72,10 +72,10 @@
         # only an organization with the platform's mark (or none, made before the mark) under the recorded name
         - name: "Decide: delete or leave"
           vars:
-            _email: "{{ (_fin_org.json | default({}, true)).email | default('', true) if _fin_org.status == 200 else '' }}"
+            _email: "{{ (_fin_org.json | default({}, true)).email | default('', true) if (_fin_org.status | int) == 200 else '' }}"
           ansible.builtin.set_fact:
             quayorg_fin_decision: >-
-              {{ 'gone' if _fin_org.status == 404
+              {{ 'gone' if (_fin_org.status | int) == 404
                  else ('delete' if _email in [fin_org_name ~ '@' ~ quayorg_mail_domain, ''] else 'leave') }}
 
         - name: Delete organization from Quay

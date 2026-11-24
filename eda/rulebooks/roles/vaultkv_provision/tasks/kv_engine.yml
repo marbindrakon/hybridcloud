@@ -35,7 +35,7 @@
     status_code: [200, 400, 403, 404]
   register: _kv_mount_existing
   no_log: true
-  when: _kv_mount_create.status == 400
+  when: (_kv_mount_create.status | int) == 400
 
 - name: "Decide: ours, adopt, create or refuse"
   vars:
@@ -44,8 +44,8 @@
     _kv2: "{{ (_m.type | default('')) == 'kv' and ((_m.options | default({}, true)).version | default('') | string) == '2' }}"
   ansible.builtin.set_fact:
     kv_decision: >-
-      {{ 'create' if _kv_mount_create.status in [200, 204]
-         else ('refuse' if (_kv_mount_existing.status | default(0)) != 200 or not (_kv2 | bool)
+      {{ 'create' if (_kv_mount_create.status | int) in [200, 204]
+         else ('refuse' if (_kv_mount_existing.status | default(0) | int) != 200 or not (_kv2 | bool)
                else ('ours' if _desc.endswith(kv_mark)
                      else ('adopt' if _desc | length == 0 and kv_recorded_path == kv_path else 'refuse'))) }}
 
