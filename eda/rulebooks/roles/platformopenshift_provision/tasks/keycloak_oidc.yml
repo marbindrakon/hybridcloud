@@ -181,9 +181,9 @@
     - _mark | length > 0
     - _mark != ocp_oidc_mark
 
-# A client of the name without a mark was made by the release before for this cluster: its status records the client
-# (status.oidcClientId), or the build the client is named after was recorded before this run (status.buildName). An
-# unmarked client that neither proves is not taken.
+# A client of the name without a mark is taken only when this cluster's status records that client
+# (status.oidcClientId, written by the release before as well). The recorded build name is no proof: the cluster
+# records it itself in its first run, before this step.
 - name: Refuse an unmarked sign-in client this cluster did not record
   ansible.builtin.fail:
     msg: >-
@@ -200,7 +200,6 @@
     - _kc_client_info.json | length > 0
     - _mark | length == 0
     - (_st.oidcClientId | default('', true)) != ocp_oidc_client_id
-    - (_st.buildName | default('', true)) != cluster_name
 
 # The client is recorded as soon as it exists (the teardown deletes the recorded client only)
 - name: Record the cluster's sign-in client
@@ -499,7 +498,8 @@
 - name: Set OIDC configured fact
   ansible.builtin.set_fact:
     oidc_configured: "{{ not (skip_oidc_setup | bool) }}"
-    oidc_client_id: "{{ ocp_oidc_client_id | default('') }}"
+    # empty when the step was skipped: the status write then leaves the recorded client as it is
+    oidc_client_id: "{{ '' if (skip_oidc_setup | bool) else (ocp_oidc_client_id | default('')) }}"
 
 - name: Push cluster RBAC ClusterRoleBindings via ACM
   ansible.builtin.include_tasks: cluster_rbac.yml
