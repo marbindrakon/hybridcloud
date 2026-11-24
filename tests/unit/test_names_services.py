@@ -441,9 +441,14 @@ class AdoptionElsewhere(unittest.TestCase):
                    "other-engine": {"type": "pki", "description": "Secrets path app " + mark}}
         cases, want = [{"create": 204, "existing": {}, "recorded": ""}], ["create"]
         for state, m in mounted.items():
-            for recorded in ("", "app"):
+            for recorded in ("", "app", "other"):
                 cases.append({"create": 400, "existing": {"status": 200, "json": {"data": m}}, "recorded": recorded})
-                want.append({"kv2-ours": "ours", "kv2-unmarked": "adopt" if recorded else "refuse"}.get(state, "refuse"))
+                # recorded and KV v2: this object's whatever the description; nothing recorded: refused, a mount
+                # carrying this object's description included
+                if recorded != "app" or not state.startswith("kv2"):
+                    want.append("refuse")
+                else:
+                    want.append("ours" if state == "kv2-ours" else "adopt")
         cases.append({"create": 400, "existing": {"status": 400, "json": {"errors": ["no matching mount"]}},
                       "recorded": ""})                       # a reserved path (sys, identity, ...)
         want.append("refuse")
@@ -453,15 +458,16 @@ class AdoptionElsewhere(unittest.TestCase):
         steps = [by_name(load(KV_ENGINE), "Decide: ours, adopt, create or refuse")]
         got = run_cases(pre + steps, cases, "kv_decision | trim", extra_vars={"kv_path": "app", "kv_mark": mark})
         self.assertEqual(got, want)
-        # the teardown removes the recorded path only with the mark (or no description)
+        # the teardown removes the recorded path whatever its description, while a KV v2 engine is mounted there
         pre = [{"ansible.builtin.set_fact": {"_kv_fin_mount": "{{ case }}"}}]
         steps = [by_name(load(KV_T), "Decide: delete or leave")]
         cases = [{"status": 404}, {"status": 200, "json": {"data": mounted["kv2-ours"]}},
                  {"status": 200, "json": {"data": mounted["kv2-unmarked"]}},
                  {"status": 200, "json": {"data": mounted["kv2-other"]}}]
+        cases.append({"status": 200, "json": {"data": mounted["other-engine"]}})
         got = run_cases(pre + steps, cases, "kv_fin_decision | trim", extra_vars={"kv_fin_path": "app",
                                                                                    "kv_fin_mark": mark})
-        self.assertEqual(got, ["gone", "delete", "delete", "leave"])
+        self.assertEqual(got, ["gone", "delete", "delete", "delete", "leave"])
 
     def test_tool_client_teardowns(self):
         for role, kind in (("aapconfig", "AAPConfig"), ("quayconfig", "QuayConfig")):

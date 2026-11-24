@@ -36,7 +36,8 @@
             namespace: "{{ vaultkv_cr_namespace }}"
           register: vault_init_final
 
-        # the path the provision recorded, removed only with this object's mark (or no description: made before it)
+        # the path the provision recorded, removed whatever its description while a KV v2 engine is mounted there
+        # (the only kind of engine the provision makes); nothing recorded, nothing removed
         - name: The recorded secrets path
           ansible.builtin.set_fact:
             kv_fin_path: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).kvPath | default('', true) }}"
@@ -57,11 +58,11 @@
         - name: "Decide: delete or leave"
           vars:
             _m: "{{ (_kv_fin_mount.json | default({}, true)).data | default(_kv_fin_mount.json | default({}, true), true) }}"
-            _desc: "{{ _m.description | default('', true) | trim }}"
+            _kv2: "{{ (_m.type | default('')) == 'kv' and ((_m.options | default({}, true)).version | default('') | string) == '2' }}"
           ansible.builtin.set_fact:
             kv_fin_decision: >-
               {{ 'gone' if (_kv_fin_mount.status | default(0) | int) != 200
-                 else ('delete' if _desc.endswith(kv_fin_mark) or _desc | length == 0 else 'leave') }}
+                 else ('delete' if _kv2 | bool else 'leave') }}
           when: kv_fin_path | length > 0
 
         - name: Disable KV engine

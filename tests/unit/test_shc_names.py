@@ -113,7 +113,7 @@ class NoTwoInputsOneName(unittest.TestCase):
 class Limits(unittest.TestCase):
     def test_cut_names_fit_with_their_endings_and_are_stable(self):
         for kind, (form, limit, prefix, reserve, count) in names.KINDS.items():
-            parts = ["t" * 200, "e" * 200, "o" * 200][:count or 3]
+            parts = ["t" * 200, "e" * 200, "o" * 200, "m" * 200][:count or 3]
             got = names.name(kind, parts)
             self.assertLessEqual(len(got["name"]) + reserve, limit, kind)
             self.assertFalse(got["exact"], kind)

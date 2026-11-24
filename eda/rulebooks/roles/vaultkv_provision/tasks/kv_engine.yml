@@ -1,8 +1,8 @@
 ---
-# The mount's description is the platform's mark: it ends with "(VaultKV <namespace>/<name>)". A path already in use
-# (the create answers 400) is this object's only with that mark, or with no description when this object's status
-# records the path (made before the mark); any other mount there, a reserved path included, is refused
-# (NameTakenOnSite) and left as it is, and no policy is written for it.
+# A path already in use (the create answers 400) is this object's only when its status records the path and a KV v2
+# engine is mounted there (whatever its description: whoever holds the secrets store's root token can write it);
+# anything else, a reserved path included, is refused (NameTakenOnSite) and left as it is, and no policy is written
+# for it. The description "(VaultKV <namespace>/<name>)" is written for people.
 - name: The secrets path's mark
   ansible.builtin.set_fact:
     kv_mark: "(VaultKV {{ vaultkv_cr_namespace }}/{{ vaultkv_cr_name }})"
@@ -46,8 +46,8 @@
     kv_decision: >-
       {{ 'create' if (_kv_mount_create.status | int) in [200, 204]
          else ('refuse' if (_kv_mount_existing.status | default(0) | int) != 200 or not (_kv2 | bool)
-               else ('ours' if _desc.endswith(kv_mark)
-                     else ('adopt' if _desc | length == 0 and kv_recorded_path == kv_path else 'refuse'))) }}
+               else ('refuse' if kv_recorded_path | length == 0 or kv_recorded_path != kv_path
+                     else ('ours' if _desc.endswith(kv_mark) else 'adopt'))) }}
 
 - name: Refuse a path in use by something this object did not make
   when: kv_decision == 'refuse'
@@ -62,7 +62,7 @@
           The secrets store already has something at the path {{ kv_path }} that was not made for this secrets path;
           it is left untouched. Choose another name for the secrets path.
 
-- name: Write the platform's mark on a path made before the mark
+- name: Write the description on a recorded path that lacks it
   ansible.builtin.uri:
     url: "{{ vault_url }}/v1/sys/mounts/{{ kv_path }}/tune"
     method: POST
