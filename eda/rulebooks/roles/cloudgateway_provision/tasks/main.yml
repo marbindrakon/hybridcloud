@@ -317,6 +317,8 @@
               {%- set n6 = ((nets.get(key, {}).status | default({}, true)).ipv6 | default({}, true)) -%}
               {%- set cov = ((n6.prefixes | default([], true)) + routed) | unique | list if p6 else [] -%}
               {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name, 'network': key,
+                                      'tenant': (p.metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
+                                                | default((st.entity | default('', true)), true),
                                       'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
                                       'mtu': vmtu, 'families': fams or [4], 'prefixes4': p4, 'prefixes6': p6,
                                       'egress6': (key in v6nets) and (p6 | length > 0), 'covering6': cov}) -%}

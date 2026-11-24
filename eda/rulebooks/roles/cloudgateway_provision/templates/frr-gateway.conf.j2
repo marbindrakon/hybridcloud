@@ -86,13 +86,20 @@ interface core0
  mpls enable
 exit
 !
-{% for v in cg_vrfs %}
+{% endif %}
+{# the VRF device keeps the placement's number; the names people chose go beside it (zebra takes a description on an
+   interface: FRR zebra "description DESCRIPTION ...") #}
+{% for v in cg_vrfs if v.tenant is defined or not _srv6 %}
 interface {{ v.vrf }}
+{% if v.tenant is defined %}
+ description {{ ('tenant ' ~ v.tenant ~ ', ') if v.tenant | default('', true) else '' }}network {{ v.network | default('') }}, placement {{ v.placement }}
+{% endif %}
+{% if not _srv6 %}
  mpls enable
+{% endif %}
 exit
 !
 {% endfor %}
-{% endif %}
 ! routes the gateways originate into the site carry this community; a gateway never takes them back from the site
 bgp community-list standard GW-ORIG seq 5 permit {{ _asn }}:{{ fab_real.gatewayCommunity }}
 !
