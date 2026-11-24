@@ -78,7 +78,7 @@ function leaves(value, prefix = '') {
   return [prefix];
 }
 
-test('every sanitizer passes every CRD spec field except the platform-only ones', (t) => {
+test('every sanitizer passes every CRD spec field except the platform-only and the ignored ones', (t) => {
   if (!specs) {
     t.skip('CRD_SPECS_JSON not set (run through ui/scripts/test-shell.sh)');
     return;
@@ -91,7 +91,7 @@ test('every sanitizer passes every CRD spec field except the platform-only ones'
     assert.ok(!result.error, `${kind}: the sanitizer refused a full spec: ${result.error}`);
     const kept = new Set(leaves(result.spec));
     const dropped = leaves(full).filter((l) => !kept.has(l));
-    const allowed = san.PLATFORM_ONLY_FIELDS[kind] || [];
+    const allowed = [...(san.PLATFORM_ONLY_FIELDS[kind] || []), ...(san.IGNORED_FIELDS[kind] || [])];
     assert.deepEqual(
       dropped.filter((d) => !allowed.includes(d)),
       [],

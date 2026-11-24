@@ -3324,6 +3324,11 @@ spec:
                         type: string
                         maxLength: 63
                         pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
+                project:
+                  type: string
+                  description: >-
+                    Accepted and ignored. The platform names the environment's project itself; this field is
+                    kept only so that manifests that still set it apply. Leave it out.
                 vaultPath:
                   type: string
                   description: >-

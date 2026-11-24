@@ -3,7 +3,8 @@
 platform is a letter first, then lower-case letters, digits and single hyphens, a letter or digit last, at most 30
 characters (a gateway's 21); a cluster on Google Cloud may not be named like "google". The platform's configuration
 kinds keep the API server's own rule. An object made before the rule keeps working: its status, its spec and its
-deletion are still accepted. The status keys the jobs read back are kept.
+deletion are still accepted. The status keys the jobs read back are kept, and an OpenStack environment's
+spec.project of the release before is accepted and ignored.
 
   python3 -I tests/cel-ipam/cel_cases_names.py --crds operator/primary/helm/templates/crds.yaml [--report out.json]
 
@@ -242,6 +243,26 @@ def status_round_trip(run, kube, plural_name, name, status):
     return (got or {}).get("status", {})
 
 
+def project_cases(run, kube):
+    """An OpenStack environment's spec.project is accepted and ignored for one release: a manifest of the release
+    before (which had to set it) applies by every path the platform's clients use, and so does one without it."""
+    with_project = obj("CloudOSO", "with-project", {"cloudRef": {"name": "site"}, "project": "web"})
+    without = obj("CloudOSO", "without-project", {"cloudRef": {"name": "site"}})
+    for o in (with_project, without):
+        n = o["metadata"]["name"]
+        rc, err = run.create(o)
+        run.check("P-create", f"CloudOSO {n!r}: kubectl create (strict field validation) accepts it",
+                  rc == 0 and "unknown field" not in err, err)
+        r = kube.run(["apply", "--server-side", "--field-manager=gitops", "-n", run.ns, "-f", "-"], body=o)
+        run.check("P-ssa", f"CloudOSO {n!r}: server-side apply (the GitOps controller's path) accepts it",
+                  r.returncode == 0, r.stderr)
+        r = kube.run(["replace", "-n", run.ns, "-f", "-"], body=o)
+        run.check("P-replace", f"CloudOSO {n!r}: replace accepts it", r.returncode == 0, r.stderr)
+    got, _, err = kube.json(["get", "cloudosos", "with-project", "-n", run.ns])
+    run.check("P-kept", "the field is stored as given (accepted, no job reads it)",
+              ((got or {}).get("spec") or {}).get("project") == "web", err or json.dumps(got))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--crds", required=True)
@@ -273,6 +294,7 @@ def main():
         sample_cases(run)
         removal_cases(run, kube)
         kept_cases(run, kube)
+        project_cases(run, kube)
         results = old_run.results + run.results
     finally:
         env.stop()
