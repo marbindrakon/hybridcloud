@@ -831,9 +831,17 @@ class OpenstackAddressesFile(unittest.TestCase):
 
     def test_recorded_floating_ips_are_kept_by_their_ids(self):
         """A cluster whose record holds both floating IPs keeps them: nothing is asked of the site, nothing is found by
-        a description, nothing is written again (the state of R-E2: recorded both / one / none)."""
+        a description, nothing is written again; a record of one stops the job, nothing recorded makes both."""
         rec = {"api": {"address": "192.0.2.25", "id": "fip-x"}, "ingress": {"address": "192.0.2.26", "id": "fip-y"}}
-        for status, calls in (({"floatingIPs": rec}, 0), ({"floatingIPs": {"api": rec["api"]}}, 1), ({}, 1)):
+        # a record of one of the two: nothing made, the job stops (the platform team completes or clears it)
+        rc, tr, out = self.run_a(k8s(), cb_platform_path=False,
+                                 po_cr_current={"resources": [{"status": {"floatingIPs": {"api": rec["api"]},
+                                                                          "buildName": "shc-oso-acme-c1"}}]})
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(H.os_calls(tr, "cluster-fips"), [])
+        self.assertEqual([p for p in H.patches(tr) if "floatingIPs" in p["body"]], [])
+        self.assertIn("only part of the cluster's floating IPs", out)
+        for status, calls in (({"floatingIPs": rec}, 0), ({}, 1)):
             rc, tr, out = self.run_a(k8s(), cb_platform_path=False,
                                      po_cr_current={"resources": [{"status": dict(status, buildName="shc-oso-acme-c1")}]})
             self.assertEqual(rc, 0, out)
