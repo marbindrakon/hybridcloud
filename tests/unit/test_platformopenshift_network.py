@@ -803,11 +803,10 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual((req["project_id"], req["network_id"], req["descriptions"]),
                          ("proj-1", "net-1", {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
                           "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"}))
+        # recorded: address and id only (the description is for people, never read back)
         self.assertEqual(H.patches(tr)[1]["body"]["floatingIPs"],
-                         {"api": {"address": "192.0.2.15", "id": "fip-a", "description": "OpenShift cluster c1: API "
-                                  "(platform build shc-oso-acme-c1)"},
-                          "ingress": {"address": "192.0.2.16", "id": "fip-i", "description": "OpenShift cluster c1: "
-                                      "ingress (platform build shc-oso-acme-c1)"}})
+                         {"api": {"address": "192.0.2.15", "id": "fip-a"},
+                          "ingress": {"address": "192.0.2.16", "id": "fip-i"}})
         self.assertEqual(H.patches(tr)[2]["body"]["platformPrefixes"], ["192.0.2.15/32", "192.0.2.16/32"])
         self.assertEqual([t for t in tr if "nudge" in t][0]["nudge"], [{"kind": "HybridNetwork", "namespace": NS, "name": "n1"}])
         self.assertEqual(tr[-1]["result"], ["192.0.2.15", "192.0.2.16"])
@@ -825,11 +824,26 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual(self.steps(tr)[2:], ["os:cluster-fips/present", "patch:floatingIPs", "os:cluster-fips/absent",
                                               "patch:floatingIPs"])
         rel = H.os_calls(tr, "cluster-fips")[1]
-        self.assertEqual((rel["ids"], rel["descriptions"]),
-                         (["fip-a", "fip-i"], {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
-                           "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)",
-                           "api-older": "shc-oso-acme-c1-api", "ingress-older": "shc-oso-acme-c1-ingress"}))
+        # released by the recorded ids only, never by a description
+        self.assertEqual(rel["ids"], ["fip-a", "fip-i"])
+        self.assertNotIn("descriptions", rel)
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
+
+    def test_recorded_floating_ips_are_kept_by_their_ids(self):
+        """A cluster whose record holds both floating IPs keeps them: nothing is asked of the site, nothing is found by
+        a description, nothing is written again (the state of R-E2: recorded both / one / none)."""
+        rec = {"api": {"address": "192.0.2.25", "id": "fip-x"}, "ingress": {"address": "192.0.2.26", "id": "fip-y"}}
+        for status, calls in (({"floatingIPs": rec}, 0), ({"floatingIPs": {"api": rec["api"]}}, 1), ({}, 1)):
+            rc, tr, out = self.run_a(k8s(), cb_platform_path=False,
+                                     po_cr_current={"resources": [{"status": dict(status, buildName="shc-oso-acme-c1")}]})
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(len(H.os_calls(tr, "cluster-fips")), calls, status)
+            fips = [p for p in H.patches(tr) if "floatingIPs" in p["body"]]
+            if calls == 0:
+                self.assertEqual(fips, [])
+                self.assertEqual(tr[-1]["result"], ["192.0.2.25", "192.0.2.26"])
+            else:
+                self.assertEqual(fips[0]["body"]["floatingIPs"]["api"]["id"], "fip-a")
 
     def test_refused_prefix_withdrawn_and_released(self):
         fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.16/32", "reason": "ServicePrefixInUse"}])
@@ -1384,15 +1398,12 @@ class TeardownRelease(unittest.TestCase):
         v.update(kw)
         return H.run("platformopenshift_teardown", "release_fips.yml", v, k8s=kube, result="1")
 
-    def test_release_by_record_and_descriptions(self):
+    def test_release_by_the_record_only(self):
         rc, tr, out = self.run_r({f"CloudOSO/{NS}/env1": OSO, f"CloudInfrastructure/sovereign-cloud/site1": SITE})
         self.assertEqual(rc, 0, out)
         req = H.os_calls(tr, "cluster-fips")[0]
-        self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
-                         ("absent", "proj-1", ["fip-a", "fip-i"],
-                          {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
-                           "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)",
-                           "api-older": "shc-oso-acme-c1-api", "ingress-older": "shc-oso-acme-c1-ingress"}))
+        self.assertEqual((req["state"], req["project_id"], req["ids"]), ("absent", "proj-1", ["fip-a", "fip-i"]))
+        self.assertNotIn("descriptions", req)
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
 
     def test_environment_gone(self):
@@ -1777,7 +1788,8 @@ class TeardownOwnsOnlyItsBuild(unittest.TestCase):
         deleted = [p for t in tr if "vault_delete" in t for p in t["vault_delete"]]
         self.assertFalse([p for p in deleted if p.startswith("cluster/")], deleted)
         rel = H.os_calls(tr, "cluster-fips")
-        self.assertTrue(all(r["descriptions"] == {} for r in rel), rel)
+        # the release asks only for the cluster's own recorded ids, never for a description
+        self.assertTrue(all("descriptions" not in r for r in rel), rel)
         self.assertTrue([p for p in H.patches(tr) if p["body"].get("deletionComplete")], out)
 
     def test_never_recorded_deletes_nothing_on_the_hub(self):

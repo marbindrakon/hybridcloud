@@ -384,28 +384,26 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
                           "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"])
         again = self.helper(conn, present)
         self.assertEqual((again["api"]["id"], again["api"]["created"]), (out["api"]["id"], False))
-        # the release by the record and by description (a floating IP created by a run that did not record it)
+        # the release by the record only: a floating IP that is not recorded is not released, whatever it is called
         absent = self.requests("cluster_fips_release.yml", cfr_project_id=S3.PROJECT, cfr_account="sites/site1",
-                               cfr_ids=[out["api"]["id"]], cfr_build="shc-oso-acme-c1", cfr_cr_name="c1",
-                               cfr_cr_namespace="acme")[0]
+                               cfr_ids=[out["api"]["id"]], cfr_cr_name="c1", cfr_cr_namespace="acme")[0]
         gone = self.helper(conn, absent)
-        self.assertEqual(sorted(gone["released"]), sorted([out["api"]["id"], out["ingress"]["id"]]))
-        self.assertEqual(conn.network.fips, [])
+        self.assertEqual(gone["released"], [out["api"]["id"]])
+        self.assertEqual([i.id for i in conn.network.fips], [out["ingress"]["id"]])
 
-    def test_a_cluster_that_recorded_its_floating_ips_keeps_their_descriptions(self):
+    def test_a_cluster_that_recorded_its_floating_ips_keeps_them_by_id(self):
+        """Floating IPs of the release before (described <build>-api / -ingress) recorded with their ids: the job asks
+        nothing of the site (no find by a description) and keeps the record."""
         import test_shc_openstack_cluster_fips as S3
         conn = S3.FakeConn()
         older = [conn.network.create_ip(floating_network_id=S3.NET, description=d)
                  for d in ("shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress")]
         rec = {"api": {"address": older[0].floating_ip_address, "id": older[0].id},
                "ingress": {"address": older[1].floating_ip_address, "id": older[1].id}}
-        present = self.requests("cluster_fips.yml", cb_app_name="shc-oso-acme-c1", cf_project_id=S3.PROJECT,
-                                cf_network_id=S3.NET, cf_account="sites/site1",
-                                po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]},
-                                fake_os={"cluster-fips/present": {"api": {"address": "x", "id": "y"},
-                                                                  "ingress": {"address": "x", "id": "y"}}})[0]
-        out = self.helper(conn, present)
-        self.assertEqual((out["api"]["id"], out["api"]["created"], out["ingress"]["id"]), (older[0].id, False, older[1].id))
+        calls = self.requests("cluster_fips.yml", cb_app_name="shc-oso-acme-c1", cf_project_id=S3.PROJECT,
+                              cf_network_id=S3.NET, cf_account="sites/site1",
+                              po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]})
+        self.assertEqual(calls, [])
         self.assertEqual(len(conn.network.fips), 2)
 
     def test_the_environment_releases_a_legacy_pair(self):
