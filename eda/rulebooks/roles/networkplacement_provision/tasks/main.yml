@@ -28,6 +28,27 @@
       ansible.builtin.meta: end_play
       when: fab_deleting | bool
 
+    # the rule for names (an object made before the API carried it): the names the site's objects are named and
+    # described with, checked before anything is read from or made on a site
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ fab_entity }}", what: tenant}
+          - {value: "{{ fab_spec.network }}", what: network}
+          - {value: "{{ fab_name }}", what: placement}
+
+    - name: Refuse a name that breaks the rule
+      ansible.builtin.set_fact:
+        fab_fail_reason: NameNotAllowed
+        fab_fail_msg: "{{ name_check_message }}"
+      when: name_check_message | length > 0
+
+    - name: Stop before anything is made
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: name_check_message | length > 0
+
     - name: Start with nothing to wait for
       ansible.builtin.set_fact:
         np_waiting: []

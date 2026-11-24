@@ -108,8 +108,9 @@
         oso_domain: "{{ _st.domain | default('') }}"
         oso_base_domain: "{{ _spec.baseDomain | default(cloudoso_defaults.baseDomain | default(''), true) }}"
         oso_route53_vault_path: "{{ rca_route53_vault_path }}"
-        # only the paths an older release recorded in status (vaultPaths); nothing is derived from the name alone
-        oso_vault_paths: "{{ _st.vaultPaths | default([], true) | select | list }}"
+        # only the paths an older release recorded in status (vaultPaths), and the name-only path of the release
+        # that wrote it when this environment recorded that release's credential (resolve_cloudoso_accounts.yml)
+        oso_vault_paths: "{{ rca_clouds_config_paths | default([], true) | select | list }}"
         oso_dns_config_secret: "{{ rca_dns_config_secret }}"
         # who could use the environment (status.access): the site client's roles and the Keystone groups go
         oso_access: "{{ _st.access | default({}, true) }}"
