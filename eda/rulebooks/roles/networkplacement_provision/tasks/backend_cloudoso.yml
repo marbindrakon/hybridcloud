@@ -46,12 +46,12 @@
       # the platform project by the id recorded for it: this placement's record, else the site's gateway's
       platformProjectId: >-
         {{ ((fab_st.realization | default({}, true)).site | default({}, true)).projectId | default('', true)
-           or ((((np_gateway.status | default({}, true)).site | default({}, true)).project | default({}, true)).id | default('', true) }}
+           or ((((np_gateway | default({}, true)).status | default({}, true)).site | default({}, true)).project | default({}, true)).id | default('', true) }}
       # <tenant>_<placement> (subnets <name>_v4, <name>_v6); found by the ids recorded below or by the tag, never by
       # that name. An object an earlier release made is renamed in place; when the status lost its ids, it is found
       # by its exact old name (hn<number>) in the platform project
       name: "{{ np_names.osNetwork }}"
-      oldName: "{{ np_names.osOldName }}"
+      oldName: "{{ np_names.osOldName | default('', true) }}"
       tag: "{{ np_names.tag }}"
       networkId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).networkId | default('', true) }}"
       routerId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerId | default('', true) }}"

@@ -221,7 +221,7 @@
                   name: "{{ npd_site_network_name }}"
                   # found by the recorded ids or by the tag, never by that name; an earlier release's objects whose
                   # ids the status lost by their exact old name (hn<number>) in the platform project
-                  oldName: "{{ npd_names.osOldName }}"
+                  oldName: "{{ npd_names.osOldName | default('', true) }}"
                   tag: "{{ npd_names.tag }}"
                   networkId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).networkId | default('', true) }}"
                   routerId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerId | default('', true) }}"
