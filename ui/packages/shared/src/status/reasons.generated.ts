@@ -91,7 +91,7 @@ export const REASONS: Record<string, ReasonEntry> = {
   "MappingFailed": { actor: "P", class: "failed", summary: "The sign-in mapping could not be set up. The platform team is looking at it." },
   "MappingWarning": { actor: "P", class: "ready", summary: "Sign-in is set up on this site; the platform team checks a warning about it." },
   "NameInUse": { actor: "T", class: "failed", summary: "This name is already used by an OpenStack environment of another tenant. Create it with another name." },
-  "NameNotAllowed": { actor: "T", class: "failed", summary: "This name is not allowed: a letter first, then lower-case letters, digits and single hyphens, 30 at most. Create it with another name." },
+  "NameNotAllowed": { actor: "T", class: "failed", summary: "This name is not allowed: a letter first, then lower-case letters, digits and single hyphens; the message says the limit. Create it again." },
   "NameTakenOnSite": { actor: "P", class: "failed", summary: "Something of this name already exists on the site and was not made by the platform. The platform team is looking at it." },
   "NamespaceNotOwned": { actor: "P", class: "failed", summary: "The tenant namespace already exists and was not created for this tenant. The platform team must remove or rename it." },
   "NamespaceOperatorImageRejected": { actor: "P", class: "failed", summary: "The requested operator version for this tenant is not allowed; the default version is used." },

@@ -28,7 +28,8 @@ class Rule(unittest.TestCase):
             self.assertEqual(names.check_name(v), "", v)
 
     def test_refused(self):
-        for v in ("", "1web", "-web", "web-", "Web", "web.prod", "web_prod", "a--b", "x" * 31, "wéb", None):
+        for v in ("", "1web", "-web", "web-", "Web", "web.prod", "web_prod", "a--b", "x" * 31, "wéb", None,
+                  "web\n", "web\nprod", " web", "web "):
             self.assertTrue(names.check_name(v), repr(v))
 
     def test_message_names_the_thing_and_the_limit(self):

@@ -106,7 +106,7 @@ class TheWalkSeesTheWrites(unittest.TestCase):
 
     def test_known_keys(self):
         for plural, path in [
-            ("platformopenshifts", ("floatingIPs", "api", "description")),
+            ("platformopenshifts", ("floatingIPs", "api", "id")),
             ("platformopenshifts", ("floatingIPs", "ingress", "id")),
             ("platformopenshifts", ("buildName",)),
             ("cloudosos", ("projectId",)),

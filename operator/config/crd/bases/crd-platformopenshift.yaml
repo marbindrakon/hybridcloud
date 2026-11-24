@@ -783,10 +783,6 @@ spec:
                         id:
                           description: Identifier of the floating IP.
                           type: string
-                        description:
-                          description: The floating IP's description on the site, written for people; the platform
-                            finds the floating IP by its identifier.
-                          type: string
                     ingress:
                       description: Floating IP of the cluster's applications (ingress).
                       type: object
@@ -796,10 +792,6 @@ spec:
                           type: string
                         id:
                           description: Identifier of the floating IP.
-                          type: string
-                        description:
-                          description: The floating IP's description on the site, written for people; the platform
-                            finds the floating IP by its identifier.
                           type: string
                 status:
                   type: string

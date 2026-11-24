@@ -82,7 +82,7 @@ def check_name(value, what="name", limit=NAME_MAX):
     """"" when value obeys the rule for names, else the sentence that tells the person what to change."""
     value = "" if value is None else str(value)
     limit = int(limit or NAME_MAX)
-    if _NAME.match(value) and "--" not in value and len(value) <= limit:
+    if _NAME.fullmatch(value) and "--" not in value and len(value) <= limit:   # the whole value: "$" lets a newline by
         return ""
     return ("The %s name '%s' is not allowed: use lower-case letters, digits and single hyphens, start with a "
             "letter, end with a letter or digit, at most %d characters." % (what, value[:80], limit))

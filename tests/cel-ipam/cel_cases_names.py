@@ -213,10 +213,10 @@ def kept_cases(run, kube):
     o = obj("PlatformOpenshift", "kept", {"type": "openstack", "openstack": {"environment": "env", "workerCount": 3}})
     rc, err = run.create(o)
     run.check("K-setup", "a cluster for the status writes", rc == 0, err)
-    fips = {"api": {"address": "192.0.2.10", "id": "f-1", "description": "OpenShift cluster web: API"},
-            "ingress": {"address": "192.0.2.11", "id": "f-2", "description": "OpenShift cluster web: ingress"}}
+    fips = {"api": {"address": "192.0.2.10", "id": "f-1"},
+            "ingress": {"address": "192.0.2.11", "id": "f-2"}}
     got = status_round_trip(run, kube, "platformopenshifts", "kept", {"floatingIPs": fips})
-    run.check("K-fip", "the floating IPs keep their description, address and id",
+    run.check("K-fip", "the floating IPs keep their address and id (the job finds them by id; it records no description)",
               (got.get("floatingIPs") or {}) == fips, json.dumps(got))
     o = obj("AAPOrg", "kept")
     rc, err = run.create(o)
