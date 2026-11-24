@@ -83,7 +83,7 @@
       Group {{ item }} on OpenShift cluster {{ cluster_cr_name | default(cluster_name, true) }} of {{ csg_entity }}
     entity_signin_realm: "{{ keycloak_realm }}"
     entity_signin_client: "{{ ocp_oidc_client_id }}"
-    entity_signin_rbac_config: "{{ platformopenshift_rbac_config | default('keycloak-sovereign-tenants-services', true) }}"
+    entity_signin_rbac_config: "{{ platformopenshift_rbac_config | default('', true) }}"
 
 # a group is granted when its access group has a directory group and the directory took its client role
 - name: The groups each binding names
