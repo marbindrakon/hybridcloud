@@ -1143,7 +1143,7 @@ class UiReadsAreDeclared(unittest.TestCase):
                               ("status.externalNetwork", "string"), ("status.placement", "string"),
                               ("status.publish", "string"), ("status.machineNetwork", "string"),
                               ("status.clusterNetwork", "string"), ("status.serviceNetwork", "string"),
-                              ("status.platformPrefixes.[]", "string"), ("status.floatingIPs.network", "string"),
+                              ("status.platformPrefixes.[]", "string"),
                               ("status.installStarted", "boolean"),
                               ("status.floatingIPs.api.address", "string"), ("status.floatingIPs.ingress.id", "string")],
         "CloudAWS": [("status.awsRegion", "string")],

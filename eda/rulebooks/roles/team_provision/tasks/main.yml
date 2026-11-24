@@ -52,6 +52,23 @@
         msg: "Team {{ team_cr_name }}: namespace {{ team_cr_namespace }} has no hybridsovereign.redhat/entity label"
       when: team_entity | length == 0
 
+    # the rule for names, for an object made before the API carried it: refused before anything is made
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items: [{value: "{{ team_entity }}", what: tenant}, {value: "{{ team_cr_name }}", what: team}]
+
+    - name: Refuse a name the rule does not allow
+      when: name_check_message | length > 0
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            team_failure_reason: NameNotAllowed
+
+        - name: Stop before anything is made
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     # the access fields: sign-in groups and resource-scoped Roles on services (access.yml)
     - name: Grant the Team's access groups
       ansible.builtin.include_tasks: access.yml
@@ -127,7 +144,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ team_failure_reason | default('EDAFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

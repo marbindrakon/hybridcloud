@@ -87,6 +87,59 @@ display name, contacts and the sites it may use are in the **tenant profile** (t
 that namespace, `oc get tenantprofile shc -n entity-<tenant> -o yaml`), available with this
 release.
 
+## Names
+
+**The rule for names.** Every name you choose for an object that reaches a cloud or a site (your
+tenant, an environment, a network, a network placement, an OpenShift cluster, an access group, a
+team setup, an app project, a cluster assignment, a Vault, a KV secrets engine, a Quay or AAP
+organization, an edge connection) follows one rule:
+
+- a letter first, then lower-case letters, digits and single hyphens (`-`), a letter or a digit
+  last; no `--`, no dots, no underscores;
+- at most **30** characters.
+
+`example-corp`, `prod`, `web-2` are allowed; `2web`, `web.prod`, `web--prod`, `Web` and a name of
+31 characters are refused. The API refuses such a name when you create the object, with the rule in
+the message (`metadata.name: Invalid value: ...`); the dashboard's forms check it as you type. A name
+cannot change later: to rename, create a new object and delete the old one. An object made before
+the rule keeps its name; its next run stops with the reason `NameNotAllowed` before it makes
+anything ([status reasons](status-reasons.md)).
+
+Two more rules:
+
+- On Google Cloud, an OpenShift cluster's name may not start with `goog` or contain `google` or a
+  word like it (`g00gle`): Google Cloud refuses such names.
+- An environment's name is unique within your tenant across the four environment types: an
+  OpenStack environment and a VM environment of your tenant cannot both be called `prod`
+  (`EnvironmentNameTaken`). Another tenant may use the same name.
+
+**What you see on each platform.** The platform names what it makes from your own names, in one
+order (tenant, then environment or network placement, then the object), joined by a character your
+names cannot contain: `_` where the platform allows it, `--` where only letters, digits and hyphens
+are allowed. Access groups keep `<tenant>.<group>`. Nothing random is added. For the tenant
+`example-corp`, the environment `prod`, the network placement `core-prod`, the cluster `web` and the
+access group `devs`:
+
+| What | Where you see it | Its name |
+|---|---|---|
+| The OpenStack project of an OpenStack environment | the OpenStack site (dashboard, CLI) | `example-corp_prod` (`status.projectName`) |
+| The network and router of a network placement on an OpenStack site | the OpenStack project | `example-corp_core-prod`; subnets `example-corp_core-prod_v4`, `example-corp_core-prod_v6` (`status.siteNetwork.name`) |
+| An access group on an OpenStack site, on a VM site, on the services cluster and on your OpenShift clusters | group lists, role bindings | `example-corp.devs` |
+| The same access group in the sign-in directory | the sign-in directory, the token's groups | `example-corp/devs` |
+| A VM environment's namespace on the OpenShift Virtualization site | the site's console | `example-corp--prod--<namespace>` |
+| An OpenShift cluster's user on an OpenStack site | the OpenStack project's users | `example-corp_prod_web` |
+| A Quay or AAP organization | Quay, the automation platform | `example-corp_<organization>` (`status.orgName`) |
+| A Vault's sign-in client | the sign-in directory | `vault_example-corp_<vault>` (`status.oidcClientId`) |
+| A network placement on AWS | the `Name` tag in your AWS account | `example-corp_core-prod` |
+| A network placement on Google Cloud | your Google Cloud project | `shc-example-corp--core-prod` |
+| DNS | DNS | `<environment>.<tenant>.<tenant DNS domain>`, a cluster's API `api.web.prod.example-corp.<tenant DNS domain>` |
+
+Where a platform's limit is shorter than the whole name (a Google Cloud network placement's objects,
+63 characters), the name is cut and ends in six characters derived from your exact names, so that
+two different names never meet; the full names are in the object's description, labels or tags.
+What the OpenShift installer names inside your project or account (`web-<five characters>-master-0`)
+is the installer's own form.
+
 ## Which project is which
 
 Four different things are called "project". In this documentation the word is always qualified.

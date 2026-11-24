@@ -99,6 +99,8 @@ class Patch(unittest.TestCase):
         self.assertEqual(patch["metadata"]["resourceVersion"], "100")
         self.assertEqual(st["delivery"], {"acknowledgedEventId": "e1", "jobId": "7", "jobStartedAt": NOW})
         self.assertEqual(st["edaJobs"][0]["status"], "running")
+        # an address of the automation platform an older caller still sends is not recorded
+        self.assertEqual(sorted(st["edaJobs"][0]), ["jobId", "name", "status", "timestamp"])
         ready = S.find_condition(st["conditions"], "Ready")
         self.assertEqual((ready["status"], ready["lastTransitionTime"]), ("True", EARLY))
         self.assertEqual(S.find_condition(st["conditions"], "Reconciling")["reason"], "JobRunning")

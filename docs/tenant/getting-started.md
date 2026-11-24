@@ -66,7 +66,10 @@ pickers of the dashboard's create forms offer those sites; on the command line:
 oc get tenantprofile shc -n entity-<tenant> -o jsonpath='{range .status.sites[*]}{.name}{"\t"}{.type}{"\t"}{.state}{"\n"}{end}'
 ```
 
-The words used on this page are explained in the [glossary](glossary.md).
+The words used on this page are explained in the [glossary](glossary.md). Every name you choose
+for an object follows one rule, and the platform builds the names you see on each cloud and site
+from yours: both are in [Names](glossary.md#names). Check a name against it before you create the
+object; a name cannot change later.
 
 ## 4. Create a network
 

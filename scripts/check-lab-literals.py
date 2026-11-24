@@ -39,6 +39,14 @@ SCOPE = [
     "eda/rulebooks/roles/platformopenshift_provision/tasks/install_*.yml",
     "eda/rulebooks/roles/platformopenshift_provision/templates/*openstack*.j2",
     "eda/rulebooks/roles/platformopenshift_provision/templates/build-values.yaml.j2",
+    # the tenant, access, team and health-check roles
+    "eda/rulebooks/roles/entity_*/**/*.yml",
+    "eda/rulebooks/roles/project_*/**/*.yml",
+    "eda/rulebooks/roles/team_*/**/*.yml",
+    "eda/rulebooks/roles/persona_*/**/*.yml",
+    "eda/rulebooks/roles/rbac_*/**/*.yml",
+    "eda/rulebooks/roles/rbacconfig_*/**/*.yml",
+    "eda/rulebooks/roles/uihealthchecker_*/**/*.yml",
 ]
 PATTERNS = {
     "lab domain": re.compile(r"signal9\.(gg|lab)|\.lab\.signal9"),

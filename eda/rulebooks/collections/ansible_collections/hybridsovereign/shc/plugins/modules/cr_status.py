@@ -31,7 +31,7 @@ options:
   action: {description: Job action (ready, failed, pending, reconciling, ...); defaults to status.status., type: str}
   partial: {description: Merge only the given fields (no delivery or job entry change)., type: bool, default: false}
   ignore_not_found: {description: Succeed without a write when the object does not exist., type: bool, default: false}
-  job: {description: Job entry recorded in status.edaJobs (name, jobId, url)., type: dict}
+  job: {description: Job entry recorded in status.edaJobs (name, jobId)., type: dict}
   give_up_attempts: {description: Failed teardown jobs after which the object is marked Stalled., type: int, default: 10}
   read_only: {description: Only read the object (returned as resource)., type: bool, default: false}
   retries: {description: Attempts on a write conflict., type: int, default: 5}
