@@ -61,16 +61,42 @@
               memberRole: "{{ aws_real.memberRoleName | default('shc-automation') }}"
               entry: automation
               tags: {shc-entity: "{{ fab_entity }}"}
-            # only the zone the environment recorded, and only while it carries the platform's tags and this
-            # tenant's: an unmarked zone of that name is refused, never deleted
+            # only the zone the environment recorded (its id), whatever its tags say (tags in the tenant's account
+            # are written for people); without a recorded id nothing is deleted
             aws_args: >-
               {{ ['zone-down', '--zone', cad_dns.zone]
                  + (['--zone-id', cad_dns.zoneId] if cad_dns.zoneId | default('', true) | length > 0 else []) }}
 
-    # an account outside the Organization was added to the hub's transit gateway share by its first placement: take
-    # it off again (a no-op for Organization accounts, which the share reaches through the OU)
-    - name: Stop sharing the hub's transit gateway with the account
+    # another environment (of this or another tenant) that records the same account still needs the share
+    - name: The other environments in the same account
+      kubernetes.core.k8s_info:
+        host: "{{ services_api_host }}"
+        api_key: "{{ services_bearer_token }}"
+        validate_certs: false
+        api_version: hybridsovereign.redhat/v1alpha1
+        kind: CloudAWS
+      register: _cad_envs
       when: cad_account | length > 0
+
+    - name: Whether another environment keeps the account in the share
+      ansible.builtin.set_fact:
+        cad_account_shared: >-
+          {%- set n = namespace(found=false) -%}
+          {%- for e in _cad_envs.resources | default([]) -%}
+            {%- if e.metadata.deletionTimestamp is not defined
+                  and not (e.metadata.name == fab_name and e.metadata.namespace == fab_namespace)
+                  and ((e.status | default({}, true)).awsAccountId | default('', true) | string) == (cad_account | string) -%}
+              {%- set n.found = true -%}
+            {%- endif -%}
+          {%- endfor -%}
+          {{ n.found }}
+      when: cad_account | length > 0
+
+    # an account outside the Organization was added to the hub's transit gateway share by its first placement: take
+    # it off again (a no-op for Organization accounts, which the share reaches through the OU), unless another
+    # environment still records the account
+    - name: Stop sharing the hub's transit gateway with the account
+      when: cad_account | length > 0 and not (cad_account_shared | default(false) | bool)
       block:
         - name: The installation's AWS realization
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
@@ -106,7 +132,10 @@
           status: ready
           ready: false
           deletionComplete: true
-          message: "Zone {{ cad_dns.zone | default('(none)') }} and its delegation removed"
+          message: >-
+            Zone {{ cad_dns.zone | default('(none)') }} and its delegation removed{{
+            '; the account stays in the hub\'s transit gateway share, as another environment records it'
+            if cad_account_shared | default(false) | bool else '' }}
 
     # the operator drops the finalizer the next time it looks at the CR: make that now
     - name: Release the finalizer now

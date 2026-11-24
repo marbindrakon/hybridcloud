@@ -158,6 +158,38 @@ class EnvironmentProject(Base):
         self.ks.projects[pid]["tags"] = [S.owner_tag(OTHER)]
         self.assertIsNone(S.resolve_project(conn_d, self.tenants, req))
 
+    def test_a_mark_the_site_refuses(self):
+        """The site's policy refuses every project write (the account may not write project tags): (nothing |
+        recorded unmarked | ours by tag) x the refusal. With nothing to show it is ours, nothing is made and the job
+        stops (CredentialsInvalid); a project ours by its record or its mark is used, the role given, and the note
+        says what could not be written."""
+        for site, recorded in (("nothing", "none"), ("unmarked", "that"), ("ours", "none"), ("ours", "that")):
+            with self.subTest(site=site, recorded=recorded):
+                self.tearDown()
+                self.ks.stop()
+                self.setUp()
+                pid, rec = self.arrange(site, recorded, NAME, OWNER, OTHER)
+                before = dict(self.ks.projects[pid]) if pid else None
+                self.ks.deny_project_writes = True
+                req = {"clouds_yaml": self.clouds, "domain": "tenants", "project": NAME, "project_id": rec,
+                       "owner": OWNER, "description": DESC}
+                if site == "nothing":
+                    with self.assertRaises(S.Refusal) as cm:
+                        S.provision(req)
+                    self.assertEqual(cm.exception.reason, "CredentialsInvalid")
+                    self.assertEqual(self.writes(), [("POST", "/v3/projects", 403)])   # the one refused write
+                    self.assertEqual([p for p in self.ks.projects.values() if p["name"] == NAME], [])
+                    continue
+                out = S.provision(req)
+                self.assertEqual(out["project"]["id"], pid)
+                self.assertIn("may not write project tags", out["project"]["markNote"])
+                self.assertEqual(self.ks.projects[pid], before)          # unchanged: the write was refused
+                self.assertTrue(self.roles_on(pid))                      # and the job went on
+        # the same site allowing the write: the mark is written and no note
+        self.ks.deny_project_writes = False
+        out = S.provision(req)
+        self.assertEqual(out["project"]["markNote"], "")
+
     def test_the_tag_obeys_keystone(self):
         tag = S.owner_tag(OWNER)
         self.assertNotIn("/", tag)
@@ -195,6 +227,18 @@ class PlatformProject(Base):
                     out = S.platform_project(self.req(rec))
                     self.assertEqual(out["created"], want == "created")
                     self.assertIn(S.owner_tag(mine), self.ks.projects[out["id"]]["tags"])
+                    self.assertEqual(out["markNote"], "")
+
+    def test_a_recorded_project_whose_mark_the_site_refuses(self):
+        pid = self.ks.add_project("hybrid-fabric", self.tenants)        # the release before's: recorded, no tag
+        self.ks.deny_project_writes = True
+        out = S.platform_project(self.req(pid))
+        self.assertEqual(out["id"], pid)
+        self.assertIn("may not write project tags", out["markNote"])
+        self.assertEqual(self.ks.projects[pid]["tags"], [])
+        with self.assertRaises(S.Refusal) as cm:                        # nothing recorded: stops, nothing made
+            S.platform_project(dict(self.req(""), name="hybrid-fabric-2"))
+        self.assertEqual(cm.exception.reason, "CredentialsInvalid")
 
 
 class DnsProject(Base):
@@ -224,6 +268,19 @@ class DnsProject(Base):
                     self.assertTrue(out["found"])
                     self.assertEqual(out["created"], want == "created")
                     self.assertIn(S.owner_tag(S.DNS_PROJECT_OWNER), self.ks.projects[out["id"]]["tags"])
+
+    def test_a_recorded_project_whose_mark_the_site_refuses(self):
+        pid = self.ks.add_project("tenant-dns", self.tenants)
+        self.ks.deny_project_writes = True
+        acct = S.Account({"clouds_yaml": self.clouds})
+        conn = acct.own_scope()
+        notes = []
+        out = S.probe_dns_project(acct, conn, conn.session.auth.get_access(conn.session).user_id, True,
+                                  {"domain": "tenants", "name": "tenant-dns", "create": True, "project_id": pid,
+                                   "description": "Tenant DNS"}, notes)
+        self.assertEqual(out["id"], pid)
+        self.assertEqual(len(notes), 1)
+        self.assertIn("may not write project tags", notes[0])
 
     def test_the_operators_own_project_is_used_as_it_is(self):
         pid = self.ks.add_project("tenant-dns", self.tenants)

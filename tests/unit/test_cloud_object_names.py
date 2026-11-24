@@ -637,6 +637,31 @@ NAMES = {"shc-entity": "acme-corp", "shc-network": "core"}
 
 @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
 @mock.patch.object(E.time, "sleep", lambda s: None) if HAVE_BOTO else (lambda c: c)
+class AwsShareStays(unittest.TestCase):
+    """CloudAWS teardown: the account leaves the hub's transit gateway share only when no other environment (of
+    this tenant or another, not being deleted) records the same account."""
+
+    def test_states(self):
+        tasks = load(os.path.join(ROLES, "cloudaws_teardown", "tasks", "main.yml"))[0]["block"]
+        decide = by_name(tasks, "Whether another environment keeps the account in the share")
+        share = by_name(tasks, "Stop sharing the hub's transit gateway with the account")
+        probe = {"ansible.builtin.set_fact": {"_down": "{{ %s }}" % share["when"]}}
+        me = {"metadata": {"name": "prod", "namespace": "entity-acme-corp"}, "status": {"awsAccountId": "111"}}
+        env = lambda name, ns, acct, deleting=False: {
+            "metadata": dict({"name": name, "namespace": ns}, **({"deletionTimestamp": "x"} if deleting else {})),
+            "status": {"awsAccountId": acct}}
+        cases = [[me],                                                       # alone: the share goes
+                 [me, env("dev", "entity-acme-corp", "111")],                 # another environment of the tenant
+                 [me, env("prod", "entity-acme", "111")],                     # another tenant, same name
+                 [me, env("dev", "entity-acme-corp", "222")],                 # another account
+                 [me, env("dev", "entity-acme-corp", "111", deleting=True)],  # the other is being deleted too
+                 [me, {"metadata": {"name": "new", "namespace": "entity-acme-corp"}}]]   # no account recorded yet
+        got = run_cases([{"ansible.builtin.set_fact": {"_cad_envs": {"resources": "{{ case }}"}}}, decide, probe],
+                        cases, "_down | bool",
+                        extra_vars={"fab_name": "prod", "fab_namespace": "entity-acme-corp", "cad_account": "111"})
+        self.assertEqual(got, [True, False, False, True, True, True])
+
+
 class HubNames(unittest.TestCase):
     def created(self, ec2, call):
         return [E.tagmap({"Tags": kw["TagSpecifications"][0]["Tags"]}) for n, kw in ec2.calls if n == call]

@@ -156,6 +156,7 @@
             {{ ('DNS zone ' ~ oso_record.dns.zone ~ ' shared with the project' ~ (', delegated from the global zone' if oso_record.dns.delegated else '') ~ '.') if (oso_record.dns | default({})).zone is defined else '' }}
             {{ oso_settings_note }}
             {{ ('Note: ' ~ oso_reader_note ~ '.') if oso_reader_note | default('', true) | length > 0 else '' }}
+            {{ ('Note: ' ~ oso_mark_note ~ '.') if oso_mark_note | default('', true) | length > 0 else '' }}
           name: "{{ cloudoso_cr_name }}"
           # shc (P7.1): the site this project lives on ('' = legacy account)
           cloudInfrastructure: "{{ oso_cloudinfra_name }}"
@@ -200,6 +201,12 @@
               status: "{{ oso_access_condition.status }}"
               reason: "{{ oso_access_condition.reason | trim }}"
               message: "{{ oso_access_condition.message | trim }}"
+            # the project is the environment's by its recorded id; a site that refuses the write of the platform's
+            # mark (a project tag) does not stop the environment: this condition says what the site account needs
+            - type: PlatformMarks
+              status: "{{ 'False' if oso_mark_note | default('', true) | length > 0 else 'True' }}"
+              reason: "{{ 'CredentialsInvalid' if oso_mark_note | default('', true) | length > 0 else 'Verified' }}"
+              message: "{{ oso_mark_note | default('', true) or 'The platform marked the project of the environment on the site.' }}"
 
     # a ready environment wakes the placements waiting for it (GA2-F4)
     - name: Wake the placements waiting for this environment

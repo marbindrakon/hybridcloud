@@ -216,24 +216,37 @@ def mark_refused(what):
                    f"team gives the site account the right to create and update projects in the domain.")
 
 
+def mark_not_written(what):
+    """The note for a project that is ours by its record (or already carries the mark) when the site refuses the
+    write of the mark or the description: reported, the job goes on."""
+    return (f"the site account may not write project tags: the {what}'s project is the platform's by its record, but "
+            f"its mark (a Keystone project tag) and description could not be written. The account needs the right to "
+            f"update projects in the domain (Keystone update_project with tags)")
+
+
 def ensure_owned_project(conn_d, domain_id, name, tag, description, recorded_id="", what="environment"):
     """Find (owned_project) or create the owner's project; its tag and description refreshed on each run.
-    Returns (project, created, how). A site that refuses the write (HTTP 403: the account's role may not create or
-    update projects with tags) is a refusal that changed nothing: Keystone writes a project and its tags in one
-    request (project_create and project_update take "tags"), and no role is given before this step."""
+    Returns (project, created, how, note). A project to create: a site that refuses the write (HTTP 403: the
+    account's role may not create projects with tags) is a refusal that changed nothing (Keystone writes a project and
+    its tags in one request, project_create takes "tags", and no role is given before this step): the mark would be
+    the only proof that the project is the platform's. A project already ours (its id recorded, or it carries the
+    mark): a refused update is not a refusal; note says what could not be written and the caller goes on."""
     project, how = owned_project(conn_d, domain_id, name, tag, recorded_id, what)
-    try:
-        if project is None:
+    if project is None:
+        try:
             project = conn_d.identity.create_project(name=name, domain_id=domain_id, description=description,
                                                      tags=[tag])
-            return project, True, "created"
-        tags, have = _tags(project), getattr(project, "description", None) or ""
-        if tag not in tags or (description and have != description):
+        except openstack.exceptions.ForbiddenException:
+            raise mark_refused(what)
+        return project, True, "created", ""
+    tags, have = _tags(project), getattr(project, "description", None) or ""
+    if tag not in tags or (description and have != description):
+        try:
             project = conn_d.identity.update_project(project, description=description or have,
                                                      tags=tags + ([tag] if tag not in tags else []))
-    except openstack.exceptions.ForbiddenException:
-        raise mark_refused(what)
-    return project, False, how
+        except openstack.exceptions.ForbiddenException:
+            return project, False, how, mark_not_written(what)
+    return project, False, how, ""
 
 
 def provision(req):
@@ -243,8 +256,8 @@ def provision(req):
     acct = Account(req)
     conn_d = acct.domain(req["domain"])
     user_id, domain_id, _ = token_info(conn_d)
-    project, created, how = ensure_owned_project(conn_d, domain_id, req["project"], owner_tag(req["owner"]),
-                                                 req.get("description", ""), req.get("project_id") or "")
+    project, created, how, mark_note = ensure_owned_project(conn_d, domain_id, req["project"], owner_tag(req["owner"]),
+                                                           req.get("description", ""), req.get("project_id") or "")
     role = conn_d.identity.find_role(req.get("role", "member"), ignore_missing=False)
     conn_d.identity.assign_project_role_to_user(project, user_id, role)
 
@@ -264,7 +277,7 @@ def provision(req):
         zone = {"id": z.id, "name": z.name}
 
     return {"project": {"id": project.id, "name": project.name, "domain_id": domain_id,
-                        "domain_name": req["domain"], "created": created, "found": how},
+                        "domain_name": req["domain"], "created": created, "found": how, "markNote": mark_note},
             "user_id": user_id, "role": role.name, "fips": fips, "legacy_app_creds_deleted": legacy,
             "auth_url": acct.auth.get("auth_url", ""), "region": acct.region, "dns_zone": zone}
 
@@ -584,9 +597,11 @@ def probe_dns_project(acct, conn, user_id, admin, dp, notes):
     if dp.get("create"):
         # the platform makes it: found by the recorded id or by the platform's tag; a project of the name the
         # platform did not make is refused (NameTakenOnSite)
-        proj, created, _ = ensure_owned_project(iconn, dom.id, dp["name"], owner_tag(DNS_PROJECT_OWNER),
-                                                dp.get("description", ""), dp.get("project_id") or "",
-                                                "site's tenant DNS")
+        proj, created, _, mark_note = ensure_owned_project(iconn, dom.id, dp["name"], owner_tag(DNS_PROJECT_OWNER),
+                                                           dp.get("description", ""), dp.get("project_id") or "",
+                                                           "site's tenant DNS")
+        if mark_note:
+            notes.append(mark_note)
     else:
         # the site's operator names a project of their own: used as it is, never changed
         proj = iconn.identity.find_project(dp["name"], domain_id=dom.id)
@@ -633,14 +648,15 @@ def platform_project(req):
             raise RuntimeError(f"project {req['name']} still holds: {', '.join(left[:10])}")
         conn.identity.delete_project(proj)
         return {"name": req["name"], "id": proj.id, "deleted": True}
-    proj, created, _ = ensure_owned_project(conn, dom.id, req["name"], tag, req.get("description", ""),
-                                            req.get("project_id") or "", "site's networks")
+    proj, created, _, mark_note = ensure_owned_project(conn, dom.id, req["name"], tag, req.get("description", ""),
+                                                       req.get("project_id") or "", "site's networks")
     member = conn.identity.find_role("member", ignore_missing=False)
     granted = False
     if not conn.identity.validate_user_has_project_role(proj, access.user_id, member):
         conn.identity.assign_project_role_to_user(proj, access.user_id, member)
         granted = True
-    return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted}
+    return {"name": proj.name, "id": proj.id, "domain_id": dom.id, "created": created, "member_granted": granted,
+            "markNote": mark_note}
 
 
 _IFACE_OWNERS = ("network:router_interface", "network:router_interface_distributed",

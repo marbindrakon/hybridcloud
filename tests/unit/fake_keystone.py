@@ -57,6 +57,9 @@ class Keystone:
         self.log = []
         self.faults = []                  # tracebacks of the fake's own errors (a test asserts there are none)
         self.long_name_lookups = []       # group lookups by a name over 64 characters (answered 500)
+        # a site whose policy refuses the account every project create and update (tags included): 403, as a
+        # policy file that keeps identity:create_project / update_project from the account's role
+        self.deny_project_writes = False
         self.fail_next = []               # [(method, path prefix, status, message)] answered once, in order
         self.on_request = None            # optional hook(method, path) run before a request is handled
         self.secrets_seen = []            # every password set and credential secret made (a test's secret hunt)
@@ -415,7 +418,7 @@ class Keystone:
             return 200, {"projects": ps}, None
         if n == 1 and method == "POST":
             p = body.get("project") or {}
-            if not self._may_domain(tok, p.get("domain_id")):
+            if not self._may_domain(tok, p.get("domain_id")) or self.deny_project_writes:
                 return self._forbidden("identity:create_project")
             if len(p.get("name") or "") > 64:
                 return self._err(400, f"Invalid input for field/attribute name. Value: {p.get('name')}")
@@ -436,7 +439,7 @@ class Keystone:
             # project_update (keystone/resource/schema.py): name, description, enabled, tags among others
             if not proj:
                 return self._err(404, "Could not find project")
-            if not self._may_domain(tok, proj["domain_id"]):
+            if not self._may_domain(tok, proj["domain_id"]) or self.deny_project_writes:
                 return self._forbidden("identity:update_project")
             p = body.get("project") or {}
             bad = self._bad_tags(p.get("tags"))

@@ -38,6 +38,17 @@
     msg: "{{ fab_fail_msg if (os_result.reason | default('', true)) | length > 0 else 'OpenStack platform-project failed: ' ~ os_result.error }}"
   when: os_result.error is defined
 
+# the platform project is the gateway's by the id its status records: a site that refuses the write of its mark (a
+# project tag) does not stop the gateway; the message and the PlatformMarks condition say what the account needs
+- name: The platform's mark on the platform project
+  ansible.builtin.set_fact:
+    cg_mark_note: "{{ os_result.markNote | default('', true) }}"
+    cg_mark_conditions:
+      - type: PlatformMarks
+        status: "{{ 'False' if os_result.markNote | default('', true) | length > 0 else 'True' }}"
+        reason: "{{ 'CredentialsInvalid' if os_result.markNote | default('', true) | length > 0 else 'Verified' }}"
+        message: "{{ os_result.markNote | default('', true) or 'The platform marked its project on the site.' }}"
+
 - name: Record the site side
   ansible.builtin.set_fact:
     cg_site_extra: {project: {name: "{{ os_result.name }}", id: "{{ os_result.id }}"}}

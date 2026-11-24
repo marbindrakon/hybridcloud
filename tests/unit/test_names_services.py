@@ -262,6 +262,31 @@ class Decisions(unittest.TestCase):
             self.assertIn("kce_recorded:", body, path)
         self.assertNotIn("kce_adopt_unmarked", text(KCE))
 
+    def test_a_teardown_whose_recorded_connection_is_gone(self):
+        """(organization recorded | not) x (the recorded connection: there | gone | not readable): with something
+        recorded and no connection the teardown stops, names what it left, and never says deleted (the rescue keeps
+        the finalizer with TeardownFailed)."""
+        for path, kind, conn_var, step in ((QUAY_T, "QuayOrg", "_quay_config", "Stop when the recorded registry connection is gone"),
+                                           (AAP_T, "AAPOrg", "_aap_config", "Stop when the recorded automation connection is gone")):
+            stop = by_name(load(path), step)
+            probe = {"ansible.builtin.set_fact": {"_stops": "{{ %s }}" % stop["when"], "_msg": stop["ansible.builtin.fail"]["msg"]}}
+            cases = [{"org": WANTED, "conn": {"resources": [{"metadata": {"name": "c"}}]}},
+                     {"org": WANTED, "conn": {"resources": []}},
+                     {"org": WANTED, "conn": {"failed": True}},
+                     {"org": "", "conn": {"resources": []}}]
+            pre = [{"ansible.builtin.set_fact": {conn_var: "{{ case.conn }}", "fin_org_name": "{{ case.org }}",
+                                                 "fin_org_id": ""}}]
+            got = run_cases(pre + [probe], cases, "{'stops': _stops | bool, 'msg': _msg}",
+                            extra_vars={"quayorg_cr_name": "web", "aaporg_cr_name": "web",
+                                        "quayorg_spec": {"quayConfig": "registry-a"}, "aaporg_spec": {"aapConfig": "aap-a"}})
+            self.assertEqual([g["stops"] for g in got], [False, True, True, False], kind)
+            self.assertIn("no longer exists", got[1]["msg"])
+            self.assertIn("could not be read", got[2]["msg"])
+            self.assertIn(WANTED + " was left in place", got[1]["msg"])
+            self.assertNotIn("deleted by", got[1]["msg"])
+            names_ = [t.get("name") for t in load(path)[0]["block"]]
+            self.assertLess(names_.index(step), names_.index("Get current timestamp for status"), kind)
+
     def test_teardowns_delete_what_status_records(self):
         # registry: the recorded organization goes whatever its address; nothing recorded, nothing is read or deleted
         pre = [{"ansible.builtin.set_fact": {"_fin_org": "{{ case }}"}}]
