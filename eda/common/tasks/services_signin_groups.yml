@@ -100,7 +100,7 @@
 
 - name: Refuse a realm without the sign-in client
   ansible.builtin.fail:
-    msg: "{{ ssg_label | default(ssg_owner) }}: the tenant realm {{ ssg_realm }} has no sign-in client {{ ssg_client_id }}"
+    msg: "{{ ssg_label | default(ssg_owner) }}: the sign-in directory has no sign-in client {{ ssg_client_id }} yet"
   when: _ssg_client.json | length == 0
 
 - name: Read the client roles
