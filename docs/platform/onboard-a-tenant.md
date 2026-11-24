@@ -62,9 +62,9 @@ spec:
       - example-auditors
 ```
 
-- **Name**: lowercase letters, digits and `-`, no dots (the sign-in groups use the first dot to
-  separate tenant and group), no `--`, at most 56 characters (so that `entity-<name>` is a valid
-  namespace name). The name cannot change later; `displayName` can.
+- **Name**: the rule for names ([Names on the platforms](platform-names.md)): a letter first, then
+  lower-case letters, digits and single hyphens, a letter or a digit last, at most 30 characters. The
+  tenant namespace is `entity-<name>`. The name cannot change later; `displayName` can.
 - `description` and `billingID` are required; `billingID` becomes a label on the tenant
   namespace.
 - `displayName`, `contacts` (up to 10, each a name with an optional email or https URL) and
