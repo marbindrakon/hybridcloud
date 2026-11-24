@@ -118,9 +118,86 @@
       ansible.builtin.set_fact:
         entity_name: "{{ quayorg_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/entity'] }}"
 
-    - name: Set org name with entity prefix
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ entity_name }}", what: tenant}
+          - {value: "{{ quayorg_cr_name }}", what: registry organization}
+
+    - name: Refuse a name that breaks the rule for names
+      when: name_check_message | length > 0
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            tool_org_failure_reason: NameNotAllowed
+
+        - name: Refuse a name that breaks the rule for names (stop)
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
+    # the registry takes its organization's contact address as the only field it shows back besides the name, so
+    # that address is the platform's mark: <organization>@<the platform's mail domain> (a setting, no default)
+    - name: Require the registry organizations' mail domain
+      ansible.builtin.fail:
+        msg: >-
+          The setting REGISTRY_ORG_MAIL_DOMAIN of the automation configuration is not set: the registry organization
+          needs the platform's mail domain for its contact address.
+      when: quayorg_mail_domain | default('', true) | length == 0
+
+    # an organization keeps the name its status records; a new one gets <tenant>_<name> from the names function
+    - name: The organization's recorded name
       ansible.builtin.set_fact:
-        org_name: "{{ entity_name }}-{{ quayorg_cr_name }}"
+        quayorg_recorded_name: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).orgName | default('', true) }}"
+
+    - name: The organization's name for a new registry organization
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+      vars:
+        names_request: {action: name, kind: registry-organization, parts: ["{{ entity_name }}", "{{ quayorg_cr_name }}"]}
+      when: quayorg_recorded_name | length == 0
+
+    - name: Set the organization's name and the platform's mark
+      ansible.builtin.set_fact:
+        org_name: "{{ quayorg_recorded_name or names_result.name }}"
+        quayorg_mark_email: "{{ (quayorg_recorded_name or names_result.name) ~ '@' ~ quayorg_mail_domain }}"
+
+    - name: Read the organization in Quay
+      ansible.builtin.uri:
+        url: "{{ quay_url }}/api/v1/organization/{{ org_name | urlencode }}"
+        method: GET
+        headers:
+          Authorization: "Bearer {{ quay_api_token }}"
+        validate_certs: false
+        status_code: [200, 404]
+      register: _org_existing
+      retries: 3
+      delay: 10
+      until: _org_existing.status | default(0) in [200, 404]
+
+    # ours: it carries our mark; adopt: it carries no mark and this object's status records the name (made before
+    # the mark); create: nothing of the name; refuse: anything else (never taken over, never deleted)
+    - name: "Decide: ours, adopt, create or refuse"
+      vars:
+        _email: "{{ (_org_existing.json | default({}, true)).email | default('', true) if (_org_existing.status | int) == 200 else '' }}"
+      ansible.builtin.set_fact:
+        quayorg_decision: >-
+          {{ 'create' if (_org_existing.status | int) == 404
+             else ('ours' if _email == quayorg_mark_email
+                   else ('adopt' if _email | length == 0 and quayorg_recorded_name == org_name else 'refuse')) }}
+
+    - name: Refuse an organization of the wanted name that this platform did not make for this object
+      when: quayorg_decision == 'refuse'
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            tool_org_failure_reason: NameTakenOnSite
+
+        - name: Refuse an organization of the wanted name that this platform did not make for this object (stop)
+          ansible.builtin.fail:
+            msg: >-
+              The registry already has an organization named {{ org_name }} that was not made for registry organization
+              {{ quayorg_cr_name }}; it is left untouched. A platform administrator renames or removes it, then this
+              object is reconciled again.
 
     - name: Create organization in Quay
       ansible.builtin.uri:
@@ -132,15 +209,56 @@
         body_format: json
         body:
           name: "{{ org_name }}"
-          email: "{{ org_name }}@sovereign.local"
-          description: "Sovereign tenant org for entity {{ entity_name }}"
+          email: "{{ quayorg_mark_email }}"
         validate_certs: false
         status_code: [200, 201, 400]
       register: _org_create
       retries: 3
       delay: 10
       until: _org_create.status | default(0) != 503
-      ignore_errors: true
+      when: quayorg_decision == 'create'
+
+    # 400: a user or an organization of the name appeared meanwhile (or the registry refused the name)
+    - name: Refuse when the registry did not create the organization
+      when: quayorg_decision == 'create' and (_org_create.status | default(0) | int) not in [200, 201]
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            tool_org_failure_reason: NameTakenOnSite
+
+        - name: Refuse when the registry did not create the organization (stop)
+          ansible.builtin.fail:
+            msg: >-
+              The registry did not create organization {{ org_name }} for registry organization {{ quayorg_cr_name }}:
+              {{ (_org_create.json | default({}, true)).error_message | default((_org_create.json | default({}, true)).message
+                 | default('the name is taken', true), true) }}. Nothing was taken over.
+
+    - name: Write the platform's mark on an organization made before the mark
+      ansible.builtin.uri:
+        url: "{{ quay_url }}/api/v1/organization/{{ org_name | urlencode }}"
+        method: PUT
+        headers:
+          Authorization: "Bearer {{ quay_api_token }}"
+          Content-Type: application/json
+        body_format: json
+        body:
+          email: "{{ quayorg_mark_email }}"
+        validate_certs: false
+        status_code: [200]
+      when: quayorg_decision == 'adopt'
+
+    # recorded at once, so a later failure or the teardown finds it by this name and never rebuilds it
+    - name: Record the organization's name
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: quayorgs
+        cr_name: "{{ quayorg_cr_name }}"
+        cr_namespace: "{{ quayorg_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          orgName: "{{ org_name }}"
+      when: quayorg_recorded_name != org_name
 
     - name: Resolve admin RBAC groups
       kubernetes.core.k8s_info:

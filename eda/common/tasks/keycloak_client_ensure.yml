@@ -5,8 +5,14 @@
 #
 # Inputs: kce_url (Keycloak base URL), kce_realm, kce_token (a clients-purpose realm token), kce_client (clientId),
 #   kce_name, kce_redirect_uris (list), kce_web_origins (default ['+']), kce_root_url (optional),
-#   kce_attributes (optional dict, create only)
-# Sets: kce_client_uuid, kce_changed (list of field names converged)
+#   kce_attributes (optional dict, create only),
+#   kce_owner (the object the client is made for, Kind/<namespace>/<name>): written as the client attribute
+#     hybridsovereign.redhat/owner, the platform's mark. A client of this id that carries another owner's mark is
+#     refused, never converged (kce_refused true, the job fails; the caller writes reason NameTakenOnSite);
+#   kce_adopt_unmarked (default false): a client of this id without any mark is taken and marked; else it is refused
+#     too (a caller passes true only for a client id its own status records, or for a platform tool's client)
+# Sets: kce_client_uuid, kce_changed (list of field names converged), kce_refused, kce_decision
+#   (create | ours | adopt | refuse; ours when kce_owner is not given)
 - name: Load the groups mapper definition
   ansible.builtin.include_vars:
     file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
@@ -27,6 +33,32 @@
     status_code: [200]
   register: _kce_lookup
 
+- name: "Decide: ours, adopt, create or refuse ({{ kce_client }})"
+  vars:
+    _found: "{{ _kce_lookup.json | default([], true) | selectattr('clientId', 'equalto', kce_client) | list }}"
+    _mark: >-
+      {{ (((_found | first).attributes | default({}, true))['hybridsovereign.redhat/owner'] | default('', true))
+         if _found | length > 0 else '' }}
+  ansible.builtin.set_fact:
+    kce_refused: false
+    kce_decision: >-
+      {{ 'create' if _found | length == 0
+         else ('ours' if (kce_owner | default('', true) | length == 0) or _mark == kce_owner
+               else ('adopt' if _mark | length == 0 and kce_adopt_unmarked | default(false) | bool else 'refuse')) }}
+
+- name: Refuse a client of this id made for something else ({{ kce_client }})
+  when: kce_decision == 'refuse'
+  block:
+    - name: Note the refusal
+      ansible.builtin.set_fact:
+        kce_refused: true
+
+    - name: Refuse a client of this id made for something else (stop)
+      ansible.builtin.fail:
+        msg: >-
+          The sign-in directory already has a client {{ kce_client }} that was not made for this object; it is left
+          untouched. A platform administrator renames or removes it, then this object is reconciled again.
+
 - name: Create {{ kce_client }}
   ansible.builtin.uri:
     url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients"
@@ -38,11 +70,45 @@
           'publicClient': false, 'clientAuthenticatorType': 'client-secret', 'standardFlowEnabled': true,
           'implicitFlowEnabled': false, 'directAccessGrantsEnabled': false, 'serviceAccountsEnabled': false,
           'redirectUris': kce_redirect_uris, 'webOrigins': kce_web_origins | default(['+']),
-          'attributes': kce_attributes | default({}), 'protocolMappers': [keycloak_group_mapper]}
+          'attributes': (kce_attributes | default({}))
+                        | combine({'hybridsovereign.redhat/owner': kce_owner} if kce_owner | default('', true) | length > 0 else {}),
+          'protocolMappers': [keycloak_group_mapper]}
          | combine({'rootUrl': kce_root_url} if (kce_root_url | default('')) | length > 0 else {}) }}
     validate_certs: false
     status_code: [201, 409]
-  when: _kce_lookup.json | length == 0
+  register: _kce_create
+  when: kce_decision == 'create'
+
+# 409: a client of this id appeared meanwhile; it is read and decided on like one found before
+- name: Re-read {{ kce_client }} after a conflict
+  ansible.builtin.uri:
+    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients?clientId={{ kce_client | urlencode }}"
+    headers: {Authorization: "Bearer {{ kce_token }}"}
+    validate_certs: false
+    status_code: [200]
+  register: _kce_relookup
+  when: kce_decision == 'create' and (_kce_create.status | default(0) | int) == 409
+
+- name: Refuse a client that appeared meanwhile and carries no mark of this object ({{ kce_client }})
+  vars:
+    _found: "{{ _kce_relookup.json | default([], true) | selectattr('clientId', 'equalto', kce_client) | list }}"
+    _mark: >-
+      {{ (((_found | first).attributes | default({}, true))['hybridsovereign.redhat/owner'] | default('', true))
+         if _found | length > 0 else '' }}
+  when:
+    - kce_decision == 'create' and (_kce_create.status | default(0) | int) == 409
+    - kce_owner | default('', true) | length > 0 and _mark != kce_owner
+  block:
+    - name: Note the refusal
+      ansible.builtin.set_fact:
+        kce_refused: true
+        kce_decision: refuse
+
+    - name: Refuse a client that appeared meanwhile (stop)
+      ansible.builtin.fail:
+        msg: >-
+          The sign-in directory already has a client {{ kce_client }} that was not made for this object; it is left
+          untouched. A platform administrator renames or removes it, then this object is reconciled again.
 
 - name: Read {{ kce_client }}
   ansible.builtin.uri:
@@ -62,6 +128,10 @@
       {{ {'redirectUris': kce_redirect_uris, 'webOrigins': kce_web_origins | default(['+']),
           'directAccessGrantsEnabled': false, 'standardFlowEnabled': true, 'implicitFlowEnabled': false}
          | combine({'rootUrl': kce_root_url} if (kce_root_url | default('')) | length > 0 else {}) }}
+    _attrs: "{{ _cur.attributes | default({}, true) }}"
+    _want_attrs: >-
+      {{ _attrs | combine({'hybridsovereign.redhat/owner': kce_owner})
+         if kce_owner | default('', true) | length > 0 else _attrs }}
   ansible.builtin.set_fact:
     kce_client_uuid: "{{ _cur.id }}"
     kce_desired: "{{ _want }}"
@@ -72,7 +142,9 @@
           {%- if (_cur[k] | default([], true) | sort | list) != (v | sort | list) -%}{%- set _ = out.append(k) -%}{%- endif -%}
         {%- elif _cur[k] | default(none) != v -%}{%- set _ = out.append(k) -%}{%- endif -%}
       {%- endfor -%}
+      {%- if _want_attrs != _attrs -%}{%- set _ = out.append('owner mark') -%}{%- endif -%}
       {{ out }}
+    kce_desired_attributes: "{{ _want_attrs }}"
     kce_mapper: "{{ (_cur.protocolMappers | default([]) | selectattr('name', 'equalto', keycloak_group_mapper.name) | list + [{}]) | first }}"
 
 - name: Converge {{ kce_client }}
@@ -81,7 +153,7 @@
     method: PUT
     headers: {Authorization: "Bearer {{ kce_token }}", Content-Type: application/json}
     body_format: json
-    body: "{{ _kce_client.json[0] | combine(kce_desired) }}"
+    body: "{{ _kce_client.json[0] | combine(kce_desired) | combine({'attributes': kce_desired_attributes}) }}"
     validate_certs: false
     status_code: [204]
   when: kce_changed | length > 0

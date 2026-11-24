@@ -256,15 +256,10 @@
         namespace: "{{ vault_cr_namespace }}"
         labels:
           app.kubernetes.io/name: "{{ vault_instance_name }}"
-      spec:
-        to:
-          kind: Service
-          name: "{{ vault_svc_name }}"
-        port:
-          targetPort: http
-        tls:
-          termination: edge
-          insecureEdgeTerminationPolicy: Redirect
+      spec: >-
+        {{ {'to': {'kind': 'Service', 'name': vault_svc_name}, 'port': {'targetPort': 'http'},
+            'tls': {'termination': 'edge', 'insecureEdgeTerminationPolicy': 'Redirect'}}
+           | combine({'subdomain': vault_route_subdomain} if vault_route_subdomain | default('', true) | length > 0 else {}) }}
 
 - name: Wait for Vault pod readiness
   kubernetes.core.k8s_info:
@@ -283,6 +278,7 @@
   delay: 10
   until: vault_pods.resources | length > 0
 
+# a Route with a subdomain gets its host from the router that admits it (status.ingress), not in spec.host
 - name: Get Vault Route host
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -293,9 +289,21 @@
     name: "{{ vault_instance_name }}"
     namespace: "{{ vault_cr_namespace }}"
   register: vault_route
+  retries: 12
+  delay: 5
+  until: >-
+    vault_route.resources | length > 0
+    and ((vault_route.resources[0].spec.host | default('', true))
+         or (((vault_route.resources[0].status | default({}, true)).ingress | default([], true) | first | default({}, true)).host
+             | default('', true))) | length > 0
 
 - name: Set Vault URLs
+  vars:
+    _host: >-
+      {{ vault_route.resources[0].spec.host | default('', true)
+         or (((vault_route.resources[0].status | default({}, true)).ingress | default([], true) | first | default({}, true)).host
+             | default('', true)) }}
   ansible.builtin.set_fact:
     vault_internal_url: "http://{{ vault_svc_name }}.{{ vault_cr_namespace }}.svc:8200"
-    vault_external_url: "https://{{ vault_route.resources[0].spec.host }}"
-    vault_api_url: "https://{{ vault_route.resources[0].spec.host }}"
+    vault_external_url: "https://{{ _host | trim }}"
+    vault_api_url: "https://{{ _host | trim }}"

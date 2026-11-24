@@ -4,3 +4,8 @@
 # service has this id and the registry has exactly one OIDC login service, that one is used; else the QuayConfig's
 # client.
 quay_login_service_id: rhbk
+
+# The platform's mail domain: a registry organization's contact address is <organization>@<this domain>, and that
+# address is the platform's mark on the organizations it makes. Set by the automation configuration
+# (REGISTRY_ORG_MAIL_DOMAIN); no default, a job without it fails with the setting's name.
+quayorg_mail_domain: ""

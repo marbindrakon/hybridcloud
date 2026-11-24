@@ -1,4 +1,3 @@
 ---
 keycloak_internal_url: "{{ lookup('env', 'KEYCLOAK_INTERNAL_URL') }}"
-keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"
 aap_gateway_internal_url: "{{ lookup('env', 'AAP_GATEWAY_INTERNAL_URL') | default('http://sovereign-aap.aap.svc:80', true) }}"

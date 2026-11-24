@@ -1,4 +1,13 @@
 ---
+# The mount's description is the platform's mark: it ends with "(VaultKV <namespace>/<name>)". A path already in use
+# (the create answers 400) is this object's only with that mark, or with no description when this object's status
+# records the path (made before the mark); any other mount there, a reserved path included, is refused
+# (NameTakenOnSite) and left as it is, and no policy is written for it.
+- name: The secrets path's mark
+  ansible.builtin.set_fact:
+    kv_mark: "(VaultKV {{ vaultkv_cr_namespace }}/{{ vaultkv_cr_name }})"
+    kv_recorded_path: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).kvPath | default('', true) }}"
+
 - name: Enable KV v2 secrets engine
   ansible.builtin.uri:
     url: "{{ vault_url }}/v1/sys/mounts/{{ kv_path }}"
@@ -8,10 +17,77 @@
     body_format: json
     body:
       type: kv
+      description: "Secrets path {{ vaultkv_cr_name }}, made by the platform {{ kv_mark }}"
       options:
         version: "2"
     validate_certs: false
     status_code: [200, 204, 400]
+  register: _kv_mount_create
+  no_log: true
+
+- name: Read the mount already at the path
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/sys/mounts/{{ kv_path }}"
+    method: GET
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    validate_certs: false
+    status_code: [200, 400, 403, 404]
+  register: _kv_mount_existing
+  no_log: true
+  when: (_kv_mount_create.status | int) == 400
+
+- name: "Decide: ours, adopt, create or refuse"
+  vars:
+    _m: "{{ (_kv_mount_existing.json | default({}, true)).data | default(_kv_mount_existing.json | default({}, true), true) }}"
+    _desc: "{{ _m.description | default('', true) | trim }}"
+    _kv2: "{{ (_m.type | default('')) == 'kv' and ((_m.options | default({}, true)).version | default('') | string) == '2' }}"
+  ansible.builtin.set_fact:
+    kv_decision: >-
+      {{ 'create' if (_kv_mount_create.status | int) in [200, 204]
+         else ('refuse' if (_kv_mount_existing.status | default(0) | int) != 200 or not (_kv2 | bool)
+               else ('ours' if _desc.endswith(kv_mark)
+                     else ('adopt' if _desc | length == 0 and kv_recorded_path == kv_path else 'refuse'))) }}
+
+- name: Refuse a path in use by something this object did not make
+  when: kv_decision == 'refuse'
+  block:
+    - name: The reason of the refusal
+      ansible.builtin.set_fact:
+        tool_org_failure_reason: NameTakenOnSite
+
+    - name: Refuse a path in use by something this object did not make (stop)
+      ansible.builtin.fail:
+        msg: >-
+          The secrets store already has something at the path {{ kv_path }} that was not made for this secrets path;
+          it is left untouched. Choose another name for the secrets path.
+
+- name: Write the platform's mark on a path made before the mark
+  ansible.builtin.uri:
+    url: "{{ vault_url }}/v1/sys/mounts/{{ kv_path }}/tune"
+    method: POST
+    headers:
+      X-Vault-Token: "{{ vault_root_token }}"
+    body_format: json
+    body:
+      description: "Secrets path {{ vaultkv_cr_name }}, made by the platform {{ kv_mark }}"
+    validate_certs: false
+    status_code: [200, 204]
+  no_log: true
+  when: kv_decision == 'adopt'
+
+# recorded at once: the teardown removes this path (with the mark), never one rebuilt from the object's name
+- name: Record the secrets path
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: vaultkvs
+    cr_name: "{{ vaultkv_cr_name }}"
+    cr_namespace: "{{ vaultkv_cr_namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      kvPath: "{{ kv_path }}"
+  when: kv_recorded_path != kv_path
 
 - name: Resolve admin Rbac groups from Keycloak
   when: vaultkv_spec.vaultAdminRbac is defined and vaultkv_spec.vaultAdminRbac | length > 0

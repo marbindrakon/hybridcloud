@@ -1,0 +1,4 @@
+---
+# The platform's mail domain (the same setting as quayorg_provision): only an organization whose contact address is
+# <organization>@<this domain> is deleted. Set by the automation configuration (REGISTRY_ORG_MAIL_DOMAIN).
+quayorg_mail_domain: ""

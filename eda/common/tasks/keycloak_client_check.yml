@@ -24,7 +24,7 @@
       ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
       vars:
         krt_purpose: clients
-        krt_rbac_config: "{{ kcc_rbac_config | default('', true) or 'keycloak-sovereign-tenants-services' }}"
+        krt_rbac_config: "{{ kcc_rbac_config | default('', true) }}"
         krt_url: "{{ _kcc_url }}"
         krt_token_fact: _kcc_token
 

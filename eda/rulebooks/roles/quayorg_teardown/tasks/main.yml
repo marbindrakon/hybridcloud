@@ -25,25 +25,10 @@
       ansible.builtin.set_fact:
         quayorg_spec: "{{ quayorg_spec | combine({'quayConfig': resolved_config_name}) }}"
 
-    - name: Read entity Namespace for teardown
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: v1
-        kind: Namespace
-        name: "{{ quayorg_cr_namespace }}"
-      register: _fin_target_ns
-      ignore_errors: true
-
-    - name: Derive entity-prefixed org name
+    # the name the provision recorded; nothing recorded = the provision never made or kept an organization
+    - name: The organization's recorded name
       ansible.builtin.set_fact:
-        fin_entity_name: "{{ _fin_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | default('') }}"
-      when: _fin_target_ns.resources | default([]) | length > 0
-
-    - name: Build org name for Quay cleanup
-      ansible.builtin.set_fact:
-        fin_org_name: "{{ (fin_entity_name ~ '-' ~ quayorg_cr_name) if (fin_entity_name | default('') | length > 0) else quayorg_cr_name }}"
+        fin_org_name: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).orgName | default('', true) }}"
 
     - name: Read QuayConfig
       kubernetes.core.k8s_info:
@@ -59,17 +44,44 @@
       ignore_errors: true
 
     - name: Delete Quay org
-      when: _quay_config.resources | default([]) | length > 0
+      when: _quay_config.resources | default([]) | length > 0 and fin_org_name | length > 0
       block:
+        - name: Require the registry organizations' mail domain
+          ansible.builtin.fail:
+            msg: >-
+              The setting REGISTRY_ORG_MAIL_DOMAIN of the automation configuration is not set: without it the
+              platform cannot tell its own registry organization from another of the same name.
+          when: quayorg_mail_domain | default('', true) | length == 0
+
         # the same credentials and URL the provision role uses (central Vault KV quay-services-admin); the
         # QuayConfig's spec.secret is a legacy pointer without a token, so the delete below ran with an undefined
         # token while the deletion was still reported complete
         - name: Load Quay admin credentials from Vault
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_quay_admin_credentials.yml"
 
-        - name: Delete organization from Quay
+        - name: Read the organization in Quay
           ansible.builtin.uri:
-            url: "{{ quay_url }}/api/v1/organization/{{ fin_org_name }}"
+            url: "{{ quay_url }}/api/v1/organization/{{ fin_org_name | urlencode }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ quay_api_token }}"
+            validate_certs: false
+            status_code: [200, 404]
+          register: _fin_org
+
+        # only an organization with the platform's mark (or none, made before the mark) under the recorded name
+        - name: "Decide: delete or leave"
+          vars:
+            _email: "{{ (_fin_org.json | default({}, true)).email | default('', true) if (_fin_org.status | int) == 200 else '' }}"
+          ansible.builtin.set_fact:
+            quayorg_fin_decision: >-
+              {{ 'gone' if (_fin_org.status | int) == 404
+                 else ('delete' if _email in [fin_org_name ~ '@' ~ quayorg_mail_domain, ''] else 'leave') }}
+
+        - name: Delete organization from Quay
+          when: quayorg_fin_decision == 'delete'
+          ansible.builtin.uri:
+            url: "{{ quay_url }}/api/v1/organization/{{ fin_org_name | urlencode }}"
             method: DELETE
             headers:
               Authorization: "Bearer {{ quay_api_token }}"
@@ -93,7 +105,10 @@
           ready: false
           deletionComplete: true
           lastReconciledAt: "{{ quayorg_delete_transition_time }}"
-          message: QuayOrg {{ quayorg_cr_name }} deleted by EDA
+          message: >-
+            {{ ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted by EDA') if quayorg_fin_decision | default('') != 'leave'
+               else ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted; the registry organization ' ~ fin_org_name
+                     ~ ' does not carry the platform\'s mark and was left untouched') }}
 
   rescue:
     - name: Mark QuayOrg delete as failed on services cluster
