@@ -93,6 +93,9 @@
             name: "oidc-static-{{ cb_app_name }}"
             namespace: "{{ cb_issuer_namespace }}"
             labels:
+              hybridsovereign.redhat/oidc-static: "true"
+              hybridsovereign.redhat/oidc-name: "{{ cb_app_name }}"
+              # the keys of the release before as well, for one release (the issuer's sync selects either)
               shc.signal9.gg/oidc-static: "true"
               shc.signal9.gg/oidc-name: "{{ cb_app_name }}"
               app.kubernetes.io/managed-by: eda-platformopenshift
@@ -193,9 +196,18 @@
         shc_step: "Prepare the cluster's identity on AWS"
         aws_helper: shc_aws_cluster.py
         aws_config: "{{ cb_aws_cfg }}"
+        aws_soft: true
         aws_args: [sts-up, --cluster, "{{ cb_app_name }}", --issuer, "{{ cb_issuer }}",
                    --release, "{{ _cb_imageset.resources[0].spec.releaseImage }}",
                    --manifests-dir, "/tmp/{{ cb_app_name }}-manifests"]
+
+    - name: A name on AWS that is not this cluster's
+      ansible.builtin.include_tasks: cloud_identity_refusal.yml
+      vars:
+        shc_step: "Prepare the cluster's identity on AWS"
+        cir_error: "{{ aws_error }}"
+        cir_result: "{{ aws_result }}"
+        cir_cloud: AWS
 
     - name: Keep the STS result
       ansible.builtin.set_fact:

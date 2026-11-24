@@ -1,7 +1,12 @@
 ---
 # A network or an environment that became ready wakes the NetworkPlacements waiting for it (their Ready reason
 # WaitingForDependencies, or status.waitingFor naming it), so they do not wait for their reconcilePeriod.
-# inputs: wp_kind (HybridNetwork | CloudOSO | CloudVirt | CloudAWS | CloudGCP), wp_name, wp_namespace
+# inputs: wp_kind (HybridNetwork | CloudOSO | CloudVirt | CloudAWS | CloudGCP), wp_name, wp_namespace;
+#   wp_compare (default false) with wp_serves ({network: [site namespaces]}): an environment says which site
+#   namespaces it has on each network now. A Ready placement on it whose status.namespaces are not those is woken
+#   too: a Ready placement publishes nothing by itself, so a namespace that came (one added, or the environment
+#   deleted and made again) would never get what a placement gives it. Compared by what both record, not by what
+#   changed in this run, so a wake that was lost is made up for by the environment's next ready run.
 - name: "List the placements that may wait for {{ wp_kind ~ ' ' ~ wp_name }}"
   kubernetes.core.k8s_info:
     host: "{{ services_api_host }}"
@@ -27,8 +32,11 @@
                   and (spec.backend | default({}, true)).name | default('') == wp_name) -%}
         {%- set waits = (ready.reason | default('') == 'WaitingForDependencies')
               or (st.waitingFor | default([], true) | select('match', (wp_kind ~ ' ' ~ wp_name ~ ' ') | regex_escape) | list | length > 0) -%}
-        {%- if names_it and waits and p.metadata.deletionTimestamp is not defined
-              and (st.status | default('') == 'pending' or st.phase | default('') == 'Waiting') -%}
+        {%- set behind = (wp_compare | default(false) | bool) and st.status | default('') == 'ready'
+              and (st.namespaces | default([], true) | sort | list)
+                  != ((wp_serves | default({}, true))[spec.network | default('')] | default([], true) | sort | list) -%}
+        {%- if names_it and p.metadata.deletionTimestamp is not defined
+              and (behind or (waits and (st.status | default('') == 'pending' or st.phase | default('') == 'Waiting'))) -%}
           {%- set _ = out.append({'kind': 'NetworkPlacement', 'namespace': wp_namespace, 'name': p.metadata.name}) -%}
         {%- endif -%}
       {%- endfor -%}

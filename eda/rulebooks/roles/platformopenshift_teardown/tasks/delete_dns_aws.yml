@@ -1,5 +1,5 @@
 ---
-# Route53 records of a cluster: AWS clusters (the slug zone) and Route53 OpenStack environments
+# Route53 records of a cluster: AWS clusters (the environment's zone) and Route53 OpenStack environments
 # (the records provision recorded). shc (§11.6 phase C): credentials come straight from Vault
 # (upstream's temporary ExternalSecret used a bare k8s call and was never deleted), and a failed
 # delete fails the job instead of being ignored.

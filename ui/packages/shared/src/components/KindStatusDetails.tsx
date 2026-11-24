@@ -28,7 +28,7 @@ import { useTranslation } from '../i18n';
 import { displayText, objectLabel } from '../i18n/vocabulary';
 import { formatRelativeTime } from '../list/listColumns';
 import { deletionBlockers } from '../status/phase';
-import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE } from '../security/tenantHiddenPaths';
+import { TENANT_HIDDEN_PATHS, TENANT_SECRET_KEY_RE, filterTenantStatus } from '../security/tenantHiddenPaths';
 import { ToolSignInPanel } from './ToolSignInPanel';
 import { Ipv6GuestReference } from './Ipv6GuestReference';
 import { useSiteIpv6Caps } from '../hooks/ipv6';
@@ -81,10 +81,9 @@ export const COMMON_STATUS_KEYS = ['waitingFor', 'deletionBlockedBy', 'realizati
 /** Paths never shown on tenant pages (one list for the UI: security/tenantHiddenPaths.ts). */
 export { TENANT_HIDDEN_PATHS };
 
-/** Copy of the object without the paths tenants must not see. */
+/** Copy of the object as tenant pages show it: without the paths tenants must not see, the status allow-listed. */
 export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind, item: T): T {
-  const paths = TENANT_HIDDEN_PATHS[kind];
-  if (!paths?.length) return item;
+  const paths = TENANT_HIDDEN_PATHS[kind] ?? [];
   const copy = JSON.parse(JSON.stringify(item)) as T;
   for (const path of paths) {
     const parts = path.split('.');
@@ -107,7 +106,8 @@ export function redactForTenant<T extends K8sResource>(kind: HybridSovereignKind
     return out;
   };
   const withStatus = copy as unknown as { status?: unknown };
-  if (withStatus.status) withStatus.status = scrub(withStatus.status);
+  // Only the status fields a tenant needs (one allow-list with the tenant dashboard's server).
+  if (withStatus.status) withStatus.status = filterTenantStatus(kind, scrub(withStatus.status));
   return copy;
 }
 
@@ -934,9 +934,10 @@ function NetworkPlacementDetails({ item }: { item: NetworkPlacement }): React.Re
           </Fact>
         )}
         <Fact label={t('fields.site')}>{st.site}</Fact>
-        <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>
-        <Fact label={t('detail.l3Vni')}>{vnis.l3}</Fact>
-        <Fact label={t('detail.l2Vni')}>{vnis.l2}</Fact>
+        {/* the platform's gateway and fabric numbers: on admin pages only (tenant pages do not get them) */}
+        {st.cloudGateway !== undefined && <Fact label={t('detail.cloudGateway')}>{st.cloudGateway}</Fact>}
+        {vnis.l3 !== undefined && <Fact label={t('detail.l3Vni')}>{vnis.l3}</Fact>}
+        {vnis.l2 !== undefined && <Fact label={t('detail.l2Vni')}>{vnis.l2}</Fact>}
         <Fact label={t('detail.effectiveMtu')}>{st.mtu}</Fact>
         <Fact label={t('detail.siteNamespaces')}>
           <List items={st.namespaces} />

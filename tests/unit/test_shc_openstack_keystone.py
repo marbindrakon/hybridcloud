@@ -399,8 +399,12 @@ class AccessGroups(Base):
 
 @unittest.skipUnless(HAVE_SDK, "openstacksdk / requests not installed")
 class Provision(Base):
+    OWNER = "CloudOSO/entity-acme/env1"
+
     def test_no_credential_is_made_and_the_legacy_one_goes(self):
-        S.provision({"clouds_yaml": self.clouds, "domain": "tenants", "project": "acme_env1"})
+        # the project of setUp is this environment's (its id is recorded)
+        S.provision({"clouds_yaml": self.clouds, "domain": "tenants", "project": "acme_env1", "project_id": self.pid,
+                     "owner": self.OWNER})
         # the account's own credential of an earlier release (it owns it, scoped to the project)
         legacy = "legacy-cred"
         self.ks.app_creds[legacy] = {"id": legacy, "user": self.uid, "project": self.pid, "name": "sovereign-acme_env1",
@@ -410,12 +414,14 @@ class Provision(Base):
         self.ks.app_creds["by-name"]["name"] = "sovereign-acme_env1"
         n = len(self.ks.app_creds)
         out = S.provision({"clouds_yaml": self.clouds, "domain": "tenants", "project": "acme_env1",
+                           "owner": self.OWNER,
                            "legacy_app_cred_ids": [legacy], "legacy_app_cred_name": "sovereign-acme_env1"})
         self.assertEqual(out["project"]["id"], self.pid)
         self.assertEqual(sorted(out["legacy_app_creds_deleted"]), ["by-name", legacy])
         self.assertEqual(len(self.ks.app_creds), n - 2)
         self.assertNotIn("app_cred", out)
         again = S.provision({"clouds_yaml": self.clouds, "domain": "tenants", "project": "acme_env1",
+                             "owner": self.OWNER,
                              "legacy_app_cred_ids": [legacy], "legacy_app_cred_name": "sovereign-acme_env1"})
         self.assertEqual(again["legacy_app_creds_deleted"], [legacy])   # recorded id: missing counts as deleted
         self.assertEqual([c for c in self.ks.log if c[0] == "POST" and "application_credentials" in c[1]], [])

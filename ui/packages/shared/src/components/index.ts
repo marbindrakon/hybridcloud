@@ -63,7 +63,9 @@ export {
 export type { KindStatusDetailsProps } from './KindStatusDetails';
 export { SitePicker, siteOptionLabel } from './SitePicker';
 export type { SitePickerProps } from './SitePicker';
-export { AttachNetworkDialog, defaultPlacementName } from './AttachNetworkDialog';
+export { AttachNetworkDialog } from './AttachNetworkDialog';
+export { defaultPlacementName, nameAllowed, nameLimitFor, nameRuleMessage, NAME_PATTERN, NAME_MAX, GATEWAY_NAME_MAX } from '../forms/nameRule';
+export type { NameRuleOptions } from '../forms/nameRule';
 export type { AttachNetworkDialogProps, AttachEnvironmentRef } from './AttachNetworkDialog';
 export { EnvironmentNetworksTab, NetworkEnvironmentsTab, isEnvironmentKind, placementBlock, ENVIRONMENT_KINDS } from './PlacementTabs';
 export { ToastHost, pushToast, dismissToast } from './ToastHost';
@@ -71,3 +73,5 @@ export type { Toast, ToastVariant } from './ToastHost';
 export { StatusCallout } from './StatusCallout';
 export { WayInPanel, WayInCard } from './WayInPanel';
 export { GettingStartedCard } from './GettingStartedCard';
+export { PlatformHealthBanner, PlatformHealthBannerView, readPlatformHealth } from './PlatformHealthBanner';
+export type { PlatformHealthBannerViewProps, PlatformHealthSettings } from './PlatformHealthBanner';

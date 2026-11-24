@@ -100,7 +100,6 @@ export interface CloudOSOAccessStatus {
 export interface EdaJobStatus {
   name?: string;
   jobId?: string;
-  url?: string;
   timestamp?: string;
   status?: 'running' | 'waiting' | 'success' | 'failed' | string;
 }
@@ -321,7 +320,7 @@ export interface PlatformOpenshiftStatus extends OperatorStatus {
   platformPrefixes?: string[];
   /** The install was started (an installed cluster keeps its floating IPs and prefixes on a refusal) */
   installStarted?: boolean;
-  floatingIPs?: { network?: string; api?: ClusterFloatingIP; ingress?: ClusterFloatingIP };
+  floatingIPs?: { api?: ClusterFloatingIP; ingress?: ClusterFloatingIP };
   apiURL?: string;
   consoleURL?: string;
   /** OpenStack clusters: the cluster's own credential on the site and its user (ids and names only) */
@@ -434,7 +433,6 @@ export type CloudInfrastructure = K8sResource<CloudInfrastructureSpec, CloudInfr
 export interface CloudOSOSpec {
   /** Immutable once set; default: the installation's default site */
   cloudRef?: NameRef;
-  project?: string;
   /** Ignored with a cloudRef in effect */
   vaultPath?: string;
   baseDomain?: string;

@@ -547,18 +547,42 @@ class TeardownWithoutSettings(unittest.TestCase):
             return {"metadata": {"name": name}, "status": {"placement": placement, "publish": publish}}
         common = dict(po_placement="tenant-a/p1", platformopenshift_cr_name="c1", platformopenshift_cr_namespace="tenant-a",
                       po_aws_account="123", po_aws_region="us-east-2", aws_real={})
+        placement = {"NetworkPlacement/tenant-a/p1": [{"metadata": {"name": "p1"},
+                                                       "status": {"realization": {"site": {"vpc": "vpc-0a1b"}}}}]}
         shared = [po_("c1", "tenant-a/p1", "External"), po_("c2", "tenant-a/p1", "External")]
-        rc, tr, out = self.run_file("public_subnets_down.yml", {"PlatformOpenshift/tenant-a/": shared}, **common)
+        rc, tr, out = self.run_file("public_subnets_down.yml", dict(placement, **{"PlatformOpenshift/tenant-a/": shared}),
+                                    **common)
         self.assertEqual(rc, 0, out)
         self.assertEqual([t for t in tr if "aws" in t], [], "another External cluster uses them")
         self.assertIn("c2 still uses them", out)
         for others in ([po_("c1", "tenant-a/p1", "External")],
                        [po_("c1", "tenant-a/p1", "External"), po_("c3", "tenant-a/p1", "Internal"),
                         po_("c4", "tenant-a/p2", "External"), {"metadata": {"name": "c5"}}]):
-            rc, tr, out = self.run_file("public_subnets_down.yml", {"PlatformOpenshift/tenant-a/": others}, **common)
+            rc, tr, out = self.run_file("public_subnets_down.yml",
+                                        dict(placement, **{"PlatformOpenshift/tenant-a/": others}), **common)
             self.assertEqual(rc, 0, out)
+            # the VPC the placement records, never one found by its tag
             self.assertEqual([t["aws"] for t in tr if "aws" in t],
-                             [["place-public", "--placement", "tenant-a/p1", "--state", "down"]])
+                             [["place-public", "--placement", "tenant-a/p1", "--state", "down", "--vpc-id", "vpc-0a1b"]])
+
+    def test_public_subnets_go_only_from_the_vpc_the_placement_records(self):
+        common = dict(po_placement="tenant-a/p1", platformopenshift_cr_name="c1", platformopenshift_cr_namespace="tenant-a",
+                      po_aws_account="123", po_aws_region="us-east-2", aws_real={})
+        alone = {"PlatformOpenshift/tenant-a/": [{"metadata": {"name": "c1"},
+                                                  "status": {"placement": "tenant-a/p1", "publish": "External"}}]}
+        # the placement is gone: its VPC went with it, nothing to remove, the delete goes on
+        rc, tr, out = self.run_file("public_subnets_down.yml", dict(alone), **common)
+        self.assertEqual((rc, [t for t in tr if "aws" in t], tr[-1]), (0, [], {"result": "end"}), out)
+        self.assertIn("no longer exists", out)
+        # the placement records no VPC: the step stops and nothing is deleted
+        for site in ({}, {"vpc": ""}):
+            k8s = dict(alone, **{"NetworkPlacement/tenant-a/p1": [{"metadata": {"name": "p1"},
+                                                                   "status": {"realization": {"site": site}}}]})
+            rc, tr, out = self.run_file("public_subnets_down.yml", k8s, **common)
+            self.assertNotEqual(rc, 0, out)
+            self.assertEqual([t for t in tr if "aws" in t], [])
+            self.assertIn("its network placement records no VPC, so nothing was deleted", out)
+            self.assertIn("The platform team must check the placement's network", out)
 
 
 # ---- 4. refusals: the tenant's own sentence, the same in the message and the condition ---------------------------------

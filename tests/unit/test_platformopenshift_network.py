@@ -41,11 +41,16 @@ def network_obj(reach=("True", "Attachable", ""), space=("192.0.2.0/24",)):
 
 def placement(kind="CloudOSO", env="env1", ready=True, ra=True, ra_state="ready", subnets=(("4", "192.0.2.0/25"),),
               site=None):
+    _site = site if site is not None else {"networkId": "net-1", "networkName": "shc-n1"}
     return {"metadata": {"name": "p1", "namespace": NS},
             "spec": {"network": "n1", "backend": {"kind": kind, "name": env}, **({"use": {"routerAttachments": ra}} if ra is not None else {})},
             "status": {"ready": ready, "subnets": [{"family": int(f), "prefix": p} for f, p in subnets],
                        "use": {"routerAttachments": {"state": ra_state}},
-                       "realization": {"site": site if site is not None else {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                       "realization": {"site": _site},
+                       # the OpenStack network as the placement records it for the tenant (the name the installer
+                       # is given)
+                       **({"siteNetwork": {"id": _site.get("networkId"), "name": _site.get("networkName")}}
+                          if kind == "CloudOSO" and "networkId" in _site else {})}}
 
 
 def fabric(enabled=True, ranges=("192.0.2.0/24",), endpoints=({"prefix": "198.18.0.10/32", "ports": [6443]},),
@@ -79,13 +84,13 @@ class BuildName(unittest.TestCase):
         return P.build_name(dict({"prefix": "shc-oso", "entity": entity, "name": cluster}, **kw))["buildName"]
 
     def test_tenant_qualified_and_readable(self):
-        self.assertRegex(self.name("acme", "web1"), r"^shc-oso-acme-web1-[0-9a-f]{8}$")
+        self.assertRegex(self.name("acme", "web1"), r"^shc-oso-web1-acme-[0-9a-f]{8}$")
 
     def test_a_hyphen_from_either_side_does_not_collide(self):
-        # the pair of the review: tenant acme-corp's prod and tenant acme's corp-prod read alike
-        names = {self.name("acme-corp", "prod"), self.name("acme", "corp-prod"), self.name("acme", "corp.prod")}
+        # the cluster's name first: tenant acme-corp's prod and tenant corp's prod-acme read alike
+        names = {self.name("acme-corp", "prod"), self.name("corp", "prod-acme"), self.name("corp", "prod.acme")}
         self.assertEqual(len(names), 3)
-        self.assertTrue(all(n.startswith("shc-oso-acme-corp-prod-") for n in names))
+        self.assertTrue(all(n.startswith("shc-oso-prod-acme-corp-") for n in names))
 
     def test_one_tenant_dot_and_hyphen_do_not_collide(self):
         self.assertNotEqual(self.name("acme", "prod.1"), self.name("acme", "prod-1"))
@@ -107,7 +112,7 @@ class BuildName(unittest.TestCase):
     def test_cloud_limit(self):
         n = self.name("acme-corp", "a-rather-long-cluster-name", prefix="shc-aws", max=40)
         self.assertLessEqual(len(n), 40)
-        self.assertTrue(n.startswith("shc-aws-acme-corp-a-rather"))
+        self.assertTrue(n.startswith("shc-aws-a-rather-long-cluster"), n)
         self.assertNotEqual(n, self.name("acme-corp", "a-rather-long-cluster-name2", prefix="shc-aws", max=40))
 
     def test_two_tenants_same_cluster_name_differ(self):
@@ -163,6 +168,17 @@ class Networking(unittest.TestCase):
 
 
 class NetworkJudge(unittest.TestCase):
+    def test_the_openstack_network_is_read_from_the_placements_record(self):
+        """The name the installer is given is the placement's status.siteNetwork, never rebuilt or taken elsewhere."""
+        p = placement()
+        p["status"]["siteNetwork"] = {"id": "net-9", "name": "acme-corp_core-prod"}
+        p["status"]["realization"]["site"] = {"networkId": "net-1", "networkName": "hn51003"}
+        r = judge(placements=[p])
+        self.assertEqual((r["networkId"], r["networkName"]), ("net-9", "acme-corp_core-prod"))
+        del p["status"]["siteNetwork"]
+        r = judge(placements=[p])
+        self.assertEqual(r["reason"], "WaitingForPlacement", r)
+
     def test_passes(self):
         r = judge()
         self.assertEqual(r["reason"], "", r["message"])
@@ -785,9 +801,11 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual((rec["buildName"], rec["publish"], rec["externalNetwork"]), ("shc-oso-acme-c1", "Internal", None))
         req = H.os_calls(tr, "cluster-fips")[0]
         self.assertEqual((req["project_id"], req["network_id"], req["descriptions"]),
-                         ("proj-1", "net-1", {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
+                         ("proj-1", "net-1", {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
+                          "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"}))
+        # recorded: address and id only (the description is for people, never read back)
         self.assertEqual(H.patches(tr)[1]["body"]["floatingIPs"],
-                         {"network": "net-1", "api": {"address": "192.0.2.15", "id": "fip-a"},
+                         {"api": {"address": "192.0.2.15", "id": "fip-a"},
                           "ingress": {"address": "192.0.2.16", "id": "fip-i"}})
         self.assertEqual(H.patches(tr)[2]["body"]["platformPrefixes"], ["192.0.2.15/32", "192.0.2.16/32"])
         self.assertEqual([t for t in tr if "nudge" in t][0]["nudge"], [{"kind": "HybridNetwork", "namespace": NS, "name": "n1"}])
@@ -806,9 +824,34 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual(self.steps(tr)[2:], ["os:cluster-fips/present", "patch:floatingIPs", "os:cluster-fips/absent",
                                               "patch:floatingIPs"])
         rel = H.os_calls(tr, "cluster-fips")[1]
-        self.assertEqual((rel["ids"], rel["descriptions"]),
-                         (["fip-a", "fip-i"], {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
+        # released by the recorded ids only, never by a description
+        self.assertEqual(rel["ids"], ["fip-a", "fip-i"])
+        self.assertNotIn("descriptions", rel)
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
+
+    def test_recorded_floating_ips_are_kept_by_their_ids(self):
+        """A cluster whose record holds both floating IPs keeps them: nothing is asked of the site, nothing is found by
+        a description, nothing is written again; a record of one stops the job, nothing recorded makes both."""
+        rec = {"api": {"address": "192.0.2.25", "id": "fip-x"}, "ingress": {"address": "192.0.2.26", "id": "fip-y"}}
+        # a record of one of the two: nothing made, the job stops (the platform team completes or clears it)
+        rc, tr, out = self.run_a(k8s(), cb_platform_path=False,
+                                 po_cr_current={"resources": [{"status": {"floatingIPs": {"api": rec["api"]},
+                                                                          "buildName": "shc-oso-acme-c1"}}]})
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(H.os_calls(tr, "cluster-fips"), [])
+        self.assertEqual([p for p in H.patches(tr) if "floatingIPs" in p["body"]], [])
+        self.assertIn("only part of the cluster's floating IPs", out)
+        for status, calls in (({"floatingIPs": rec}, 0), ({}, 1)):
+            rc, tr, out = self.run_a(k8s(), cb_platform_path=False,
+                                     po_cr_current={"resources": [{"status": dict(status, buildName="shc-oso-acme-c1")}]})
+            self.assertEqual(rc, 0, out)
+            self.assertEqual(len(H.os_calls(tr, "cluster-fips")), calls, status)
+            fips = [p for p in H.patches(tr) if "floatingIPs" in p["body"]]
+            if calls == 0:
+                self.assertEqual(fips, [])
+                self.assertEqual(tr[-1]["result"], ["192.0.2.25", "192.0.2.26"])
+            else:
+                self.assertEqual(fips[0]["body"]["floatingIPs"]["api"]["id"], "fip-a")
 
     def test_refused_prefix_withdrawn_and_released(self):
         fab = fabric(refused=[{"network": f"{NS}/n1", "prefix": "192.0.2.16/32", "reason": "ServicePrefixInUse"}])
@@ -893,6 +936,43 @@ class DnsRecordedBeforeCreated(unittest.TestCase):
         self.assertEqual([(r["zoneId"], r["name"], r["type"]) for r in dns["records"]],
                          [("zone-1", "api.c1.env1.example.org.", "A"), ("zone-1", "*.apps.c1.env1.example.org.", "A")])
         self.assertTrue(H.patches(tr)[0]["partial"])
+
+    DESIGNATE = dict(cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16", cb_ocp_name="c1",
+                     cb_cluster_domain="env1.example.org", cb_cluster_name="shc-oso-acme-c1", use_designate_dns=True,
+                     designate_zone_id="zone-1", designate_project_id="dnsproj-1",
+                     designate_admin_vault_path="sites/site1")
+
+    def test_designate_records_carry_the_clusters_owner(self):
+        """The helper marks the records shc:<owner> and refuses an empty owner: the request names the cluster."""
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": {"records": []}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1")
+        self.assertEqual(rc, 0, out)
+        req = H.os_calls(tr, "dns-upsert")[0]
+        self.assertEqual(req["owner"], f"PlatformOpenshift/{CR['namespace']}/{CR['name']}")
+
+    def test_a_record_the_platform_did_not_make_is_refused(self):
+        taken = {"error": "refused", "reason": "NameTakenOnSite",
+                 "message": "The DNS name api.c1.env1.example.org. already has a A record ..."}
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": taken})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        facts = json.loads(H.LAST_VARS)
+        self.assertEqual(facts["po_fail_reason"], "NameTakenOnSite")
+        self.assertIn("api.c1.env1.example.org", facts["po_preflight_condition"]["message"])
+        # any other failure is the step's sentence, no refusal reason
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": {"error": "HTTP 503"}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("po_fail_reason", json.loads(H.LAST_VARS))
+        self.assertIn("Write the cluster's DNS names", out)
+
+    def test_the_teardown_deletes_only_the_clusters_records(self):
+        v = dict(TD_BASE, po_dns={"provider": "designate", "projectId": "dnsproj-1", "records": [
+            {"zoneId": "zone-1", "name": "api.c1.env1.example.org.", "type": "A"}]},
+            po_dns_account_vault_path="sites/site1", fake_os={"dns-delete": {"deleted": [], "missing": [], "kept": []}})
+        rc, tr, out = H.run("platformopenshift_teardown", "delete_dns_openstack.yml", v, result="1")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr, "dns-delete")[0]["owner"], f"PlatformOpenshift/{NS}/c1")
 
     def test_route53(self):
         tasks = load(os.path.join(TASKS, "openstack_clusterbuild.yml"))
@@ -1239,6 +1319,31 @@ class CloudNetworkFiles(unittest.TestCase):
         self.assertEqual(rc, 0, out)
         self.assertFalse([p for p in H.patches(tr) if "platformPrefixes" in p["body"]])
 
+    def test_aws_external_public_subnets_in_the_recorded_vpc_only(self):
+        """place-public up is given the VPC the placement records; a placement that records none: nothing is made."""
+        fakes = {"aws_call.yml": H.TRACE % "{'aws': aws_args}" + """- name: fake result
+  ansible.builtin.set_fact:
+    aws_result: {result: {public: [{id: subnet-p1}]}}
+"""}
+        rc, tr, out = H.run("platformopenshift_provision", "aws_clusterbuild_network.yml", cloud_vars("aws", "External"),
+                            k8s=k8s(net=network_obj(reach=("False", "NotRequested", "")),
+                                    places=self.placements("CloudAWS"), fab={}),
+                            result="cb_public_subnet_ids", fakes=fakes)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual([t["aws"] for t in tr if "aws" in t],
+                         [["place-public", "--placement", f"{NS}/p1", "--state", "up", "--vpc-id", "vpc-1"]])
+        for site in ({"subnets": [{"id": "subnet-1", "az": "az-a"}]},
+                     {"vpc": "", "subnets": [{"id": "subnet-1", "az": "az-a"}]}):
+            with self.subTest(site=site):
+                rc, tr, out = H.run("platformopenshift_provision", "aws_clusterbuild_network.yml",
+                                    cloud_vars("aws", "External"),
+                                    k8s=k8s(net=network_obj(reach=("False", "NotRequested", "")),
+                                            places=[placement(kind="CloudAWS", ra=None, site=site)], fab={}),
+                                    fakes=fakes)
+                self.assertNotEqual(rc, 0, out)
+                self.assertEqual([t for t in tr if "aws" in t], [])
+                self.assertIn("Prepare the cluster's public subnets on AWS", out)
+
     def test_installed_or_started_cluster_keeps_its_prefix_on_a_refusal(self):
         # Review R3 N2 (R2 M1 on AWS/GCP): a refused row for a cluster whose install was started or is done reports the
         # refusal and keeps the prefix (and with it its place); before the install the prefix is withdrawn
@@ -1326,13 +1431,12 @@ class TeardownRelease(unittest.TestCase):
         v.update(kw)
         return H.run("platformopenshift_teardown", "release_fips.yml", v, k8s=kube, result="1")
 
-    def test_release_by_record_and_descriptions(self):
+    def test_release_by_the_record_only(self):
         rc, tr, out = self.run_r({f"CloudOSO/{NS}/env1": OSO, f"CloudInfrastructure/sovereign-cloud/site1": SITE})
         self.assertEqual(rc, 0, out)
         req = H.os_calls(tr, "cluster-fips")[0]
-        self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
-                         ("absent", "proj-1", ["fip-a", "fip-i"],
-                          {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
+        self.assertEqual((req["state"], req["project_id"], req["ids"]), ("absent", "proj-1", ["fip-a", "fip-i"]))
+        self.assertNotIn("descriptions", req)
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
 
     def test_environment_gone(self):
@@ -1389,10 +1493,16 @@ class Renders(unittest.TestCase):
     def test_aws_and_gcp_ranges(self):
         for name in ("install-config.yaml.j2", "install-config-gcp.yaml.j2"):
             ic = self.render(name, cb_install_base_domain="example.org", cb_machine_cidr="10.10.0.0/16", cb_region="r1",
-                             cb_app_name="shc-aws-acme-c1", cb_project="p1")
+                             cb_app_name="shc-aws-acme-c1", cb_project="p1", resolved_entity="acme",
+                             aws_env_name="prod", gcp_env_name="prod",
+                             ansible_operator_meta={"name": "c1", "namespace": "entity-acme"})
             self.assertEqual(ic["networking"]["clusterNetwork"], [{"cidr": "10.200.0.0/16", "hostPrefix": 24}], name)
             self.assertEqual(ic["networking"]["machineNetwork"], [{"cidr": "10.10.0.0/16"}], name)
             self.assertEqual(ic["compute"][0]["replicas"], 0, name)
+            # the tenant's, the environment's and the cluster's names in full on what the installer makes
+            tags = (ic["platform"]["aws"]["userTags"] if "aws" in ic["platform"]
+                    else {t["key"]: t["value"] for t in ic["platform"]["gcp"]["userLabels"]})
+            self.assertEqual((tags["shc-tenant"], tags["shc-environment"], tags["shc-cluster"]), ("acme", "prod", "c1"))
 
 
 # ---- structure --------------------------------------------------------------------------------------------------------
@@ -1484,9 +1594,9 @@ class EnvironmentPair(unittest.TestCase):
         rc, tr, out = self.run_e(self.LEGACY, [other, aws])
         self.assertEqual(rc, 0, out)
         req = H.os_calls(tr, "cluster-fips")[0]
-        self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
-                         ("absent", "proj-1", ["fip-1", "fip-2"],
-                          {"api": "sovereign-env1-api", "ingress": "sovereign-env1-ingress"}))
+        # by the recorded ids only (a description in the tenant's project is the tenant's to write)
+        self.assertEqual((req["state"], req["project_id"], req["ids"]), ("absent", "proj-1", ["fip-1", "fip-2"]))
+        self.assertNotIn("descriptions", req)
         body = H.patches(tr, "cloudosos")[0]["body"]
         self.assertEqual(body, {k: None for k in self.LEGACY})
 
@@ -1529,7 +1639,9 @@ class TeardownPaths(unittest.TestCase):
         build, paths = self.paths(cr)
         self.assertEqual(build, "shc-oso-acme-c1")
         self.assertIn("cluster/oso/shc-oso-acme-c1/admin-kubeconfig", paths)
-        self.assertIn("oso/projects/env1/clusters/c1/install-config", paths)
+        self.assertIn("cluster/oso/shc-oso-acme-c1/build/install-config", paths)
+        # no path named after the environment without the tenant
+        self.assertFalse([p for p in paths if p.startswith("oso/projects/")])
         self.assertFalse([p for p in paths if p.startswith("cluster/oso/c1/")])
 
     def test_openstack_without_record_uses_the_derived_name(self):
@@ -1709,7 +1821,8 @@ class TeardownOwnsOnlyItsBuild(unittest.TestCase):
         deleted = [p for t in tr if "vault_delete" in t for p in t["vault_delete"]]
         self.assertFalse([p for p in deleted if p.startswith("cluster/")], deleted)
         rel = H.os_calls(tr, "cluster-fips")
-        self.assertTrue(all(r["descriptions"] == {} for r in rel), rel)
+        # the release asks only for the cluster's own recorded ids, never for a description
+        self.assertTrue(all("descriptions" not in r for r in rel), rel)
         self.assertTrue([p for p in H.patches(tr) if p["body"].get("deletionComplete")], out)
 
     def test_never_recorded_deletes_nothing_on_the_hub(self):
@@ -1792,8 +1905,17 @@ class RouterAdvertisementPreflight(unittest.TestCase):
     REAL = {"placement": {"routerAdvertisementBySite": {"site1": {"url": "https://ra.site1.example.org"}}},
             "openstack": {"platformProject": "platform-project", "projectDomain": "platform-domain"}}
 
-    def run_ra(self, real, answer=None):
-        place = placement(site={"networkId": "net-1", "networkName": "shc-n1", "routerId": "router-1"})
+    def run_ra(self, real, answer=None, project_id="proj-platform", gateway=None):
+        """project_id: the platform project the placement records (status.realization.site.projectId); gateway: the
+        site's CloudGateway object the placement names (status.cloudGateway)."""
+        site = {"networkId": "net-1", "networkName": "shc-n1", "routerId": "router-1"}
+        if project_id:
+            site["projectId"] = project_id
+        place = placement(site=site)
+        extra = {f"CloudInfrastructure/{PLAT}/site1": SITE}
+        if gateway is not None:
+            place["status"]["cloudGateway"] = "gw-site1"
+            extra[f"CloudGateway/{PLAT}/gw-site1"] = gateway
         v = os_preflight_vars(fabric_realization=real, cb_fip_account="sites/site1",
                               fake_os=dict(NAME_OK, **{"router-advertisement/present": answer or {}}))
         # the role's rescue records po_fail_reason (main.yml); here a rescue traces it
@@ -1802,7 +1924,7 @@ class RouterAdvertisementPreflight(unittest.TestCase):
         tasks = [{"block": [{"ansible.builtin.include_tasks": os.path.join(TASKS, "openstack_preflight.yml")}],
                   "rescue": [trace, {"ansible.builtin.fail": {"msg": "{{ ansible_failed_result.msg | default('') }}"}}]}]
         return H.run("platformopenshift_provision", "openstack_preflight.yml", v, tasks=tasks,
-                     k8s=k8s(places=[place], extra={f"CloudInfrastructure/{PLAT}/site1": SITE}), result="1")
+                     k8s=k8s(places=[place], extra=extra), result="1")
 
     def test_no_service_calls_nothing(self):
         rc, tr, out = self.run_ra({})
@@ -1821,7 +1943,27 @@ class RouterAdvertisementPreflight(unittest.TestCase):
                           req["platformProject"], req["domain"]),
                          ("present", "router-1", "net-1", "site1", "https://ra.site1.example.org", "platform-project",
                           "platform-domain"))
+        # the platform project by the id the placement recorded, never found by its tag
+        self.assertEqual(req["platformProjectId"], "proj-platform")
         self.assertFalse(H.patches(tr))   # nothing recorded or created by the preflight
+
+    def test_the_platform_project_id_from_the_gateway_or_a_wait(self):
+        ok = {"service": "found", "port_id": "port-1", "nat": True, "wanted": True, "changed": False, "restores": 0,
+              "lastRestoredAt": "", "reason": "", "message": ""}
+        # a placement of the release before that has not recorded the id: the gateway's record
+        gw = {"metadata": {"name": "gw-site1"}, "status": {"site": {"project": {"id": "proj-from-gw"}}}}
+        rc, tr, out = self.run_ra(self.REAL, ok, project_id="", gateway=gw)
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr, "router-advertisement")[0]["platformProjectId"], "proj-from-gw")
+        # neither records it: the cluster waits, nothing is asked of the site
+        for gateway in (None, {"metadata": {"name": "gw-site1"}, "status": {}}):
+            with self.subTest(gateway=gateway):
+                rc, tr, out = self.run_ra(self.REAL, ok, project_id="", gateway=gateway)
+                self.assertEqual(rc, 0, out)
+                self.assertFalse(H.os_calls(tr, "router-advertisement"))
+                self.assertNotIn({"result": 1}, tr)
+                self.assertEqual(H.patches(tr)[-1]["body"]["reason"], "WaitingForPlacement")
+                self.assertIn("has not recorded the platform's project", H.patches(tr)[-1]["body"]["message"])
 
     def test_failing_or_unconfirmed(self):
         for answer, want in (({"service": "found", "nat": False, "reason": "NotYourPort",

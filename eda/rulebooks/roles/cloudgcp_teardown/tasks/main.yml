@@ -41,6 +41,13 @@
               project_id: "{{ dnscfg_project_id }}"
               zone_id: "{{ dnscfg_zone_id }}"
               name: "{{ cad_dns.zone }}"
+              # only the NS recordset the provision wrote (its description is the mark); another one is kept
+              description: "Delegation of CloudGCP {{ fab_namespace }}/{{ fab_name }} (Cloud DNS, project {{ cad_account }})"
+          when: dnscfg_found | default(false) | bool
+
+        - name: What happened to the delegation
+          ansible.builtin.set_fact:
+            cad_deleg: "{{ os_result }}"
           when: dnscfg_found | default(false) | bool
 
     - name: Remove the environment's zone
@@ -53,8 +60,49 @@
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_call.yml"
           vars:
             gcp_helper: shc_gcp_tenant.py
-            gcp_config: {project: "{{ cad_account }}", region: "{{ cad_region }}"}
-            gcp_args: [zone-down, --zone, "{{ cad_dns.zone }}"]
+            # only the zone the environment recorded, whatever its labels say (labels in the tenant's project are
+            # written for people); without a recorded zone nothing is deleted
+            gcp_config: {project: "{{ cad_account }}", region: "{{ cad_region }}", labels: {shc-entity: "{{ fab_entity }}"}}
+            gcp_args: >-
+              {{ ['zone-down', '--zone', cad_dns.zone]
+                 + (['--zone-name', cad_dns.zoneId] if cad_dns.zoneId | default('', true) | length > 0 else []) }}
+
+        - name: What happened to the zone
+          ansible.builtin.set_fact:
+            cad_zone: "{{ gcp_result.result | default({}, true) }}"
+
+    # what was deleted and what was left (never "removed" for a zone or a delegation that was kept or not found)
+    - name: What the teardown deleted and left
+      vars:
+        _zone: "{{ cad_dns.zone | default('', true) }}"
+        _z: "{{ cad_zone | default({}, true) }}"
+        _d: "{{ cad_deleg | default({}, true) }}"
+      ansible.builtin.set_fact:
+        cad_done: >-
+          {%- if _zone | length == 0 -%}
+          No DNS zone was recorded for the environment, so none was deleted
+          {%- else -%}
+          {%- if _z.deleted | default(false) | bool -%}
+          Zone {{ _zone }} deleted
+          {%- elif _z.note | default('', true) | length > 0 -%}
+          Zone {{ _zone }} was not deleted: the environment recorded no zone id, so nothing was deleted in the project
+          {%- elif _z | length > 0 -%}
+          Zone {{ _zone }} was already gone
+          {%- else -%}
+          Zone {{ _zone }} was not deleted: the environment recorded no project
+          {%- endif -%}
+          {%- if _d | length > 0 and _d.deleted | default(false) | bool -%}
+          ; its delegation in the tenant zone deleted
+          {%- elif _d.kept | default('', true) | length > 0 -%}
+          ; its delegation in the tenant zone was kept ({{ _d.kept }})
+          {%- elif _d | length > 0 -%}
+          ; no delegation of it was found in the tenant zone
+          {%- elif cad_dns.dnsConfig | default('', true) | length > 0 -%}
+          ; its delegation in the tenant zone was not deleted: the platform's tenant DNS configuration was not found
+          {%- else -%}
+          ; no delegation in a tenant zone was recorded
+          {%- endif -%}
+          {%- endif -%}
 
     - name: Mark deletion complete
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -70,7 +118,7 @@
           status: ready
           ready: false
           deletionComplete: true
-          message: "Zone {{ cad_dns.zone | default('(none)') }} and its delegation removed"
+          message: "{{ cad_done }}"
 
     # the operator drops the finalizer the next time it looks at the CR: make that now
     - name: Release the finalizer now

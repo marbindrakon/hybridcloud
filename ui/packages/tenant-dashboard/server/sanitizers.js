@@ -30,6 +30,14 @@ export const PLATFORM_ONLY_FIELDS = {
   PlatformOpenshift: ["openstack.pullSecretVaultPath", "openstack.pullSecretVaultProperty", "openstack.sshKeyVaultPath"],
 };
 
+/**
+ * Fields the API still accepts and ignores (kept for manifests written for the
+ * release before); the tenant routes never send them.
+ */
+export const IGNORED_FIELDS = {
+  CloudOSO: ["project"],
+};
+
 export function isObject(v) {
   return v != null && typeof v === "object" && !Array.isArray(v);
 }
@@ -377,7 +385,6 @@ export function sanitizeCloudOSOSpec(raw) {
   if (!isObject(raw)) return { error: "spec must be an object" };
   // vaultPath and route53VaultPath are platform-only (never sent).
   const spec = pickStrings(raw, [
-    "project",
     "baseDomain",
     "projectDomain",
     "externalNetwork",

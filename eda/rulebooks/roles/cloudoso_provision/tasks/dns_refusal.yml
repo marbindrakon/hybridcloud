@@ -1,0 +1,14 @@
+---
+# After a soft shc_dns.py call (os_result): a zone or delegation of the wanted name that the platform did not make for
+# this environment is refused with NameTakenOnSite and its sentence; any other error fails the job as before.
+- name: Record the reason
+  ansible.builtin.set_fact:
+    cloudoso_failure_reason: NameTakenOnSite
+  when: (os_result.reason | default('', true)) == 'NameTakenOnSite'
+
+- name: Stop before anything else is made
+  ansible.builtin.fail:
+    msg: >-
+      {{ os_result.message if (os_result.reason | default('', true)) == 'NameTakenOnSite'
+         else 'OpenStack ' ~ os_request.action | default('DNS') ~ ' failed: ' ~ os_result.error }}
+  when: os_result.error is defined

@@ -1,12 +1,12 @@
 ---
-# Route53 environments: remove an NS delegation for the slug domain if one exists (upstream's older
-# provision created one). Credentials come straight from Vault, not a temporary ExternalSecret.
+# Route53 environments: remove an NS delegation for the environment's recorded domain (status.domain) if one exists
+# (upstream's older provision created one). Credentials come straight from Vault, not a temporary ExternalSecret.
 - name: Read the Route53 credentials
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
   vars:
     vault_kv_path: "{{ oso_route53_vault_path }}"
 
-- name: Remove NS delegation for slug zone
+- name: Remove the NS delegation of the environment's domain
   amazon.aws.route53:
     state: absent
     zone: "{{ oso_base_domain }}"

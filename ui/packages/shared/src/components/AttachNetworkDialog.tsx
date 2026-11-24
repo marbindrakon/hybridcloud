@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useState } from 'react';
+import { defaultPlacementName, nameAllowed, NAME_MAX } from '../forms/nameRule';
 import { Link } from 'react-router-dom';
 import {
   Alert,
@@ -75,13 +76,6 @@ export interface AttachNetworkDialogProps {
   onAttached?: (placement: NetworkPlacement) => void;
 }
 
-/** Placement object name: <network>-<environment>, at most 63 characters, no trailing hyphen. */
-export function defaultPlacementName(network: string, environment: string): string {
-  const raw = `${network}-${environment}`.toLowerCase().replace(/[^a-z0-9-]/g, '-');
-  return raw.slice(0, 63).replace(/-+$/, '');
-}
-
-const NAME_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 const DRY_RUN_DELAY_MS = 600;
 
 const ENV_WHAT: Record<NetworkPlacementBackendKind, string> = {
@@ -251,7 +245,7 @@ export function AttachNetworkDialog({
   const pinnedText = pinned.trim();
   const pinnedOk =
     !families.ipv4 || !pinnedText || (isPinnedIpv4Prefix(pinnedText, maxLength) && (!spacePrefixes.length || prefixWithin(pinnedText, spacePrefixes)));
-  const nameOk = !!effectiveName && effectiveName.length <= 63 && NAME_RE.test(effectiveName);
+  const nameOk = nameAllowed(effectiveName);
   const existing = placements.items.find(
     (p) => p.spec?.network === networkName && p.spec?.backend?.kind === env?.kind && p.spec?.backend?.name === env?.name,
   );
@@ -263,7 +257,7 @@ export function AttachNetworkDialog({
   if (pairBlock) blockers.push(t('attach.notAttachable', { network: networkName, environment: envLabel }));
   if (envUnknown) blockers.push(t('form.checking'));
   if (!pinnedOk) blockers.push(t('attach.pinnedInvalid', { max: maxLength }));
-  if (networkName && env && !nameOk) blockers.push(t('attach.nameInvalid'));
+  if (networkName && env && !nameOk) blockers.push(t('attach.nameInvalid', { max: NAME_MAX }));
   if (env && chosenNetwork && families.block) blockers.push(t(placementIpv6NoteKey(v6Offer, families.block) ?? 'attach.needFamily'));
   if (families.ipv6 && !v6PinnedOk) blockers.push(t('attach.ipv6PinnedInvalid', { lengths: v6Offer.lengths.map((l) => `/${l}`).join(', ') }));
   const useProblem = placementUseProblem(env?.kind, use);

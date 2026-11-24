@@ -6,7 +6,7 @@
 # would re-push deleted Vault keys), the recorded Vault paths, the Keycloak client, the services viewer
 # RBAC. Any failure lands in status.deletion and the CR stays Terminating; deletionComplete only after
 # every step succeeded. The build's objects on central are named after status.buildName
-# (shc-<oso|aws|gcp>-<entity>-<name>-<digest>) and are touched only when the build's hub namespace is this cluster's
+# (shc-<oso|aws|gcp>-<name>-<entity>-<digest>) and are touched only when the build's hub namespace is this cluster's
 # (hub_ownership.yml): a cluster without a recorded build, or whose name another object holds, deletes nothing on the
 # hub (Review R2 H1). A cluster on a hybrid network leaves the
 # platform's service routing domain (status.platformPrefixes cleared, the withdrawal checked) before an OpenStack
@@ -61,15 +61,12 @@
         _st: "{{ (po_cr.resources | default([]) | first | default({})).status | default({}) }}"
       ansible.builtin.set_fact:
         platform_type: "{{ (po_cr.resources | default([]) | first | default({})).spec.type | default(platform_spec.type | default('')) }}"
-        po_status_slug: "{{ _st.slug | default('') }}"
         po_status_domain: "{{ _st.domain | default('') }}"
         po_dns: "{{ _st.dns | default({}) }}"
         po_vault_paths: "{{ rpp_vault_paths }}"
         po_dns_account_vault_path: "{{ rpp_dns_account_vault_path }}"
-        # the cluster's Keycloak client: the recorded one, else its build's (never one named after the CR alone)
-        po_oidc_client_id: >-
-          {{ (_st.oidcClientId | default('', true) or ((po_hub_build ~ '-keycloak-oidc') if po_hub_build | length > 0 else ''))
-             if po_hub_owned | bool else '' }}
+        # the cluster's sign-in client: the one its status records, nothing else
+        po_oidc_client_id: "{{ _st.oidcClientId | default('', true) | trim }}"
         po_build_name: "{{ rpp_build_name_in_effect }}"
         po_aws_account: "{{ _st.awsAccountId | default('', true) }}"
         po_aws_region: "{{ _st.awsRegion | default('', true) }}"
@@ -270,6 +267,13 @@
       ansible.builtin.set_fact:
         teardown_step: keycloak-client
 
+    - name: Say that no sign-in client is recorded
+      ansible.builtin.debug:
+        msg: >-
+          PlatformOpenshift {{ platformopenshift_cr_name }} records no sign-in client; nothing was deleted in the sign-in
+          directory.
+      when: po_oidc_client_id | length == 0
+
     - name: Open a Keycloak admin session
       ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/keycloak_admin_session.yml"
       when: po_oidc_client_id | length > 0
@@ -283,6 +287,22 @@
       register: kc_client
       when: po_oidc_client_id | length > 0
 
+    # the client of the recorded clientId, when it carries this cluster's mark or none (a client of the release before,
+    # recorded by it); a client marked for another cluster is left and named in the job's log
+    - name: Whose the clients of the name are
+      vars:
+        _mine: "{{ platformopenshift_cr_namespace }}/{{ platformopenshift_cr_name }}"
+        _found: "{{ (kc_client.json | default([], true)) if kc_client is not skipped else [] }}"
+      ansible.builtin.set_fact:
+        po_kc_clients: >-
+          {%- set out = {'ours': [], 'other': []} -%}
+          {%- for c in _found if c.clientId | default('') == po_oidc_client_id -%}
+            {%- set m = (c.attributes | default({}, true)).platformopenshift | default('', true) -%}
+            {%- set _ = out[('ours' if m in ['', _mine] else 'other')].append({'id': c.id, 'clientId': c.clientId,
+                                                                              'mark': m}) -%}
+          {%- endfor -%}
+          {{ out }}
+
     - name: Delete the cluster's OIDC client
       ansible.builtin.uri:
         url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ item.id }}"
@@ -291,7 +311,15 @@
           Authorization: "Bearer {{ kc_admin_token }}"
         validate_certs: false
         status_code: [204, 404]
-      loop: "{{ (kc_client.json | default([])) if kc_client is not skipped else [] }}"
+      loop: "{{ po_kc_clients.ours }}"
+      loop_control:
+        label: "{{ item.clientId }}"
+
+    - name: Say that a client of the name is another cluster's
+      ansible.builtin.debug:
+        msg: >-
+          The sign-in client {{ item.clientId }} is marked for another cluster ({{ item.mark }}); it was left in place.
+      loop: "{{ po_kc_clients.other }}"
       loop_control:
         label: "{{ item.clientId }}"
 

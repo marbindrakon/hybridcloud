@@ -151,7 +151,10 @@ metadata:
   name: fabric-rr-{{ $n.name }}
   namespace: openshift-frr-k8s
   labels:
-    # RouteAdvertisements select the sessions they advertise over by label (frrConfigurationSelector)
+    # RouteAdvertisements select the sessions they advertise over by label (frrConfigurationSelector). The key of
+    # the release before is carried beside the product key for one release, so that a route advertisement that
+    # still selects it keeps its sessions until its placement runs again with the new selector
+    hybridsovereign.redhat/fabric: route-reflectors
     shc.signal9.gg/fabric: route-reflectors
   annotations:
     argocd.argoproj.io/sync-wave: "4"

@@ -16,7 +16,8 @@
 #   rca_account_vault_path   the OpenStack account the project was created with ('' = cannot be told)
 #   rca_route53_vault_path   the Route53 account ('' unless the environment uses Route53)
 #   rca_dns_config_secret    the DNS account of the environment zone's delegation ('' without an environment zone)
-#   rca_clouds_config_paths  the project's own Vault paths
+#   rca_clouds_config_paths  the project's own Vault paths (recorded in status; the earlier release's name-only
+#                            path only for an environment whose status recorded that release's credential)
 #   rca_sources              {key: status|derived|none} per output (never values)
 # Fails only when an environment zone exists and its DNSConfig cannot be found by the name recorded at provision.
 - name: Reset the CloudOSO account facts
@@ -34,6 +35,7 @@
       route53: "{{ (_st.route53VaultPath | default('', true)) if _use_status | bool else '' }}"
       dns: "{{ (_dns.dnsConfigSecret | default('', true)) if _use_status | bool else '' }}"
       paths: "{{ (_st.vaultPaths | default([], true)) if _use_status | bool else [] }}"
+      appCredentialId: "{{ _st.appCredentialId | default('', true) }}"
     # the site recorded at provision ('' recorded = the legacy account); without a record the spec, then the
     # installation default
     rca_site: >-
@@ -68,9 +70,15 @@
     # a site never uses Route53 for an environment; the legacy account only when the environment recorded route53
     rca_route53_vault_path: >-
       {{ rca_status_keys.route53 or ((_legacy_route53 if rca_dns_provider == 'route53' else '') if rca_site | length == 0 else '') }}
+    # only the paths the environment's status records: a path made of the environment's name alone would be
+    # another tenant's when two tenants use one name. An environment of the release that wrote that path recorded
+    # its credential (status.appCredentialId): that record makes the path its own (that release refused a second
+    # environment of the name before any write)
     rca_clouds_config_paths: >-
       {{ rca_status_keys.paths if rca_status_keys.paths | length > 0
-         else (['oso/projects/' ~ rca_name ~ '/clouds-config'] if rca_name | length > 0 else []) }}
+         else (['oso/projects/' ~ rca_name ~ '/clouds-config']
+               if rca_name | length > 0 and (rca_status_keys.appCredentialId | default('', true)) | length > 0
+               else []) }}
 
 - name: Does the environment have its own zone
   ansible.builtin.set_fact:

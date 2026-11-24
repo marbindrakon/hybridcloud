@@ -164,12 +164,16 @@ class FakeEdge:
     def tgw(self):
         return {"TransitGatewayId": TGW}
 
+    names = []   # the names the tenant side hands the hub (net_up, net_attach), kept apart from the pinned calls
+
     def net_up(self, vni, **kw):
+        FakeEdge.names.append(["net_up", kw.pop("names", None)])
         FakeEdge.calls.append(["net_up", vni, kw])
         eg = {"publicIp": EIP, "natGateway": "nat-1"} if kw.get("egress") else None
         return {"routeTable": "tgw-rtb-net", "connectAttachment": "tgw-attach-connect", "egress": eg}
 
-    def net_attach(self, vni, att):
+    def net_attach(self, vni, att, names=None):
+        FakeEdge.names.append(["net_attach", names])
         FakeEdge.calls.append(["net_attach", vni, att])
         return {}
 
@@ -220,19 +224,38 @@ def dual_stack_scenarios(module, ec2_cls):
                 t.cfg = {"account": V8.ACCOUNT, "region": V8.REGION, "azs": list(V8.AZS),
                          "tags": {"shc-entity": "acme", "shc-network": "core"}, "edge": {}}
                 t.ec2, t.r53, t.ram, t.changed = ec2, None, None, []
-                if what == "up":
-                    t.place_up(PLACEMENT, 1001, list(V8.V4), True, v6)
-                else:
-                    t.place_down(PLACEMENT, 1001, v6)
+                # the VPC the placement's status records after its first run (the job writes it at once)
+                vid = recorded_vpc(ec2, PLACEMENT)
+                if what == "up":  # with what its status records, as the job passes it
+                    if v6:
+                        v6 = dict(v6, ipams=list(ec2.ipams), **V8.recorded6(ec2, PLACEMENT))
+                    t.place_up(PLACEMENT, 1001, list(V8.V4), True, v6, vpc_id=vid)
+                else:  # with the pool its status records
+                    t.place_down(PLACEMENT, 1001, dict(v6, **V8.recorded6(ec2, PLACEMENT)) if v6 else v6, vpc_id=vid)
         out[label] = {"ec2": [[n, kw] for n, kw in ec2.calls], "hub": copy.deepcopy(FakeEdge.calls)}
     return out
 
 
+def recorded_vpc(ec2, placement):
+    """The VPC id the placement's status records once a run made it."""
+    return next((v["VpcId"] for v in ec2.vpcs.values() if T.tagmap(v).get("shc-placement") == placement), None)
+
+
 # the scenarios' calls as the module made them before IPv6-only existed (sha256 of the canonical JSON)
+# re-pinned for the names rules: the placement's VPC is looked up before its IPv6 pool (its Name decides the pool's),
+# and place-public finds its route table by the role tag instead of the Name tag; re-pinned again when the VPC became
+# the one the placement's status records: later runs read it by id (VpcIds) instead of by the tag; the same calls
+# in the same order otherwise (checked call by call against the module before); re-pinned when place-down acted only
+# on what status records: its two new reads list what carries the placement's tag (describe_vpcs by the tag, and
+# describe_ipam_pools with IPv6), the teardown is given the recorded pool, and every other call is as before;
+# re-pinned when place-up took its IPAM and pool by the ids status records: describe_ipams and describe_ipam_pools by
+# id instead of listing them (the recorded pool names its IPAM), and place-up's report of what carries the placement's tag (describe_vpcs by the tag,
+# describe_ipam_pools with source Network); every create, change and delete and every hub call the same, in the same
+# order (compared call by call against the module before)
 DUAL_STACK_DIGESTS = {
-    "ipv4": "b33bb9d63af45b6e3c37a1bc13a9c9ae697b1f68a29218eb44794466f2d89868",
-    "network": "fd6c1fcde2b0c49a6287261335bd8f87831620aceadb594ff6740e6f06c9ff3a",
-    "provider": "f854fd92a5b1687f10ba3fbc3eaae0d5a12fa76ff09e86c629740a93d057a1b4",
+    "ipv4": "e3721de86e1068af2f8d036f8d1efc46ecc910259c6d53f5f336a1463a924f56",
+    "network": "da242fc8628ddd6c8219194f4c1cc12369bbab83ed326619dedf44399ca82371",
+    "provider": "a77b5d6f0c07abb13cdb357d16d654405430c664ceb80a86e9ddd904d144b851",
 }
 
 
@@ -278,12 +301,16 @@ class TenantIpv6OnlyTest(unittest.TestCase):
         self.ec2 = FakeEc2()
 
     def up(self, v6, egress=True):
+        """As the job calls it: the placement's recorded objects and the IPAMs the account's placements record."""
         t = tenant(self.ec2)
-        return t.place_up(PLACEMENT, VNI, [], egress, v6), t.changed
+        if v6:
+            v6 = dict(v6, ipams=list(self.ec2.ipams), **V8.recorded6(self.ec2, PLACEMENT))
+        return t.place_up(PLACEMENT, VNI, [], egress, v6, vpc_id=recorded_vpc(self.ec2, PLACEMENT)), t.changed
 
     def down(self, v6):
         t = tenant(self.ec2)
-        return t.place_down(PLACEMENT, VNI, v6), t.changed
+        v6 = dict(v6, **V8.recorded6(self.ec2, PLACEMENT))   # the pool and option set its status records
+        return t.place_down(PLACEMENT, VNI, v6, vpc_id=recorded_vpc(self.ec2, PLACEMENT)), t.changed
 
     def routes6(self, vpc):
         return {r["DestinationIpv6CidrBlock"]: {k: v for k, v in r.items() if k.endswith("Id")}
@@ -376,12 +403,15 @@ class TenantIpv6OnlyTest(unittest.TestCase):
     def test_a_vpc_with_another_cidr_is_refused(self):
         self.up(only6())
         t = tenant(self.ec2)
-        self.assertIn("has CIDR", refused(lambda: t.place_up(PLACEMENT, VNI + 1, [], True, only6()))["error"])
+        rec = dict(only6(), **V8.recorded6(self.ec2, PLACEMENT))
+        self.assertIn("has CIDR", refused(lambda: t.place_up(PLACEMENT, VNI + 1, [], True, rec,
+                                                             vpc_id=recorded_vpc(self.ec2, PLACEMENT)))["error"])
 
     def test_no_public_subnets(self):
         self.up(only6())
         t = tenant(self.ec2)
-        self.assertIn("IPv6-only", refused(lambda: t.place_public(PLACEMENT, "up"))["error"])
+        self.assertIn("IPv6-only", refused(lambda: t.place_public(PLACEMENT, "up",
+                                                                  vpc_id=recorded_vpc(self.ec2, PLACEMENT)))["error"])
 
     # ---- source Provider
     def test_provider_source_with_translation(self):
@@ -473,12 +503,62 @@ class TenantIpv6OnlyTest(unittest.TestCase):
             out, _ = self.down({"source": "Provider", "only": True})
         self.assertTrue(out["networkKept"])
 
-    def test_teardown_finds_an_option_set_without_its_vpc(self):
+    def test_place_up_never_takes_or_deletes_an_option_set_nothing_records(self):
+        """The option set: (none | recorded with these resolvers | recorded with others | recorded and in use by
+        another VPC) x (a set tagged for the placement that nothing records: absent | present). Only a recorded set
+        is used or deleted; a tagged one nothing records is listed, never taken and never deleted (before this, a
+        place-up deleted every tagged set it did not use)."""
+        for state in ("none", "same", "other", "other, in use"):
+            for stray in (False, True):
+                with self.subTest(state=state, stray=stray):
+                    self.ec2 = FakeEc2()
+                    rec = {}
+                    if state != "none":
+                        r0, _ = self.up(only6(resolvers=RESOLVERS if state == "same" else []))
+                        rec["dhcpOptions"] = r0["ipv6"]["dhcpOptions"]
+                        rec["pool"] = r0["ipv6"]["pool"]
+                        if state == "other, in use":   # someone associates it with another VPC
+                            self.ec2.vpcs["vpc-elsewhere"] = {"VpcId": "vpc-elsewhere", "Tags": [],
+                                                              "DhcpOptionsId": rec["dhcpOptions"]}
+                    if stray:
+                        self.ec2.dhcp["dopt-x"] = {"DhcpOptionsId": "dopt-x", "DhcpConfigurations": [],
+                                                   "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}]}
+                    T.MADE.clear()
+                    t = tenant(self.ec2)
+                    r = t.place_up(PLACEMENT, VNI, [], True, dict(only6(), ipams=list(self.ec2.ipams), **rec),
+                                   vpc_id=recorded_vpc(self.ec2, PLACEMENT))
+                    mine = r["ipv6"]["dhcpOptions"]
+                    self.assertEqual(T.dhcp_servers(self.ec2.dhcp[mine]), RESOLVERS)
+                    self.assertEqual(mine == rec.get("dhcpOptions"), state == "same")
+                    self.assertEqual(T.MADE.get("dhcpOptions"), None if state == "same" else mine)
+                    if stray:
+                        self.assertIn("dopt-x", self.ec2.dhcp)
+                        self.assertIn("dhcp options dopt-x", r["left"])
+                    if state == "other":
+                        self.assertNotIn(rec["dhcpOptions"], self.ec2.dhcp)       # the recorded one replaced
+                    if state == "other, in use":
+                        self.assertIn(rec["dhcpOptions"], self.ec2.dhcp)
+                        self.assertIn("dhcp options %s (in use elsewhere)" % rec["dhcpOptions"], r["left"])
+                    if state in ("none", "same") and not stray:
+                        self.assertNotIn("left", r)
+
+    def test_an_option_set_nothing_records_is_listed_not_deleted(self):
+        # tagged for the placement, recorded by no status: the tag is anyone's to write in the account
         t = tenant(self.ec2)
         self.ec2.dhcp["dopt-x"] = {"DhcpOptionsId": "dopt-x", "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}],
                                    "DhcpConfigurations": []}
-        t.place_down(PLACEMENT, VNI, {"source": "Network", "only": True})
+        out = t.place_down(PLACEMENT, VNI, {"source": "Network", "only": True})
+        self.assertIn("dopt-x", self.ec2.dhcp)
+        self.assertEqual(out["left"], ["dhcp options dopt-x"])
+
+    def test_the_recorded_option_set_goes_when_the_vpc_is_gone(self):
+        t = tenant(self.ec2)
+        self.ec2.dhcp["dopt-r"] = {"DhcpOptionsId": "dopt-r", "Tags": [{"Key": "shc-placement", "Value": PLACEMENT}],
+                                   "DhcpConfigurations": []}
+        out = t.place_down(PLACEMENT, VNI, {"source": "Network", "only": True, "dhcpOptions": "dopt-r"},
+                           vpc_id="vpc-gone")
         self.assertEqual(self.ec2.dhcp, {})
+        self.assertIn("no longer exists", out["note"])
 
     def test_cli_place_up_without_prefix(self):
         seen = {}
@@ -489,7 +569,7 @@ class TenantIpv6OnlyTest(unittest.TestCase):
             def __init__(self, cfg):
                 self.changed = []
 
-            def place_up(self, *a):
+            def place_up(self, *a, **kw):
                 seen["up"] = a
                 return {}
         argv = ["x", "--config", "{}", "place-up", "--placement", PLACEMENT, "--vni", str(VNI), "--egress",
@@ -529,7 +609,9 @@ if HAVE_BOTO:
             self.atts = {"tgw-attach-connect": {"TransitGatewayAttachmentId": "tgw-attach-connect", "ResourceType": "connect",
                                                 "State": "available", "Tags": []}}
             self.tgw_rts = {"tgw-rtb-net": {"TransitGatewayRouteTableId": "tgw-rtb-net", "State": "available",
-                                            "Tags": [{"Key": "Name", "Value": "shc-net-%d" % VNI}]}}
+                                            "Tags": [{"Key": "Name", "Value": "shc-net-%d" % VNI},
+                                                     {"Key": "shc-edge-site", "Value": "site-x"},
+                                                     {"Key": "shc-vni", "Value": str(VNI)}]}}
             self.assoc, self.static = {}, {}
             self.amazon = [EGRESS6]
 
@@ -571,6 +653,13 @@ if HAVE_BOTO:
         def _f(Filters):
             return {f["Name"]: f["Values"] for f in Filters or []}
 
+        @classmethod
+        def _by_tags(cls, out, Filters):
+            for k, v in cls._f(Filters).items():
+                if k.startswith("tag:"):
+                    out = [x for x in out if E.tagmap(x).get(k[4:]) in v]
+            return out
+
         def h_describe_transit_gateways(self, **kw):
             return {"TransitGateways": [{"TransitGatewayId": TGW, "State": "available"}]}
 
@@ -578,10 +667,7 @@ if HAVE_BOTO:
             out = list(self.vpcs.values())
             if VpcIds:
                 out = [v for v in out if v["VpcId"] in VpcIds]
-            f = self._f(Filters)
-            if "tag:Name" in f:
-                out = [v for v in out if E.tagmap(v).get("Name") in f["tag:Name"]]
-            return {"Vpcs": copy.deepcopy(out)}
+            return {"Vpcs": copy.deepcopy(self._by_tags(out, Filters))}
 
         def h_create_vpc(self, CidrBlock, **kw):
             v = self._id("vpc")
@@ -702,8 +788,7 @@ if HAVE_BOTO:
             return {"NatGateways": copy.deepcopy(out)}
 
         def h_describe_addresses(self, Filters=None, **kw):
-            name = self._f(Filters).get("tag:Name", [None])[0]
-            return {"Addresses": [copy.deepcopy(a) for a in self.eips.values() if E.tagmap(a).get("Name") == name]}
+            return {"Addresses": copy.deepcopy(self._by_tags(list(self.eips.values()), Filters))}
 
         def h_allocate_address(self, **kw):
             a = self._id("eipalloc")
@@ -759,11 +844,7 @@ if HAVE_BOTO:
             return {}
 
         def h_describe_transit_gateway_route_tables(self, Filters=None, **kw):
-            out = list(self.tgw_rts.values())
-            f = self._f(Filters)
-            if "tag:Name" in f:
-                out = [r for r in out if E.tagmap(r).get("Name") in f["tag:Name"]]
-            return {"TransitGatewayRouteTables": copy.deepcopy(out)}
+            return {"TransitGatewayRouteTables": copy.deepcopy(self._by_tags(list(self.tgw_rts.values()), Filters))}
 
         def h_get_transit_gateway_route_table_associations(self, TransitGatewayRouteTableId, **kw):
             return {"Associations": [{"TransitGatewayAttachmentId": a, "State": "associated"}
@@ -820,8 +901,10 @@ def egress_scenario(module, nat64_runs=None):
     return ec2
 
 
-# the hub's calls for a network's NAT egress VPC (up, re-run, down) before NAT64 existed (sha256)
-EGRESS_DIGEST = "b331dbe391422fa85cfa57d958212c1a0bfad1235a4265abaa462fcd1fbb527b"
+# the hub's calls for a network's NAT egress VPC (up, re-run, down) before NAT64 existed (sha256); re-pinned for the
+# names rules: the egress VPC, its address and the network's route table are looked up by their tags (site, VNI, role)
+# instead of their Name, every other call as before
+EGRESS_DIGEST = "d836932560114338826452a49cd1aad01920b034f244bba0649a3a6e6536ed07"
 
 
 @unittest.skipUnless(HAVE_BOTO, "boto3 not installed")
@@ -1008,9 +1091,10 @@ class TasksTest(unittest.TestCase):
     def test_place_up_without_a_prefix(self):
         task = by_name(load(os.path.join(NP, "backend_cloudaws.yml")), "The placement's VPC and its attachment to the network")
         args = run_play([task_vars(task), write_out("_out")],
-                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_l3vni": VNI,
-                         "np_prefixes_v4": [], "np_aws_nat_egress": True, "np_aws_ipv6": only6("Provider")})["aws_args"]
-        self.assertEqual(args[:6], ["place-up", "--placement", "acme/p1", "--vni", str(VNI), "--egress"])
+                        {"np_aws_cfg": {}, "fab_namespace": "acme", "fab_name": "p1", "np_aws_name": "acme_p1", "np_l3vni": VNI,
+                         "np_prefixes_v4": [], "np_aws_nat_egress": True, "np_aws_ipv6": only6("Provider"),
+                         "np_aws_vpc_id": ""})["aws_args"]
+        self.assertEqual(args[:8], ["place-up", "--placement", "acme/p1", "--name", "acme_p1", "--vni", str(VNI), "--egress"])
         self.assertEqual(json.loads(args[-1]), only6("Provider"))
 
     def test_translation_and_placeholder_recorded(self):

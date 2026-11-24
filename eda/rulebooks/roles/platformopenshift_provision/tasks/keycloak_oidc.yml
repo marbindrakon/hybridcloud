@@ -4,11 +4,11 @@
 #
 # Inputs (must be set by caller):
 #   cluster_name       - PlatformOpenshift CR name (e.g. ocp-ses4); the ManagedCluster's name
-#   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (shc AWS builds: shc-aws-<entity>-<name>)
+#   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (the build name of AWS and Google Cloud builds)
 #   cluster_cr_name    - optional: the PlatformOpenshift's name when it differs from cluster_name (read by cluster_rbac.yml)
-#   cluster_console_url - https://console-openshift-console.apps.<slug>.<domain>
-#   cluster_api_url     - https://api.<slug>.<domain>:6443
-#   cluster_apps_url    - https://apps.<slug>.<domain>
+#   cluster_console_url - https://console-openshift-console.apps.<cluster domain>
+#   cluster_api_url     - https://api.<cluster domain>:6443
+#   cluster_apps_url    - https://apps.<cluster domain>
 #   cluster_domain      - the cluster's DNS domain (<name>.<environment domain>); its OAuth server is
 #                         oauth-openshift.apps.<cluster_domain>. Empty: taken from cluster_api_url (https://api.<domain>:6443)
 #   cluster_namespace   - CR namespace (e.g. entity-acme-corp)
@@ -18,6 +18,9 @@
 # Reads:
 #   the RHBK Route on services and the admin account in central Vault (keycloak_admin_session.yml)
 #   KEYCLOAK_REALM env var (defaults to sovereign-tenants)
+#   resolved_entity    the tenant (the cluster's groups are <tenant>.<group>)
+#   the realization's tenantCluster.oauthAccessTokenMaxAgeSeconds (common/vars/fabric_realization.yml, overridden by
+#   the installation's fabric_realization): how long the cluster's OAuth access tokens live
 
 - name: Skip OIDC setup if console URL not yet available or central token is missing
   ansible.builtin.set_fact:
@@ -104,6 +107,14 @@
     quiet: true
   when: not (skip_oidc_setup | bool)
 
+# The client is the cluster's by its mark: the attribute platformopenshift=<namespace>/<cluster> the job writes on it
+# (a client attribute only the platform writes: tenants do not administer the realm). A client of the name marked for
+# another cluster is refused, never changed; one without the mark was made by the release before and gets it.
+- name: The cluster's mark on its sign-in client
+  ansible.builtin.set_fact:
+    ocp_oidc_mark: "{{ cluster_namespace }}/{{ cluster_cr_name | default(cluster_name, true) }}"
+  when: not (skip_oidc_setup | bool)
+
 - name: Check if OIDC client already exists
   ansible.builtin.uri:
     url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId={{ ocp_oidc_client_id }}"
@@ -135,9 +146,11 @@
       redirectUris: "{{ ocp_oidc_redirect_uris }}"
       webOrigins:
         - "{{ cluster_apps_url | regex_replace('/+$', '') }}"
+      implicitFlowEnabled: false
       attributes:
         "access.token.lifespan": "28800"
         "groups.claim.enabled": "true"
+        platformopenshift: "{{ ocp_oidc_mark }}"
     validate_certs: false
     status_code: [201, 409]
   when:
@@ -155,21 +168,79 @@
   register: _kc_client_info
   when: not (skip_oidc_setup | bool)
 
-# A client made before the exact callback (or for another domain) is converged in place; other fields are kept.
-- name: Converge the sign-in callback of an existing OIDC client
+- name: Refuse a sign-in client of the name that is another cluster's
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: the sign-in directory already holds a
+      client {{ ocp_oidc_client_id }} that the platform made for another cluster; nothing was changed. The platform
+      team must check it.
+  vars:
+    _mark: "{{ ((_kc_client_info.json[0].attributes | default({}, true)).platformopenshift | default('', true)) }}"
+  when:
+    - not (skip_oidc_setup | bool)
+    - _mark | length > 0
+    - _mark != ocp_oidc_mark
+
+# A client of the name without a mark is taken only when this cluster's status records that client
+# (status.oidcClientId, written by the release before as well). The recorded build name is no proof: the cluster
+# records it itself in its first run, before this step.
+- name: Refuse an unmarked sign-in client this cluster did not record
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: the sign-in directory already holds a
+      client {{ ocp_oidc_client_id }} that this cluster did not record; nothing was changed. The platform team must
+      check it.
+  vars:
+    _mark: "{{ ((_kc_client_info.json[0].attributes | default({}, true)).platformopenshift | default('', true)) }}"
+    _st: >-
+      {{ ((platformopenshift_cr | default({}, true)).resources | default([{}], true) | first | default({}, true)).status
+         | default({}, true) }}
+  when:
+    - not (skip_oidc_setup | bool)
+    - _kc_client_info.json | length > 0
+    - _mark | length == 0
+    - (_st.oidcClientId | default('', true)) != ocp_oidc_client_id
+
+# The client is recorded as soon as it exists (the teardown deletes the recorded client only)
+- name: Record the cluster's sign-in client
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: platformopenshifts
+    cr_name: "{{ cluster_cr_name | default(cluster_name, true) }}"
+    cr_namespace: "{{ cluster_namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      oidcClientId: "{{ ocp_oidc_client_id }}"
+  when:
+    - not (skip_oidc_setup | bool)
+    - _kc_client_info.json | length > 0
+
+# The client is converged in place: the exact callback (a client made before it, or for another domain), no password
+# or implicit grant (the cluster's OAuth server uses the code flow only), and the cluster's mark; other fields are kept.
+- name: Converge an existing OIDC client
+  vars:
+    _c: "{{ _kc_client_info.json[0] }}"
+    _attrs: "{{ _c.attributes | default({}, true) | combine({'platformopenshift': ocp_oidc_mark}) }}"
   ansible.builtin.uri:
-    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}"
+    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _c.id }}"
     method: PUT
     headers:
       Authorization: "Bearer {{ kc_admin_token }}"
       Content-Type: application/json
     body_format: json
-    body: "{{ _kc_client_info.json[0] | combine({'redirectUris': ocp_oidc_redirect_uris}) }}"
+    body: >-
+      {{ _c | combine({'redirectUris': ocp_oidc_redirect_uris, 'directAccessGrantsEnabled': false,
+                       'implicitFlowEnabled': false, 'attributes': _attrs}) }}
     validate_certs: false
     status_code: [204]
   when:
     - not (skip_oidc_setup | bool)
-    - (_kc_client_info.json[0].redirectUris | default([], true) | sort | list) != (ocp_oidc_redirect_uris | sort | list)
+    - >-
+      (_c.redirectUris | default([], true) | sort | list) != (ocp_oidc_redirect_uris | sort | list)
+      or (_c.directAccessGrantsEnabled | default(false) | bool)
+      or (_c.implicitFlowEnabled | default(false) | bool)
+      or (_c.attributes | default({}, true)).platformopenshift | default('', true) != ocp_oidc_mark
   no_log: true
 
 - name: Get OIDC client secret
@@ -184,28 +255,38 @@
   when: not (skip_oidc_setup | bool)
   no_log: true
 
-- name: Add groups mapper to OIDC client (if not present)
-  ansible.builtin.uri:
-    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}/protocol-mappers/models"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ kc_admin_token }}"
-      Content-Type: application/json
-    body_format: json
-    body:
-      name: groups
-      protocol: openid-connect
-      protocolMapper: oidc-group-membership-mapper
-      config:
-        "full.path": "false"
-        "id.token.claim": "true"
-        "access.token.claim": "true"
-        "userinfo.token.claim": "true"
-        "claim.name": "groups"
-    validate_certs: false
-    status_code: [201, 409]
+# Who gets what on the cluster, before the cluster is given the identity provider: the client roles <tenant>.<group>
+# of the cluster's access groups (cluster_signin_groups.yml), then the client's groups claim from those roles only
+# (cluster_groups_claim.yml). A cluster whose claim is not right is not connected to the directory. Everyone of the
+# realm can authenticate at the client; a person outside the cluster's groups gets no group, so no binding.
+- name: The cluster's access groups as client roles of its sign-in client
+  ansible.builtin.include_tasks: cluster_signin_groups.yml
   when: not (skip_oidc_setup | bool)
-  ignore_errors: true
+
+- name: The cluster's groups claim holds its own roles only
+  ansible.builtin.include_tasks: cluster_groups_claim.yml
+  when: not (skip_oidc_setup | bool)
+
+# How long the cluster's OAuth access tokens live (OpenShift's default is 86400 seconds): a person taken out of an
+# access group keeps the cluster's group until their token ends, as groups from the claim change at a sign-in only
+- name: The lifetime of the cluster's OAuth access tokens
+  ansible.builtin.include_vars:
+    file: "{{ role_path }}/../../../common/vars/fabric_realization.yml"
+  when: not (skip_oidc_setup | bool)
+
+- name: Keep the lifetime of the cluster's OAuth access tokens
+  vars:
+    _real: "{{ fabric_realization_defaults | combine(fabric_realization | default({}, true), recursive=True) }}"
+  ansible.builtin.set_fact:
+    ocp_oauth_token_max_age: "{{ (_real.tenantCluster | default({}, true)).oauthAccessTokenMaxAgeSeconds | default(86400, true) | int }}"
+  when: not (skip_oidc_setup | bool)
+
+- name: Refuse a token lifetime that is not a number of seconds
+  ansible.builtin.assert:
+    that: ocp_oauth_token_max_age | int > 0
+    fail_msg: "The setting tenantCluster.oauthAccessTokenMaxAgeSeconds must be a number of seconds above 0."
+    quiet: true
+  when: not (skip_oidc_setup | bool)
 
 - name: Encode OIDC client secret as base64
   ansible.builtin.set_fact:
@@ -283,6 +364,9 @@
                       metadata:
                         name: cluster
                       spec:
+                        # one expression, so that the number stays a number on the automation's ansible-core 2.16
+                        # (a nested "{{ x | int }}" comes out as a string there, and the field is an integer)
+                        tokenConfig: "{{ {'accessTokenMaxAgeSeconds': ocp_oauth_token_max_age | int} }}"
                         identityProviders:
                           - name: "{{ platformopenshift_oidc_idp_name }}"
                             mappingMethod: claim
@@ -414,7 +498,8 @@
 - name: Set OIDC configured fact
   ansible.builtin.set_fact:
     oidc_configured: "{{ not (skip_oidc_setup | bool) }}"
-    oidc_client_id: "{{ ocp_oidc_client_id | default('') }}"
+    # empty when the step was skipped: the status write then leaves the recorded client as it is
+    oidc_client_id: "{{ '' if (skip_oidc_setup | bool) else (ocp_oidc_client_id | default('')) }}"
 
 - name: Push cluster RBAC ClusterRoleBindings via ACM
   ansible.builtin.include_tasks: cluster_rbac.yml

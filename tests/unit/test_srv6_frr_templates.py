@@ -362,5 +362,22 @@ class RootSrv6(unittest.TestCase):
             self.assertEqual(f.read(), self.out)
 
 
+
+class VrfDescriptionsSrv6(unittest.TestCase):
+    """On the SRv6 core a gateway VRF has no MPLS line; it still gets its interface block with the names beside the
+    number (zebra takes "description" on an interface). Without names (the release's inputs) nothing is added."""
+
+    def test_described_without_mpls(self):
+        v = gw_srv6()
+        for x in v["cg_vrfs"]:
+            x.update(tenant="acme-corp", network="entity-acme-corp/core")
+        b = block(T.render(T.GW, v), "interface t51000")
+        self.assertEqual(b, ["interface t51000",
+                             " description tenant acme-corp, network entity-acme-corp/core, placement entity-acme/core-site1",
+                             "exit"])
+
+    def test_no_names_no_block(self):
+        self.assertNotIn("interface t51000", T.render(T.GW, gw_srv6()).splitlines())
+
 if __name__ == "__main__":
     unittest.main()

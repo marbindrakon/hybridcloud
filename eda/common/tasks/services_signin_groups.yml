@@ -23,11 +23,14 @@
 #               role is another entity's) is that group's fault, reported in ssg_faults, and the others go on; the
 #               caller keeps its ownership of that group's client role (default false: the whole step fails)
 #   ssg_keep    group names this owner keeps the client roles of although they are not wanted now (default [])
+#   ssg_adopt_unmarked  true: a wanted client role that carries no entity attribute at all (made before the marks,
+#               e.g. by an older job of a site's sign-in client) is taken: entity and owner are written on it. Default
+#               false: such a role is refused like another entity's. A role with another entity's mark is always
+#               refused; a role is never taken over or deleted on its name alone.
 # Sets ssg_released ([{key: role, value: {owners}}]: owners [] = deleted), ssg_all_role_names (before the run) and
 # ssg_faults ([{group, missing (bool), message}]).
 - name: Sign-in settings
   ansible.builtin.set_fact:
-    ssg_realm: "{{ entity_signin_realm | default('sovereign-tenants') }}"
     ssg_client_id: "{{ entity_signin_client | default('openshift-services') }}"
     ssg_legacy_owner: "Entity/{{ ssg_entity }}"
 
@@ -43,7 +46,7 @@
   ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
   vars:
     krt_purpose: clients
-    krt_rbac_config: "{{ entity_signin_rbac_config | default('keycloak-sovereign-tenants-services', true) }}"
+    krt_rbac_config: "{{ entity_signin_rbac_config | default('', true) }}"
     krt_url: "{{ ssg_kc }}"
     krt_token_fact: ssg_clients_token
 
@@ -51,9 +54,14 @@
   ansible.builtin.include_tasks: obtain_keycloak_realm_token.yml
   vars:
     krt_purpose: membership
-    krt_rbac_config: "{{ entity_signin_rbac_config | default('keycloak-sovereign-tenants-services', true) }}"
+    krt_rbac_config: "{{ entity_signin_rbac_config | default('', true) }}"
     krt_url: "{{ ssg_kc }}"
     krt_token_fact: ssg_members_token
+
+# the realm a site's caller names, else the realm whose automation clients the RbacConfig published
+- name: The tenant realm
+  ansible.builtin.set_fact:
+    ssg_realm: "{{ entity_signin_realm | default('', true) or keycloak_realm_name }}"
 
 # per group: the Rbac groups first, a group missing from the directory is that group's fault
 - name: Find the Rbac groups (per group)
@@ -92,7 +100,7 @@
 
 - name: Refuse a realm without the sign-in client
   ansible.builtin.fail:
-    msg: "{{ ssg_label | default(ssg_owner) }}: the tenant realm {{ ssg_realm }} has no sign-in client {{ ssg_client_id }}"
+    msg: "{{ ssg_label | default(ssg_owner) }}: the sign-in directory has no sign-in client {{ ssg_client_id }} yet"
   when: _ssg_client.json | length == 0
 
 - name: Read the client roles
@@ -117,6 +125,20 @@
       {%- endfor -%}
       {{ out }}
     ssg_all_role_names: "{{ _ssg_roles_now.json | map(attribute='name') | list }}"
+    ssg_unmarked_role_names: >-
+      {{ _ssg_roles_now.json | rejectattr('attributes.entity', 'defined') | map(attribute='name') | list
+         if ssg_adopt_unmarked | default(false) | bool else [] }}
+
+# a wanted role without any mark, when the caller asked for it: it is this entity's from now on (this owner)
+- name: Take the wanted client roles made before the marks
+  ansible.builtin.set_fact:
+    ssg_entity_roles: >-
+      {%- set out = dict(ssg_entity_roles) -%}
+      {%- for r in _ssg_roles_now.json if r.name in ssg_unmarked_role_names and r.name in (ssg_wanted_eff | map(attribute='group') | list) -%}
+        {%- set _ = out.update({r.name: {'description': r.description | default(''), 'owners': []}}) -%}
+      {%- endfor -%}
+      {{ out }}
+  when: ssg_unmarked_role_names | length > 0
 
 - name: A wanted group held by a role of another entity is that group's fault (per group)
   vars:
@@ -181,6 +203,17 @@
     validate_certs: false
   loop: "{{ ssg_wanted_groups }}"
   register: _ssg_roles
+
+# a role created by someone else between the list and the create (the create answered 409) is not mapped
+- name: Refuse a wanted client role that does not carry this entity's mark
+  ansible.builtin.fail:
+    msg: >-
+      {{ ssg_label | default(ssg_owner) }}: client role {{ item.item }} of {{ ssg_client_id }} exists but is not tagged
+      entity={{ ssg_entity }}
+  loop: "{{ _ssg_roles.results }}"
+  loop_control:
+    label: "{{ item.item }}"
+  when: ((item.json | default({}, true)).attributes | default({}, true)).entity | default([]) != [ssg_entity]
 
 - name: Find the Rbac groups
   ansible.builtin.uri:

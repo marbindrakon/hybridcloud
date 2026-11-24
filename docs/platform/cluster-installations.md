@@ -116,6 +116,96 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).
 
+## Who gets what on a tenant's cluster
+
+The identity realm is shared by all tenants. A tenant's cluster takes only its own tenant's groups:
+
+- Each access group the cluster names (`spec.toolRbac`: `clusterAdminRbac`, `clusterOperatorRbac`,
+  `clusterDeveloperRbac`, `clusterViewerRbac`) becomes a client role `<tenant>.<group>` of the cluster's own sign-in
+  client, mapped to the access group's group in the directory, as on the services cluster and the sites.
+- The client's groups claim comes from one place only: a mapper of the client's own roles. No other mapper of the
+  client writes `groups`, and a client scope linked to the client whose mappers write `groups` (for example a
+  realm's `microprofile-jwt` scope) is unlinked from this client, so asking for more scopes at sign-in adds nothing.
+  The cluster sees the group `<tenant>.<group>` and never another tenant's group of the same name.
+- The cluster's bindings (`<build>-cluster-admin`, `-cluster-operator`, `-cluster-developer`, `-cluster-viewer`)
+  name exactly those groups; a level without an access group has no binding.
+- Creating projects: OpenShift's default binding `self-provisioners` lets every signed-in person create projects. On
+  a tenant's cluster the platform manages it: it names the operator level's groups only (none when that level has no
+  access group), and carries `rbac.authorization.kubernetes.io/autoupdate: "false"` so that OpenShift does not put
+  the default back. Administrators create projects through `cluster-admin`.
+- A new project belongs to the cluster's groups, not to the person who asked for it. OpenShift's default project
+  template makes the requesting user the project's admin; on a tenant's cluster the platform sets the cluster's own
+  project template (`project-request` in `openshift-config`, named by the cluster's project configuration), whose
+  admin binding names the operator level's groups. A person taken out of such a group, or moved to another tenant,
+  loses the admin right of those projects when their token ends (below), including the projects they asked for. A
+  cluster whose operator level has no access group: nobody but its administrators can create a project, and a new
+  project is bound to no group; the cluster's message for a refused project request says so.
+- A limit of the project template: OpenShift applies it once, when the project is made, and the platform does not
+  change a project's admin binding afterwards. The binding names the groups that were the operator level's groups
+  when the project was made. When a group leaves the operator level (moved to another level, or taken off the
+  cluster), or is taken off and an access group of the same name is added to the cluster again later, the projects
+  made before keep that group's name in their admin binding: the members of a group of that name on the cluster are
+  admins of those projects. A group added to the operator level later is not admin of the projects made before. The
+  cluster's administrators change those bindings where that is not wanted.
+- An access group whose group is not in the directory yet gets nothing; the job's log names it.
+
+**Who can sign in.** A person of the same sign-in directory who is not in one of the cluster's access groups can
+authenticate at the cluster and then has no rights: no group, no binding, no project. They keep what OpenShift gives
+every authenticated user, such as the `basic-user` role (basic information about their own user and the projects
+they can see) and their own OAuth tokens, which they can list and delete. What would stop the authentication itself
+is a sign-in directory (realm) per tenant.
+
+**When a person leaves an access group.** OpenShift takes a person's groups from the sign-in directory at each
+sign-in. The platform binds nothing to a person, only to groups, so a person taken out of an access group, or moved
+to another tenant, keeps the cluster's group, and its rights, until their OAuth access token ends, and nothing after:
+the cluster's token lifetime is the realization's `tenantCluster.oauthAccessTokenMaxAgeSeconds` (default 86400
+seconds, OpenShift's own). A cluster administrator can end it sooner by deleting the person's tokens. An access group
+taken off the cluster loses the cluster's bindings (its level's binding and `self-provisioners`) with the next run of
+the cluster's job; the admin bindings of projects keep its name (the limit above). A binding that someone on the
+cluster gave a person by name (a project administrator can), and a service account token they made, are the
+cluster's administrators' to remove; the platform does not look for them.
+
+The cluster's job needs no right in the identity provider beyond the realm's `clients` and `membership` automation
+clients that the RbacConfig publishes: it manages the cluster's own client, its roles and their mappings to the
+access groups' groups. The sign-in client carries the attribute `platformopenshift=<namespace>/<cluster>` and is
+recorded in the cluster's `status.oidcClientId` as soon as it exists; a client of the same name marked for another
+cluster, or without a mark when the cluster's `status.oidcClientId` does not record it, is refused and never changed
+(the recorded build name is not proof: the cluster records it itself before its sign-in step). A run that skips the
+sign-in step (the cluster's console is not known yet) leaves the recorded client as it is. The delete removes the recorded client only (when it carries the cluster's mark or none); a
+cluster that recorded no client deletes nothing in the sign-in directory and says so.
+
+**What the sign-in directory must allow.** The jobs manage a cluster's sign-in client with the realm's own account
+for clients, which may manage clients but not the realm. The directory lets such an account add or change only the
+protocol mapper types its realm lists (realm attribute `allowedProtocolMapperTypesForClientAdministrators`; with
+none listed every mapper is refused). The job of the directory's connection (`RbacConfig`) lists the two types
+the platform uses and keeps any an administrator added: group membership, for the tools' sign-in clients, and
+client roles, for a cluster's and a site's sign-in client. After an upgrade of the directory that brings this
+rule, run that connection's job once (Retry now on the `RbacConfig`) before a cluster or a secrets store is made;
+until then their sign-in step stops with the directory's refusal.
+
+## The names the platform gives a cluster
+
+- **Build name** (`status.buildName`, the cluster's identity on the hub): `shc-<oso|aws|gcp>-<cluster>-<tenant>-<8
+  hex>`, the cluster's own name first, cut to fit (53 characters on OpenStack, 40 on AWS and Google Cloud) and ended
+  by a digest of the exact tenant and cluster. A recorded build name stays the cluster's.
+- **OpenStack user and application credential**: `<tenant>_<environment>_<cluster>`, described with the same names.
+  A cluster that recorded its user (`status.credential.user`) keeps that name.
+- **OpenStack floating IPs**: described `OpenShift cluster <cluster>: API (platform build <build>)` and `...:
+  ingress (...)` for people, and recorded with their addresses and ids in `status.floatingIPs`. A cluster that
+  recorded its floating IPs keeps those two; with nothing recorded the job makes two and records them at once. They
+  are never found by a description, and released by their recorded ids only. A run that made floating IPs and
+  stopped before it recorded them leaves them to the platform team: the cluster's next run makes new ones, and the
+  ones left behind are released by hand in the environment's project. The same holds when the second of the two
+  cannot be made after the first was: the first is left unrecorded, and the job's log does not give its id; its
+  description names the cluster. A record that holds only part of the pair
+  stops the job and makes nothing: the platform team completes or clears `status.floatingIPs`.
+- **Tags and labels** on what the installer makes on AWS and Google Cloud: `shc-tenant`, `shc-environment` and
+  `shc-cluster` carry the names in full, next to `shc-managed` and `shc-build`.
+- The cluster's, the tenant's and the environment's names are checked before anything is made: a letter first,
+  lower-case letters, digits and single hyphens, a letter or digit last, at most 30 characters; on Google Cloud a
+  cluster name may not start with `goog` or contain `google` or a look-alike (the installer's own rule). A name that
+  breaks the rule stops the job with reason `NameNotAllowed`.
+
 ## The cause a tenant sees
 
 The job reads the cause of a failed attempt from the installer's log on the `ClusterProvision` (`spec.installLog`) and
@@ -157,7 +247,13 @@ periodic run tries again (a run waits at most about three minutes for them).
 
 On AWS the public subnets, route table and internet gateway of a placement serve all External clusters on it: a
 delete leaves them while another cluster object of the namespace records the same placement as External; the last
-one's delete removes them.
+one's delete removes them. They are made in, and removed from, the VPC the placement records
+(`status.realization.site.vpc`), never a VPC found by its tags. A placement that records no VPC stops the step and
+nothing is made or deleted; a placement that no longer exists took its VPC with it.
+
+On an OpenStack site with a router advertisement service, the cluster's preflight gives the service the platform's
+project by the id the placement recorded (else the one the site's gateway recorded); while neither has recorded it,
+the cluster waits (`WaitingForPlacement`).
 
 On OpenStack the preflight refuses a flavor the environment does not offer before anything is created: named to the
 tenant (`FlavorNotFound`) when the cluster's spec names it; when it is the installation's default
@@ -203,6 +299,19 @@ OpenStack) cannot change after creation.
   worker count was applied, and it still is.
 - **All clusters:** `spec.type` and the environment can no longer change, and on AWS and Google Cloud neither can the
   region nor the network.
+- **Sign-in of existing clusters:** the next run of an installed cluster gives it the tenant's groups as above: its
+  bindings are replaced (the groups without the tenant are no longer bound), its sign-in client is marked as the
+  cluster's, `self-provisioners` names its operator groups only, and new projects are bound to the operator groups.
+  Projects made before keep their admin binding to the person who asked for them: the cluster's administrators
+  review them (`oc get rolebindings -A`) and remove the bindings to people by name. People who sign in again get
+  their groups `<tenant>.<group>`; the cluster's old groups of bare names are left on the cluster with no binding and
+  can be deleted there.
+- **AWS and Google Cloud issuers:** the static issuer's ConfigMap of an existing cluster carries the label keys of the
+  release before; the issuer's sync selects both keys in this release, and the cluster's next run writes both.
+- **OpenStack clusters of the release before** left the install-config secret at
+  `oso/projects/<environment>/clusters/<cluster>/install-config` in the secret store; a delete no longer removes that
+  path (the cluster's name alone is not unique across tenants). The platform team removes it by hand after the
+  cluster is deleted.
 - **Clusters installing during the upgrade:** a provision job that is already running finishes the old way; the next
   run of the cluster writes the new fields.
 - **OpenStack clusters on a hybrid network whose installation stopped** are no longer reinstalled about every two

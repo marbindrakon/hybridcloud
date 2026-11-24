@@ -1,0 +1,14 @@
+---
+# One access group's name on the cluster, <tenant>.<group> (common/files/shc_names.py group: exact or refused, never
+# cut). Input csg_item {rbac, path}; appends {rbac, path, group} to csg_named.
+- name: The group name of an access group
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request:
+      action: group
+      tenant: "{{ csg_entity }}"
+      group: "{{ csg_item.rbac }}"
+
+- name: Keep the group name of the access group
+  ansible.builtin.set_fact:
+    csg_named: "{{ csg_named + [csg_item | combine({'group': names_result.name})] }}"

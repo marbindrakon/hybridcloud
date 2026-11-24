@@ -95,6 +95,14 @@
         platform_type: "{{ platformopenshift_cr.resources[0].spec.type | default('') }}"
         platform_spec: "{{ platformopenshift_cr.resources[0].spec }}"
 
+    # the rule for names, before anything is claimed or made; a cluster that recorded its build keeps the name it
+    # was built with
+    - name: Check the names before anything is made
+      ansible.builtin.include_tasks: cluster_name_check.yml
+      when:
+        - platform_type in ['openstack', 'aws', 'gcp']
+        - (platformopenshift_cr.resources[0].status | default({}, true)).buildName | default('', true) | length == 0
+
     # A cluster recorded as installed (clusterInstalled, or stage Finishing or Installed) whose build the hub does not
     # hold: no release is made and no installation started under its name, whoever asked (a new installation could
     # take the addresses and DNS names of a cluster that may still run on the site). The failure is written for the

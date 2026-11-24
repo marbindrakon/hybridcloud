@@ -114,8 +114,9 @@ class FakeDNS:
                 and (type is None or r.type == type)]
 
     def create_recordset(self, zone, **kw):
+        # Designate gives a recordset the project of the request that made it (here the zone's own project)
         self.n += 1
-        rs = Obj(id=f"rs-{self.n}", zone_id=zone.id, **kw)
+        rs = Obj(id=f"rs-{self.n}", zone_id=zone.id, project_id=zone.project_id, **kw)
         self.sets.append(rs)
         self.conn.calls.append(("create", kw["name"], kw["type"]))
         return rs

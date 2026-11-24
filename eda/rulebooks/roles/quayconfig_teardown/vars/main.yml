@@ -1,3 +1,2 @@
 ---
 keycloak_internal_url: "{{ lookup('env', 'KEYCLOAK_INTERNAL_URL') }}"
-keycloak_realm: "{{ lookup('env', 'KEYCLOAK_REALM') | default('sovereign-tenants', true) }}"

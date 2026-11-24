@@ -17,7 +17,7 @@ OIDC = os.path.join(ROLE, "tasks", "keycloak_oidc.yml")
 DEFAULTS = os.path.join(ROLE, "defaults", "main.yml")
 SET = "Set the cluster's OAuth callback for the sign-in client"
 REFUSE = "Refuse a sign-in callback without the cluster's domain"
-CONVERGE = "Converge the sign-in callback of an existing OIDC client"
+CONVERGE = "Converge an existing OIDC client"
 INCLUDE_NAME = "Configure Keycloak OIDC client and ACM OAuth policy for this cluster"
 
 
@@ -46,7 +46,7 @@ class Wiring(unittest.TestCase):
         self.assertEqual(create["ansible.builtin.uri"]["body"]["redirectUris"], "{{ ocp_oidc_redirect_uris }}")
         conv = by_name(tasks, CONVERGE)
         self.assertEqual(conv["ansible.builtin.uri"]["method"], "PUT")
-        self.assertIn("combine({'redirectUris': ocp_oidc_redirect_uris})", conv["ansible.builtin.uri"]["body"])
+        self.assertIn("combine({'redirectUris': ocp_oidc_redirect_uris,", conv["ansible.builtin.uri"]["body"])
         self.assertTrue(conv["no_log"])
         names = [t.get("name") for t in walk(tasks)]
         self.assertLess(names.index(REFUSE), names.index("Create OIDC client in Keycloak for OpenShift cluster"))

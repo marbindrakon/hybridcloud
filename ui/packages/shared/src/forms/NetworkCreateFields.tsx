@@ -4,6 +4,7 @@
  * the only preset values are the CRDs' own defaults.
  */
 import React, { useEffect, useMemo, useState } from 'react';
+import { nameAllowed, NAME_MAX } from './nameRule';
 import {
   ExpandableSection,
   FormGroup,
@@ -1276,7 +1277,7 @@ export function CloudVirtCreateFields({
   const nsOk =
     namespaces.length >= 1 &&
     namespaces.length <= 16 &&
-    namespaces.every((n) => DNS_LABEL.test(String(n.name ?? '')) && String(n.name).length <= 30) &&
+    namespaces.every((n) => nameAllowed(String(n.name ?? ''))) &&
     new Set(nsNames).size === nsNames.length;
   const qOk = (v: string) => !v.trim() || QUANTITY.test(v.trim());
   const vmsOk = optionalInt(vms, 0, Number.MAX_SAFE_INTEGER);
@@ -1362,7 +1363,7 @@ export function CloudVirtCreateFields({
           {
             key: 'name',
             label: t('fields.namespaceName'),
-            validate: (v) => v == null || (DNS_LABEL.test(String(v)) && String(v).length <= 30),
+            validate: (v) => v == null || nameAllowed(String(v)),
           },
           {
             key: 'network',
@@ -1374,7 +1375,7 @@ export function CloudVirtCreateFields({
             ],
           },
         ]}
-        helperText={t('fields.vmNamespacesHelp')}
+        helperText={`${t('fields.vmNamespacesHelp')} ${t('form.nameRule.rule', { max: NAME_MAX })}`}
       />
       <FormGroup label={t('fields.quota')} fieldId="cv-quota-cpu">
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(10rem, 1fr))', gap: '0.5rem' }}>

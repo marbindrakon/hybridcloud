@@ -7,10 +7,19 @@
 # once no PlatformOpenshift names the environment. The environment holds no credential either: each OpenShift
 # cluster has its own Keystone user and credential (common/tasks/openstack_cluster_credential.yml), people sign
 # in with their platform identity (access.yml). An application credential an earlier release made for the
-# environment (as the site account, Vault oso/projects/<name>/clouds-config) is deleted here.
+# environment (as the site account) is deleted here.
+# the project's name: <tenant>_<environment> from the names function. Found again by the id recorded in status after
+# the first run (an environment keeps the project it was given); by name only with the platform's tag
+- name: The project's name
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request: {action: name, kind: openstack-project, parts: ["{{ entity_name }}", "{{ cloudoso_cr_name }}"]}
+
 - name: Set environmentprep spec facts
   ansible.builtin.set_fact:
-    ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
+    ep_project: "{{ names_result.name }}"
+    ep_project_display: "{{ names_result.display }}"
+    ep_project_id: "{{ (cloudoso_cr_lookup.resources[0].status | default({}, true)).projectId | default('', true) }}"
     # shc (P7.1): from the CloudInfrastructure (cloudref.yml), or the legacy spec/defaults
     ep_vault_path: "{{ oso_settings.vaultPath }}"
     ep_base_domain: "{{ oso_settings.baseDomain }}"
@@ -20,11 +29,8 @@
     ep_designate_zone_id: "{{ oso_settings.designateZoneId }}"
     ep_designate_project_id: "{{ oso_settings.designateProjectId }}"
     ep_route53_vault_path: "{{ oso_settings.route53VaultPath }}"
-    ep_slug: "{{ (cloudoso_cr_name | hash('sha256'))[:5] }}"
-    # the legacy record: the application credential an earlier release made as the site account, and its
-    # name-only Vault path (this object holds the name: name_unique.yml)
+    # the legacy record: the application credential an earlier release made as the site account
     ep_legacy_cred_id: "{{ (cloudoso_cr_lookup.resources[0].status | default({}, true)).appCredentialId | default('', true) }}"
-    ep_legacy_clouds_config_vault: "oso/projects/{{ cloudoso_cr_name }}/clouds-config"
 
 - name: Validate the CloudOSO environment settings
   ansible.builtin.assert:
@@ -43,12 +49,12 @@
 
 - name: Derive the environment DNS domain
   ansible.builtin.set_fact:
-    # Designate: <cloudoso>.<entity>.<baseDomain> inside the delegated tenant zone (entity keeps two
-    # entities' same-named CloudOSOs apart); zone (design/TENANT-DNS.md): the same name as its own zone.
-    # Route53 keeps upstream's <slug>.<baseDomain>. none: no domain.
+    # <environment>.<tenant>.<baseDomain> for every provider (designate: inside the delegated tenant zone; zone: the
+    # environment's own zone; route53: below the parent hosted zone); the tenant keeps two tenants' same-named
+    # environments apart. none: no domain.
     ep_cluster_domain: >-
-      {{ (cloudoso_cr_name ~ '.' ~ entity_name ~ '.' ~ ep_base_domain) if ep_dns_provider in ['designate', 'zone']
-         else ((ep_slug ~ '.' ~ ep_base_domain) if ep_dns_provider == 'route53' else '') }}
+      {{ (cloudoso_cr_name ~ '.' ~ entity_name ~ '.' ~ ep_base_domain) if ep_dns_provider in ['designate', 'zone', 'route53']
+         else '' }}
 
 - name: Load the OpenStack account
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -62,30 +68,58 @@
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
   vars:
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: provision
       domain: "{{ ep_project_domain }}"
       project: "{{ ep_project }}"
-      description: "Sovereign Cloud project for {{ entity_name }} (CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }})"
+      project_id: "{{ ep_project_id }}"
+      # the platform's mark: a project tag naming this environment (a project of the name without it is refused)
+      owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
+      # refreshed on each run
+      description: >-
+        Environment {{ cloudoso_cr_name }} of tenant {{ entity_name }} ({{ ep_project_display }}; CloudOSO
+        {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}). Managed by the sovereign cloud platform; do not change.
       legacy_app_cred_ids: "{{ [ep_legacy_cred_id] | select | list }}"
       legacy_app_cred_name: "sovereign-{{ ep_project }}"
       region: "{{ ep_region_name }}"
       dns_zone_id: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else '' }}"
       dns_project_id: "{{ ep_designate_project_id }}"
 
+# a refusal changed nothing on the site: a project of the name the platform did not make for this environment
+# (NameTakenOnSite), or a site account that may not write the platform's mark on projects (CredentialsInvalid)
+- name: Refuse a project of that name the platform did not make for this environment
+  when: os_result.error is defined
+  block:
+    - name: Record the reason
+      ansible.builtin.set_fact:
+        cloudoso_failure_reason: "{{ os_result.reason | default('EDAFailed', true) }}"
+
+    - name: Stop before anything else is made
+      ansible.builtin.fail:
+        msg: >-
+          {{ os_result.message if (os_result.reason | default('', true)) | length > 0
+             else 'OpenStack provision failed: ' ~ os_result.error }}
+
+# a project ours by its recorded id (or already marked) whose mark the site refused to write: the job goes on and
+# the ready status says what the site account needs (oso_mark_note: the PlatformMarks condition)
 - name: Keep the provision result
   ansible.builtin.set_fact:
     ep_os: "{{ os_result }}"
+    oso_mark_note: "{{ (os_result.project | default({}, true)).markNote | default('', true) }}"
 
-# the legacy credential is gone from the site: its secret goes from Vault (only a record that names one wrote it)
+# the legacy credential is gone from the site: its copy in the secrets store goes too. That path is made of the
+# environment's name alone; it is this environment's because its status recorded the credential (the release that
+# wrote it refused a second environment of the name before any write), and only then is it deleted. The record
+# goes with this run's status write.
 - name: Delete the legacy credential's Vault path
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"
   vars:
-    vault_kv_delete_paths: ["{{ ep_legacy_clouds_config_vault }}"]
+    vault_kv_delete_paths: ["oso/projects/{{ cloudoso_cr_name }}/clouds-config"]
   when: ep_legacy_cred_id | length > 0
 
 # an older run allocated the environment's pair of floating IPs (status apiFloatingIPId / ingressFloatingIPId,
-# apiVIP / ingressVIP, descriptions sovereign-<name>-api / -ingress); it goes once no cluster names the environment.
+# apiVIP / ingressVIP); it goes, by the recorded ids, once no cluster names the environment.
 # No cluster takes it over: each cluster allocates its own.
 - name: The environment's legacy floating IP pair
   vars:
@@ -125,10 +159,8 @@
           action: cluster-fips
           state: absent
           project_id: "{{ ep_os.project.id }}"
+          # by the recorded ids only: a description in the tenant's project is the tenant's to write
           ids: "{{ ep_legacy_fip_ids }}"
-          descriptions:
-            api: "sovereign-{{ cloudoso_cr_name }}-api"
-            ingress: "sovereign-{{ cloudoso_cr_name }}-ingress"
 
     - name: Remove the pair from the record
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -154,15 +186,23 @@
   vars:
     os_helper: shc_dns.py
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: ensure-zone
       owner_project_id: "{{ oso_env_dns.ownerProjectId }}"
       name: "{{ ep_cluster_domain }}"
+      # the recorded zone first; a zone of the name is this environment's only when it carries this description (the
+      # platform's mark; Designate keeps no tags on zones). Any other is refused, never reused and shared.
+      zone_id: "{{ ((cloudoso_cr_lookup.resources[0].status | default({}, true)).dns | default({}, true)).zoneId | default('', true) }}"
       email: "hostmaster@{{ ep_base_domain }}"
       description: "Environment zone of CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }} (shared with its project)"
       share_with: "{{ ep_os.project.id }}"
       attributes: "{{ oso_env_dns.zoneAttributes | default({}) }}"
       region: "{{ ep_region_name }}"
+  when: ep_dns_provider == 'zone'
+
+- name: Refuse a zone or delegation of the name that is not this environment's
+  ansible.builtin.include_tasks: dns_refusal.yml
   when: ep_dns_provider == 'zone'
 
 - name: Keep the environment zone
@@ -183,13 +223,19 @@
   vars:
     os_helper: shc_dns.py
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: ensure-delegation
       project_id: "{{ oso_env_dns.globalProjectId }}"
       zone_id: "{{ oso_env_dns.globalZoneId }}"
       name: "{{ ep_cluster_domain }}"
       nameservers: "{{ ep_env_zone.nameservers }}"
+      # the mark: an NS recordset of the name with another description is refused (teardown deletes only this one)
       description: "Delegation of CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }} (site {{ oso_cloudinfra_name }})"
+  when: ep_dns_provider == 'zone' and ep_env_delegate | bool
+
+- name: Refuse a delegation of the name that is not this environment's
+  ansible.builtin.include_tasks: dns_refusal.yml
   when: ep_dns_provider == 'zone' and ep_env_delegate | bool
 
 - name: Check the environment domain sits inside the Designate zone
@@ -234,7 +280,6 @@
     oso_project_id: "{{ ep_os.project.id }}"
     oso_domain_id: "{{ ep_os.project.domain_id }}"
     oso_domain_name: "{{ ep_os.project.domain_name }}"
-    oso_slug: "{{ ep_slug }}"
     oso_dns_domain: "{{ ep_cluster_domain }}"
     oso_route53_zone_id: "{{ ep_route53_zone_id | default('') }}"
     # the status record: ids only, no account or Vault path (eda/common/tasks/resolve_cloudoso_accounts.yml)

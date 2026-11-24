@@ -274,6 +274,7 @@ class CloudOSORequest(unittest.TestCase):
         fab_real["openstack"] = {"platformProject": "platform", "projectDomain": "tenants"}
         variables = {"ci_spec": {"openstack": {"region": "r1"}}, "fab_real": fab_real,
                      "np_names": {"osNetwork": "hn51001-site1", "tag": "shc.np/51001"}, "fab_namespace": "acme",
+                     "fab_entity": "acme",
                      "fab_name": "v6-site1", "fab_spec": {"network": "v6"}, "np_real": {"mtu": 8950, "l3Vni": 51001},
                      "np_prefixes_v4": list(v4), "np_prefixes_v6": [P6], "np_site": "site1",
                      "np_backend": {"status": {"projectId": "p-tenant"}}}

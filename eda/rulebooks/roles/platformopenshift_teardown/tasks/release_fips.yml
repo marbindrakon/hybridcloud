@@ -1,6 +1,6 @@
 ---
 # Release an OpenStack cluster's floating IPs (DESIGN cnet §4.3), after Hive's deprovision and after its prefixes
-# left the service routing domain: the recorded ids and the build's descriptions, with the site account of the
+# left the service routing domain: the recorded ids, with the site account of the
 # cluster's environment scoped to its project (a missing id counts as released). An environment that is gone took its
 # project with it (its teardown refuses a project that still holds floating IPs): nothing is left to release.
 - name: Read the cluster's environment
@@ -39,7 +39,6 @@
     cfr_project_id: "{{ _rf_oso.resources[0].status.projectId }}"
     cfr_account: "{{ rca_account_vault_path }}"
     cfr_ids: "{{ po_fip_ids }}"
-    cfr_build: "{{ po_build_name }}"
     cfr_cr_name: "{{ platformopenshift_cr_name }}"
     cfr_cr_namespace: "{{ platformopenshift_cr_namespace }}"
   when:
@@ -47,3 +46,10 @@
     - _rf_oso.resources | default([]) | length > 0
     - ((_rf_oso.resources[0].status | default({}, true)).projectId | default('', true)) | length > 0
     - (rca_account_vault_path | default('', true)) | length > 0
+
+- name: Say that no floating IP is recorded
+  ansible.builtin.debug:
+    msg: >-
+      PlatformOpenshift {{ platformopenshift_cr_name }} records no floating IP; none is released (one made by a run
+      that stopped before it recorded it is left to the platform team).
+  when: po_fip_ids | length == 0

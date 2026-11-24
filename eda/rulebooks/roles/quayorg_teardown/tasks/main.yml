@@ -25,25 +25,11 @@
       ansible.builtin.set_fact:
         quayorg_spec: "{{ quayorg_spec | combine({'quayConfig': resolved_config_name}) }}"
 
-    - name: Read entity Namespace for teardown
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: v1
-        kind: Namespace
-        name: "{{ quayorg_cr_namespace }}"
-      register: _fin_target_ns
-      ignore_errors: true
-
-    - name: Derive entity-prefixed org name
+    # the name the provision recorded; nothing recorded = the provision never made or kept an organization, and
+    # nothing is deleted in the registry
+    - name: The organization's recorded name
       ansible.builtin.set_fact:
-        fin_entity_name: "{{ _fin_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | default('') }}"
-      when: _fin_target_ns.resources | default([]) | length > 0
-
-    - name: Build org name for Quay cleanup
-      ansible.builtin.set_fact:
-        fin_org_name: "{{ (fin_entity_name ~ '-' ~ quayorg_cr_name) if (fin_entity_name | default('') | length > 0) else quayorg_cr_name }}"
+        fin_org_name: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).orgName | default('', true) }}"
 
     - name: Read QuayConfig
       kubernetes.core.k8s_info:
@@ -58,8 +44,21 @@
       when: quayorg_spec.quayConfig | length > 0
       ignore_errors: true
 
+    # the recorded organization lives in the registry of the recorded connection: with that connection gone (or not
+    # readable) nothing can be deleted there, so the deletion does not complete; it says what was left and waits
+    # (the rescue reports TeardownFailed, the finalizer stays) until the platform team restores the connection or
+    # removes the organization and the finalizer by hand
+    - name: Stop when the recorded registry connection is gone
+      ansible.builtin.fail:
+        msg: >-
+          QuayOrg {{ quayorg_cr_name }}: the registry connection {{ quayorg_spec.quayConfig | default('', true) or '(none recorded)' }}
+          {{ 'could not be read' if _quay_config.failed | default(false) | bool else 'no longer exists' }}, so the
+          registry organization {{ fin_org_name }} was left in place and the deletion waits. The platform team restores
+          the connection, or removes the organization in the registry and then this object's finalizer.
+      when: fin_org_name | length > 0 and _quay_config.resources | default([]) | length == 0
+
     - name: Delete Quay org
-      when: _quay_config.resources | default([]) | length > 0
+      when: _quay_config.resources | default([]) | length > 0 and fin_org_name | length > 0
       block:
         # the same credentials and URL the provision role uses (central Vault KV quay-services-admin); the
         # QuayConfig's spec.secret is a legacy pointer without a token, so the delete below ran with an undefined
@@ -67,9 +66,25 @@
         - name: Load Quay admin credentials from Vault
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/obtain_quay_admin_credentials.yml"
 
-        - name: Delete organization from Quay
+        - name: Read the organization in Quay
           ansible.builtin.uri:
-            url: "{{ quay_url }}/api/v1/organization/{{ fin_org_name }}"
+            url: "{{ quay_url }}/api/v1/organization/{{ fin_org_name | urlencode }}"
+            method: GET
+            headers:
+              Authorization: "Bearer {{ quay_api_token }}"
+            validate_certs: false
+            status_code: [200, 404]
+          register: _fin_org
+
+        # the organization the status records is this object's, whatever its contact address (written for people)
+        - name: "Decide: delete or gone"
+          ansible.builtin.set_fact:
+            quayorg_fin_decision: "{{ 'gone' if (_fin_org.status | int) == 404 else 'delete' }}"
+
+        - name: Delete organization from Quay
+          when: quayorg_fin_decision == 'delete'
+          ansible.builtin.uri:
+            url: "{{ quay_url }}/api/v1/organization/{{ fin_org_name | urlencode }}"
             method: DELETE
             headers:
               Authorization: "Bearer {{ quay_api_token }}"
@@ -93,7 +108,10 @@
           ready: false
           deletionComplete: true
           lastReconciledAt: "{{ quayorg_delete_transition_time }}"
-          message: QuayOrg {{ quayorg_cr_name }} deleted by EDA
+          message: >-
+            {{ ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted by EDA') if fin_org_name | length > 0
+               else ('QuayOrg ' ~ quayorg_cr_name ~ ' deleted; its status records no registry organization, so nothing'
+                     ~ ' was deleted in the registry') }}
 
   rescue:
     - name: Mark QuayOrg delete as failed on services cluster

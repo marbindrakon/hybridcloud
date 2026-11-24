@@ -594,7 +594,9 @@ spec:
 
 {{- if $o.alerts.enabled }}
 {{- /* the platform health checks have alerts of their own (platform-health.yaml) */}}
-{{- $checks := "eda-activations|eda-api-check|identity-write-probe-.+" }}
+{{- $checks := include "shc-cluster-base.checkCronJobs" . }}
+{{- /* the checks and the banner's report have their own alerts; the backup alerts leave them out */}}
+{{- $notBackups := printf "%s|platform-health-report" $checks }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule
@@ -629,14 +631,26 @@ spec:
       rules:
         - alert: ShcBackupJobFailed
           expr: >-
-            max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}", cronjob!~"{{ $checks }}"})
-            > max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}", cronjob!~"{{ $checks }}"})
+            max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}", cronjob!~"{{ $notBackups }}"})
+            > max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}", cronjob!~"{{ $notBackups }}"})
           for: 1h
           labels:
             severity: warning
           annotations:
             summary: "{{ "{{" }} $labels.namespace {{ "}}" }}/{{ "{{" }} $labels.cronjob {{ "}}" }}: the last run failed"
             description: "The most recent run of CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} did not succeed. The failed pod's termination message or its log says why."
+        - alert: ShcPlatformHealthReportFailed
+          expr: >-
+            max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace="{{ $o.namespace }}", cronjob="platform-health-report"})
+            > max by (namespace, cronjob) (kube_cronjob_status_last_successful_time{namespace="{{ $o.namespace }}", cronjob="platform-health-report"})
+            or max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace="{{ $o.namespace }}", cronjob="platform-health-report"}
+            unless on (namespace, cronjob) kube_cronjob_status_last_successful_time)
+          for: 15m
+          labels:
+            severity: warning
+          annotations:
+            summary: "This cluster's health report for the admin pages is not being written"
+            description: "The last run of CronJob platform-health-report did not succeed: the admin pages show this cluster's report as late or missing. Its pod's log says why (the monitoring could not be read, or the services cluster refused the write)."
         - alert: ShcOidcIssuerProbeFailed
           expr: >-
             max by (namespace, cronjob) (kube_cronjob_status_last_schedule_time{namespace="{{ $o.namespace }}", cronjob="oidc-issuer-probe"})
@@ -659,7 +673,7 @@ spec:
             description: "The issuer document sync fails on at least one source (it keeps the last published documents). Check its Job logs."
         - alert: ShcBackupJobNeverSucceeded
           expr: >-
-            kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}", cronjob!~"{{ $checks }}"}
+            kube_cronjob_status_last_schedule_time{namespace=~"{{ $o.namespace }}|{{ $o.transitTokenCheck.namespace | default $o.namespace }}", cronjob!~"{{ $notBackups }}"}
             unless on (namespace, cronjob) kube_cronjob_status_last_successful_time
           for: 1h
           labels:
@@ -669,7 +683,7 @@ spec:
             description: "CronJob {{ "{{" }} $labels.cronjob {{ "}}" }} has no successful run yet."
         - alert: ShcBackupStale
           expr: >-
-            time() - kube_cronjob_status_last_successful_time{namespace="{{ $o.namespace }}", cronjob!~"{{ $checks }}"} > {{ mul $o.alerts.staleHours 3600 }}
+            time() - kube_cronjob_status_last_successful_time{namespace="{{ $o.namespace }}", cronjob!~"{{ $notBackups }}"} > {{ mul $o.alerts.staleHours 3600 }}
           for: 30m
           labels:
             severity: warning

@@ -166,15 +166,13 @@ fabric_realization_defaults:
       viewRoles: [reader]
     # an OpenShift cluster on an OpenStack site acts as its own Keystone user in the environment's domain (no stored
     # password, the platform's user options), with these roles on the environment's project and one restricted
-    # application credential of the same life as the cluster. "{build}" = the cluster's build name (it already starts
-    # with the platform's prefix); the jobs trust the platform's mark in the user's description, never the name. rolesBySite:
+    # application credential of the same life as the cluster; both are named by the platform (<tenant>_<environment>_
+    # <cluster>), and the jobs trust the platform's mark in the user's description, never the name. rolesBySite:
     # <site>: roles for that site instead of roles (a site whose load balancer needs more than member). A role other
     # than manager/member/reader needs admin, or a site policy that lets the domain manager grant it.
     clusterIdentity:
-      userName: "{build}"
       roles: [member]
       rolesBySite: {}
-      credentialName: "{build}"
   openshift:
     # OpenShift sites: the FRRConfigurations (labels) whose BGP sessions to the site's gateway carry the placements'
     # routes; empty selects every FRRConfiguration of the site
@@ -190,6 +188,11 @@ fabric_realization_defaults:
       idpName: ""
       editRole: edit
       viewRole: view
+  # a tenant's OpenShift cluster: how long its OAuth access tokens live, in seconds (OpenShift's default, 86400, is one
+  # day). Groups come from the sign-in directory at each sign-in and nothing on the cluster is bound to a person, so a
+  # person taken out of an access group keeps the cluster's group until their token ends, and nothing after it.
+  tenantCluster:
+    oauthAccessTokenMaxAgeSeconds: 86400
   # address management of the HybridNetworks (files/shc_ipam.py): where each network's space and its placements'
   # subnets are kept; ledger = the fabric's ledger (the only provider so far)
   ipam:

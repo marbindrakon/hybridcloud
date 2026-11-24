@@ -1,0 +1,33 @@
+---
+# The rule for names, checked first, before the build name is claimed or anything is made (an object made before
+# the API checked names, or by a client that got past it): the cluster's own name, its tenant's and its
+# environment's (common/tasks/name_check.yml); on Google Cloud also the installer's own rule that the API cannot
+# know for an older object: a cluster name may not start with "goog" or contain "google" or a look-alike
+# ("g00gle"; the installer's validate.GCPClusterName). A refused name stops the job with reason NameNotAllowed
+# (preflight_stop.yml), nothing made. Inputs: ansible_operator_meta.name, resolved_entity, platform_type,
+# platform_spec.
+- name: Check the cluster's, the tenant's and the environment's names
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+  vars:
+    _env: "{{ (platform_spec[platform_type] | default({}, true)).environment | default('', true) }}"
+    name_check_items: >-
+      {{ [{'value': ansible_operator_meta.name, 'what': 'cluster'}]
+         + ([{'value': resolved_entity | trim, 'what': 'tenant'}] if resolved_entity | default('', true) | trim | length > 0 else [])
+         + ([{'value': _env, 'what': 'environment'}] if _env | length > 0 else []) }}
+
+- name: The installer's rule for a cluster name on Google Cloud
+  ansible.builtin.set_fact:
+    name_check_message: >-
+      The cluster name '{{ ansible_operator_meta.name }}' is not allowed on Google Cloud: it may not start with "goog"
+      or contain "google" or a look-alike such as "g00gle". Choose another name.
+  when:
+    - name_check_message | length == 0
+    - platform_type == 'gcp'
+    - ansible_operator_meta.name is match('^goog') or ansible_operator_meta.name is search('g[o0]{2}gle')
+
+- name: Refuse a name that breaks the rule
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: NameNotAllowed
+    ps_message: "{{ name_check_message | trim }}"
+  when: name_check_message | trim | length > 0

@@ -22,6 +22,8 @@ except ImportError:  # pragma: no cover
     HAVE_SDK = False
 
 BUILD = "shc-oso-acme-c1-0a1b2"
+# the name the names function gives the cluster's user: <tenant>_<environment>_<cluster>
+USER = "acme_web_c1"
 NS = "entity-acme"
 PATH = f"central/cluster/oso/{BUILD}/build/provider-creds"
 CRED_TASK = {"ansible.builtin.include_tasks": "{{ role_path }}/../../../common/tasks/openstack_cluster_credential.yml"}
@@ -112,6 +114,7 @@ class ClusterCredential(unittest.TestCase):
         extra = {"fake_clouds_yaml": self.site.account, "cb_app_name": BUILD, "cb_oso_site": "site-a",
                  "cloudoso_cr": {"resources": [{"status": {"domainName": "tenants", "projectId": self.pid}}]},
                  "cb_oso_project_id": self.pid, "cb_fip_account": "cloudinfra/site-a", "oso_env_name": "web",
+                 "resolved_entity": "acme",
                  "ansible_operator_meta": {"name": "c1", "namespace": NS},
                  "po_cr_current": {"resources": [{"status": {}}]}}
         extra.update(over)
@@ -149,7 +152,7 @@ class ClusterCredential(unittest.TestCase):
             self.assertFalse(f.startswith(f"eda-po-cred-{BUILD}"), f"left behind: /tmp/{f}")
 
     def user(self):
-        return next(u for u in self.site.ks.users.values() if u["name"] == BUILD)
+        return next(u for u in self.site.ks.users.values() if u["name"] == USER)
 
     def test_first_run_user_credential_vault_and_status(self):
         trace = self.run_cred()
@@ -160,7 +163,7 @@ class ClusterCredential(unittest.TestCase):
         self.assertEqual(self.site.ks.effective_roles(user["id"], "project", self.pid), {"member", "reader"})
         cred = [c for c in self.site.ks.app_creds.values() if c["user"] == user["id"]]
         self.assertEqual(len(cred), 1)
-        self.assertEqual((cred[0]["name"], cred[0]["unrestricted"]), (BUILD, False))
+        self.assertEqual((cred[0]["name"], cred[0]["unrestricted"]), (USER, False))
         import yaml
         clouds = yaml.safe_load(self.site.vault.data[PATH]["clouds.yaml"])["clouds"]["openstack"]
         self.assertEqual(clouds["auth"]["application_credential_id"], cred[0]["id"])
@@ -170,10 +173,10 @@ class ClusterCredential(unittest.TestCase):
         body = patch["body"]
         self.assertEqual(body["credential"]["id"], cred[0]["id"])
         self.assertEqual((body["credential"]["user"], body["credential"]["userId"], body["credential"]["domain"],
-                          body["credential"]["domainId"]), (BUILD, user["id"], "tenants", self.site.tenants))
+                          body["credential"]["domainId"]), (USER, user["id"], "tenants", self.site.tenants))
         cond = body["conditions"][0]
         self.assertEqual((cond["type"], str(cond["status"]), cond["reason"]), ("ClusterCredential", "True", "OwnCredential"))
-        self.assertEqual(cond["message"], f"The cluster uses its own credential on the site, owned by the site user {BUILD}.")
+        self.assertEqual(cond["message"], f"The cluster uses its own credential on the site, owned by the site user {USER}.")
         self.assertEqual(res["cred"]["credential"]["kept"], False)
         if not self.manager:
             status = {"credential": body["credential"],
@@ -292,7 +295,7 @@ class ClusterCredential(unittest.TestCase):
         del self.site.vault.data[PATH]
         creds = set(self.site.ks.app_creds)
         n = len(self.site.ks.log)
-        recorded = {"resources": [{"status": {"credential": {"id": cid, "user": BUILD}}}]}
+        recorded = {"resources": [{"status": {"credential": {"id": cid, "user": USER}}}]}
         trace = self.run_cred(po_cr_current=recorded)
         ref = [t["refused"] for t in trace if "refused" in t][0]
         self.assertEqual((ref["reason"], ref["condition"]["reason"]), ("CredentialSecretMissing", "CredentialSecretMissing"))
@@ -318,7 +321,7 @@ class ClusterCredential(unittest.TestCase):
         clouds["clouds"]["openstack"]["auth"].update(application_credential_id="y-cred",
                                                      application_credential_secret="secret-y-cred-value")
         self.site.vault.data[PATH] = {"clouds.yaml": yaml.safe_dump(clouds)}
-        recorded = {"resources": [{"status": {"credential": {"id": x, "user": BUILD}}}]}
+        recorded = {"resources": [{"status": {"credential": {"id": x, "user": USER}}}]}
         n = len(ks.log)
         trace = self.run_cred(po_cr_current=recorded)
         self.assertEqual(H.patches(trace)[-1]["body"]["credential"]["id"], "y-cred")
@@ -343,7 +346,7 @@ class ClusterCredential(unittest.TestCase):
         self.assertEqual(H.patches(trace), [])
 
     def test_a_foreign_user_of_that_name_is_refused(self):
-        self.site.ks.add_user(BUILD, self.site.tenants, password="someone-elses", description="theirs")
+        self.site.ks.add_user(USER, self.site.tenants, password="someone-elses", description="theirs")
         trace = self.run_cred()
         ref = [t["refused"] for t in trace if "refused" in t][0]
         self.assertEqual(ref["reason"], "UserRefused")
@@ -352,7 +355,7 @@ class ClusterCredential(unittest.TestCase):
         self.assertEqual(ref["condition"]["message"],
                          "The site refused the cluster's user. The cluster cannot be built; the platform team can see "
                          "why in the job's log.")
-        self.assertIn(f"a user named {BUILD} exists in domain tenants", H.LAST_OUTPUT)
+        self.assertIn(f"a user named {USER} exists in domain tenants", H.LAST_OUTPUT)
         self.assertNotIn(PATH, self.site.vault.data)
         self.assertEqual(H.patches(trace), [])
 
@@ -426,17 +429,18 @@ class ClusterUserDown(unittest.TestCase):
         self.assertNotIn(self.uid, self.site.ks.users)
         paths = sorted(trace[-1]["result"]["paths"])
         self.assertEqual(len(paths), 2)
-        self.assertTrue(paths[0].startswith("cluster/oso/shc-oso-acme-c1-") and paths[0].endswith("/build/provider-creds"),
+        self.assertTrue(paths[0].startswith("cluster/oso/" + self.derived()) and paths[0].endswith("/build/provider-creds"),
                         paths)
 
     def test_no_credential_recorded_the_user_of_the_computed_name_goes(self):
         """R3: a cluster refused after its user was made (RoleRefused, PasswordRefused, CredentialRefused, a failed
         status write) recorded no credential: its delete still removes the user of its computed name."""
+        self.site.ks.users[self.uid]["name"] = USER
         trace = self.run_down({"buildName": BUILD}, hub_owned=True)
         self.assertNotIn(self.uid, self.site.ks.users)
         self.assertEqual(self.site.ks.app_creds, {})
         req = H.os_calls(trace, "cluster-identity-delete")[0]
-        self.assertEqual((req["user_id"], req["user_name"]), ("", BUILD))
+        self.assertEqual((req["user_id"], req["user_name"]), ("", USER))
         # the recorded build's paths are the teardown's (resolve_platformopenshift_paths.yml), not this file's
         self.assertEqual(trace[-1]["result"]["paths"], ["x/one"])
 
@@ -446,10 +450,10 @@ class ClusterUserDown(unittest.TestCase):
         return po_preflight.build_name({"entity": "acme", "name": "c1"})["buildName"]
 
     def test_no_build_recorded_the_derived_names_user_goes(self):
-        self.site.ks.users[self.uid]["name"] = self.derived()
+        self.site.ks.users[self.uid]["name"] = USER
         trace = self.run_down({})
         self.assertNotIn(self.uid, self.site.ks.users)
-        self.assertEqual(H.os_calls(trace, "cluster-identity-delete")[0]["user_name"], self.derived())
+        self.assertEqual(H.os_calls(trace, "cluster-identity-delete")[0]["user_name"], USER)
 
     def test_a_build_another_cluster_owns_is_not_touched(self):
         """A cluster refused NamespaceTaken / BuildOwnerMismatch never made a user under that name: nothing is
@@ -458,7 +462,7 @@ class ClusterUserDown(unittest.TestCase):
         self.assertIn(self.uid, self.site.ks.users)
         self.assertEqual(H.os_calls(trace), [])
         self.assertEqual(trace[-1]["result"]["paths"], ["x/one"])
-        self.site.ks.users[self.uid]["name"] = self.derived()
+        self.site.ks.users[self.uid]["name"] = USER
         taken = {f"Namespace//{self.derived()}": {"metadata": {"name": self.derived(), "labels": {
             "hybridsovereign.redhat/platformopenshift-uid": "uid-another"}}}}
         trace = self.run_down({}, hub_ns=taken)
@@ -470,7 +474,7 @@ class ClusterUserDown(unittest.TestCase):
         """V5(b): the user cannot be looked for: the delete says so in its result (never a silent skip)."""
         trace = self.run_down({"buildName": BUILD}, hub_owned=True, oso_status={"projectId": self.pid})
         self.assertIn(self.uid, self.site.ks.users)
-        self.assertIn(f"The cluster's user {BUILD} on the site could not be looked for", trace[-1]["result"]["note"])
+        self.assertIn(f"The cluster's user {USER} on the site could not be looked for", trace[-1]["result"]["note"])
         # an environment that is gone took the user with it: nothing to say
         trace = self.run_down({"buildName": BUILD}, hub_owned=True)
         self.assertEqual(trace[-1]["result"]["note"], "")
@@ -498,7 +502,7 @@ class ClusterUserDown(unittest.TestCase):
     def test_never_realized_without_the_identity_step_needs_no_site(self):
         """W3: a cluster whose identity step never ran (no credential, no ClusterCredential condition) is deleted
         without a call to the site, also while the site is down."""
-        self.site.ks.users[self.uid]["name"] = self.derived()
+        self.site.ks.users[self.uid]["name"] = USER
         self.site.ks.stop()
         rc, trace, out = self.unrealized([{"type": "Ready", "status": "False", "reason": "NetworkNotFound"}])
         self.assertEqual(rc, 0, out)
@@ -513,7 +517,7 @@ class ClusterUserDown(unittest.TestCase):
         first = load(os.path.join(O.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown", "tasks",
                                   "main.yml"))[0]["block"][0]
         self.assertEqual(first["name"], "Skip the site cleanup when nothing was realized")
-        self.site.ks.users[self.uid]["name"] = self.derived()
+        self.site.ks.users[self.uid]["name"] = USER
         po = {"apiVersion": "hybridsovereign.redhat/v1alpha1", "kind": "PlatformOpenshift",
               "metadata": {"name": "c1", "namespace": NS, "uid": "uid-c1"},
               "spec": {"type": "openstack", "openstack": {"environment": "web"}},

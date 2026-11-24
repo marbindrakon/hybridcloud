@@ -1,0 +1,116 @@
+---
+# Who gets what on a tenant's cluster: the access groups of spec.toolRbac (clusterAdminRbac, clusterOperatorRbac,
+# clusterDeveloperRbac, clusterViewerRbac) become client roles <tenant>.<group> of the cluster's own sign-in client,
+# each mapped to its access group's directory group (common/tasks/services_signin_groups.yml, as on the services
+# cluster and the sites). The client's groups claim holds the person's roles of this client only, so the cluster sees
+# <tenant>.<group> and never another tenant's group of the same name; the bindings (cluster_rbac.yml) name those
+# groups. A group whose access group has no directory group yet, or whose client role is not this tenant's, is left
+# out (and named in the job's log) while the others go on.
+# Inputs: cluster_cr_name (or cluster_name), cluster_namespace, resolved_entity, ocp_oidc_client_id, keycloak_realm,
+# services_api_host / services_bearer_token. Sets csg_tiers ({admin, operator, developer, viewer}: the groups each
+# binding names), csg_wanted (the client roles the cluster's people hold) and csg_faults.
+- name: Read the cluster's access settings and the tenant's access groups
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Rbac
+    namespace: "{{ cluster_namespace }}"
+  register: _csg_rbacs
+
+- name: Read the cluster object for its access groups
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: PlatformOpenshift
+    name: "{{ cluster_cr_name | default(cluster_name, true) }}"
+    namespace: "{{ cluster_namespace }}"
+  register: _csg_cluster
+
+- name: Refuse a cluster without its tenant
+  ansible.builtin.assert:
+    that: resolved_entity | default('', true) | trim | length > 0
+    fail_msg: "The cluster's namespace names no tenant, so nobody can be given access to the cluster."
+    quiet: true
+
+- name: The access groups of each binding
+  vars:
+    _tool: "{{ ((_csg_cluster.resources | default([]) | first | default({})).spec | default({}, true)).toolRbac | default({}, true) }}"
+    _rbacs: "{{ _csg_rbacs.resources | default([]) }}"
+    _tiers: {admin: clusterAdminRbac, operator: clusterOperatorRbac, developer: clusterDeveloperRbac, viewer: clusterViewerRbac}
+  ansible.builtin.set_fact:
+    csg_entity: "{{ resolved_entity | trim }}"
+    # tier -> the Rbac names it names (in order, once)
+    csg_by_tier: >-
+      {%- set out = {} -%}
+      {%- for tier, key in _tiers.items() -%}
+        {%- set _ = out.update({tier: _tool[key] | default([], true) | unique | list}) -%}
+      {%- endfor -%}
+      {{ out }}
+    # every Rbac the cluster names, with its directory group ('' = none yet)
+    csg_rbacs: >-
+      {%- set out = [] -%}
+      {%- set seen = [] -%}
+      {%- for key in _tiers.values() -%}
+        {%- for name in _tool[key] | default([], true) if name not in seen -%}
+          {%- set _ = seen.append(name) -%}
+          {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', name) | list + [{}]) | first -%}
+          {%- set _ = out.append({'rbac': name, 'path': ((r.status | default({}, true)).group | default('', true))}) -%}
+        {%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
+    csg_named: []
+
+- name: The group name of each access group
+  ansible.builtin.include_tasks: cluster_signin_group_name.yml
+  loop: "{{ csg_rbacs }}"
+  loop_control:
+    loop_var: csg_item
+    label: "{{ csg_item.rbac }}"
+
+- name: The client roles of the cluster's sign-in client
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/services_signin_groups.yml"
+  vars:
+    ssg_entity: "{{ csg_entity }}"
+    ssg_owner: "PlatformOpenshift/{{ cluster_cr_name | default(cluster_name, true) }}"
+    ssg_label: "PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}"
+    ssg_wanted: "{{ csg_named | selectattr('path') | list }}"
+    ssg_per_group: true
+    ssg_role_description: >-
+      Group {{ item }} on OpenShift cluster {{ cluster_cr_name | default(cluster_name, true) }} of {{ csg_entity }}
+    entity_signin_realm: "{{ keycloak_realm }}"
+    entity_signin_client: "{{ ocp_oidc_client_id }}"
+    entity_signin_rbac_config: "{{ platformopenshift_rbac_config | default('', true) }}"
+
+# a group is granted when its access group has a directory group and the directory took its client role
+- name: The groups each binding names
+  vars:
+    _faulted: "{{ ssg_faults | default([], true) | map(attribute='group') | list }}"
+    _granted: >-
+      {{ csg_named | selectattr('path') | map(attribute='group') | reject('in', _faulted) | list }}
+    _group_of: "{{ csg_named | items2dict(key_name='rbac', value_name='group') }}"
+  ansible.builtin.set_fact:
+    csg_wanted: "{{ _granted }}"
+    csg_faults: >-
+      {%- set out = ssg_faults | default([], true) | list -%}
+      {%- for g in csg_named | rejectattr('path') -%}
+        {%- set _ = out.append({'group': g.group, 'missing': true,
+                                'message': 'Its access group has no group in the sign-in directory yet.'}) -%}
+      {%- endfor -%}
+      {{ out }}
+    csg_tiers: >-
+      {%- set out = {} -%}
+      {%- for tier, names in csg_by_tier.items() -%}
+        {%- set _ = out.update({tier: names | map('extract', _group_of) | select('in', _granted) | list}) -%}
+      {%- endfor -%}
+      {{ out }}
+
+- name: The access groups left out, for the job's log
+  ansible.builtin.debug:
+    msg: "PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: group {{ item.group }} is not given access: {{ item.message }}"
+  loop: "{{ csg_faults }}"
+  loop_control:
+    label: "{{ item.group }}"

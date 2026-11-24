@@ -187,7 +187,7 @@
           capabilities: "{{ ci_capabilities_out }}"
           site: "{{ ci_site_out }}"
           # the type's own conditions follow (an openstack site: SignInConfigured)
-          conditions: "{{ _ci_conditions + (ci_extra_conditions | default([], true)) }}"
+          conditions: "{{ _ci_conditions + (ci_extra_conditions | default([], true)) + (ci_mark_conditions | default([], true)) }}"
         _ci_conditions:
           - type: Ready
             status: "True"

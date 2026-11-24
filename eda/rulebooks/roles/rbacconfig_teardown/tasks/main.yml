@@ -32,43 +32,69 @@
             keycloak_url: "{{ plugin_rbac_keycloak_url }}"
             keycloak_url_http_headers: "{{ plugin_rbac_keycloak_url_http_headers | default({}) }}"
 
-        - name: Look up Keycloak client internal id
+        # the realm automation clients this connection's status records, in the realm it recorded (an object of the
+        # release before records no realm: the realm its credentials in central Vault name); each is deleted only
+        # while it carries the description the provision gives it (only holders of the realm's manage-clients right
+        # can write a client's description); nothing recorded, nothing deleted
+        - name: The realm automation clients the status records
+          vars:
+            _st: "{{ (shc_live_cr | default({}, true)).status | default({}, true) }}"
+            _ra: "{{ _st.realmAutomation | default({}, true) }}"
+          ansible.builtin.set_fact:
+            rbacconfig_fin_realm: "{{ _st.realm | default('', true) }}"
+            rbacconfig_fin_clients: >-
+              {{ [{'purpose': 'membership', 'clientId': _ra.membershipClientId | default('', true)},
+                  {'purpose': 'clients', 'clientId': _ra.clientsClientId | default('', true)}]
+                 | rejectattr('clientId', 'equalto', '') | list }}
+
+        - name: The realm the credentials name
+          when: rbacconfig_fin_realm | length == 0 and rbacconfig_fin_clients | length > 0
+          block:
+            - name: Read the published credentials
+              ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
+              vars:
+                vault_kv_path: "{{ keycloak_automation_vault_prefix | default('keycloak-automation') }}/{{ rbac_config_cr_name }}"
+                vault_kv_read_missing_ok: true
+
+            - name: Keep the realm only
+              ansible.builtin.set_fact:
+                rbacconfig_fin_realm: "{{ vault_kv_data.realm | default('', true) }}"
+                vault_kv_data: {}
+              no_log: true
+
+        - name: Look up the recorded clients
           ansible.builtin.uri:
             url: >-
-              {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients?clientId={{ rbac_config_cr_name | urlencode }}
+              {{ plugin_rbac_keycloak_url }}/admin/realms/{{ rbacconfig_fin_realm }}/clients?clientId={{ item.clientId | urlencode }}
             method: GET
             headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
             status_code: [200]
-          register: kc_client_lookup_final
+          loop: "{{ rbacconfig_fin_clients if rbacconfig_fin_realm | length > 0 else [] }}"
+          loop_control:
+            label: "{{ item.clientId }}"
+          register: _rbacconfig_fin_lookup
+          no_log: true
 
-        - name: Delete Keycloak OIDC client when present
-          when: kc_client_lookup_final.json | length > 0
+        - name: Delete the recorded clients that carry this connection's description
           ansible.builtin.uri:
-            url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients/{{ kc_client_lookup_final.json[0].id }}"
+            url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ rbacconfig_fin_realm }}/clients/{{ item.id }}"
             method: DELETE
             headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
             validate_certs: false
             status_code: [204, 404]
-
-        - name: Look up the clients automation client
-          ansible.builtin.uri:
-            url: >-
-              {{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients?clientId={{ (rbac_config_cr_name ~ '-clients') | urlencode }}
-            method: GET
-            headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-            validate_certs: false
-            status_code: [200]
-          register: kc_clients_client_lookup
-
-        - name: Delete the clients automation client when present
-          when: kc_clients_client_lookup.json | length > 0
-          ansible.builtin.uri:
-            url: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/clients/{{ kc_clients_client_lookup.json[0].id }}"
-            method: DELETE
-            headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
-            validate_certs: false
-            status_code: [204, 404]
+          loop: >-
+            {%- set out = [] -%}
+            {%- for r in _rbacconfig_fin_lookup.results | default([]) -%}
+              {%- for c in r.json | default([], true)
+                    if c.clientId == r.item.clientId
+                    and (c.description | default('', true)) == 'Realm automation (' ~ r.item.purpose ~ ') for RbacConfig ' ~ rbac_config_cr_name -%}
+                {%- set _ = out.append({'id': c.id, 'clientId': c.clientId}) -%}
+              {%- endfor -%}
+            {%- endfor -%}
+            {{ out }}
+          loop_control:
+            label: "{{ item.clientId }}"
 
     - name: Delete the realm automation credentials from central Vault
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_delete.yml"

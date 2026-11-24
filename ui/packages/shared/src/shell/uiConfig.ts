@@ -6,13 +6,26 @@ export interface UiConfig {
   helpBaseUrl?: string;
   /** OpenShift console of the services cluster (link from the account menu). */
   consoleUrl?: string;
+  /** Link to an automation job, with "{jobId}" (no default: the admin's diagnostics show the job id without a link). */
+  automationJobUrlTemplate?: string;
+  /** The platform namespace of the services cluster, where the platform-health banner reads (admin dashboard). */
+  platformNamespace?: string;
+  /** The longest report interval the platform-health banner believes, in minutes (null: the banner's default). */
+  platformHealthMaxReportIntervalMinutes?: number | null;
 }
 
 let cached: Promise<UiConfig> | null = null;
+let configUrl = '/api/ui-config';
+
+/** Where the settings are read (a console plugin reads the dashboard's through its console proxy). */
+export function configureUiConfigUrl(url: string): void {
+  configUrl = url;
+  cached = null;
+}
 
 export function loadUiConfig(): Promise<UiConfig> {
   if (!cached) {
-    cached = fetch('/api/ui-config', { headers: { Accept: 'application/json' } })
+    cached = fetch(configUrl, { headers: { Accept: 'application/json' } })
       .then((r) => (r.ok ? (r.json() as Promise<UiConfig>) : {}))
       .catch(() => ({}));
   }

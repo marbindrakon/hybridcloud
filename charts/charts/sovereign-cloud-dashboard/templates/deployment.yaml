@@ -146,6 +146,23 @@ spec:
             - name: SHC_PLATFORM_SAR
               value: {{ toJson . | quote }}
             {{- end }}
+            {{- with .Values.automationJobUrlTemplate }}
+            {{- if not (and (hasPrefix "https://" .) (contains "{jobId}" .)) }}
+            {{- fail "automationJobUrlTemplate must be an https URL with {jobId} where the job's id goes" }}
+            {{- end }}
+            - name: SHC_AUTOMATION_JOB_URL_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
+            {{- /* the platform namespace: where the platform-health banner reads its ConfigMaps (the operations
+                   layer's ops.platformHealth.report.namespace must name the same) */}}
+            - name: SHC_PLATFORM_NAMESPACE
+              value: {{ required "namespace is required (the platform namespace)" .Values.namespace | quote }}
+            {{- $maxMin := .Values.platformHealthMaxReportIntervalMinutes }}
+            {{- if not (and (or (kindIs "float64" $maxMin) (kindIs "int64" $maxMin) (kindIs "int" $maxMin)) (eq (float64 (int $maxMin)) (float64 $maxMin)) (ge (int $maxMin) 1) (le (int $maxMin) 30)) }}
+            {{- fail "platformHealthMaxReportIntervalMinutes must be a whole number of minutes from 1 to 30" }}
+            {{- end }}
+            - name: SHC_PLATFORM_HEALTH_MAX_REPORT_INTERVAL_MINUTES
+              value: {{ int $maxMin | quote }}
             {{- range $key, $val := .Values.env }}
             - name: {{ $key }}
               value: {{ $val | quote }}

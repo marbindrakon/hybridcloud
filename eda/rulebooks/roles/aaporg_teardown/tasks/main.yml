@@ -25,25 +25,14 @@
       ansible.builtin.set_fact:
         aaporg_spec: "{{ aaporg_spec | combine({'aapConfig': resolved_config_name}) }}"
 
-    - name: Read entity Namespace for teardown
-      kubernetes.core.k8s_info:
-        host: "{{ services_api_host }}"
-        api_key: "{{ services_bearer_token }}"
-        validate_certs: false
-        api_version: v1
-        kind: Namespace
-        name: "{{ aaporg_cr_namespace }}"
-      register: _fin_target_ns
-      ignore_errors: true
-
-    - name: Derive entity-prefixed org name
+    # the name, the gateway id and the sign-in maps the provision recorded; nothing is found by a name's beginning
+    - name: The organization's recorded name, id and maps
       ansible.builtin.set_fact:
-        fin_entity_name: "{{ _fin_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/entity'] | default('') }}"
-      when: _fin_target_ns.resources | default([]) | length > 0
-
-    - name: Build org name for AAP cleanup
-      ansible.builtin.set_fact:
-        fin_org_name: "{{ (fin_entity_name ~ '-' ~ aaporg_cr_name) if (fin_entity_name | default('') | length > 0) else aaporg_cr_name }}"
+        fin_status: "{{ (shc_live_cr | default({}, true)).status | default({}, true) }}"
+        fin_org_name: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).orgName | default('', true) }}"
+        fin_org_id: >-
+          {{ (((shc_live_cr | default({}, true)).status | default({}, true)).gatewayOrgId | default('', true) | string | trim)
+             | regex_replace('^0$', '') }}
 
     - name: Read AAPConfig CR
       kubernetes.core.k8s_info:
@@ -57,6 +46,20 @@
       register: _aap_config
       when: aaporg_spec.aapConfig | length > 0
       ignore_errors: true
+
+    # the recorded organization lives in the automation platform of the recorded connection: with that connection
+    # gone (or not readable) nothing can be deleted there, so the deletion does not complete; it says what was left
+    # and waits (the rescue reports TeardownFailed, the finalizer stays) until the platform team restores the
+    # connection or removes the organization and the finalizer by hand
+    - name: Stop when the recorded automation connection is gone
+      ansible.builtin.fail:
+        msg: >-
+          AAPOrg {{ aaporg_cr_name }}: the automation connection {{ aaporg_spec.aapConfig | default('', true) or '(none recorded)' }}
+          {{ 'could not be read' if _aap_config.failed | default(false) | bool else 'no longer exists' }}, so the
+          automation organization {{ fin_org_name or fin_org_id }} was left in place with its teams and sign-in maps,
+          and the deletion waits. The platform team restores the connection, or removes the organization in the
+          automation platform and then this object's finalizer.
+      when: (fin_org_id ~ fin_org_name) | length > 0 and _aap_config.resources | default([]) | length == 0
 
     - name: Delete AAP org and teams
       when: _aap_config.resources | default([]) | length > 0
@@ -83,6 +86,19 @@
             aap_gateway_internal_url: "https://{{ aap_gw_route.resources[0].spec.host }}"
           when: aap_gw_route.resources | length > 0
 
+        - name: Read the recorded organization in the gateway
+          ansible.builtin.uri:
+            url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/{{ fin_org_id }}/"
+            method: GET
+            user: "{{ aap_username }}"
+            password: "{{ aap_password }}"
+            force_basic_auth: true
+            validate_certs: false
+            status_code: [200, 404]
+          register: _gw_org_by_id
+          when: fin_org_id | length > 0
+
+        # an object of the release before records the name only: the organization of exactly that name
         - name: Find org in gateway
           ansible.builtin.uri:
             url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/?name={{ fin_org_name | urlencode }}"
@@ -93,28 +109,74 @@
             validate_certs: false
             status_code: [200]
           register: _gw_org_lookup
+          when: fin_org_id | length == 0 and fin_org_name | length > 0
+
+        # the organization the status records is this object's, whatever its name or description now: by the
+        # recorded id, else (recorded before the ids were kept) by the recorded name; nothing recorded, nothing
+        # deleted
+        - name: "Decide: delete or gone"
+          vars:
+            _by_id: "{{ _gw_org_by_id.json | default({}, true) if (_gw_org_by_id.status | default(0) | int) == 200 else {} }}"
+            _found: >-
+              {{ (_gw_org_lookup.json | default({}, true)).results | default([], true)
+                 | selectattr('name', 'equalto', fin_org_name) | list }}
+          ansible.builtin.set_fact:
+            aaporg_fin_org: >-
+              {{ _by_id if fin_org_id | length > 0 else ((_found | first) if _found | length > 0 else {}) }}
+            aaporg_fin_decision: >-
+              {{ ('delete' if _by_id | length > 0 else 'gone') if fin_org_id | length > 0
+                 else ('delete' if _found | length > 0 else 'gone') }}
 
         - name: Delete org from gateway
           ansible.builtin.uri:
-            url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/{{ _gw_org_lookup.json.results[0].id }}/"
+            url: "{{ aap_gateway_internal_url }}/api/gateway/v1/organizations/{{ aaporg_fin_org.id }}/"
             method: DELETE
             user: "{{ aap_username }}"
             password: "{{ aap_password }}"
             force_basic_auth: true
             validate_certs: false
             status_code: [200, 204, 404]
-          when: _gw_org_lookup.json.results | length > 0
+          when: aaporg_fin_decision == 'delete'
 
-        - name: Delete authenticator maps
+        # the maps the provision recorded by id; an object that recorded none (made before the ids were kept): the
+        # exact names it would have made for the groups its status records, pointing at its organization
+        - name: The sign-in maps to delete
+          ansible.builtin.set_fact:
+            aaporg_fin_map_ids: "{{ fin_status.signInMaps | default([], true) | map(attribute='id') | map('string') | list }}"
+            aaporg_fin_map_names: >-
+              {%- set out = [] -%}
+              {%- if fin_org_name | length > 0 -%}
+                {%- for kind, groups in [('admin', fin_status.adminGroups | default([], true)),
+                                         ('executor', fin_status.executorGroups | default([], true)),
+                                         ('viewer', fin_status.viewerGroups | default([], true))] -%}
+                  {%- for g in groups -%}{%- set _ = out.append(fin_org_name ~ '-' ~ kind ~ '-map-' ~ g) -%}{%- endfor -%}
+                {%- endfor -%}
+              {%- endif -%}
+              {{ out }}
+
+        - name: Find the recorded sign-in maps
           ansible.builtin.uri:
-            url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/?name__startswith={{ fin_org_name }}-"
+            url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/{{ item }}/"
+            method: GET
+            user: "{{ aap_username }}"
+            password: "{{ aap_password }}"
+            force_basic_auth: true
+            validate_certs: false
+            status_code: [200, 404]
+          loop: "{{ aaporg_fin_map_ids }}"
+          register: _fin_maps_by_id
+
+        - name: Find the sign-in maps by their exact names
+          ansible.builtin.uri:
+            url: "{{ aap_gateway_internal_url }}/api/gateway/v1/authenticator_maps/?name={{ item | urlencode }}"
             method: GET
             user: "{{ aap_username }}"
             password: "{{ aap_password }}"
             force_basic_auth: true
             validate_certs: false
             status_code: [200]
-          register: _auth_maps
+          loop: "{{ aaporg_fin_map_names if aaporg_fin_map_ids | length == 0 else [] }}"
+          register: _fin_maps_by_name
 
         - name: Delete each authenticator map
           ansible.builtin.uri:
@@ -125,7 +187,21 @@
             force_basic_auth: true
             validate_certs: false
             status_code: [200, 204, 404]
-          loop: "{{ _auth_maps.json.results | default([]) }}"
+          loop: >-
+            {%- set out = [] -%}
+            {%- for r in _fin_maps_by_id.results | default([]) if r.status | default(0) == 200 -%}
+              {%- set _ = out.append(r.json) -%}
+            {%- endfor -%}
+            {%- for r in _fin_maps_by_name.results | default([]) -%}
+              {%- for m in (r.json | default({}, true)).results | default([], true)
+                    if m.name == r.item and (m.organization | default('', true) | string)
+                       == (aaporg_fin_org.name | default(fin_org_name, true)) -%}
+                {%- set _ = out.append(m) -%}
+              {%- endfor -%}
+            {%- endfor -%}
+            {{ out }}
+          loop_control:
+            label: "{{ item.name }}"
       # a tool-side failure fails the teardown (the object shows TeardownFailed and retries) instead of
       # reporting a deletion that left the organization, its teams and maps behind
 
@@ -145,7 +221,10 @@
           ready: false
           deletionComplete: true
           lastReconciledAt: "{{ aaporg_delete_transition_time }}"
-          message: AAPOrg {{ aaporg_cr_name }} deleted by EDA
+          message: >-
+            {{ ('AAPOrg ' ~ aaporg_cr_name ~ ' deleted by EDA') if (fin_org_id ~ fin_org_name) | length > 0
+               else ('AAPOrg ' ~ aaporg_cr_name ~ ' deleted; its status records no automation organization, so nothing'
+                     ~ ' was deleted in the automation platform') }}
 
   rescue:
     - name: Mark AAPOrg delete as failed on services cluster

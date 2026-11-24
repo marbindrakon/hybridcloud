@@ -213,14 +213,17 @@ class NothingOfAnotherCluster(unittest.TestCase):
             def __init__(self):
                 self.deleted = []
 
-            def describe_vpcs(self, Filters):
-                return {"Vpcs": [{"VpcId": "vpc-1", "Tags": []}]}
+            def describe_vpcs(self, VpcIds):
+                return {"Vpcs": [{"VpcId": v, "Tags": []} for v in VpcIds if v == "vpc-1"]}
 
             def describe_subnets(self, Filters):
-                mk = lambda i, n, az: {"SubnetId": i, "AvailabilityZone": az, "Tags": [{"Key": "Name", "Value": n}]}
-                return {"Subnets": [mk("s1", "shc-ns-p-public-a", "us-east-2a"),
-                                    mk("s2", "shc-ns-p-public-public-a", "us-east-2a"),
-                                    mk("s3", "shc-ns-p-public-b-extra", "us-east-2b")]}
+                # found by the role tag place-public gives, never by a name (a subnet named like a public one but
+                # of another role, or untagged, stays)
+                mk = lambda i, n, az, role: {"SubnetId": i, "AvailabilityZone": az, "Tags": [{"Key": "Name", "Value": n}]
+                                             + ([{"Key": "shc-role", "Value": role}] if role else [])}
+                return {"Subnets": [mk("s1", "acme_p-public-a", "us-east-2a", "public"),
+                                    mk("s2", "acme_p-public-public-a", "us-east-2a", "work"),
+                                    mk("s3", "acme_p-public-b", "us-east-2b", None)]}
 
             def describe_route_tables(self, Filters):
                 return {"RouteTables": []}
@@ -232,7 +235,7 @@ class NothingOfAnotherCluster(unittest.TestCase):
                 self.deleted.append(SubnetId)
         t = object.__new__(T.Tenant)
         t.ec2, t.cfg, t.changed = Ec2(), {}, []
-        t.place_public("ns/p", "down")
+        t.place_public("ns/p", "down", vpc_id="vpc-1")
         self.assertEqual(t.ec2.deleted, ["s1"])
 
 

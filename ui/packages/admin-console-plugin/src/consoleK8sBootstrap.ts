@@ -1,5 +1,5 @@
 import { consoleFetch } from '@openshift-console/dynamic-plugin-sdk';
-import { configureK8sClient, configurePermissionsClient } from '@hybridsovereign/shared';
+import { configureK8sClient, configurePermissionsClient, configureUiConfigUrl } from '@hybridsovereign/shared';
 
 /**
  * Must run in every exposed console page module.
@@ -17,3 +17,7 @@ configurePermissionsClient('/api/kubernetes', {
   style: 'ssar',
   fetchFn: consoleFetch as unknown as typeof fetch,
 });
+
+// The installation's settings (help pages, the automation job link) come from the admin dashboard's
+// server, through the console's proxy to it (the alias the plugin's chart declares).
+configureUiConfigUrl('/api/proxy/plugin/sovereign-admin-plugin/uihealth/api/ui-config');

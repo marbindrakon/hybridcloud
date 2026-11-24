@@ -66,6 +66,11 @@ minimum). A quoted number, a fraction, null or anything else fails with the sett
 {{- index . 1 -}}
 {{- end }}
 
+{{- /* the check CronJobs of platform-health.yaml (their own alerts; the report adds their findings) */}}
+{{- define "shc-cluster-base.checkCronJobs" -}}
+eda-activations|eda-api-check|identity-write-probe-.+
+{{- end }}
+
 {{- define "shc-cluster-base.platformHealthEnabled" -}}
 {{- $p := .Values.ops.platformHealth | default dict -}}
 {{- range $k := list "volumes" "databaseBackups" "aggregatedAPIs" "edaActivations" "identityWriteProbe" -}}

@@ -7,9 +7,13 @@
  *                          path. The oauth-proxy then clears its cookie and, when
  *                          --logout-url is set, sends the browser to the identity
  *                          provider's end-session page.
- *   GET  /api/ui-config    { helpBaseUrl, consoleUrl } from SHC_HELP_BASE_URL and
- *                          SHC_CONSOLE_URL (both empty by default: no installation
- *                          defaults in the image or chart).
+ *   GET  /api/ui-config    { helpBaseUrl, consoleUrl, automationJobUrlTemplate,
+ *                          platformNamespace, platformHealthMaxReportIntervalMinutes } from
+ *                          SHC_HELP_BASE_URL, SHC_CONSOLE_URL,
+ *                          SHC_AUTOMATION_JOB_URL_TEMPLATE, SHC_PLATFORM_NAMESPACE and
+ *                          SHC_PLATFORM_HEALTH_MAX_REPORT_INTERVAL_MINUTES (empty or null
+ *                          when not set: no installation defaults in the image; the admin
+ *                          dashboard's chart sets the last two).
  */
 import crypto from "crypto";
 import { k8sRequest, userToken } from "./upstream.js";
@@ -28,10 +32,34 @@ function cleanUrl(v) {
   return /^https:\/\/[^\s"'<>]+$/.test(s) ? s.replace(/\/+$/, "") : "";
 }
 
+/** An https URL template with "{jobId}" where the job's id goes; anything else is no template. */
+function cleanJobTemplate(v) {
+  if (typeof v !== "string") return "";
+  const s = v.trim();
+  return /^https:\/\/[^\s"'<>]+$/.test(s) && s.includes("{jobId}") ? s : "";
+}
+
+/** A namespace name (a DNS label), else "". */
+function cleanNamespace(v) {
+  if (typeof v !== "string") return "";
+  const s = v.trim();
+  return s.length <= 63 && /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/.test(s) ? s : "";
+}
+
+/** A whole number of minutes from 1 to 30, else null. */
+function cleanMinutes(v) {
+  if (typeof v !== "string" || !/^\s*\d+\s*$/.test(v)) return null;
+  const n = Number(v);
+  return n >= 1 && n <= 30 ? n : null;
+}
+
 export function uiConfigFromEnv(env = process.env) {
   return {
     helpBaseUrl: cleanUrl(env.SHC_HELP_BASE_URL),
     consoleUrl: cleanUrl(env.SHC_CONSOLE_URL),
+    automationJobUrlTemplate: cleanJobTemplate(env.SHC_AUTOMATION_JOB_URL_TEMPLATE),
+    platformNamespace: cleanNamespace(env.SHC_PLATFORM_NAMESPACE),
+    platformHealthMaxReportIntervalMinutes: cleanMinutes(env.SHC_PLATFORM_HEALTH_MAX_REPORT_INTERVAL_MINUTES),
   };
 }
 

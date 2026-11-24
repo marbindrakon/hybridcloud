@@ -171,8 +171,8 @@ class Realization(unittest.TestCase):
             os_ = yaml.safe_load(f)["fabric_realization_defaults"]["openstack"]
         self.assertEqual(os_["tenantSignIn"], {"realm": "", "clientId": "openstack-{site}", "rbacConfig": "",
                                                "editRoles": ["member"], "viewRoles": ["reader"]})
-        self.assertEqual(os_["clusterIdentity"], {"userName": "{build}", "roles": ["member"], "rolesBySite": {},
-                                                  "credentialName": "{build}"})
+        # the cluster's user and credential are named by the platform; no name setting is offered
+        self.assertEqual(os_["clusterIdentity"], {"roles": ["member"], "rolesBySite": {}})
 
 
 if __name__ == "__main__":

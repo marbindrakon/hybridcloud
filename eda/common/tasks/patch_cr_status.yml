@@ -9,19 +9,13 @@
   vars:
     _pcs_action: "{{ cr_status_body.status | default('reconcile') }}"
     _pcs_tower_job_id: "{{ tower_job_id | default(awx_job_id | default('')) | string | trim }}"
-    _pcs_tower_url: "{{ aap_ui_url | default('') | regex_replace('/$', '') }}"
-    _pcs_activation_id: "{{ (ansible_eda['rulebook_activation_id'] | default('')) if ansible_eda is defined else '' }}"
-    _pcs_eda_host: "{{ eda_dashboard_host | default(aap_ui_url | default('')) | regex_replace('/$', '') }}"
-    _pcs_job_name: "{{ cr_plural | regex_replace('s$', '') }}-{{ _pcs_action }}"
-    _pcs_job:
-      name: "{{ _pcs_job_name }}"
-      jobId: >-
-        {{ _pcs_tower_job_id if (_pcs_tower_job_id | length > 0 and _pcs_tower_url | length > 0)
-           else (_pcs_activation_id | string if (_pcs_activation_id | string) not in ['', 'manual'] else _pcs_job_name) }}
-      url: >-
-        {{ (_pcs_tower_url ~ '/execution/jobs/playbook/' ~ _pcs_tower_job_id ~ '/output')
-           if (_pcs_tower_job_id | length > 0 and _pcs_tower_url | length > 0)
-           else (_pcs_eda_host ~ '/#/rulebook-activations' ~ (('/' ~ _pcs_activation_id) if (_pcs_activation_id | string) not in ['', 'manual'] else '')) }}
+    # the kind's singular (entities -> entity, cloudawss -> cloudaws) and the action
+    _pcs_job_name: "{{ cr_plural | regex_replace('ies$', 'y') | regex_replace('s$', '') }}-{{ _pcs_action }}"
+    # No address of the automation platform in status: the admin page builds the link from jobId and its own
+    # setting. jobId is the controller's job id only; a run without one (by hand) records no jobId, so that no
+    # link points at another job.
+    _pcs_job: >-
+      {{ {'name': _pcs_job_name} | combine({'jobId': _pcs_tower_job_id} if _pcs_tower_job_id is match('^[0-9]+$') else {}) }}
   hybridsovereign.shc.cr_status:
     host: "{{ services_api_host | trim }}"
     api_key: "{{ services_bearer_token | trim }}"

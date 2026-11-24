@@ -35,14 +35,6 @@ spec:
           type: object
           required:
             - spec
-          x-kubernetes-validations:
-            - rule: >-
-                self.metadata.name.size() <= 56
-                && self.metadata.name.matches('^[a-z0-9]([-a-z0-9]*[a-z0-9])?$')
-                && !self.metadata.name.contains('--')
-              message: >-
-                Tenant names are lowercase letters, digits and single '-', at most 56 characters; the
-                name becomes the namespace entity-<name>.
           properties:
             apiVersion:
               type: string
@@ -50,6 +42,18 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters. The tenant's name becomes the namespace
+                        entity-<name>.
             spec:
               description: What the tenant is and which access groups hold which roles.
               type: object
@@ -133,18 +137,24 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     auditor:
                       description: >-
                         Auditor: read everything a tenant admin can change.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     BobsTeam:
                       description: >-
                         Deprecated: the same as auditor; use auditor.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudOSOAdmin:
                       description: >-
                         OpenStack environment admin: create, change and delete OpenStack
@@ -152,12 +162,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudOSOView:
                       description: >-
                         OpenStack environment viewer: read OpenStack environments and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudVirtAdmin:
                       description: >-
                         OpenShift Virtualization environment admin: create, change and delete VM
@@ -165,6 +179,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudVirtView:
                       description: >-
                         OpenShift Virtualization environment viewer: read VM environments
@@ -172,6 +188,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     networkAdmin:
                       description: >-
                         Network admin: create, change and delete networks, network placements and
@@ -179,6 +197,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     networkView:
                       description: >-
                         Network viewer: read networks, network placements, edge connections and
@@ -186,6 +206,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudAWSAdmin:
                       description: >-
                         AWS environment admin: create, change and delete AWS environments
@@ -193,12 +215,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     cloudAWSView:
                       description: >-
                         AWS environment viewer: read AWS environments and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     platformOpenshiftAdmin:
                       description: >-
                         OpenShift cluster admin: create, change and delete OpenShift clusters
@@ -206,12 +232,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     platformOpenshiftView:
                       description: >-
                         OpenShift cluster viewer: read OpenShift clusters and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     teamAdmin:
                       description: >-
                         Team setup admin: create, change and delete team setups (Team); read cluster
@@ -219,12 +249,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     teamView:
                       description: >-
                         Team setup viewer: read team setups, cluster assignments and access groups.
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     projectAdmin:
                       description: >-
                         App project admin: create, change and delete app projects (Project); read
@@ -232,6 +266,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     projectView:
                       description: >-
                         App project viewer: read app projects, cluster assignments and access
@@ -239,6 +275,8 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     assignmentAdmin:
                       description: >-
                         Cluster assignment admin: create, change and delete cluster assignments
@@ -246,12 +284,16 @@ spec:
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                     identityAdmin:
                       description: >-
                         Access group admin: create, change and delete access groups (Rbac).
                       type: array
                       items:
                         type: string
+                        maxLength: 63
+                        pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
             status:
               description: Observed state, written by the platform. Do not edit.
               type: object
@@ -308,9 +350,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -318,7 +357,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-

@@ -61,6 +61,32 @@
         assignment_billing_id: "{{ assignment_target_ns.resources[0].metadata.labels['hybridsovereign.redhat/billing-id'] | default('') }}"
         assignment_description: "{{ (assignment_target_ns.resources[0].metadata.annotations | default({}))['hybridsovereign.redhat/description'] | default('') }}"
 
+    # the rule for names, for an object made before the API carried it: refused before anything is made
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items: >-
+          {%- set ns = namespace(checks=[{'value': assignment_entity, 'what': 'tenant'},
+                                        {'value': assignment_cr_name, 'what': 'cluster assignment'}]) -%}
+          {%- if assignment_team | length > 0 -%}
+            {%- set ns.checks = ns.checks + [{'value': assignment_team, 'what': 'team'}] -%}
+          {%- endif -%}
+          {%- for p in assignment_projects -%}
+            {%- set ns.checks = ns.checks + [{'value': p | string, 'what': 'app project'}] -%}
+          {%- endfor -%}
+          {{ ns.checks }}
+
+    - name: Refuse a name the rule does not allow
+      when: name_check_message | length > 0
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            assignment_failure_reason: NameNotAllowed
+
+        - name: Stop before anything is made
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Look up referenced Team CR
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -224,7 +250,7 @@
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ assignment_failure_reason | default('EDAFailed') }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
         # the ACM record goes with the failure once an ACM object exists (this run's, or what an earlier run
         # recorded), so the teardown removes a policy this job created before it failed (R3A-F2). Not written when

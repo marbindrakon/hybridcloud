@@ -266,7 +266,9 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `InvalidSpec` | The request is not valid; correct the fields named in the message. | You (the tenant) |
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
 | `MappingFailed` | The sign-in mapping could not be set up. The platform team is looking at it. | The platform team |
-| `NameInUse` | This name is already used by an OpenStack environment of another tenant. Create it with another name. | You (the tenant) |
+| `NameInUse` | An earlier release refused this name because another tenant used it. Names are now per tenant: use Retry now. | You (the tenant) |
+| `NameNotAllowed` | This name is not allowed: a letter first, then lower-case letters, digits and single hyphens; the message says the limit. Create it again. | You (the tenant) |
+| `NameTakenOnSite` | Something of this name already exists on the site and was not made by the platform. The platform team is looking at it. | The platform team |
 | `NamespaceNotOwned` | The tenant namespace already exists and was not created for this tenant. The platform team must remove or rename it. | The platform team |
 | `NamespaceOperatorImageRejected` | The requested operator version for this tenant is not allowed; the default version is used. | The platform team |
 | `NamespaceTaken` | The namespace name is already in use on the site. Choose another name. | You (the tenant) |
@@ -302,6 +304,7 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `RouterAttachmentsOff` | The network's placement here does not allow router attachments. Turn on 'Use for router attachments' on the placement. | You (the tenant) |
 | `RoutesMissing` | Network routes are missing. The platform team is looking at it. | The platform team |
 | `RoutingDaemonDown` | Routing on a node is partly down. The platform team is alerted. | The platform team |
+| `SecretNameTaken` | A Secret of the name the platform generates already exists in your namespace. Rename it, or name your own Secret in the circuit. | You (the tenant) |
 | `ServiceFailed` | A network service on a node is not running. The platform team is alerted. | The platform team |
 | `ServiceLinkDown` | On a node, a network's link to the platform's connection is down: the platform may not reach all its clusters. The platform team is alerted. | The platform team |
 | `ServiceNotOffered` | The platform's connection for clusters on networks is not offered here. Ask the platform team. | The platform team |

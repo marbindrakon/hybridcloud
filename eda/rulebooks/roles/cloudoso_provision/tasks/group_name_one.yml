@@ -1,0 +1,18 @@
+---
+# One access group's name (group_names.yml): refused alone when it does not fit.
+- name: "The group name of {{ gn_group }}"
+  block:
+    - name: "Name {{ gn_group }}"
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+      vars:
+        names_request: {action: group, tenant: "{{ gn_tenant }}", group: "{{ gn_group }}"}
+
+    - name: "Keep the group name of {{ gn_group }}"
+      ansible.builtin.set_fact:
+        gn_names: "{{ gn_names | combine({gn_group: names_result.name}) }}"
+  rescue:
+    - name: "Refuse the access group {{ gn_group }}"
+      ansible.builtin.set_fact:
+        gn_refused: >-
+          {{ gn_refused | combine({gn_group: (names_result | default({}, true)).error
+                                             | default('The group name could not be worked out.', true)}) }}

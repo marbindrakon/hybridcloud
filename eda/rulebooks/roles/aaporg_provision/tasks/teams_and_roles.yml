@@ -53,19 +53,27 @@
   ignore_errors: true
   when: gw_org_id | int > 0 and viewer_groups | length > 0
 
-# Authenticator maps: one per (team, access group). The sign-in claim carries full group paths
-# (/<entity>/<access group>), so the trigger is '/' + the Rbac's group. Maps are created, updated when their trigger
-# or team differ, and this organization's maps that are no longer wanted are deleted.
+# Authenticator maps: one per (team, access group), named <tenant>_<name>_<admin|executor|viewer>_<access group> by
+# the names function (the gateway keeps one namespace of map names for all organizations). The sign-in claim carries
+# full group paths (/<entity>/<access group>), so the trigger is '/' + the Rbac's group. This organization's maps are
+# the ones whose ids its status records, and a map of a wanted name that already points at this organization (only
+# the gateway's administrators write maps); never a map found by the beginning of its name. Maps are created, updated
+# when their trigger or team differ, and this organization's maps that are no longer wanted are deleted (also the
+# maps of the earlier names); the ids are recorded right after the creates.
+- name: The names of the wanted maps
+  ansible.builtin.include_tasks: map_name.yml
+  loop: "{{ aaporg_grants | default([]) }}"
+  loop_control:
+    loop_var: aaporg_grant
+    label: "{{ aaporg_grant.kind }} {{ aaporg_grant.rbac }}"
+
 - name: Wanted authenticator maps of this organization
   ansible.builtin.set_fact:
     aaporg_wanted_maps: >-
       {%- set out = [] -%}
-      {%- for kind, team, order, groups in [('admin', 'admins', 1, admin_groups), ('executor', 'executors', 2, executor_groups),
-                                            ('viewer', 'viewers', 3, viewer_groups)] -%}
-        {%- for g in groups -%}
-          {%- set _ = out.append({'name': org_name ~ '-' ~ kind ~ '-map-' ~ g, 'team': org_name ~ '-' ~ team,
-                                   'order': order, 'group': '/' ~ (g | regex_replace('^/+', ''))}) -%}
-        {%- endfor -%}
+      {%- for g in aaporg_grants | default([]) -%}
+        {%- set _ = out.append({'name': aaporg_map_names[g.kind ~ ' ' ~ g.rbac], 'team': org_name ~ '-' ~ g.team,
+                                 'order': g.order, 'group': '/' ~ (g.group | regex_replace('^/+', ''))}) -%}
       {%- endfor -%}
       {{ out }}
 
@@ -84,13 +92,49 @@
 - name: Work out the map changes
   vars:
     _have: "{{ (_aaporg_maps.json | default({})).results | default([]) }}"
-    _prefix_re: "{{ '^' ~ (org_name | regex_escape) ~ '-(admin|executor|viewer)-map-' }}"
+    _recorded_ids: >-
+      {{ ((aaporg_recorded | default({}, true)).signInMaps | default([], true)) | map(attribute='id')
+         | map('string') | list }}
+    _wanted_names: "{{ aaporg_wanted_maps | map(attribute='name') | list }}"
+    # the names maps had before the names function (<organization>-<kind>-map-<group>), for the groups granted now
+    # and the groups the status records: such a map pointing at this organization is this organization's, and goes
+    _earlier_names: >-
+      {%- set out = [] -%}
+      {%- for kind, groups in [('admin', (aaporg_grants | default([]) | selectattr('kind', 'equalto', 'admin') | map(attribute='group') | list)
+                                          + ((aaporg_recorded | default({}, true)).adminGroups | default([], true))),
+                               ('executor', (aaporg_grants | default([]) | selectattr('kind', 'equalto', 'executor') | map(attribute='group') | list)
+                                             + ((aaporg_recorded | default({}, true)).executorGroups | default([], true))),
+                               ('viewer', (aaporg_grants | default([]) | selectattr('kind', 'equalto', 'viewer') | map(attribute='group') | list)
+                                           + ((aaporg_recorded | default({}, true)).viewerGroups | default([], true)))] -%}
+        {%- for g in groups -%}{%- set _ = out.append(org_name ~ '-' ~ kind ~ '-map-' ~ g) -%}{%- endfor -%}
+      {%- endfor -%}
+      {{ out }}
   ansible.builtin.set_fact:
-    aaporg_maps_create: "{{ aaporg_wanted_maps | rejectattr('name', 'in', _have | map(attribute='name') | list) | list }}"
+    aaporg_maps_ours: >-
+      {%- set out = [] -%}
+      {%- for h in _have -%}
+        {%- if (h.id | string) in _recorded_ids
+              or ((h.name in _wanted_names or h.name in _earlier_names)
+                  and (h.organization | default('', true) | string) == org_name) -%}
+          {%- set _ = out.append(h) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {{ out }}
+    aaporg_maps_foreign: >-
+      {{ _have | selectattr('name', 'in', _wanted_names)
+         | rejectattr('organization', 'equalto', org_name) | rejectattr('id', 'in', _recorded_ids | map('int') | list)
+         | map(attribute='name') | list }}
+  when: aap_auth_id | length > 0
+
+- name: Work out what to create, update and delete
+  ansible.builtin.set_fact:
+    aaporg_maps_create: >-
+      {{ aaporg_wanted_maps | rejectattr('name', 'in', (_aaporg_maps.json | default({})).results | default([])
+                                         | map(attribute='name') | list) | list }}
     aaporg_maps_update: >-
       {%- set out = [] -%}
       {%- for w in aaporg_wanted_maps -%}
-        {%- for h in _have if h.name == w.name -%}
+        {%- for h in aaporg_maps_ours if h.name == w.name -%}
           {%- set trig = ((h.triggers | default({}, true)).groups | default({}, true)).has_or | default([], true) -%}
           {%- if trig != [w.group] or (h.team | default('', true) | string) != w.team -%}
             {%- set _ = out.append(w | combine({'id': h.id})) -%}
@@ -99,8 +143,7 @@
       {%- endfor -%}
       {{ out }}
     aaporg_maps_delete: >-
-      {{ _have | selectattr('name', 'match', _prefix_re)
-         | rejectattr('name', 'in', aaporg_wanted_maps | map(attribute='name') | list) | list }}
+      {{ aaporg_maps_ours | rejectattr('name', 'in', aaporg_wanted_maps | map(attribute='name') | list) | list }}
   when: aap_auth_id | length > 0
 
 - name: Create the authenticator maps
@@ -132,6 +175,36 @@
   when: aap_auth_id | length > 0
   register: _aaporg_map_created
   ignore_errors: true
+
+# the maps this organization holds now, by id, recorded at once after the creates (the teardown deletes exactly
+# what is recorded); the list without the maps deleted below is recorded with the ready status
+- name: The maps this organization holds after the creates
+  ansible.builtin.set_fact:
+    aaporg_maps_recorded: >-
+      {%- set out = [] -%}
+      {%- for h in aaporg_maps_ours | default([]) -%}
+        {%- set _ = out.append({'id': h.id | string, 'name': h.name}) -%}
+      {%- endfor -%}
+      {%- for r in (_aaporg_map_created.results | default([])) if not (r.failed | default(false)) and r.json is defined -%}
+        {%- set _ = out.append({'id': r.json.id | string, 'name': r.json.name}) -%}
+      {%- endfor -%}
+      {{ out }}
+  when: aap_auth_id | length > 0
+
+- name: Record this organization's maps in its status
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+  vars:
+    cr_api_version: hybridsovereign.redhat/v1alpha1
+    cr_plural: aaporgs
+    cr_name: "{{ aaporg_cr_name }}"
+    cr_namespace: "{{ aaporg_cr_namespace }}"
+    cr_status_partial: true
+    cr_status_body:
+      signInMaps: "{{ aaporg_maps_recorded }}"
+  when:
+    - aap_auth_id | length > 0
+    - (aaporg_maps_recorded | sort(attribute='id') | list)
+      != ((aaporg_recorded | default({}, true)).signInMaps | default([], true) | sort(attribute='id') | list)
 
 - name: Update the authenticator maps whose trigger differs
   ansible.builtin.uri:
@@ -170,11 +243,21 @@
     label: "{{ item.name }}"
   when: aap_auth_id | length > 0
 
+- name: The maps this organization keeps
+  ansible.builtin.set_fact:
+    aaporg_maps_recorded: >-
+      {%- set gone = aaporg_maps_delete | default([]) | map(attribute='id') | map('string') | list -%}
+      {{ aaporg_maps_recorded | rejectattr('id', 'in', gone) | list }}
+  when: aap_auth_id | length > 0
+
+# a wanted map name held by a map of another organization is not touched; this organization's sign-in is then not
+# in place for that group
 - name: Record whether the sign-in mapping is in place
   ansible.builtin.set_fact:
     aaporg_mapping_failed: >-
       {{ ((_aaporg_map_created.results | default([])) + (_aaporg_map_updated.results | default([])))
-         | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0 }}
+         | selectattr('failed', 'defined') | selectattr('failed') | list | length > 0
+         or (aaporg_maps_foreign | default([]) | length > 0) }}
 
 - name: Fetch org object roles
   ansible.builtin.uri:

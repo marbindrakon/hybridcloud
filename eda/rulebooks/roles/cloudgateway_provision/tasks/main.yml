@@ -317,6 +317,8 @@
               {%- set n6 = ((nets.get(key, {}).status | default({}, true)).ipv6 | default({}, true)) -%}
               {%- set cov = ((n6.prefixes | default([], true)) + routed) | unique | list if p6 else [] -%}
               {%- set _ = out.append({'placement': p.metadata.namespace ~ '/' ~ p.metadata.name, 'network': key,
+                                      'tenant': (p.metadata.labels | default({}, true))['hybridsovereign.redhat/entity']
+                                                | default((st.entity | default('', true)), true),
                                       'vrf': 't' ~ r.l3Vni, 'vni': r.l3Vni | int, 'vpnTarget': r.vpnTarget | int,
                                       'mtu': vmtu, 'families': fams or [4], 'prefixes4': p4, 'prefixes6': p6,
                                       'egress6': (key in v6nets) and (p6 | length > 0), 'covering6': cov}) -%}
@@ -446,7 +448,8 @@
           {{ cg_node_results | map(attribute='upstreamSessions') | map('string') | join('/') }}
           ({{ ('changed on ' ~ cg_changed_nodes | join(', ')) if cg_changed_nodes or cg_site_changed | bool else 'no change' }}){{
           ('; tunnel ' ~ cg_node_results | map(attribute='tunnel') | join('/')) if cg_instance.wireguard is defined else '' }}{{
-          cg_rdns_note | default('') }}
+          cg_rdns_note | default('') }}{{ ('; ' ~ cg_mark_note) if cg_mark_note | default('', true) | length > 0 else '' }}
+        fab_conditions: "{{ cg_mark_conditions | default([], true) }}"
         fab_status: >-
           {{ cg_status | combine({'wireguard': {'nodes': cg_wg_nodes | default([])}} if cg_instance.wireguard is defined else {})
              | combine({'site': cg_status.site | combine(cg_site_extra),

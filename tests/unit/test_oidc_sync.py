@@ -17,7 +17,7 @@ import unittest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPT = os.path.join(ROOT, "charts", "charts", "oidc-issuer", "files", "oidc-sync.sh")
 BASE = "https://issuer.example.test"
-ANN = "shc.signal9.gg/oidc-fetched-"
+ANN = "hybridsovereign.redhat/oidc-fetched-"
 
 # The fake oc: state in $FAKE/state.json; prints what the real one would or exits 1.
 FAKE_OC = textwrap.dedent(r'''
@@ -42,7 +42,10 @@ FAKE_OC = textwrap.dedent(r'''
             sys.exit(1)
         out(json.dumps(st["cm"]))
     if a[:2] == ["get", "configmap"] and "-l" in a:
-        out(json.dumps({"items": []}))
+        key = a[a.index("-l") + 1].split("=", 1)[0]
+        if key in st.get("list_fails", []):
+            sys.exit(1)
+        out(json.dumps({"items": [c for c in st.get("static", []) if c["metadata"]["labels"].get(key) == "true"]}))
     if a[:2] == ["get", "secret"]:
         ns = a[a.index("-n") + 1]
         out(st["tokens"].get(ns, ""))
@@ -92,13 +95,13 @@ class OidcSync(unittest.TestCase):
                             "siteB__openid-configuration": '{"issuer":"%s/siteB"}' % BASE}},
         }
 
-    def run_sync(self):
+    def run_sync(self, **more):
         with open(os.path.join(self.d, "state.json"), "w") as f:
             json.dump(self.state, f)
         env = dict(os.environ, PATH=self.bin + os.pathsep + os.environ["PATH"], FAKE=self.d, NAMESPACE="oidc",
                    BASE_URL=BASE, MSA="sync", PROXY_URL="https://proxy.example.test", STATIC_LABEL="static",
                    STATIC_NAME_LABEL="static-name", CLUSTERS="hub local\nsiteA acm\nsiteB acm\n",
-                   SA_CA="/dev/null", WORKDIR=self.work, TERMINATION_LOG=os.path.join(self.d, "termination"))
+                   SA_CA="/dev/null", WORKDIR=self.work, TERMINATION_LOG=os.path.join(self.d, "termination"), **more)
         p = subprocess.run(["bash", SCRIPT], env=env, capture_output=True, text=True, timeout=60)
         applied = None
         if os.path.exists(os.path.join(self.d, "applied.json")):
@@ -168,6 +171,80 @@ class OidcSync(unittest.TestCase):
         self.assertEqual(p.returncode, 1)
         self.assertIsNone(applied)
         self.assertIn("oidc-documents: cannot be read", term)
+
+
+    PREVIOUS = {"STATIC_LABEL_PREVIOUS": "old-static", "STATIC_NAME_LABEL_PREVIOUS": "old-static-name",
+                "ANN_PREFIX_PREVIOUS": "old/oidc-fetched-"}
+
+    @staticmethod
+    def static_cm(name, labels):
+        return {"metadata": {"name": "oidc-static-" + name, "labels": labels},
+                "data": {"keys.json": json.dumps({"keys": [{"kid": name}]})}}
+
+    def test_static_issuers_under_either_label_key(self):
+        """For one release a static issuer of the release before (the older label keys) stays published next to one
+        with the new keys and one with both (listed once)."""
+        self.state["static"] = [
+            self.static_cm("aws-new", {"static": "true", "static-name": "aws-new"}),
+            self.static_cm("aws-old", {"old-static": "true", "old-static-name": "aws-old"}),
+            self.static_cm("aws-both", {"static": "true", "static-name": "aws-both",
+                                        "old-static": "true", "old-static-name": "aws-both"})]
+        p, applied, term = self.run_sync(**self.PREVIOUS)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("published: hub siteA siteB aws-both aws-new aws-old", p.stdout)
+        for n in ("aws-new", "aws-old", "aws-both"):
+            self.assertEqual(json.loads(applied["data"][n + "__keys.json"])["keys"][0]["kid"], n)
+        self.assertIsNone(term)
+
+    def test_a_failed_static_list_changes_nothing(self):
+        """Either static list failing: nothing is applied (no issuer of that list dropped), the run fails and says so."""
+        self.state["static"] = [
+            self.static_cm("aws-new", {"static": "true", "static-name": "aws-new"}),
+            self.static_cm("aws-old", {"old-static": "true", "old-static-name": "aws-old"})]
+        for failing in ("static", "old-static"):
+            with self.subTest(failing=failing):
+                self.state["list_fails"] = [failing]
+                if os.path.exists(os.path.join(self.d, "applied.json")):
+                    os.remove(os.path.join(self.d, "applied.json"))
+                p, applied, term = self.run_sync(**self.PREVIOUS)
+                self.assertEqual(p.returncode, 1, p.stdout + p.stderr)
+                self.assertIsNone(applied)
+                self.assertIn("static issuers: list failed", term)
+                self.assertIn("oidc-documents: not changed", term)
+
+    def test_without_the_previous_keys_only_the_new_ones_count(self):
+        self.state["static"] = [self.static_cm("aws-old", {"old-static": "true", "old-static-name": "aws-old"})]
+        p, applied, term = self.run_sync()
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertNotIn("aws-old__keys.json", applied["data"])
+
+    def test_the_fetch_time_under_the_previous_prefix_is_read(self):
+        self.state["down"] = ["siteB"]
+        self.state["mc"]["siteB"] = ["Unknown", "ManagedClusterLeaseUpdateStopped", "2026-01-03T00:00:00Z"]
+        self.state["cm"]["metadata"]["annotations"] = {"old/oidc-fetched-siteB": "2026-01-02T03:04:05Z"}
+        p, applied, term = self.run_sync(**self.PREVIOUS)
+        self.assertEqual(p.returncode, 0, p.stdout + p.stderr)
+        self.assertIn("siteB: keeping the documents fetched 2026-01-02T03:04:05Z", p.stdout)
+        # written back under the current prefix only
+        self.assertEqual(applied["metadata"]["annotations"][ANN + "siteB"], "2026-01-02T03:04:05Z")
+        self.assertNotIn("old/oidc-fetched-siteB", applied["metadata"]["annotations"])
+
+
+class ChartWiring(unittest.TestCase):
+    def test_the_chart_passes_the_previous_keys(self):
+        with open(os.path.join(ROOT, "charts", "charts", "oidc-issuer", "templates", "sync.yaml")) as f:
+            body = f.read()
+        for name in ("STATIC_LABEL_PREVIOUS", "STATIC_NAME_LABEL_PREVIOUS", "ANN_PREFIX_PREVIOUS"):
+            self.assertIn("name: " + name, body)
+
+    def test_the_jobs_write_both_label_keys(self):
+        import yaml
+        for f in ("aws_clusterbuild_sts.yml", "gcp_clusterbuild_wif.yml"):
+            body = open(os.path.join(ROOT, "eda", "rulebooks", "roles", "platformopenshift_provision", "tasks", f)).read()
+            with open(os.path.join(ROOT, "charts", "charts", "oidc-issuer", "values.yaml")) as fh:
+                static = yaml.safe_load(fh)["sync"]["static"]
+            for key in ("label", "nameLabel", "previousLabel", "previousNameLabel"):
+                self.assertIn(static[key] + ":", body, (f, key))
 
 
 if __name__ == "__main__":

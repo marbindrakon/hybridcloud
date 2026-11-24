@@ -6,7 +6,7 @@ import { fileURLToPath } from "url";
 import { createK8sHandlers } from "./k8s-proxy.js";
 import { isDryRunRequest, writeOptionsMiddleware } from "./writeOptions.js";
 import { createApiK8sProxy } from "../../shared/server/apiK8sProxy.js";
-import { transformBody } from "../../shared/server/tenantSafe.js";
+import { transformBody, tenantSafeResponses } from "../../shared/server/tenantSafe.js";
 import { guardTenantWrite } from "./sanitizers.js";
 import { createPermissionsHandler } from "../../shared/server/permissions.js";
 import { mountSessionRoutes } from "../../shared/server/session.js";
@@ -97,6 +97,8 @@ app.use(
 
 // Strict field validation, dry runs and Warning headers for the curated write routes.
 app.use("/api/", dryRunLimiter, writeOptionsMiddleware);
+// Answers of the /api/<plural> routes: the tenant status allow-list of every kind a tenant reads.
+app.use("/api/", tenantSafeResponses());
 
 function requireAuth(req, res, next) {
   const raw = req.headers["x-forwarded-access-token"];
@@ -258,7 +260,7 @@ app.patch("/api/personas/:name/annotations", requireAuth, mutationLimiter, k8s.p
 app.post("/api/k8s/patch-annotation", requireAuth, mutationLimiter, k8s.patchAnnotation);
 
 // Transparent K8s API proxy used by PatternFly UI shared hooks (/api/k8s/apis/...)
-// The raw path filters CloudOSO and PlatformOpenshift answers through the tenant status allow-list.
+// The raw path filters the answers of every kind a tenant reads through the tenant status allow-list.
 app.use("/api/k8s", requireAuth, createApiK8sProxy(OCP_API, { transformBody, guardRequest: guardTenantWrite }));
 
 // Unknown API paths answer 404 JSON instead of falling through to the SPA.

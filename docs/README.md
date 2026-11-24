@@ -29,6 +29,7 @@
 | [Convert an OpenShift Virtualization site to dual-stack](platform/metal-dual-stack-conversion.md) | The day-2 conversion of a bare-metal OpenShift cluster: pre-checks, the node step, the cluster step, the roll, post steps, verification, rollback by rebuild, known product issues. |
 | [Platform services: what recovers by itself](platform/platform-operations.md) | Event activations and their restart limit, the Keycloak after a database fail-over, database backups, retention, the restore window and the limit on the waiting archive, upgrading an installation that carried the schema compatibility service. |
 | [Platform alerts](platform/platform-alerts.md) | The alerts on the platform's own services, what each means and what to do, and the receiver an installation sets. |
+| [Names on the platforms](platform/platform-names.md) | How the platform names what it makes, where the full names are written, and how to get from a name or a number back to the tenant. |
 | [Bootstrap](../bootstrap/README.md) | Building the charts and seeding Argo CD on a new installation. |
 | [Disconnected deploy](disconnected-deploy.md) | What a disconnected installation needs. |
 | [Lab configuration policy](lab-config.md) | Where installation-specific values live (never in Git). |

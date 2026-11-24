@@ -64,6 +64,22 @@ ROLE_ID_MAX = 64            # custom role id: 3-64 of [a-zA-Z0-9_.]
 ROLE_TITLE_MAX = 100        # custom role title
 
 
+def pool_description(cluster):
+    """The pool's description: the platform's mark of the cluster's pool."""
+    return "OpenShift cluster %s (SHC)" % cluster
+
+
+def sa_description(cluster):
+    """A service account's description: the platform's mark of the cluster's operator accounts."""
+    return "shc-cluster=" + cluster
+
+
+def taken(what):
+    """An object of the wanted id that is not this cluster's (no mark, or another cluster's): refused, untouched."""
+    fail("%s already exists in the project and was not made by the platform for this cluster; it was left untouched."
+         % what, reason="NameTakenOnSite")
+
+
 def labelled_name(cluster, ns, name, limit):
     """"<cluster> <ns>/<name>" in at most `limit` characters: the build name stays whole (it is what the platform
     finds the cluster's objects by), the CredentialsRequest's namespace/name is cut to the room left."""
@@ -119,6 +135,8 @@ class Cluster:
     # ---- the pool and provider for the cluster's issuer
     def pool_up(self, issuer):
         pool = g.http("GET", self.pool, token=self.tok, ok404=True)
+        if pool and (pool.get("description") or "") != pool_description(self.cluster):
+            taken("A workload identity pool %s" % self.pool_id)
         if pool and pool.get("state") == "DELETED":
             g.http("POST", self.pool + ":undelete", {}, token=self.tok)
             self.changed.append("pool undeleted")
@@ -130,7 +148,7 @@ class Cluster:
                     break
         if not pool:
             g.http("POST", "%s/projects/%s/locations/global/workloadIdentityPools?workloadIdentityPoolId=%s" % (IAM, self.project, self.pool_id),
-                   {"displayName": self.cluster[:POOL_DISPLAY_NAME_MAX], "description": "OpenShift cluster %s (SHC)" % self.cluster}, token=self.tok)
+                   {"displayName": self.cluster[:POOL_DISPLAY_NAME_MAX], "description": pool_description(self.cluster)}, token=self.tok)
             self.changed.append("pool " + self.pool_id)
             for _ in range(30):
                 time.sleep(5)
@@ -158,10 +176,12 @@ class Cluster:
     def ensure_sa(self, account_id, ref):
         email = self.sa_email(account_id)
         sa = g.http("GET", "%s/projects/%s/serviceAccounts/%s" % (IAM, self.project, email), token=self.tok, ok404=True)
+        if sa and (sa.get("description") or "") != sa_description(self.cluster):
+            taken("A service account %s" % account_id)
         if not sa:
             g.http("POST", "%s/projects/%s/serviceAccounts" % (IAM, self.project), {
                 "accountId": account_id, "serviceAccount": {"displayName": labelled_name(self.cluster, ref["namespace"], ref["name"], SA_DISPLAY_NAME_MAX),
-                                                            "description": "shc-cluster=" + self.cluster}}, token=self.tok)
+                                                            "description": sa_description(self.cluster)}}, token=self.tok)
             self.changed.append("service account " + account_id)
             time.sleep(3)
         return email
@@ -195,6 +215,8 @@ class Cluster:
     def custom_role_up(self, role_id, permissions, title):
         name = "projects/%s/roles/%s" % (self.project, role_id)
         r = g.http("GET", "%s/%s" % (IAM, name), token=self.tok, ok404=True)
+        if r and not owns_role(self.cluster, r):
+            taken("A custom role %s" % role_id)
         if r and r.get("deleted"):
             g.http("POST", "%s/%s:undelete" % (IAM, name), {}, token=self.tok)
             r = g.http("GET", "%s/%s" % (IAM, name), token=self.tok)
@@ -270,7 +292,7 @@ class Cluster:
 
     def cluster_sas(self):
         return [s for s in g.list_all("%s/projects/%s/serviceAccounts" % (IAM, self.project), "accounts", self.tok)
-                if (s.get("description") or "") == "shc-cluster=" + self.cluster]
+                if (s.get("description") or "") == sa_description(self.cluster)]
 
     def down(self):
         for sa in self.cluster_sas():
@@ -281,7 +303,8 @@ class Cluster:
                 g.http("DELETE", "%s/%s" % (IAM, r["name"]), token=self.tok)
                 self.changed.append("removed custom role " + r["name"].rsplit("/", 1)[1])
         pool = g.http("GET", self.pool, token=self.tok, ok404=True)
-        if pool and pool.get("state") == "ACTIVE":
+        # only the cluster's own pool (its description is the platform's mark)
+        if pool and pool.get("state") == "ACTIVE" and (pool.get("description") or "") == pool_description(self.cluster):
             g.http("DELETE", self.pool, token=self.tok)
             self.changed.append("pool deleted (recoverable 30 days)")
         return {"cluster": self.cluster, "project": self.project, "pool": self.pool_id}

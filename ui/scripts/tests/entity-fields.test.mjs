@@ -70,5 +70,6 @@ test('ENTITY_LIMITS match the Entity CRD', () => {
   assert.match(after('displayName', 300), new RegExp(`maxLength: ${ef.ENTITY_LIMITS.displayNameMax}\\b`));
   assert.match(after('contacts', 300), new RegExp(`maxItems: ${ef.ENTITY_LIMITS.contactsMax}\\b`));
   assert.match(after('allowedSites', 600), new RegExp(`maxItems: ${ef.ENTITY_LIMITS.allowedSitesMax}\\b`));
-  assert.match(crd, new RegExp(`self\\.metadata\\.name\\.size\\(\\) <= ${ef.ENTITY_LIMITS.nameMax}\\b`));
+  // the rule for names sits on the metadata.name property, where an unchanged older name is let through
+  assert.match(after('            metadata', 400), new RegExp(`self\\.size\\(\\) <= ${ef.ENTITY_LIMITS.nameMax}\\b`));
 });

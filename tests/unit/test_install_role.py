@@ -259,7 +259,8 @@ class WatchEndings(unittest.TestCase):
         jobs = api.obj["status"]["edaJobs"]
         self.assertEqual((jobs[0]["name"], jobs[0]["jobId"], jobs[0]["status"]),
                          ("platformopenshift-failed", "4242", "failed"))
-        self.assertEqual(jobs[0]["url"], "https://controller.example.org/execution/jobs/playbook/4242/output")
+        # the automation controller's address is not the tenant's: the admin page builds the link from a setting
+        self.assertNotIn("url", jobs[0])
 
     def test_overdue(self):
         """Past the deadline: written failed (InstallOverdue, no Stalled), the job ends without failing and the

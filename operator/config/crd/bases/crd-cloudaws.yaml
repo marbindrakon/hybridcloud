@@ -44,6 +44,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -86,12 +97,9 @@ spec:
                   type: boolean
                 centralApiServer:
                   type: string
-                slug:
-                  type: string
-                  description: Short unique name of the environment, used in DNS names.
                 domain:
                   type: string
-                  description: "Full domain: <slug>.<baseDomain>"
+                  description: DNS zone of the environment.
                 route53ZoneId:
                   type: string
                   description: "Route53 hosted zone ID"
@@ -139,9 +147,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -149,7 +154,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -258,9 +262,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain

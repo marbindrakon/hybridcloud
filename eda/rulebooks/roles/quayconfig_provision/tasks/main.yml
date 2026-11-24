@@ -50,6 +50,23 @@
       ansible.builtin.set_fact:
         quayconfig_generation: "{{ _quayconfig_cr.resources[0].metadata.generation | default(0) | int }}"
 
+    - name: Check the name against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ quayconfig_cr_name }}", what: registry connection}
+
+    - name: Refuse a name that breaks the rule for names
+      when: name_check_message | length > 0
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            quayconfig_failure_reason: NameNotAllowed
+
+        - name: Refuse a name that breaks the rule for names (stop)
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Read RbacConfig for Keycloak settings
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -66,9 +83,20 @@
         msg: "RbacConfig {{ quayconfig_spec.rbacConfig }} not found"
       when: _rbac_config.resources | length == 0
 
+    # the client id the status records is kept; a new connection's client is quay_<connection> (names function)
+    - name: The sign-in client's recorded id
+      ansible.builtin.set_fact:
+        quayconfig_recorded_client_id: "{{ ((_quayconfig_cr.resources[0].status | default({}, true)).keycloakClientId | default('', true)) | string | trim }}"
+
+    - name: The sign-in client's id for a new connection
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+      vars:
+        names_request: {action: name, kind: tool-client, parts: ["quay", "{{ quayconfig_cr_name }}"]}
+      when: quayconfig_recorded_client_id | length == 0
+
     - name: Set OIDC client ID
       ansible.builtin.set_fact:
-        quay_oidc_client_id: "quay-{{ quayconfig_cr_name }}"
+        quay_oidc_client_id: "{{ quayconfig_recorded_client_id or names_result.name }}"
         keycloak_vault_path: "{{ _rbac_config.resources[0].spec.secret | default('rhbk-services-admin') }}"
 
     # without a labelled Route the job keeps KEYCLOAK_INTERNAL_URL of its environment
@@ -96,6 +124,11 @@
         _kc_token: {json: {access_token: "{{ quay_kc_realm_token }}"}}
       no_log: true
 
+    # the realm is the one whose automation clients the RbacConfig published (one source for every job)
+    - name: The tenant realm
+      ansible.builtin.set_fact:
+        keycloak_realm: "{{ keycloak_realm_name }}"
+
     # exact callbacks of the registry's external login service (quay_login_service_id), the groups claim
     - name: Ensure the Keycloak sign-in client for Quay
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_ensure.yml"
@@ -110,7 +143,29 @@
           {{ ['', '/attach', '/cli'] | map('regex_replace', '^', (quay_url | regex_replace('/$', '')) ~ '/oauth2/'
              ~ quay_login_service_id ~ '/callback') | list }}
         kce_web_origins: ["{{ quay_url | regex_replace('/$', '') }}"]
+        kce_owner: "QuayConfig/{{ quayconfig_cr_namespace }}/{{ quayconfig_cr_name }}"
+        # the client is this connection's when its status records the id; any other client of the id is refused
+        kce_recorded: "{{ quayconfig_recorded_client_id | length > 0 and quayconfig_recorded_client_id == quay_oidc_client_id }}"
         kce_attributes: {"access.token.lifespan": "3600"}
+
+    # recorded right after the create, in the same run: the teardown deletes this id. (A run that created the client
+    # and could not record it leaves it to a platform administrator: the next run refuses it.)
+    - name: Record the sign-in client's id
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
+      vars:
+        cr_api_version: hybridsovereign.redhat/v1alpha1
+        cr_plural: quayconfigs
+        cr_name: "{{ quayconfig_cr_name }}"
+        cr_namespace: "{{ quayconfig_cr_namespace }}"
+        cr_status_partial: true
+        cr_status_body:
+          keycloakClientId: "{{ quay_oidc_client_id }}"
+      when: quayconfig_recorded_client_id != quay_oidc_client_id
+
+    # a second ensure in this run (the gateway's own callback) finds the client recorded
+    - name: The client is recorded now
+      ansible.builtin.set_fact:
+        quayconfig_recorded_client_id: "{{ quay_oidc_client_id }}"
 
     - name: Keep the client for the secret lookup
       ansible.builtin.set_fact:
@@ -188,11 +243,12 @@
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
+          reason: "{{ 'NameTakenOnSite' if kce_refused | default(false) | bool else quayconfig_failure_reason | default('EDAFailed', true) }}"
           conditions:
             - type: Ready
               status: "False"
               lastTransitionTime: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
-              reason: EDAFailed
+              reason: "{{ 'NameTakenOnSite' if kce_refused | default(false) | bool else quayconfig_failure_reason | default('EDAFailed', true) }}"
               message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"
       ignore_errors: true
       when: services_api_host is defined and services_bearer_token is defined

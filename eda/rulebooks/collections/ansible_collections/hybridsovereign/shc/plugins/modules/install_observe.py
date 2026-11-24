@@ -58,7 +58,7 @@ options:
   nothing_removes: {description: "wait for the namespace - no ManagedCluster was removed, so nothing deletes the
       namespace: only a namespace being deleted is waited for.", type: bool, default: false}
   recheck: {description: removal - the fresh read right before the first delete of a removal this run decided., type: bool, default: false}
-  job: {description: Job entry recorded in status.edaJobs (name, jobId, url)., type: dict}
+  job: {description: Job entry recorded in status.edaJobs (name, jobId)., type: dict}
   timeout: {description: HTTP timeout in seconds., type: int, default: 30}
 author: [Hybrid Sovereign Cloud]
 """

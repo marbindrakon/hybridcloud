@@ -122,6 +122,9 @@ spec:
                 - {name: PROXY_URL, value: {{ .Values.sync.acm.proxyURL | quote }}}
                 - {name: STATIC_LABEL, value: {{ .Values.sync.static.label | quote }}}
                 - {name: STATIC_NAME_LABEL, value: {{ .Values.sync.static.nameLabel | quote }}}
+                - {name: STATIC_LABEL_PREVIOUS, value: {{ .Values.sync.static.previousLabel | default "" | quote }}}
+                - {name: STATIC_NAME_LABEL_PREVIOUS, value: {{ .Values.sync.static.previousNameLabel | default "" | quote }}}
+                - {name: ANN_PREFIX_PREVIOUS, value: {{ .Values.sync.previousFetchedPrefix | default "" | quote }}}
                 - name: CLUSTERS
                   value: |
                     {{- range .Values.sync.clusters }}

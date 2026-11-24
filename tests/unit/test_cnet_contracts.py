@@ -216,7 +216,7 @@ class NetworkRowsAndTheServicePlan(unittest.TestCase):
 class PlatformReachableAndThePreflight(unittest.TestCase):
     """The network job's condition, as the cluster job's preflight reads it."""
 
-    def judge(self, decision, space=SPACE):
+    def judge(self, decision, space=SPACE, site_network=True):
         net = network_object("acme/n1", decision["prefixes"], space)
         net["status"]["conditions"] = [dict(decision["condition"], lastTransitionTime="2001-01-01T00:00:00Z")]
         placement = {"metadata": {"name": "p1", "namespace": "acme"},
@@ -224,7 +224,9 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
                               "use": {"routerAttachments": True}},
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                                "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
+        if not site_network:
+            del placement["status"]["siteNetwork"]
         real = realization()
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
@@ -234,6 +236,15 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
         return P.network({"kind": "CloudOSO", "environment": "env1", "namespace": "acme", "network": "n1",
                           "networkObj": net, "placements": [placement], "fabric": fab, "needPlatform": True,
                           "needRouterAttachments": True, "hubApi": ""})
+
+    def test_a_placement_that_recorded_no_network_says_so(self):
+        """A placement of the release before has no status.siteNetwork until its own job runs again: the cluster waits
+        and says that, not that the router attachments are not ready."""
+        d = network_decision("acme/n1", [], Ledger(), {"circuits": CIRCUIT_STATUS}, realization())
+        out = self.judge(d, site_network=False)
+        self.assertEqual(out["reason"], "WaitingForPlacement")
+        self.assertIn("has not recorded its network on the site yet", out["message"])
+        self.assertNotIn("router attachments", out["message"])
 
     def test_reasons(self):
         real, led = realization(), Ledger()
@@ -377,30 +388,68 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
                                 cf_network_id=S3.NET, cf_account="sites/site1",
                                 fake_os={"cluster-fips/present": {"api": {"address": "x", "id": "y"},
                                                                   "ingress": {"address": "x", "id": "y"}}})[0]
+        # nothing recorded: both are made, none is found by its description
+        self.assertIs(present["create_only"], True)
+        # a floating IP someone else described as the cluster's is not taken, nor deleted as a duplicate
+        planted = conn.network.create_ip(floating_network_id=S3.NET,
+                                         description="OpenShift cluster c1: API (platform build shc-oso-acme-c1)")
         out = self.helper(conn, present)
-        self.assertEqual(sorted(i.description for i in conn.network.fips), ["shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress"])
-        again = self.helper(conn, present)
-        self.assertEqual((again["api"]["id"], again["api"]["created"]), (out["api"]["id"], False))
-        # the release by the record and by description (a floating IP created by a run that did not record it)
+        self.assertNotEqual(out["api"]["id"], planted.id)
+        self.assertIn(planted.id, [i.id for i in conn.network.fips])
+        conn.network.delete_ip(planted.id)
+        # the cluster's name in words, the build name as the platform's mark
+        self.assertEqual(sorted(i.description for i in conn.network.fips),
+                         ["OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
+                          "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"])
+        # the release by the record only: a floating IP that is not recorded is not released, whatever it is called
         absent = self.requests("cluster_fips_release.yml", cfr_project_id=S3.PROJECT, cfr_account="sites/site1",
-                               cfr_ids=[out["api"]["id"]], cfr_build="shc-oso-acme-c1", cfr_cr_name="c1",
-                               cfr_cr_namespace="acme")[0]
+                               cfr_ids=[out["api"]["id"]], cfr_cr_name="c1", cfr_cr_namespace="acme")[0]
         gone = self.helper(conn, absent)
-        self.assertEqual(sorted(gone["released"]), sorted([out["api"]["id"], out["ingress"]["id"]]))
-        self.assertEqual(conn.network.fips, [])
+        self.assertEqual(gone["released"], [out["api"]["id"]])
+        self.assertEqual([i.id for i in conn.network.fips], [out["ingress"]["id"]])
+
+    def test_a_cluster_that_recorded_its_floating_ips_keeps_them_by_id(self):
+        """Floating IPs of the release before (described <build>-api / -ingress) recorded with their ids: the job asks
+        nothing of the site (no find by a description) and keeps the record."""
+        import test_shc_openstack_cluster_fips as S3
+        conn = S3.FakeConn()
+        older = [conn.network.create_ip(floating_network_id=S3.NET, description=d)
+                 for d in ("shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress")]
+        rec = {"api": {"address": older[0].floating_ip_address, "id": older[0].id},
+               "ingress": {"address": older[1].floating_ip_address, "id": older[1].id}}
+        calls = self.requests("cluster_fips.yml", cb_app_name="shc-oso-acme-c1", cf_project_id=S3.PROJECT,
+                              cf_network_id=S3.NET, cf_account="sites/site1",
+                              po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]})
+        self.assertEqual(calls, [])
+        self.assertEqual(len(conn.network.fips), 2)
+
+    def test_a_record_of_half_the_pair_makes_nothing(self):
+        import test_platformopenshift_network as PO
+        for rec in ({"api": {"address": "192.0.2.10", "id": "fip-1"}}, {"api": {"id": "fip-1"}, "ingress": {"id": "fip-2"}},
+                    {"ingress": {"address": "192.0.2.11"}}):
+            v = dict(PO.BASE, cb_app_name="shc-oso-acme-c1", cf_project_id="p1", cf_network_id="n1",
+                     cf_account="sites/site1", po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]})
+            rc, tr, out = H.run("platformopenshift_provision", "cluster_fips.yml", v)
+            self.assertNotEqual(rc, 0, rec)
+            self.assertEqual(H.os_calls(tr, "cluster-fips"), [], rec)
+            self.assertEqual(H.patches(tr), [], rec)
+            self.assertIn("only part of the cluster's floating IPs", out)
 
     def test_the_environment_releases_a_legacy_pair(self):
         import test_shc_openstack_cluster_fips as S3
         text = load(os.path.join(ROLES, "cloudoso_provision", "tasks", "environmentprep.yml"))
         t = next(x for x in walk(text) if (x.get("vars") or {}).get("os_request", {}).get("action") == "cluster-fips")
         conn = S3.FakeConn()
-        for d in ("sovereign-env1-api", "sovereign-env1-ingress"):
-            conn.network.create_ip(floating_network_id=S3.NET, description=d)
+        pair = [conn.network.create_ip(floating_network_id=S3.NET, description=d).id
+                for d in ("sovereign-env1-api", "sovereign-env1-ingress")]
+        # one of the old description the status does not record: the tenant's, never released
+        conn.network.create_ip(floating_network_id=S3.NET, description="sovereign-env1-api")
         req = run_play([{"ansible.builtin.set_fact": {"r": t["vars"]["os_request"]}}, write_out("r")],
-                       {"ep_os": {"project": {"id": S3.PROJECT}}, "ep_legacy_fip_ids": [], "cloudoso_cr_name": "env1"})
+                       {"ep_os": {"project": {"id": S3.PROJECT}}, "ep_legacy_fip_ids": pair, "cloudoso_cr_name": "env1"})
+        self.assertNotIn("descriptions", req)
         gone = self.helper(conn, req)
-        self.assertEqual(len(gone["released"]), 2)
-        self.assertEqual(conn.network.fips, [])
+        self.assertEqual(sorted(gone["released"]), sorted(pair))
+        self.assertEqual(len(conn.network.fips), 1)
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
@@ -460,7 +509,7 @@ def placement_obj():
             "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"}, "use": {"routerAttachments": True}},
             "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                        "use": {"routerAttachments": {"state": "ready"}},
-                       "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                       "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
 
 
 def preflight_on_the_plan(real, plan, decision, hub_api="", cluster="c2"):
@@ -850,7 +899,7 @@ class PlatformSideDown(unittest.TestCase):
                               "use": {"routerAttachments": True}},
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                                "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
                           "realization": {"service": dict(F.service_settings(real), enabled=True, sources=[HUB],
@@ -1110,7 +1159,7 @@ def declared(schema, path):
 
 class UiReadsAreDeclared(unittest.TestCase):
     """Every status key the UI reads (types/crds.ts, types/tenantProfile.ts, the network, placement and cluster
-    pages, tenantSafe.js's allow-list for clusters) is declared in the CRD bases, with the type the UI expects."""
+    pages, tenantStatusAllow.js's allow-list for clusters) is declared in the CRD bases, with the type the UI expects."""
 
     READS = {
         "HybridNetwork": [("spec.platformAccess", "boolean"), ("status.platformAccess.state", "string"),
@@ -1143,7 +1192,7 @@ class UiReadsAreDeclared(unittest.TestCase):
                               ("status.externalNetwork", "string"), ("status.placement", "string"),
                               ("status.publish", "string"), ("status.machineNetwork", "string"),
                               ("status.clusterNetwork", "string"), ("status.serviceNetwork", "string"),
-                              ("status.platformPrefixes.[]", "string"), ("status.floatingIPs.network", "string"),
+                              ("status.platformPrefixes.[]", "string"),
                               ("status.installStarted", "boolean"),
                               ("status.floatingIPs.api.address", "string"), ("status.floatingIPs.ingress.id", "string")],
         "CloudAWS": [("status.awsRegion", "string")],
@@ -1163,7 +1212,7 @@ class UiReadsAreDeclared(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_tenant_safe_keeps_the_cluster_keys(self):
-        with open(os.path.join(ROOT, "ui", "packages", "shared", "server", "tenantSafe.js")) as fh:
+        with open(os.path.join(ROOT, "ui", "packages", "shared", "server", "tenantStatusAllow.js")) as fh:
             text = fh.read()
         block = text[text.index("PlatformOpenshift: ["):]
         block = block[:block.index("],\n};")]

@@ -61,6 +61,18 @@ resources:
     cpu: 50m
     memory: 128Mi
 
+# Link from the admin's diagnostics to an automation job: an https URL with {jobId} where the job's id
+# goes, for example https://automation.example.com/execution/jobs/playbook/{jobId}/output. Empty = the
+# diagnostics show the job's id without a link (objects' status carries no address of the automation
+# platform).
+automationJobUrlTemplate: ""
+
+# The platform-health banner: a cluster's report counts as late when it is older than three intervals, where the
+# interval is the report's own, but at most this many minutes (a report cannot hold off "no report since" by
+# claiming a long interval). Set it to the largest ops.platformHealth.report.intervalMinutes of the reporting
+# clusters. With 5, a report written every five minutes is shown late after fifteen.
+platformHealthMaxReportIntervalMinutes: 5
+
 env:
   NODE_ENV: production
   # Base URL of the documentation for the Help menu (empty = "not configured").

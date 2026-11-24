@@ -43,6 +43,17 @@ spec:
               type: string
             metadata:
               type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: Desired state of this object.
               type: object
@@ -382,7 +393,15 @@ spec:
                       type: object
                       description: >-
                         OpenStack sites, the declared sign-in (spec.openstack.signIn) and what the probe found.
+                        OpenShift sites, the client and the identity provider tenants sign in with.
                       properties:
+                        clientId:
+                          type: string
+                          description: OpenShift sites, the sign-in client of the tenants' directory for this site.
+                        idpName:
+                          type: string
+                          description: >-
+                            OpenShift sites, the name of the button on the site's login page that signs tenants in.
                         identityProvider:
                           type: string
                           description: Identifier of the identity provider.
@@ -487,9 +506,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -497,7 +513,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-

@@ -108,7 +108,11 @@ REASONS = {
     "NamespaceTaken": _r("T", FAILED, "The namespace name is already in use on the site. Choose another name."),
     "EarlierClusterNotRemoved": _r("P", FAILED, "An earlier cluster of this name was not removed from the platform in time. The platform team is looking at it."),
     "EnvironmentNameTaken": _r("T", FAILED, "This environment name is already in use. Choose another name."),
-    "NameInUse": _r("T", FAILED, "This name is already used by an OpenStack environment of another tenant. Create it with another name."),
+    # retired: no job writes it; kept for objects an earlier release refused (teardown_unrealized.yml lists it)
+    "NameInUse": _r("T", FAILED, "An earlier release refused this name because another tenant used it. Names are now per tenant: use Retry now."),
+    "NameNotAllowed": _r("T", FAILED, "This name is not allowed: a letter first, then lower-case letters, digits and single hyphens; the message says the limit. Create it again."),
+    "NameTakenOnSite": _r("P", FAILED, "Something of this name already exists on the site and was not made by the platform. The platform team is looking at it."),
+    "SecretNameTaken": _r("T", FAILED, "A Secret of the name the platform generates already exists in your namespace. Rename it, or name your own Secret in the circuit."),
     "PrefixInvalid": _r("T", FAILED, "The address prefix is not valid."),
     "PrefixInUse": _r("T", FAILED, "The address prefix overlaps one already in use: a placement's subnet or another network of this tenant."),
     "PrefixReserved": _r("T", FAILED, "The address prefix overlaps address space the platform keeps for itself. Choose another prefix."),

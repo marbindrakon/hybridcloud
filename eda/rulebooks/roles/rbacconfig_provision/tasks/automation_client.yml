@@ -5,6 +5,13 @@
 - name: Name the {{ rac.purpose }} client
   ansible.builtin.set_fact:
     _rac_client_id: "{{ rbac_config_cr_name }}{{ rac.suffix }}"
+    # the client's mark: the description this job gives it when it makes it
+    _rac_description: "Realm automation ({{ rac.purpose }}) for RbacConfig {{ rbac_config_cr_name }}"
+    # what this RbacConfig's own status records for this purpose: a client it recorded is its own, whatever its
+    # description says (an earlier release recorded the client and wrote no such description)
+    _rac_recorded: >-
+      {{ (((rbac_config_cr.resources | default([{}], true))[0].status | default({}, true)).realmAutomation
+          | default({}, true))[rac.purpose ~ 'ClientId'] | default('', true) }}
     _rac_headers: "{{ {'Authorization': 'Bearer ' + keycloak_admin_token} | combine(plugin_rbac_keycloak_url_http_headers | default({})) }}"
     _rac_base: "{{ plugin_rbac_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}"
   no_log: true
@@ -19,6 +26,25 @@
   retries: 5
   delay: 5
 
+# a client of this id that this job did not make (another RbacConfig's "-clients" client, or one made by hand) is
+# refused: it would otherwise be given realm-management roles. Its own: the client its status records, or one that
+# carries the description (only an administrator of the realm can write either)
+- name: Refuse a {{ rac.purpose }} client this job did not make
+  when:
+    - _rac_lookup.json | length > 0
+    - (_rac_lookup.json[0].description | default('', true)) != _rac_description
+    - (_rac_recorded | default('', true)) != _rac_client_id
+  block:
+    - name: Record the reason
+      ansible.builtin.set_fact:
+        rbacconfig_failure_reason: NameTakenOnSite
+
+    - name: Stop before the client is changed
+      ansible.builtin.fail:
+        msg: >-
+          The sign-in directory already holds a client {{ _rac_client_id }} that this connection did not make.
+          Rename or remove that client, or give this connection another name.
+
 - name: Create the {{ rac.purpose }} client
   ansible.builtin.uri:
     url: "{{ _rac_base }}/clients"
@@ -28,7 +54,7 @@
     body:
       clientId: "{{ _rac_client_id }}"
       name: "{{ _rac_client_id }}"
-      description: "Realm automation ({{ rac.purpose }}) for RbacConfig {{ rbac_config_cr_name }}"
+      description: "{{ _rac_description }}"
       enabled: true
       clientAuthenticatorType: client-secret
       publicClient: false
@@ -68,6 +94,19 @@
     or (_rac_client.json[0].implicitFlowEnabled | default(false) | bool)
     or (_rac_client.json[0].directAccessGrantsEnabled | default(false) | bool)
     or (_rac_client.json[0].publicClient | default(false) | bool)
+  no_log: true
+
+# a recorded client of an earlier release gets the mark, so that it is known again should the record be lost
+- name: Mark the {{ rac.purpose }} client as this connection's
+  ansible.builtin.uri:
+    url: "{{ _rac_base }}/clients/{{ _rac_client.json[0].id }}"
+    method: PUT
+    headers: "{{ _rac_headers | combine({'Content-Type': 'application/json'}) }}"
+    body_format: json
+    body: "{{ _rac_client.json[0] | combine({'description': _rac_description}) }}"
+    validate_certs: false
+    status_code: [204]
+  when: (_rac_client.json[0].description | default('', true)) != _rac_description
   no_log: true
 
 - name: Get the {{ rac.purpose }} service account user

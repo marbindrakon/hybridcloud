@@ -1,0 +1,115 @@
+---
+# Whose the tenant's group /<tenant> and the access group /<tenant>/<group> are in the sign-in directory, before
+# anything is made or changed there. A group is this tenant's when it carries the tenant's mark (attribute entity =
+# the tenant) or, for the access group, when its id is the one recorded in status.groupId. An existing group that is
+# neither is refused (NameTakenOnSite), never adopted. The tenant's group from before the mark (no attribute at all)
+# is the tenant's when one of its access groups is (by mark or by a recorded id); it is then marked.
+# Input: parent_group_initial (the group-by-path answer for /<tenant>), svc_keycloak_url, svc_access_token,
+# entity_name, rbac_cr_name, rbac_cr_namespace, kc_full_path_query. Sets rbac_group_owner {parent, child}:
+# parent create | use | mark | refuse, child create | use | refuse; fails with the sentence on a refusal.
+- name: Look up the access group before anything is made
+  ansible.builtin.uri:
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
+    method: GET
+    headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
+    validate_certs: false
+    status_code: [200, 404]
+  register: _rgo_child_path
+
+- name: Read the tenant's group
+  ansible.builtin.uri:
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_initial.json.id }}"
+    method: GET
+    headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rgo_parent
+  when: parent_group_initial.status == 200
+
+- name: Read the access group
+  ansible.builtin.uri:
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ _rgo_child_path.json.id }}"
+    method: GET
+    headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
+    validate_certs: false
+    status_code: [200]
+  register: _rgo_child
+  when: _rgo_child_path.status == 200
+
+- name: What the directory holds
+  ansible.builtin.set_fact:
+    rgo_parent_found: "{{ parent_group_initial.status == 200 }}"
+    rgo_parent_entity: >-
+      {{ ((_rgo_parent.json | default({}, true)).attributes | default({}, true)).entity | default([], true)
+         if parent_group_initial.status == 200 else [] }}
+    rgo_child_found: "{{ _rgo_child_path.status == 200 }}"
+    rgo_child_id: "{{ (_rgo_child.json | default({}, true)).id | default('', true) if _rgo_child_path.status == 200 else '' }}"
+    rgo_child_entity: >-
+      {{ ((_rgo_child.json | default({}, true)).attributes | default({}, true)).entity | default([], true)
+         if _rgo_child_path.status == 200 else [] }}
+    rgo_recorded_id: >-
+      {{ ((rbac_cr_lookup.resources[0] | default({}, true)).status | default({}, true)).groupId | default('', true) }}
+    rgo_recorded_paths: []
+
+# only for the tenant's group from before the mark: the access groups this tenant's Rbac objects recorded
+- name: List the tenant's access groups
+  kubernetes.core.k8s_info:
+    host: "{{ services_api_host }}"
+    api_key: "{{ services_bearer_token }}"
+    validate_certs: false
+    api_version: hybridsovereign.redhat/v1alpha1
+    kind: Rbac
+    namespace: "{{ rbac_cr_namespace }}"
+  register: _rgo_rbacs
+  when:
+    - rgo_parent_found | bool
+    - rgo_parent_entity | length == 0
+
+- name: Read the access groups recorded in status
+  ansible.builtin.uri:
+    url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ item }}"
+    method: GET
+    headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
+    validate_certs: false
+    status_code: [200, 404]
+  loop: >-
+    {{ (_rgo_rbacs.resources | default([])) | map(attribute='status', default={}) | select('mapping')
+       | map(attribute='groupId', default='') | select('string') | select('match', '^[A-Za-z0-9-]+$') | unique | list
+       if (rgo_parent_found | bool) and (rgo_parent_entity | length == 0) else [] }}
+  register: _rgo_recorded
+
+- name: Keep the paths of the recorded access groups
+  ansible.builtin.set_fact:
+    rgo_recorded_paths: >-
+      {{ (_rgo_recorded.results | default([])) | selectattr('status', 'defined') | selectattr('status', 'equalto', 200)
+         | map(attribute='json') | map(attribute='path', default='') | list }}
+  when: _rgo_recorded.results | default([]) | length > 0
+
+- name: Decide whose the groups are
+  ansible.builtin.set_fact:
+    rbac_group_owner: >-
+      {%- set mine = [entity_name] -%}
+      {%- set child_ours = (rgo_child_found | bool) and (((rgo_recorded_id | length > 0) and rgo_child_id == rgo_recorded_id)
+                           or (rgo_child_entity | list) == mine) -%}
+      {%- set child = 'create' if not (rgo_child_found | bool) else ('use' if child_ours else 'refuse') -%}
+      {%- set proof = child_ours or (rgo_recorded_paths | select('match', '^/' ~ entity_name ~ '/[^/]+$') | list | length > 0) -%}
+      {%- if not (rgo_parent_found | bool) -%}{%- set parent = 'create' -%}
+      {%- elif (rgo_parent_entity | list) == mine -%}{%- set parent = 'use' -%}
+      {%- elif rgo_parent_entity | length > 0 -%}{%- set parent = 'refuse' -%}
+      {%- else -%}{%- set parent = 'mark' if proof else 'refuse' -%}
+      {%- endif -%}
+      {{ {'parent': parent, 'child': child} }}
+
+- name: Refuse a group that is not this tenant's
+  when: "'refuse' in [rbac_group_owner.parent, rbac_group_owner.child]"
+  block:
+    - name: Record the reason
+      ansible.builtin.set_fact:
+        rbac_failure_reason: NameTakenOnSite
+
+    - name: Stop before anything is made in the sign-in directory
+      ansible.builtin.fail:
+        msg: >-
+          {{ ('The group ' ~ entity_name) if rbac_group_owner.parent == 'refuse'
+             else ('The access group ' ~ entity_name ~ '/' ~ rbac_cr_name) }} already exists in the sign-in
+          directory and was not made by the platform for this tenant. The platform team is looking at it.

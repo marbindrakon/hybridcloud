@@ -12,12 +12,43 @@
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
   vars:
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: platform-project
       region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
       domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
       name: "{{ fab_real.openstack.platformProject }}"
-      description: "Platform networks for fabric placements (CloudGateway {{ fab_name }})"
+      # found by the id this gateway recorded, else by the platform's tag; a project of the name that the platform
+      # did not make is refused (NameTakenOnSite). The description is refreshed on each run.
+      project_id: "{{ ((fab_st.site | default({}, true)).project | default({}, true)).id | default('', true) }}"
+      description: >-
+        Networks the sovereign cloud platform places on this site for its tenants (shared into their projects).
+        Managed by the sovereign cloud platform; do not change.
+
+# a refusal (a project of that name the platform did not make: NameTakenOnSite; the site account may not write the
+# platform's mark on projects: CredentialsInvalid) changed nothing on the site and says what to do
+- name: Refuse a project of that name the platform did not make, or one it may not mark
+  ansible.builtin.set_fact:
+    fab_fail_reason: "{{ os_result.reason }}"
+    fab_fail_msg: "{{ os_result.message }}"
+  when: (os_result.reason | default('', true)) | length > 0
+
+- name: Stop on the platform project's failure
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg if (os_result.reason | default('', true)) | length > 0 else 'OpenStack platform-project failed: ' ~ os_result.error }}"
+  when: os_result.error is defined
+
+# the platform project is the gateway's by the id its status records: a site that refuses the write of its mark (a
+# project tag) does not stop the gateway; the message and the PlatformMarks condition (Unknown with a ready-class
+# reason: the phase stays Ready) say what the account needs
+- name: The platform's mark on the platform project
+  ansible.builtin.set_fact:
+    cg_mark_note: "{{ os_result.markNote | default('', true) }}"
+    cg_mark_conditions:
+      - type: PlatformMarks
+        status: "{{ 'Unknown' if os_result.markNote | default('', true) | length > 0 else 'True' }}"
+        reason: "{{ 'NotReported' if os_result.markNote | default('', true) | length > 0 else 'Verified' }}"
+        message: "{{ (os_result.markNote ~ '.') if os_result.markNote | default('', true) | length > 0 else 'The platform marked its project on the site.' }}"
 
 - name: Record the site side
   ansible.builtin.set_fact:

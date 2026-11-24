@@ -61,9 +61,27 @@
         vault_root_token: "{{ vault_init_secret.resources[0].data.root_token | b64decode }}"
       no_log: true
 
+    - name: Check the name against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ vaultkv_cr_name }}", what: secrets path}
+
+    - name: Refuse a name that breaks the rule for names
+      when: name_check_message | length > 0
+      block:
+        - name: The reason of the refusal
+          ansible.builtin.set_fact:
+            tool_org_failure_reason: NameNotAllowed
+
+        - name: Refuse a name that breaks the rule for names (stop)
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
+    # the path the status records is kept; a new secrets path is the object's own name (one tenant per store)
     - name: Set KV engine path
       ansible.builtin.set_fact:
-        kv_path: "{{ vaultkv_cr_name }}"
+        kv_path: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).kvPath | default(vaultkv_cr_name, true) }}"
 
     - name: Configure KV engine, policies, and identity groups
       ansible.builtin.include_tasks: kv_engine.yml

@@ -7,7 +7,9 @@
 # platform's. Resolvers: the site's (placement.resolversBySite); an IPv6-only placement with translation
 # (np_translation, ipv6_status.yml "Describe the placement's IPv6") gets the site's DNS64 resolvers first, so its IPv6
 # subnet's dns_nameservers (DHCPv6 and the config drive) carry them; a dual-stack placement never does (its workloads
-# reach IPv4 natively and must not be steered into the translator). Uses the site account (cloud admin). Input:
+# reach IPv4 natively and must not be steered into the translator). Uses the site account (cloud admin). The network,
+# router and subnets are named for people (<tenant>_<placement>, subnets _v4 / _v6) and found by the ids recorded in
+# status.realization.site or by the tag shc-placement=<namespace>/<name>, never by name. Input:
 # np_recreate_router (bool). Sets np_backend_status.
 # The CloudOSO's uses of the network (spec.use, sent always with its defaults): virtualMachines (default true) = the
 # share to its project (access_as_shared), routerAttachments (default false) = the network external for its project
@@ -41,9 +43,22 @@
       region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
       domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
       platformProject: "{{ fab_real.openstack.platformProject }}"
+      # the platform project by the id recorded for it: this placement's record, else the site's gateway's
+      platformProjectId: >-
+        {{ ((fab_st.realization | default({}, true)).site | default({}, true)).projectId | default('', true)
+           or ((((np_gateway | default({}, true)).status | default({}, true)).site | default({}, true)).project | default({}, true)).id | default('', true) }}
+      # <tenant>_<placement> (subnets <name>_v4, <name>_v6); found by the ids recorded below or by the tag, never by
+      # that name. An object an earlier release made is renamed in place; when the status lost its ids, it is found
+      # by its exact old name (hn<number>) in the platform project
       name: "{{ np_names.osNetwork }}"
+      oldName: "{{ np_names.osOldName | default('', true) }}"
       tag: "{{ np_names.tag }}"
-      description: "NetworkPlacement {{ fab_namespace }}/{{ fab_name }} (HybridNetwork {{ fab_spec.network }})"
+      networkId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).networkId | default('', true) }}"
+      routerId: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerId | default('', true) }}"
+      # on the network, its subnets and its router; refreshed on each run (Neutron takes 255 characters)
+      description: >-
+        {{ ('Network ' ~ fab_spec.network ~ ' of tenant ' ~ fab_entity ~ ', placement ' ~ fab_name
+            ~ ' (NetworkPlacement ' ~ fab_namespace ~ '/' ~ fab_name ~ '). Managed by the sovereign cloud platform; do not change.')[:255] }}
       mtu: "{{ np_real.mtu | int }}"
       prefixes: "{{ np_prefixes_v4 + (np_prefixes_v6 | default([])) }}"
       addressMode: "{{ (fab_real.placement.ipv6.addressMode | default({}, true))['CloudOSO'] | default('', true) }}"
@@ -66,12 +81,15 @@
   ansible.builtin.set_fact:
     np_backend_status:
       project: "{{ fab_real.openstack.platformProject }}"
+      projectId: "{{ os_result.projectId | default('', true) }}"
       networkId: "{{ os_result.networkId }}"
       routerId: "{{ os_result.routerId }}"
       subnets: "{{ os_result.subnets }}"
       addressMode: "{{ os_result.addressMode | default('') }}"
       sharedTo: "{{ np_backend.status.projectId }}"
-      networkName: "{{ np_names.osNetwork }}"
+      networkName: "{{ os_result.name | default(np_names.osNetwork, true) }}"
+      # why the network keeps an earlier name ('' when it carries the new one)
+      networkNameKept: "{{ os_result.nameKept | default('', true) }}"
       rbac:
         shared: "{{ os_result.shareId | default('', true) }}"
         external: "{{ os_result.externalId | default('', true) }}"
@@ -93,7 +111,7 @@
       {{ out | sort(attribute='family') }}
   ansible.builtin.set_fact:
     np_status: >-
-      {{ np_status | combine({'siteNetwork': {'name': np_names.osNetwork, 'id': np_place_result.networkId,
+      {{ np_status | combine({'siteNetwork': {'name': np_place_result.name | default(np_names.osNetwork, true), 'id': np_place_result.networkId,
                                              'project': fab_real.openstack.platformProject, 'subnets': _subnets}}) }}
 
 # the router advertisement: present while router attachments are on or still in use; absent once off, but only when
@@ -118,6 +136,7 @@
     ra_site: "{{ np_site }}"
     ra_domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
     ra_platform_project: "{{ fab_real.openstack.platformProject }}"
+    ra_platform_project_id: "{{ np_place_result.projectId | default('', true) }}"
     ra_region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
     ra_held_before: "{{ np_ra_held | bool }}"
     ra_before: "{{ ((fab_st.realization | default({}, true)).site | default({}, true)).routerAdvertisement | default({}, true) }}"

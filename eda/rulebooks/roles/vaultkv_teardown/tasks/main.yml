@@ -36,10 +36,39 @@
             namespace: "{{ vaultkv_cr_namespace }}"
           register: vault_init_final
 
-        - name: Disable KV engine
-          when: vault_init_final.resources | length > 0
+        # the path the provision recorded, removed whatever its description while a KV v2 engine is mounted there
+        # (the only kind of engine the provision makes); nothing recorded, nothing removed
+        - name: The recorded secrets path
+          ansible.builtin.set_fact:
+            kv_fin_path: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).kvPath | default('', true) }}"
+            kv_fin_mark: "(VaultKV {{ vaultkv_cr_namespace }}/{{ vaultkv_cr_name }})"
+
+        - name: Read the mount at the recorded path
+          when: vault_init_final.resources | length > 0 and kv_fin_path | length > 0
           ansible.builtin.uri:
-            url: "{{ parent_vault_final.resources[0].status.vaultUrl }}/v1/sys/mounts/{{ vaultkv_cr_name }}"
+            url: "{{ parent_vault_final.resources[0].status.vaultUrl }}/v1/sys/mounts/{{ kv_fin_path }}"
+            method: GET
+            headers:
+              X-Vault-Token: "{{ vault_init_final.resources[0].data.root_token | b64decode }}"
+            validate_certs: false
+            status_code: [200, 400, 404]
+          register: _kv_fin_mount
+          no_log: true
+
+        - name: "Decide: delete or leave"
+          vars:
+            _m: "{{ (_kv_fin_mount.json | default({}, true)).data | default(_kv_fin_mount.json | default({}, true), true) }}"
+            _kv2: "{{ (_m.type | default('')) == 'kv' and ((_m.options | default({}, true)).version | default('') | string) == '2' }}"
+          ansible.builtin.set_fact:
+            kv_fin_decision: >-
+              {{ 'gone' if (_kv_fin_mount.status | default(0) | int) != 200
+                 else ('delete' if _kv2 | bool else 'leave') }}
+          when: kv_fin_path | length > 0
+
+        - name: Disable KV engine
+          when: vault_init_final.resources | length > 0 and kv_fin_path | length > 0 and kv_fin_decision == 'delete'
+          ansible.builtin.uri:
+            url: "{{ parent_vault_final.resources[0].status.vaultUrl }}/v1/sys/mounts/{{ kv_fin_path }}"
             method: DELETE
             headers:
               X-Vault-Token: "{{ vault_init_final.resources[0].data.root_token | b64decode }}"
@@ -50,11 +79,11 @@
 
         - name: Delete policies
           loop:
-            - "{{ vaultkv_cr_name }}-admin"
-            - "{{ vaultkv_cr_name }}-reader"
-            - "{{ vaultkv_cr_name }}-ops"
-            - "{{ vaultkv_cr_name }}-developer"
-          when: vault_init_final.resources | length > 0
+            - "{{ kv_fin_path }}-admin"
+            - "{{ kv_fin_path }}-reader"
+            - "{{ kv_fin_path }}-ops"
+            - "{{ kv_fin_path }}-developer"
+          when: vault_init_final.resources | length > 0 and kv_fin_path | length > 0 and kv_fin_decision != 'leave'
           ansible.builtin.uri:
             url: "{{ parent_vault_final.resources[0].status.vaultUrl }}/v1/sys/policies/acl/{{ item }}"
             method: DELETE
@@ -68,11 +97,11 @@
         # the role groups of this engine; the external groups of the access groups stay (other engines share them)
         - name: Delete the role groups
           loop:
-            - "{{ vaultkv_cr_name }}-admin"
-            - "{{ vaultkv_cr_name }}-reader"
-            - "{{ vaultkv_cr_name }}-ops"
-            - "{{ vaultkv_cr_name }}-developer"
-          when: vault_init_final.resources | length > 0
+            - "{{ kv_fin_path }}-admin"
+            - "{{ kv_fin_path }}-reader"
+            - "{{ kv_fin_path }}-ops"
+            - "{{ kv_fin_path }}-developer"
+          when: vault_init_final.resources | length > 0 and kv_fin_path | length > 0 and kv_fin_decision != 'leave'
           ansible.builtin.uri:
             url: "{{ parent_vault_final.resources[0].status.vaultUrl }}/v1/identity/group/name/{{ item }}"
             method: DELETE

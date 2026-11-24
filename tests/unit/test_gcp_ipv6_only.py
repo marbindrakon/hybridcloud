@@ -162,7 +162,10 @@ class Base(unittest.TestCase):
     def up(self, ipv6=V6T, prefixes=(), known=None, egress="fabric", **cfg):
         t = self.tenant(**cfg)
         with fake(self.f):
-            out = t.place_up(PLACEMENT, VNI, list(prefixes), V.EDGE, egress, known, copy.deepcopy(ipv6))
+            # as the job runs it: after the first run the placement's status records the VPC and the gateway
+            out = t.place_up(PLACEMENT, VNI, list(prefixes), V.EDGE, egress, known, copy.deepcopy(ipv6),
+                             vpc_recorded=N in self.f.networks,
+                             ext_recorded="shc-edge-" + V.EDGE["site"] in self.f.externals)
         with open(self.tfile) as fh:
             self.tunnels_file = json.load(fh)
         return out, t.changed
@@ -173,7 +176,7 @@ class Base(unittest.TestCase):
     def down(self):
         t = self.tenant()
         with fake(self.f):
-            return t.place_down(PLACEMENT), t.changed
+            return t.place_down(PLACEMENT, vpc=N, external_gateway="shc-edge-" + V.EDGE["site"]), t.changed
 
     def status(self):
         t = self.tenant()
@@ -352,13 +355,20 @@ class UnchangedPlacements(Base):
     FAKE = V.FakeCompute
 
     # sha256 of every call (method, path, body; GETs included) of place-up, a re-run, place-status and place-down,
-    # recorded with the module as it was before IPv6-only placements existed, on this fake and with these secrets
+    # recorded with the module as it was before IPv6-only placements existed, on this fake and with these secrets;
+    # re-recorded for the names rules (three calls differ): the site's external VPN gateway is labelled with its site
+    # (not the first placement's labels), place-down reads the VPC's description first (an unmarked VPC is refused)
+    # and reads the one external gateway its tunnels used by name instead of listing every one; re-recorded again
+    # when ownership became what status records (checked call by call against the module before): place-down reads
+    # the VPC once instead of twice and lists the project's tunnels in every region (aggregated) instead of one;
+    # re-recorded when the tunnels went only with the placement's router in the recorded VPC: place-down reads the
+    # router before the tunnels instead of after them (the one difference, checked call by call)
     PINNED = {
-        "dual-stack": (76, "baebde4aabf39dbf8c74b7d6c2211e81c1d1ca1502eecc67b115bee0d9064f49"),
-        "dual-stack internet off": (77, "6c1fc48336e2f9cbf8e2a536c63588997f9fa65b561c6f164238f00959f91280"),
-        "ipv4-only": (67, "85a3c268f8063a122a48b42379f904fdaecf3dec1b2ab729a7de53938c6fa379"),
-        "ipv4-only ipv6Edge": (67, "ce73b312eb80cdcfddd4089c3884e0f6e4bbbcc004f0fcec1a495f958d004250"),
-        "dual-stack cloudNat": (75, "e9072d9cc3f9f7824884e6b5f444579947a89de34938ed099dfc00489e1bd79c"),
+        "dual-stack": (76, "5f0748e0e734d9aac99810e090e05c866e869579e7e3169491fb576d3f53fda1"),
+        "dual-stack internet off": (77, "b662717da7fcae0e7f574615f009e83c8ce551e4c8dacfa0cd64acaddab0e1cc"),
+        "ipv4-only": (67, "68513386a164ca419d903adf243848e8e8d2bc6e39092662eb53e180dc56bcfa"),
+        "ipv4-only ipv6Edge": (67, "8c4743a0c9c53cc0e1917c98156c34a89ce015d60f1a1ed8f977f64818af9976"),
+        "dual-stack cloudNat": (75, "d416877bf99dff1221e5abe1235928e9903e6135ee2556619a01a276023cace2"),
     }
 
     def calls(self, ipv6, egress="fabric", **cfg):

@@ -64,10 +64,17 @@
             krt_url: "{{ keycloak_internal_url | default('', true) }}"
             krt_token_fact: aap_kc_realm_token
 
+        # the client id the provision recorded (never rebuilt), and the client of that id
+        - name: The recorded sign-in client
+          ansible.builtin.set_fact:
+            aapconfig_fin_client_id: "{{ ((shc_live_cr | default({}, true)).status | default({}, true)).keycloakClientId | default('', true) }}"
+            aapconfig_fin_owner: "AAPConfig/{{ aapconfig_cr_namespace }}/{{ aapconfig_cr_name }}"
+
         # the client representation carries the client secret
         - name: Find Keycloak client
+          when: aapconfig_fin_client_id | length > 0
           ansible.builtin.uri:
-            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm }}/clients?clientId=aap-{{ aapconfig_cr_name }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/clients?clientId={{ aapconfig_fin_client_id | urlencode }}"
             method: GET
             headers:
               Authorization: "Bearer {{ aap_kc_realm_token }}"
@@ -75,15 +82,29 @@
           register: _kc_client
           no_log: true
 
+        # only the recorded client with this object's mark, or with none (made before the mark)
+        - name: "Decide: delete or leave"
+          when: aapconfig_fin_client_id | length > 0
+          vars:
+            _found: "{{ _kc_client.json | default([], true) | selectattr('clientId', 'equalto', aapconfig_fin_client_id) | list }}"
+            _mark: >-
+              {{ (((_found | first).attributes | default({}, true))['hybridsovereign.redhat/owner'] | default('', true))
+                 if _found | length > 0 else '' }}
+          ansible.builtin.set_fact:
+            aapconfig_fin_client_uuid: "{{ (_found | first).id if _found | length > 0 else '' }}"
+            aapconfig_fin_decision: >-
+              {{ 'gone' if _found | length == 0 else ('delete' if _mark in [aapconfig_fin_owner, ''] else 'leave') }}
+          no_log: true
+
         - name: Delete Keycloak client
           ansible.builtin.uri:
-            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client.json[0].id }}"
+            url: "{{ keycloak_realm_url }}/admin/realms/{{ keycloak_realm_name }}/clients/{{ aapconfig_fin_client_uuid }}"
             method: DELETE
             headers:
               Authorization: "Bearer {{ aap_kc_realm_token }}"
             validate_certs: false
             status_code: [204, 404]
-          when: _kc_client.json | default([]) | length > 0
+          when: aapconfig_fin_client_id | length > 0 and aapconfig_fin_decision == 'delete'
       always:
         - name: Forget the realm token and the client
           ansible.builtin.set_fact:

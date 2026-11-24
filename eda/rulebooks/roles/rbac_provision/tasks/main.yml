@@ -82,6 +82,23 @@
             | default(rbac_cr_lookup.resources[0].metadata.managedFields[0].manager | default('unknown'))
           }}
 
+    # the rule for names, for an object made before the API carried it: refused before anything is made
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items: [{value: "{{ entity_name }}", what: tenant}, {value: "{{ rbac_cr_name }}", what: group}]
+
+    - name: Refuse a name the rule does not allow
+      when: name_check_message | length > 0
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            rbac_failure_reason: NameNotAllowed
+
+        - name: Stop before anything is made
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
     - name: Read referenced RbacConfig
       kubernetes.core.k8s_info:
         host: "{{ services_api_host }}"
@@ -131,29 +148,50 @@
 
     - name: Look up parent entity group
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_parent_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_parent_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
         status_code: [200, 404]
       register: parent_group_initial
 
+    # an existing group that is not this tenant's is refused before anything is made (group_owner.yml)
+    - name: Decide whose the groups are
+      ansible.builtin.include_tasks: group_owner.yml
+
     - name: Create parent entity group when missing
       when: parent_group_initial.status == 404
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups"
         method: POST
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
         body:
           name: "{{ entity_name }}"
+          attributes:
+            entity: ["{{ entity_name }}"]
         validate_certs: false
         status_code: [201, 409]
+      register: rbac_parent_create
+
+    - name: Mark the tenant's group made before the mark
+      when: rbac_group_owner.parent == 'mark'
+      ansible.builtin.uri:
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_initial.json.id }}"
+        method: PUT
+        headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
+        body_format: json
+        body:
+          id: "{{ parent_group_initial.json.id }}"
+          name: "{{ entity_name }}"
+          attributes: "{{ (_rgo_parent.json.attributes | default({}, true)) | combine({'entity': [entity_name]}) }}"
+        validate_certs: false
+        status_code: [200, 204]
 
     - name: Refresh parent group representation
       when: parent_group_initial.status == 404
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_parent_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_parent_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -162,6 +200,32 @@
       retries: 12
       delay: 3
       until: parent_group_refetch.status | default(0) == 200
+
+    # made by someone else between the look-up and the creation: the tenant's only with its mark
+    - name: Read a tenant's group someone made meanwhile
+      when: rbac_parent_create.status | default(0) == 409
+      ansible.builtin.uri:
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_refetch.json.id }}"
+        method: GET
+        headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
+        validate_certs: false
+        status_code: [200]
+      register: rbac_parent_raced
+
+    - name: Refuse a tenant's group someone else made meanwhile
+      when:
+        - rbac_parent_create.status | default(0) == 409
+        - ((rbac_parent_raced.json | default({}, true)).attributes | default({}, true)).entity | default([], true) | list != [entity_name]
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            rbac_failure_reason: NameTakenOnSite
+
+        - name: Stop before anything is made under the group
+          ansible.builtin.fail:
+            msg: >-
+              The group {{ entity_name }} already exists in the sign-in directory and was not made by the platform
+              for this tenant. The platform team is looking at it.
 
     - name: Record parent group id
       ansible.builtin.set_fact:
@@ -183,7 +247,7 @@
 
     - name: Look up fully-qualified RBAC subgroup
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_full_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -206,7 +270,7 @@
     - name: Create RBAC subgroup under entity group
       when: child_group_initial.status == 404
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ parent_group_id }}/children"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ parent_group_id }}/children"
         method: POST
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
@@ -215,10 +279,11 @@
           attributes: "{{ rbac_group_attributes }}"
         validate_certs: false
         status_code: [201, 204, 409]
+      register: rbac_child_create
 
     - name: Verify RBAC subgroup now exists
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/group-by-path/{{ kc_full_path_query }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/group-by-path/{{ kc_full_path_query }}"
         method: GET
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
         validate_certs: false
@@ -228,9 +293,35 @@
       delay: 3
       until: child_group_verify.status | default(0) == 200
 
+    # made by someone else between the look-up and the creation: ours only with this tenant's mark
+    - name: Read an access group someone made meanwhile
+      when: rbac_child_create.status | default(0) == 409
+      ansible.builtin.uri:
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ child_group_verify.json.id }}"
+        method: GET
+        headers: "{{ {'Authorization': 'Bearer ' + svc_access_token} | combine(svc_keycloak_url_http_headers | default({})) }}"
+        validate_certs: false
+        status_code: [200]
+      register: rbac_child_raced
+
+    - name: Refuse an access group someone else made meanwhile
+      when:
+        - rbac_child_create.status | default(0) == 409
+        - ((rbac_child_raced.json | default({}, true)).attributes | default({}, true)).entity | default([], true) | list != [entity_name]
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            rbac_failure_reason: NameTakenOnSite
+
+        - name: Stop before the access group is changed
+          ansible.builtin.fail:
+            msg: >-
+              The access group {{ entity_name }}/{{ rbac_cr_name }} already exists in the sign-in directory and was
+              not made by the platform for this tenant. The platform team is looking at it.
+
     - name: Update group attributes and description
       ansible.builtin.uri:
-        url: "{{ svc_keycloak_url }}/admin/realms/{{ plugin_rbac_keycloak_realm }}/groups/{{ child_group_verify.json.id }}"
+        url: "{{ svc_keycloak_url }}/admin/realms/{{ keycloak_realm_name }}/groups/{{ child_group_verify.json.id }}"
         method: PUT
         headers: "{{ {'Authorization': 'Bearer ' + svc_access_token, 'Content-Type': 'application/json'} | combine(svc_keycloak_url_http_headers | default({})) }}"
         body_format: json
@@ -267,7 +358,7 @@
           billingId: "{{ entity_billing_id }}"
           creator: "{{ rbac_creator }}"
           description: "{{ rbac_group_description }}"
-          realm: "{{ plugin_rbac_keycloak_realm }}"
+          realm: "{{ keycloak_realm_name }}"
           attributes: "{{ rbac_group_attributes }}"
           conditions:
             - type: Ready
@@ -275,7 +366,7 @@
               lastTransitionTime: "{{ rbac_status_transition_time }}"
               reason: EDASucceeded
               message: >-
-                Keycloak subgroup {{ rbac_group_path_display }} is present in realm {{ plugin_rbac_keycloak_realm }}.
+                Keycloak subgroup {{ rbac_group_path_display }} is present in realm {{ keycloak_realm_name }}.
 
     # what names this access group binds it now (Entity namespaceRbac, Team and Project access fields)
     - name: Wake the objects that name this access group
@@ -291,7 +382,7 @@
         cr_namespace: "{{ rbac_cr_namespace }}"
         cr_status_body:
           status: failed
-          reason: ProvisionFailed
+          reason: "{{ rbac_failure_reason | default('ProvisionFailed') }}"
           ready: false
           lastReconciledAt: "{{ lookup('pipe', 'date -u +%Y-%m-%dT%H:%M:%S.000000Z') }}"
           message: "{{ ansible_failed_result.msg | default(ansible_failed_task.name | default('EDA provisioning failed')) }}"

@@ -1,12 +1,47 @@
 ---
-# The cluster's two floating IPs (DESIGN cnet §4.2 step 4, §4.3): with the site account scoped to the environment's
-# project, found by description (<build>-api, <build>-ingress) or created on the chosen network, and recorded in
-# status.floatingIPs at once, before anything else uses them (the teardown releases them by the record). Inputs:
+# The cluster's two floating IPs (DESIGN cnet §4.2 step 4, §4.3), recorded in status.floatingIPs (address and id)
+# before anything else uses them. A cluster whose record holds both is the owner of those two (found by the recorded
+# ids; nothing is asked of the site and nothing is found by a description). With nothing recorded both are made
+# (create_only: the site finds nothing by description) with the site account scoped to the environment's project on
+# the chosen network and recorded at once (the teardown releases them by the recorded ids); a record of only part of
+# the pair stops the job. Their description says the cluster's name in words, for people: "OpenShift cluster <cluster>:
+# API (platform build <build>)" and "...: ingress (...)"; it is never read back. Inputs:
 #   cf_project_id    the environment's project (CloudOSO status.projectId)
 #   cf_network_id    the network the floating IPs come from (placement status.realization.site.networkId, or the
 #                    external network in effect)
 #   cf_account       the site account's Vault path
-# Sets cb_fips ({network, api: {address, id}, ingress: {address, id}}), cb_api_vip, cb_ingress_vip.
+#   po_cr_current    the cluster as read (its record)
+# Sets cb_fips ({api: {address, id}, ingress: {...}}), cb_api_vip, cb_ingress_vip.
+- name: The cluster's recorded floating IPs
+  vars:
+    _rec: "{{ ((po_cr_current | default({})).resources | default([{}], true) | first).status | default({}, true) }}"
+    _fips: "{{ _rec.floatingIPs | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cf_recorded:
+      api: "{{ _fips.api | default({}, true) }}"
+      ingress: "{{ _fips.ingress | default({}, true) }}"
+
+- name: Whether the record holds both
+  ansible.builtin.set_fact:
+    cf_have_record: >-
+      {{ (cf_recorded.api.id | default('', true) | length > 0) and (cf_recorded.api.address | default('', true) | length > 0)
+         and (cf_recorded.ingress.id | default('', true) | length > 0)
+         and (cf_recorded.ingress.address | default('', true) | length > 0) }}
+
+# A record that holds part of the pair (one floating IP, or an id without its address) is not completed by guessing:
+# nothing is made, and the platform team completes or clears status.floatingIPs.
+- name: Refuse a record of half the floating IPs
+  ansible.builtin.fail:
+    msg: >-
+      PlatformOpenshift {{ ansible_operator_meta.name }}: its status records only part of the cluster's floating IPs;
+      nothing was made. The platform team must complete or clear the record.
+  when:
+    - not (cf_have_record | bool)
+    - >-
+      (cf_recorded.api.id | default('', true) | length > 0) or (cf_recorded.api.address | default('', true) | length > 0)
+      or (cf_recorded.ingress.id | default('', true) | length > 0)
+      or (cf_recorded.ingress.address | default('', true) | length > 0)
+
 - name: Require the environment's project and the network
   ansible.builtin.assert:
     that:
@@ -16,9 +51,11 @@
     fail_msg: >-
       PlatformOpenshift {{ ansible_operator_meta.name }}: the floating IPs need the environment's project, the
       network's id and the site account of the environment; one of them is not recorded.
+  when: not (cf_have_record | bool)
 
 # the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
 - name: The cluster's floating IPs with the site account
+  when: not (cf_have_record | bool)
   block:
     - name: Load the site account
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_account.yml"
@@ -27,7 +64,7 @@
         os_account_vault_path: "{{ cf_account }}"
         os_account_tag: "po-fips-{{ cb_app_name }}"
 
-    - name: Find or create the cluster's floating IPs
+    - name: Create the cluster's floating IPs
       ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
       vars:
         shc_step: "Reserve the cluster's floating addresses"
@@ -37,24 +74,36 @@
           state: present
           project_id: "{{ cf_project_id }}"
           network_id: "{{ cf_network_id }}"
+          # nothing is recorded: both are made, none is found by its description (a description is for people)
+          create_only: true
           descriptions:
-            api: "{{ cb_app_name }}-api"
-            ingress: "{{ cb_app_name }}-ingress"
+            api: "OpenShift cluster {{ ansible_operator_meta.name }}: API (platform build {{ cb_app_name }})"
+            ingress: "OpenShift cluster {{ ansible_operator_meta.name }}: ingress (platform build {{ cb_app_name }})"
   always:
     - name: Remove the account's temp files
       ansible.builtin.file:
         path: "/tmp/eda-po-fips-{{ cb_app_name }}-{{ item }}"
         state: absent
       loop: [clouds.yaml, ca.crt]
+      when: not (cf_have_record | bool)
 
-- name: Keep the floating IPs
+- name: Keep the recorded floating IPs
   ansible.builtin.set_fact:
     cb_fips:
-      network: "{{ os_result.network | default(cf_network_id, true) }}"
+      api: {address: "{{ cf_recorded.api.address }}", id: "{{ cf_recorded.api.id }}"}
+      ingress: {address: "{{ cf_recorded.ingress.address }}", id: "{{ cf_recorded.ingress.id }}"}
+    cb_api_vip: "{{ cf_recorded.api.address }}"
+    cb_ingress_vip: "{{ cf_recorded.ingress.address }}"
+  when: cf_have_record | bool
+
+- name: Keep the floating IPs made now
+  ansible.builtin.set_fact:
+    cb_fips:
       api: {address: "{{ os_result.api.address }}", id: "{{ os_result.api.id }}"}
       ingress: {address: "{{ os_result.ingress.address }}", id: "{{ os_result.ingress.id }}"}
     cb_api_vip: "{{ os_result.api.address }}"
     cb_ingress_vip: "{{ os_result.ingress.address }}"
+  when: not (cf_have_record | bool)
 
 - name: Record the floating IPs
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
@@ -66,3 +115,4 @@
     cr_status_partial: true
     cr_status_body:
       floatingIPs: "{{ cb_fips }}"
+  when: not (cf_have_record | bool)

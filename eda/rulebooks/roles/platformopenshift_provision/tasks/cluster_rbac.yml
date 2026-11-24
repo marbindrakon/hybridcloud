@@ -3,219 +3,109 @@
 #
 # Inputs (from caller / keycloak_oidc.yml):
 #   cluster_name         - the ManagedCluster's name (the build name of OpenStack, AWS and GCP builds)
-#   cluster_cr_name      - optional: the PlatformOpenshift's name when it differs from cluster_name
-#   cluster_namespace    - CR namespace (entity namespace)
+#   csg_tiers            - the groups of each tier (cluster_signin_groups.yml)
 #   acm_base             - the base of the ACM object names (keycloak_oidc.yml)
 #   central_api_server   - Central cluster API URL
 #   central_token        - Bearer token for central cluster
 
-- name: Read PlatformOpenshift CR for toolRbac spec
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: hybridsovereign.redhat/v1alpha1
-    kind: PlatformOpenshift
-    name: "{{ cluster_cr_name | default(cluster_name, true) }}"
-    namespace: "{{ cluster_namespace }}"
-  register: _plat_cr
-
-- name: Set toolRbac spec fact
+# The groups of each tier come from cluster_signin_groups.yml (csg_tiers): <tenant>.<group>, the names the cluster's
+# sign-in client puts in the groups claim (its client roles), never a group's last part alone, so another tenant's
+# group of the same name is never bound.
+- name: Build the subjects of each binding
+  vars:
+    _subjects: >-
+      {%- set out = {} -%}
+      {%- for tier in ['admin', 'operator', 'developer', 'viewer'] -%}
+        {%- set l = [] -%}
+        {%- for g in (csg_tiers | default({}, true))[tier] | default([], true) -%}
+          {%- set _ = l.append({'kind': 'Group', 'name': g, 'apiGroup': 'rbac.authorization.k8s.io'}) -%}
+        {%- endfor -%}
+        {%- set _ = out.update({tier: l}) -%}
+      {%- endfor -%}
+      {{ out }}
   ansible.builtin.set_fact:
-    tool_rbac_spec: "{{ _plat_cr.resources[0].spec.toolRbac | default({}) }}"
-
-# ─── Resolve each RBAC tier to Keycloak group paths ─────────────────────────
-- name: Resolve clusterAdminRbac groups
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: hybridsovereign.redhat/v1alpha1
-    kind: Rbac
-    name: "{{ item }}"
-    namespace: "{{ cluster_namespace }}"
-  loop: "{{ tool_rbac_spec.clusterAdminRbac | default([]) }}"
-  register: _cluster_admin_rbacs
-
-- name: Build clusterAdmin group paths
-  ansible.builtin.set_fact:
-    cluster_admin_groups: >-
-      {{
-        _cluster_admin_rbacs.results
-        | default([])
-        | selectattr('resources', 'defined')
-        | map(attribute='resources')
-        | flatten
-        | selectattr('status.group', 'defined')
-        | map(attribute='status.group')
-        | list
-      }}
-
-- name: Resolve clusterOperatorRbac groups
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: hybridsovereign.redhat/v1alpha1
-    kind: Rbac
-    name: "{{ item }}"
-    namespace: "{{ cluster_namespace }}"
-  loop: "{{ tool_rbac_spec.clusterOperatorRbac | default([]) }}"
-  register: _cluster_operator_rbacs
-
-- name: Build clusterOperator group paths
-  ansible.builtin.set_fact:
-    cluster_operator_groups: >-
-      {{
-        _cluster_operator_rbacs.results
-        | default([])
-        | selectattr('resources', 'defined')
-        | map(attribute='resources')
-        | flatten
-        | selectattr('status.group', 'defined')
-        | map(attribute='status.group')
-        | list
-      }}
-
-- name: Resolve clusterDeveloperRbac groups
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: hybridsovereign.redhat/v1alpha1
-    kind: Rbac
-    name: "{{ item }}"
-    namespace: "{{ cluster_namespace }}"
-  loop: "{{ tool_rbac_spec.clusterDeveloperRbac | default([]) }}"
-  register: _cluster_developer_rbacs
-
-- name: Build clusterDeveloper group paths
-  ansible.builtin.set_fact:
-    cluster_developer_groups: >-
-      {{
-        _cluster_developer_rbacs.results
-        | default([])
-        | selectattr('resources', 'defined')
-        | map(attribute='resources')
-        | flatten
-        | selectattr('status.group', 'defined')
-        | map(attribute='status.group')
-        | list
-      }}
-
-- name: Resolve clusterViewerRbac groups
-  kubernetes.core.k8s_info:
-    host: "{{ services_api_host }}"
-    api_key: "{{ services_bearer_token }}"
-    validate_certs: false
-    api_version: hybridsovereign.redhat/v1alpha1
-    kind: Rbac
-    name: "{{ item }}"
-    namespace: "{{ cluster_namespace }}"
-  loop: "{{ tool_rbac_spec.clusterViewerRbac | default([]) }}"
-  register: _cluster_viewer_rbacs
-
-- name: Build clusterViewer group paths
-  ansible.builtin.set_fact:
-    cluster_viewer_groups: >-
-      {{
-        _cluster_viewer_rbacs.results
-        | default([])
-        | selectattr('resources', 'defined')
-        | map(attribute='resources')
-        | flatten
-        | selectattr('status.group', 'defined')
-        | map(attribute='status.group')
-        | list
-      }}
-
-# ─── Build group subjects for each tier ──────────────────────────────────────
-# Strip any leading slash and parent-group prefix so the group name matches
-# what Keycloak puts in the 'groups' claim (full.path=false → leaf name only).
-# e.g. "acme-corp/acme-ses10-cluster-admins" → "acme-ses10-cluster-admins"
-- name: Build admin subjects
-  ansible.builtin.set_fact:
-    admin_subjects: >-
-      {{ cluster_admin_groups | default([])
-         | map('regex_replace', '^.*/', '')
-         | map('regex_replace', '^(.*)$', '{"kind":"Group","name":"\1","apiGroup":"rbac.authorization.k8s.io"}')
-         | map('from_json') | list }}
-
-- name: Build operator subjects
-  ansible.builtin.set_fact:
-    operator_subjects: >-
-      {{ cluster_operator_groups | default([])
-         | map('regex_replace', '^.*/', '')
-         | map('regex_replace', '^(.*)$', '{"kind":"Group","name":"\1","apiGroup":"rbac.authorization.k8s.io"}')
-         | map('from_json') | list }}
-
-- name: Build developer subjects
-  ansible.builtin.set_fact:
-    developer_subjects: >-
-      {{ cluster_developer_groups | default([])
-         | map('regex_replace', '^.*/', '')
-         | map('regex_replace', '^(.*)$', '{"kind":"Group","name":"\1","apiGroup":"rbac.authorization.k8s.io"}')
-         | map('from_json') | list }}
-
-- name: Build viewer subjects
-  ansible.builtin.set_fact:
-    viewer_subjects: >-
-      {{ cluster_viewer_groups | default([])
-         | map('regex_replace', '^.*/', '')
-         | map('regex_replace', '^(.*)$', '{"kind":"Group","name":"\1","apiGroup":"rbac.authorization.k8s.io"}')
-         | map('from_json') | list }}
+    admin_subjects: "{{ _subjects.admin }}"
+    operator_subjects: "{{ _subjects.operator }}"
+    developer_subjects: "{{ _subjects.developer }}"
+    viewer_subjects: "{{ _subjects.viewer }}"
 
 # ─── Build object-templates list for ConfigurationPolicy ─────────────────────
+# Every tier's binding is exact: mustonlyhave replaces the subjects (a binding of an older run that named other
+# groups keeps none of them), and a tier without groups has no binding (mustnothave). The default binding
+# self-provisioners is managed the same way (below), so that only the cluster's own groups may create projects, and
+# the cluster's project template binds a new project to those groups, never to the person who asked.
 - name: Assemble RBAC object templates
+  vars:
+    cluster_project_template: project-request
+    cluster_project_request_message: >-
+      {{ 'Projects on this cluster are requested by its operator access groups and belong to those groups.'
+         if operator_subjects | length > 0 else
+         'Projects on this cluster are made by its admins: it has no operator access group.' }}
+    _tiers:
+      - {subjects: "{{ admin_subjects }}", suffix: cluster-admin, role: cluster-admin}
+      - {subjects: "{{ operator_subjects }}", suffix: cluster-operator, role: self-provisioner}
+      - {subjects: "{{ developer_subjects }}", suffix: cluster-developer, role: edit}
+      - {subjects: "{{ viewer_subjects }}", suffix: cluster-viewer, role: view}
   ansible.builtin.set_fact:
     rbac_object_templates: >-
-      {{
-        (
-          [{
-            'complianceType': 'musthave',
-            'objectDefinition': {
-              'apiVersion': 'rbac.authorization.k8s.io/v1',
-              'kind': 'ClusterRoleBinding',
-              'metadata': {'name': cluster_name + '-cluster-admin'},
-              'subjects': admin_subjects,
-              'roleRef': {'kind': 'ClusterRole', 'name': 'cluster-admin', 'apiGroup': 'rbac.authorization.k8s.io'}
-            }
-          }] if admin_subjects | default([]) | length > 0 else []
-        ) + (
-          [{
-            'complianceType': 'musthave',
-            'objectDefinition': {
-              'apiVersion': 'rbac.authorization.k8s.io/v1',
-              'kind': 'ClusterRoleBinding',
-              'metadata': {'name': cluster_name + '-cluster-operator'},
-              'subjects': operator_subjects,
-              'roleRef': {'kind': 'ClusterRole', 'name': 'self-provisioner', 'apiGroup': 'rbac.authorization.k8s.io'}
-            }
-          }] if operator_subjects | default([]) | length > 0 else []
-        ) + (
-          [{
-            'complianceType': 'musthave',
-            'objectDefinition': {
-              'apiVersion': 'rbac.authorization.k8s.io/v1',
-              'kind': 'ClusterRoleBinding',
-              'metadata': {'name': cluster_name + '-cluster-developer'},
-              'subjects': developer_subjects,
-              'roleRef': {'kind': 'ClusterRole', 'name': 'edit', 'apiGroup': 'rbac.authorization.k8s.io'}
-            }
-          }] if developer_subjects | default([]) | length > 0 else []
-        ) + (
-          [{
-            'complianceType': 'musthave',
-            'objectDefinition': {
-              'apiVersion': 'rbac.authorization.k8s.io/v1',
-              'kind': 'ClusterRoleBinding',
-              'metadata': {'name': cluster_name + '-cluster-viewer'},
-              'subjects': viewer_subjects,
-              'roleRef': {'kind': 'ClusterRole', 'name': 'view', 'apiGroup': 'rbac.authorization.k8s.io'}
-            }
-          }] if viewer_subjects | default([]) | length > 0 else []
-        )
-      }}
+      {%- set out = [] -%}
+      {%- for t in _tiers -%}
+        {%- set obj = {'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRoleBinding',
+                       'metadata': {'name': cluster_name ~ '-' ~ t.suffix}} -%}
+        {%- if t.subjects | length > 0 -%}
+          {%- set _ = obj.update({'subjects': t.subjects,
+                                  'roleRef': {'kind': 'ClusterRole', 'name': t.role,
+                                              'apiGroup': 'rbac.authorization.k8s.io'}}) -%}
+          {%- set _ = out.append({'complianceType': 'mustonlyhave', 'objectDefinition': obj}) -%}
+        {%- else -%}
+          {%- set _ = out.append({'complianceType': 'mustnothave', 'objectDefinition': obj}) -%}
+        {%- endif -%}
+      {%- endfor -%}
+      {#- OpenShift's default binding self-provisioners gives every signed-in person (system:authenticated:oauth) the
+          right to create projects. On a tenant's cluster it names the operator tier's groups only (the tier that
+          binds self-provisioner), none when the tier has none; the annotation autoupdate "false" stops the API
+          server from restoring the default subjects at its next start (OpenShift "Disabling project
+          self-provisioning"). -#}
+      {%- set _ = out.append({'complianceType': 'mustonlyhave', 'objectDefinition': {
+            'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRoleBinding',
+            'metadata': {'name': 'self-provisioners',
+                         'annotations': {'rbac.authorization.kubernetes.io/autoupdate': 'false'}},
+            'roleRef': {'kind': 'ClusterRole', 'name': 'self-provisioner', 'apiGroup': 'rbac.authorization.k8s.io'},
+            'subjects': operator_subjects}}) -%}
+      {#- A new project belongs to the cluster's groups, not to the person who asked: OpenShift's default project template
+          makes the requesting user the project's admin, which would outlast the person's group. The cluster's project
+          template (openshift-config/project-request, named by the cluster's project configuration: OpenShift
+          "Configuring project creation") binds admin to the operator tier's groups instead; with no operator group it
+          binds nobody (and nobody but the cluster's admins can request a project then). -#}
+      {%- set objects = [{'apiVersion': 'project.openshift.io/v1', 'kind': 'Project',
+            'metadata': {'name': '${PROJECT_NAME}',
+                         'annotations': {'openshift.io/description': '${PROJECT_DESCRIPTION}',
+                                         'openshift.io/display-name': '${PROJECT_DISPLAYNAME}',
+                                         'openshift.io/requester': '${PROJECT_REQUESTING_USER}'}}}] -%}
+      {%- if operator_subjects | length > 0 -%}
+        {%- set _ = objects.append({'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'RoleBinding',
+              'metadata': {'name': 'admin', 'namespace': '${PROJECT_NAME}'},
+              'roleRef': {'apiGroup': 'rbac.authorization.k8s.io', 'kind': 'ClusterRole', 'name': 'admin'},
+              'subjects': operator_subjects}) -%}
+      {%- endif -%}
+      {%- set _ = out.append({'complianceType': 'mustonlyhave', 'objectDefinition': {
+            'apiVersion': 'template.openshift.io/v1', 'kind': 'Template',
+            'metadata': {'name': cluster_project_template, 'namespace': 'openshift-config'},
+            'objects': objects,
+            'parameters': [{'name': 'PROJECT_NAME'}, {'name': 'PROJECT_DISPLAYNAME'}, {'name': 'PROJECT_DESCRIPTION'},
+                           {'name': 'PROJECT_ADMIN_USER'}, {'name': 'PROJECT_REQUESTING_USER'}]}}) -%}
+      {%- set _ = out.append({'complianceType': 'musthave', 'objectDefinition': {
+            'apiVersion': 'config.openshift.io/v1', 'kind': 'Project', 'metadata': {'name': 'cluster'},
+            'spec': {'projectRequestTemplate': {'name': cluster_project_template},
+                     'projectRequestMessage': cluster_project_request_message}}}) -%}
+      {{ out }}
+
+- name: Say that nobody can request a project on the cluster
+  ansible.builtin.debug:
+    msg: >-
+      PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: the cluster has no operator access group,
+      so nobody but its admins can request a project, and a new project is bound to no group.
+  when: operator_subjects | length == 0
 
 # ─── Idempotent create-or-update for RBAC Policy ─────────────────────────────
 - name: Check if cluster RBAC Policy already exists

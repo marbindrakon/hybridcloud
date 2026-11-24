@@ -125,8 +125,16 @@ class AcmNames(unittest.TestCase):
         b = build("acme-corp", "web-frontend")
         base = acm_vars(b)["acm_base"]
         self.assertNotEqual(base, b)
-        self.assertTrue(base.startswith("shc-oso-acme-corp-web"), base)
+        self.assertTrue(base.startswith("shc-oso-web-frontend"), base)
         self.assertRegex(base, r"-[0-9a-f]{8}$")
+
+    def test_the_cluster_name_comes_first(self):
+        """The readable part is the cluster's name, then the tenant's: a cut takes the tenant's name first."""
+        self.assertEqual(build("acme-corp", "web"), "shc-oso-web-acme-corp-" + build("acme-corp", "web")[-8:])
+        self.assertTrue(build("a" * 30, "web-frontend", "shc-aws", 40).startswith("shc-aws-web-frontend-aaaa"))
+        # the digest is still of the exact pair: two tenants whose readable parts read alike stay apart
+        self.assertEqual(build("corp", "web-acme")[:-8], build("acme-corp", "web")[:-8])
+        self.assertNotEqual(build("corp", "web-acme"), build("acme-corp", "web"))
 
     def test_no_acm_name_from_the_build_name_alone(self):
         for path in self.FILES:

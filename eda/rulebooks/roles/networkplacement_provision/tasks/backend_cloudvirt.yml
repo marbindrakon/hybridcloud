@@ -13,6 +13,47 @@
       vars:
         site_kc_tag: "np-{{ fab_namespace }}-{{ fab_name }}"
 
+    # named by number (OpenShift derives device names from it); an object of that name the platform did not make
+    # for this placement (its tenant and placement labels) is refused before anything is applied, never changed
+    - name: Read the site's objects of these names
+      kubernetes.core.k8s_info:
+        kubeconfig: "{{ site_kubeconfig }}"
+        api_version: k8s.ovn.org/v1
+        kind: "{{ item.kind }}"
+        name: "{{ item.name }}"
+      loop:
+        - {kind: ClusterUserDefinedNetwork, name: "{{ np_names.cudn }}"}
+        - {kind: RouteAdvertisements, name: "{{ np_names.routeAdvertisement }}"}
+      loop_control:
+        label: "{{ item.kind }}/{{ item.name }}"
+      register: _np_site_existing
+
+    - name: Decide whether they are the placement's
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/fabric_check.yml"
+      vars:
+        fab_check:
+          action: site-object-ownership
+          labels: "{{ np_names.labels }}"
+          objects: >-
+            {%- set out = [] -%}
+            {%- for r in _np_site_existing.results | default([]) -%}
+              {%- set _ = out.append({'kind': r.item.kind, 'name': r.item.name,
+                                      'existing': (r.resources[0].metadata.labels | default({}, true))
+                                                  if r.resources | default([]) | length > 0 else none}) -%}
+            {%- endfor -%}
+            {{ out }}
+
+    - name: Refuse objects that are not the placement's
+      ansible.builtin.set_fact:
+        fab_fail_reason: "{{ fab_check_result.reason }}"
+        fab_fail_msg: "{{ fab_check_result.message }}"
+      when: not (fab_check_result.ok | bool)
+
+    - name: Stop before anything is applied
+      ansible.builtin.fail:
+        msg: "{{ fab_fail_msg }}"
+      when: not (fab_check_result.ok | bool)
+
     # one expression: numbers stay numbers (templated scalars inside a YAML definition become strings)
     - name: "ClusterUserDefinedNetwork {{ np_names.cudn }}"
       kubernetes.core.k8s:
@@ -21,7 +62,8 @@
         definition: >-
           {{ {'apiVersion': 'k8s.ovn.org/v1', 'kind': 'ClusterUserDefinedNetwork',
               'metadata': {'name': np_names.cudn, 'labels': np_names.labels,
-                           'annotations': {'hybridsovereign.redhat/networkplacement': fab_namespace ~ '/' ~ fab_name}},
+                           'annotations': {'hybridsovereign.redhat/networkplacement': fab_namespace ~ '/' ~ fab_name}
+                                          | combine(np_names.annotations | default({}, true))},
               'spec': {'namespaceSelector': {'matchLabels': np_ns_selector},
                        'network': {'topology': 'Layer2', 'transport': 'EVPN',
                                    'evpn': {'vtep': np_gateway.status.site.vtep,
@@ -31,27 +73,29 @@
                                               'ipam': {'lifecycle': 'Persistent'}}}}} }}
       register: _np_cudn
 
+    # the route advertisement is the placement's alone: it is written whole (a replace, not a merge), so that its
+    # FRRConfiguration selector is exactly the realization's (a merge would keep a label key the realization no longer
+    # names, and the selector would then need both labels). A replace carries the resourceVersion the site read above.
     - name: "RouteAdvertisements {{ np_names.routeAdvertisement }}"
       kubernetes.core.k8s:
         kubeconfig: "{{ site_kubeconfig }}"
         state: present
-        definition:
-          apiVersion: k8s.ovn.org/v1
-          kind: RouteAdvertisements
-          metadata:
-            name: "{{ np_names.routeAdvertisement }}"
-            labels: "{{ np_names.labels }}"
-          spec:
-            advertisements: [PodNetwork]
-            nodeSelector: {}
-            targetVRF: auto
-            frrConfigurationSelector:
-              matchLabels: "{{ fab_real.openshift.frrConfigurationSelector | default({}, true) }}"
-            networkSelectors:
-              - networkSelectionType: ClusterUserDefinedNetworks
-                clusterUserDefinedNetworkSelector:
-                  networkSelector:
-                    matchLabels: {hybridsovereign.redhat/l3vni: "{{ np_real.l3Vni | string }}"}
+        force: true
+        definition: >-
+          {{ {'apiVersion': 'k8s.ovn.org/v1', 'kind': 'RouteAdvertisements',
+              'metadata': {'name': np_names.routeAdvertisement, 'labels': np_names.labels,
+                           'annotations': np_names.annotations | default({}, true)}
+                          | combine({'resourceVersion': _np_ra_have.metadata.resourceVersion}
+                                    if _np_ra_have.metadata.resourceVersion | default('', true) | length > 0 else {}),
+              'spec': {'advertisements': ['PodNetwork'], 'nodeSelector': {}, 'targetVRF': 'auto',
+                       'frrConfigurationSelector': {'matchLabels': np_ra_selector},
+                       'networkSelectors': [{'networkSelectionType': 'ClusterUserDefinedNetworks',
+                                             'clusterUserDefinedNetworkSelector': {'networkSelector': {'matchLabels':
+                                               {'hybridsovereign.redhat/l3vni': np_real.l3Vni | string}}}}]}} }}
+      vars:
+        # the names people chose (tenant, network, placement) go beside the number, in the annotation
+        _np_ra_have: "{{ (_np_site_existing.results[1].resources | default([], true) + [{'metadata': {}}]) | first }}"
+        np_ra_selector: "{{ fab_real.openshift.frrConfigurationSelector | default({}, true) }}"
       register: _np_ra
 
     - name: Wait for the network to be created on the site

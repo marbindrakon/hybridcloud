@@ -62,6 +62,19 @@ spec:
             identity.
           type: object
           properties:
+            metadata:
+              type: object
+              properties:
+                name:
+                  type: string
+                  x-kubernetes-validations:
+                    # the rule for names (eda/common/files/shc_names.py NAME_PATTERN, NAME_MAX)
+                    - rule: >-
+                        self.size() <= 30 && self.matches('^[a-z]([a-z0-9-]*[a-z0-9])?$')
+                        && !self.contains('--')
+                      message: >-
+                        Names are lower-case letters, digits and single hyphens, start with a letter, end with a
+                        letter or digit, and have at most 30 characters.
             spec:
               description: The organization and who gets which access.
               type: object
@@ -78,6 +91,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members are admins of the
                     organization.
@@ -85,6 +100,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can create
                     repositories.
@@ -92,6 +109,8 @@ spec:
                   type: array
                   items:
                     type: string
+                    maxLength: 63
+                    pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
                   description: >-
                     Access groups (Rbac names in this namespace) whose members can read and push to
                     the organization's repositories.
@@ -132,8 +151,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -141,7 +160,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-

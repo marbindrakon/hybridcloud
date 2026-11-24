@@ -28,6 +28,27 @@ object in your tenant namespace.
 | Cluster assignment | `spec.toolRbac` | Roles in the namespaces the assignment creates on the tenant's clusters. |
 | Vault, KV secrets engine, AAP organization, Quay organization | their access lists | Sign-in and roles in that service. |
 
+**Who can sign in to your OpenShift cluster.** Your cluster's groups are the access groups its `spec.toolRbac` lists,
+named `<tenant>.<group>`, and its roles go to those groups only. Anyone in the platform's sign-in directory can
+complete the sign-in to the cluster, including people outside your tenant, but a person who is in none of the
+cluster's groups gets no role: no project, no access to your workloads, nothing beyond what OpenShift gives every
+signed-in user (basic information about their own user and their own sign-in tokens). Creating projects is also
+reserved to the cluster's groups that the roles give it to. Stopping the sign-in itself for people outside your tenant
+would need a sign-in directory of your own. The platform binds nothing on the cluster to a person, only to groups,
+and a project belongs to the cluster's operator groups, not to the person who asked for it. When you remove a person
+from a group, or the person moves to another tenant, the rights that group gives on the cluster end when their
+current session token expires (24 hours by default, or the token lifetime your platform team set for clusters). What
+a person was given by name stays: a project admin can bind a user by name in a project, or make a service account
+token, and those are not removed with the group; the cluster's admins remove them. A cluster with no operator group:
+only its admins create projects.
+
+A project's admin right goes to the groups that were the cluster's operator groups when the project was made, and it
+is not changed afterwards. A person removed from such a group loses it. When a group leaves the operator level (you
+move it to another level or take it off the cluster), or you take it off and later add an access group of the same
+name again, the projects made before keep that group's name in their admin binding, so the members of a group of that
+name on the cluster stay, or become again, admins of those projects; a group you add to the operator level later is
+not admin of the older projects. The cluster's admins change those bindings where that is not wanted.
+
 ## Team setups and app projects: delegated access (available with this release)
 
 A tenant admin can let a team manage its own app projects without making the team tenant-wide
