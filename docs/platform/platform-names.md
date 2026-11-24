@@ -38,7 +38,11 @@ group `devs`.
    that does not fit is refused.
 4. **An object keeps the name it was given**, for its life; the name is recorded in its status. A change of the
    scheme names new objects only. Where the platform allows a rename in place and nothing else holds the old name
-   (the network, router and subnets of a network placement on OpenStack), the object is renamed.
+   (the network, router and subnets of a network placement on OpenStack), the object is renamed. A placement's
+   network is not renamed when the new name would give the tenant two networks of one name (the tenant's project
+   already sees another network of that name): it keeps its present name, the placement's
+   `status.realization.site.networkNameKept` says why, and the name it has is in `status.siteNetwork.name` and
+   `status.realization.site.networkName`, where the tenant reads it.
 
 The code that makes every name is one function, `eda/common/files/shc_names.py`; nothing is joined by hand.
 
@@ -85,9 +89,9 @@ An environment's name is unique within its tenant across the four environment ki
 | Object | Name | Recorded in (how the platform finds it) | Full names written in (for people) |
 |---|---|---|---|
 | OpenStack project of an environment | `<tenant>_<environment>` (Keystone: 64) | CloudOSO `status.projectId`, `status.projectName` | the project's description; the project tag `hybridsovereign.redhat:CloudOSO:<namespace>:<environment>` (a mark only the platform writes) |
-| Network, router and subnets of a placement on OpenStack | `<tenant>_<placement>`; subnets `<tenant>_<placement>_v4`, `…_v6` | NetworkPlacement `status.realization.site.networkId`, `.routerId`; the name in `status.siteNetwork.name` | the description of the network, the router and each subnet; the tag `shc-placement=<namespace>/<placement>` (in the platform's own project) |
+| Network, router and subnets of a placement on OpenStack | `<tenant>_<placement>`; subnets `<tenant>_<placement>_v4`, `…_v6`; a network of an earlier release whose new name the tenant already sees elsewhere keeps its present name (`status.realization.site.networkNameKept` says why) | NetworkPlacement `status.realization.site.networkId`, `.routerId`; the name it has in `status.siteNetwork.name` | the description of the network, the router and each subnet; the tag `shc-placement=<namespace>/<placement>` (in the platform's own project) |
 | A cluster's OpenStack user and application credential | `<tenant>_<environment>_<cluster>` | PlatformOpenshift `status.credential.user`, `.userId`, `.id` | the user's description `User of OpenShift cluster <tenant> / <environment> / <cluster> (build <build>)`, the credential's `OpenShift cluster <tenant> / <environment> / <cluster>` |
-| A cluster's floating IPs | (no name) | PlatformOpenshift `status.floatingIPs.api.id`, `.ingress.id` | descriptions `OpenShift cluster <cluster>: API (platform build <build>)` and `…: ingress (…)`, also in `status.floatingIPs.*.description` |
+| A cluster's floating IPs | (no name) | PlatformOpenshift `status.floatingIPs.api.id`, `.ingress.id` | descriptions `OpenShift cluster <cluster>: API (platform build <build>)` and `…: ingress (…)` (written for people, never read back) |
 | A cluster's DNS records | `api.<cluster>.<environment zone>`, `*.apps.<cluster>.<environment zone>` | PlatformOpenshift `status.dns.records` | the record's description `shc:PlatformOpenshift/<namespace>/<cluster>` |
 | Namespace of a VM environment on an OpenShift Virtualization site | `<tenant>--<environment>--<namespace>` (63; cut with the ending) | CloudVirt `status.namespaces[].namespace` | the labels `hybridsovereign.redhat/entity`, `/cloudvirt`, `/cloudvirt-namespace` (guarded by the site's admission policy) |
 | Access group on the services cluster, OpenStack and VM sites, tenant clusters | `<tenant>.<group>` (never cut) | the client role's attributes (`entity`, `owner`) in the sign-in directory | the client role's description |
