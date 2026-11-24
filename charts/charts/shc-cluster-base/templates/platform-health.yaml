@@ -2,7 +2,9 @@
 The platform's own health (ops.platformHealth; every switch off by default, each renders only its own part): alert
 rules in the cluster's monitoring for volumes, database backups and aggregated APIs, and two checks where no metric exists: the event activations of the automation platform (eda-activations, which
 also repairs, and eda-api-check) and a write to each listed Keycloak (identity-write-probe-<name>). A check's failed
-run is its alert; its pod's termination message says what it found.
+run is its alert; its pod's termination message says what it found. And the report behind the admin dashboard's
+banner (platform-health-report): this cluster's firing Shc alerts and the checks' findings, written as one key of the
+ConfigMap shc-platform-health on the services cluster.
 */}}
 {{- if and (or .Values.layers.base .Values.layers.ops) .Values.ops.enabled }}
 {{- $o := .Values.ops }}
@@ -259,6 +261,239 @@ spec:
               configMap:
                 name: {{ $k.caConfigMap }}
             {{- end }}
+{{- end }}
+{{- end }}{{ end }}
+
+{{- with $p.report }}{{ if .enabled }}
+{{- $r := . }}
+{{- $R := "ops.platformHealth.report." }}
+{{- $cluster := .cluster | default $.Values.cluster.name }}
+{{- if not $cluster }}{{ fail (printf "%scluster is required (or cluster.name)" $R) }}{{ end }}
+{{- if or (gt (len $cluster) 63) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" $cluster)) }}{{ fail (printf "%scluster %q: lower-case letters, digits and '-', at most 63 characters" $R $cluster) }}{{ end }}
+{{- $interval := include "shc-cluster-base.wholeNumber" (list (printf "%sintervalMinutes" $R) .intervalMinutes 1) | atoi }}
+{{- if not (has $interval (list 1 2 3 4 5 6 10 12 15 20 30)) }}{{ fail (printf "%sintervalMinutes must be one of 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30 (a divisor of an hour)" $R) }}{{ end }}
+{{- $target := required (printf "%snamespace is required (the platform namespace of the services cluster)" $R) .namespace }}
+{{- $local := include "shc-cluster-base.switch" (list (printf "%sonServicesCluster" $R) .onServicesCluster) | eq "true" }}
+{{- $receiver := include "shc-cluster-base.switch" (list (printf "%sreceiverCheck" $R) .receiverCheck) | eq "true" }}
+{{- $sc := .servicesCluster | default dict }}
+{{- $writers := .writers | default list }}
+{{- $readers := .readerGroups | default list }}
+{{- if not (kindIs "slice" $writers) }}{{ fail (printf "%swriters must be a list of names" $R) }}{{ end }}
+{{- if not (kindIs "slice" $readers) }}{{ fail (printf "%sreaderGroups must be a list of group names" $R) }}{{ end }}
+{{- if $local }}
+{{- if $sc.secret }}{{ fail (printf "%sservicesCluster is for another cluster; on the services cluster (onServicesCluster true) leave it empty" $R) }}{{ end }}
+{{- if not $readers }}{{ fail (printf "%sreaderGroups needs at least one group on the services cluster" $R) }}{{ end }}
+{{- range $writers }}
+{{- if or (not (kindIs "string" .)) (gt (len .) 40) (not (regexMatch "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$" .)) }}{{ fail (printf "%swriters: %v: lower-case letters, digits and '-', at most 40 characters" $R .) }}{{ end }}
+{{- end }}
+{{- range $readers }}{{ if not (and (kindIs "string" .) .) }}{{ fail (printf "%sreaderGroups must be a list of group names" $R) }}{{ end }}{{ end }}
+{{- else }}
+{{- range $k := list "secret" "serverKey" "tokenKey" }}
+{{- if not (get $sc $k) }}{{ fail (printf "%sservicesCluster.%s is required on a cluster other than the services cluster" $R $k) }}{{ end }}
+{{- end }}
+{{- if or $writers $readers }}{{ fail (printf "%swriters and readerGroups belong to the services cluster (onServicesCluster true)" $R) }}{{ end }}
+{{- end }}
+{{- $cfg := dict "cluster" $cluster "intervalSeconds" (mul $interval 60) "receiverCheck" $receiver "opsNamespace" $ns "checkCronJobs" (include "shc-cluster-base.checkCronJobs" $) "targetMode" (ternary "local" "remote" $local) "targetNamespace" $target "targetConfigMap" "shc-platform-health" "targetDir" "/etc/services-cluster" "targetServerKey" ($sc.serverKey | default "") "targetTokenKey" ($sc.tokenKey | default "") "targetCAKey" ($sc.caKey | default "") }}
+{{- $hash := printf "%s%s" ($.Files.Get "files/platform_health_report.py") (toJson $cfg) | sha256sum | trunc 16 }}
+---
+# The banner's report of this cluster: reads the cluster monitoring's alerts (role monitoring-alertmanager-view in
+# openshift-monitoring) and the check Jobs and their pods in {{ $ns }}, and writes the key {{ $cluster }}.json of
+# ConfigMap shc-platform-health in {{ $target }} on the services cluster.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-health-report
+  namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shc-platform-health-report
+  namespace: openshift-monitoring
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: monitoring-alertmanager-view
+subjects:
+  - kind: ServiceAccount
+    name: platform-health-report
+    namespace: {{ $ns }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: platform-health-report-checks
+  namespace: {{ $ns }}
+rules:
+  - apiGroups: [batch]
+    resources: [jobs]
+    verbs: [list]
+  - apiGroups: [""]
+    resources: [pods]
+    verbs: [list]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: platform-health-report-checks
+  namespace: {{ $ns }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: platform-health-report-checks
+subjects:
+  - kind: ServiceAccount
+    name: platform-health-report
+    namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: platform-health-report
+  namespace: {{ $ns }}
+data:
+  platform_health_report.py: |
+    {{- $.Files.Get "files/platform_health_report.py" | nindent 4 }}
+  config.json: |
+    {{- toPrettyJson $cfg | nindent 4 }}
+---
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: platform-health-report
+  namespace: {{ $ns }}
+spec:
+  schedule: {{ printf "*/%d * * * *" $interval | quote }}
+  timeZone: Etc/UTC
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 1
+  failedJobsHistoryLimit: 3
+  jobTemplate:
+    spec:
+      backoffLimit: 0
+      activeDeadlineSeconds: {{ min 240 (sub (mul $interval 60) 10) }}
+      template:
+        metadata:
+          annotations:
+            shc/config-hash: {{ $hash | quote }}
+        spec:
+          serviceAccountName: platform-health-report
+          restartPolicy: Never
+          containers:
+            - name: report
+              image: {{ required (printf "%simage is required" $R) $r.image }}
+              command: [python3, /etc/platform-health-report/platform_health_report.py,
+                        --config, /etc/platform-health-report/config.json]
+              terminationMessagePolicy: FallbackToLogsOnError
+              resources: {requests: {cpu: 10m, memory: 32Mi}, limits: {memory: 96Mi}}
+              securityContext:
+                {{- toYaml $restricted | nindent 16 }}
+              volumeMounts:
+                - name: config
+                  mountPath: /etc/platform-health-report
+                  readOnly: true
+                {{- if not $local }}
+                - name: services-cluster
+                  mountPath: /etc/services-cluster
+                  readOnly: true
+                {{- end }}
+          volumes:
+            - name: config
+              configMap:
+                name: platform-health-report
+            {{- if not $local }}
+            # optional, so that a missing Secret or key fails the run with the setting's name instead of a pod that
+            # never starts
+            - name: services-cluster
+              secret:
+                secretName: {{ $sc.secret }}
+                optional: true
+            {{- end }}
+{{- if $local }}
+---
+# Writers of the banner's ConfigMap: get and patch on shc-platform-health only. create cannot be limited to one name
+# in Kubernetes RBAC; a writer creates only shc-platform-health, and only when it is absent.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shc-platform-health-writer
+  namespace: {{ $target }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    verbs: [create]
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [shc-platform-health]
+    verbs: [get, patch]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shc-platform-health-writer
+  namespace: {{ $target }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: shc-platform-health-writer
+subjects:
+  - kind: ServiceAccount
+    name: platform-health-report
+    namespace: {{ $ns }}
+  {{- range $writers }}
+  - kind: ServiceAccount
+    name: platform-health-writer-{{ . }}
+    namespace: {{ $ns }}
+  {{- end }}
+{{- range $writers }}
+---
+# The account of the writer on cluster {{ . }}: its token (this Secret's key token, filled by the cluster) and this
+# cluster's API address go into the Secret named by that cluster's ops.platformHealth.report.servicesCluster.secret.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: platform-health-writer-{{ . }}
+  namespace: {{ $ns }}
+---
+apiVersion: v1
+kind: Secret
+metadata:
+  name: platform-health-writer-{{ . }}
+  namespace: {{ $ns }}
+  annotations:
+    kubernetes.io/service-account.name: platform-health-writer-{{ . }}
+    # after its service account, or the token controller removes it
+    argocd.argoproj.io/sync-wave: "1"
+type: kubernetes.io/service-account-token
+{{- end }}
+---
+# Readers of the banner's ConfigMap: get on shc-platform-health only.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: shc-platform-health-reader
+  namespace: {{ $target }}
+rules:
+  - apiGroups: [""]
+    resources: [configmaps]
+    resourceNames: [shc-platform-health]
+    verbs: [get]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: shc-platform-health-reader
+  namespace: {{ $target }}
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: Role
+  name: shc-platform-health-reader
+subjects:
+  {{- range $readers }}
+  - apiGroup: rbac.authorization.k8s.io
+    kind: Group
+    name: {{ . | quote }}
+  {{- end }}
 {{- end }}
 {{- end }}{{ end }}
 {{- end }}

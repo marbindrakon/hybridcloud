@@ -594,7 +594,7 @@ spec:
 
 {{- if $o.alerts.enabled }}
 {{- /* the platform health checks have alerts of their own (platform-health.yaml) */}}
-{{- $checks := "eda-activations|eda-api-check|identity-write-probe-.+" }}
+{{- $checks := include "shc-cluster-base.checkCronJobs" . }}
 ---
 apiVersion: monitoring.coreos.com/v1
 kind: PrometheusRule

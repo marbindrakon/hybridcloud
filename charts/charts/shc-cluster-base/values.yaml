@@ -319,6 +319,37 @@ ops:
       # [{name, url (https), realm, clientId, credentialSecret, attribute (default lastName), caConfigMap}]; the
       # Secret, in ops.namespace, holds the client's secret under the key clientSecret
       keycloaks: []
+    # The report behind the admin dashboard's platform-health banner (files/platform_health_report.py): every
+    # interval, this cluster's firing platform alerts (names starting with Shc, read from the cluster monitoring's
+    # Alertmanager) and the findings of the checks' last failed runs, written as the key <cluster>.json of the
+    # ConfigMap shc-platform-health in `namespace` of the services cluster. Each cluster writes only its own key. It
+    # does not replace sending the alerts to the installation's Alertmanager.
+    report:
+      enabled: false
+      cluster: ""                   # the cluster's name as the banner shows it; empty = cluster.name
+      intervalMinutes: 5            # one of 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30
+      image: registry.redhat.io/ubi9/python-312-minimal:latest
+      # the platform namespace of the services cluster, where the dashboard reads the ConfigMap
+      namespace: ""
+      # true on the services cluster (the writer uses its own service account); false on any other cluster, which
+      # then needs servicesCluster. No default.
+      onServicesCluster: null
+      # another cluster only: a Secret in ops.namespace holding the services cluster's API address (https), a bearer
+      # token of an account allowed to write (see writers) and, when the API's certificate is not publicly trusted,
+      # its CA bundle. The settings name the Secret and its keys.
+      servicesCluster:
+        secret: ""
+        serverKey: ""
+        tokenKey: ""
+        caKey: ""                   # empty = the image's trust store
+      # the services cluster only: names of writers on other clusters. Each gets a service account
+      # platform-health-writer-<name> in ops.namespace with a token Secret of the same name, allowed to get, create
+      # and patch the ConfigMap; its token goes into that cluster's servicesCluster Secret.
+      writers: []
+      # the services cluster only: groups allowed to read the ConfigMap (the platform admins who see the banner)
+      readerGroups: []
+      # true: alertsDelivered says whether OpenShift's AlertmanagerReceiversNotConfigured is firing; false: null
+      receiverCheck: false
   # fabric health metrics and alerts (templates/fabric-health.yaml): on the cluster that holds the HybridFabric and
   # CloudGateway objects. A kube-state-metrics instance of its own (custom resource state only) and the rules
   # shc-fabric-health. Off: nothing of it is rendered.
