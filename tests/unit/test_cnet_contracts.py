@@ -413,13 +413,16 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
         text = load(os.path.join(ROLES, "cloudoso_provision", "tasks", "environmentprep.yml"))
         t = next(x for x in walk(text) if (x.get("vars") or {}).get("os_request", {}).get("action") == "cluster-fips")
         conn = S3.FakeConn()
-        for d in ("sovereign-env1-api", "sovereign-env1-ingress"):
-            conn.network.create_ip(floating_network_id=S3.NET, description=d)
+        pair = [conn.network.create_ip(floating_network_id=S3.NET, description=d).id
+                for d in ("sovereign-env1-api", "sovereign-env1-ingress")]
+        # one of the old description the status does not record: the tenant's, never released
+        conn.network.create_ip(floating_network_id=S3.NET, description="sovereign-env1-api")
         req = run_play([{"ansible.builtin.set_fact": {"r": t["vars"]["os_request"]}}, write_out("r")],
-                       {"ep_os": {"project": {"id": S3.PROJECT}}, "ep_legacy_fip_ids": [], "cloudoso_cr_name": "env1"})
+                       {"ep_os": {"project": {"id": S3.PROJECT}}, "ep_legacy_fip_ids": pair, "cloudoso_cr_name": "env1"})
+        self.assertNotIn("descriptions", req)
         gone = self.helper(conn, req)
-        self.assertEqual(len(gone["released"]), 2)
-        self.assertEqual(conn.network.fips, [])
+        self.assertEqual(sorted(gone["released"]), sorted(pair))
+        self.assertEqual(len(conn.network.fips), 1)
 
 
 @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")

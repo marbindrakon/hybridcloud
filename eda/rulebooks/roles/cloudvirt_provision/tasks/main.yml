@@ -441,7 +441,7 @@
           ansible.builtin.set_fact:
             cv_kept: >-
               {{ cv_stale_counts | rejectattr('count', 'equalto', 0) | map(attribute='namespace') | list
-                 + cv_claimed_kept }}
+                 + cv_claimed_kept | default([], true) }}
 
         # what the environment's namespaces hold (status.virtualMachines; the site probe refreshes it)
         - name: The VirtualMachines in the environment's namespaces
@@ -483,9 +483,10 @@
         fab_message: >-
           {{ cv_namespaces | length }} namespace(s) on {{ cv_site_name }}
           ({{ cv_ns_status | selectattr('ready') | list | length }} with their network){{ '; removed from spec but still
-          holding VMs: ' ~ cv_kept | difference(cv_claimed_kept) | join(', ')
-          if cv_kept | difference(cv_claimed_kept) | length > 0 else '' }}{{ '; kept, as they carry the labels of a
-          namespace still in the spec: ' ~ cv_claimed_kept | join(', ') if cv_claimed_kept | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
+          holding VMs: ' ~ cv_kept | difference(cv_claimed_kept | default([], true)) | join(', ')
+          if cv_kept | difference(cv_claimed_kept | default([], true)) | length > 0 else '' }}{{ '; kept, as they carry
+          the labels of a namespace still in the spec: ' ~ cv_claimed_kept | join(', ')
+          if cv_claimed_kept | default([], true) | length > 0 else '' }}{{ '; ' ~ cv_stale | difference(cv_kept)
           | length ~ ' removed' if cv_stale | difference(cv_kept) | length > 0 else '' }}{{ cv_dns_note | default('') }}{{
           ('; access for ' ~ cv_access.groups | join(', ')) if cv_access.groups | default([]) | length > 0 else '; no tenant access granted' }}{{
           ('; ' ~ cv_access_waiting | join('; ')) if cv_access_waiting | default([]) | length > 0 else '' }}

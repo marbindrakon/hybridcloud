@@ -287,10 +287,10 @@ still be using the credential: ClusterCredential False / CredentialSecretMissing
 the secret at `cluster/oso/<build>/build/provider-creds`, or replaces the credential in the cluster by hand.
 Replacing the credential of a running cluster is not offered by the platform yet.
 
-The installation sets the user's name, roles and credential name in the realization
-(`openstack.clusterIdentity`: `userName`, `roles`, `rolesBySite`, `credentialName`; `{build}` is the build name,
-which already carries the platform's prefix; the default for both names is `{build}`). The platform trusts the mark
-in the user's description, never the name: a user of that name without it is refused, never changed or deleted.
+The user and its credential are named `<tenant>_<environment>_<cluster>` by the platform (a cluster that recorded
+its user keeps the name it recorded); the installation sets the user's roles in the realization
+(`openstack.clusterIdentity`: `roles`, `rolesBySite`). The platform trusts the mark in the user's description, never
+the name: a user of that name without it is refused, never changed or deleted.
 The realization also sets the sign-in client and the roles of access groups (`openstack.tenantSignIn`: `clientId`
 with `{site}`, `editRoles`, `viewRoles`, `realm`).
 
