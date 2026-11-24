@@ -34,6 +34,7 @@ import { SitePicker } from './SitePicker';
 import { AllowedSitesSelect } from './AllowedSitesSelect';
 import { ObjectListEditor, type ObjectListRow } from './ObjectListEditor';
 import { cleanContacts, contactsValid, entityOptionalSpec, ENTITY_LIMITS } from '../forms/entityFields';
+import { nameAllowed, nameLimitFor, nameRuleMessage } from '../forms/nameRule';
 import { useTranslation } from '../i18n';
 import { DEFAULT_LANDING_ZONE } from '../forms/hybridFabricDefaults';
 import {
@@ -88,17 +89,6 @@ export interface CreateResourceFormProps {
   audience?: 'admin' | 'tenant';
   /** The new object's page; after Create the form goes there instead of the list. */
   detailPathFor?: (name: string) => string | undefined;
-}
-
-/** DNS-1123 label (most kinds); Entity names are shorter and never hold "--" (they become namespaces). */
-const DNS_LABEL_RE = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
-function nameProblem(kind: HybridSovereignKind, name: string): string | null {
-  if (!name) return null;
-  const max = kind === 'Entity' ? 56 : 63;
-  if (name.length > max) return `max:${max}`;
-  if (!DNS_LABEL_RE.test(name)) return 'pattern';
-  if (kind === 'Entity' && name.includes('--')) return 'doubleHyphen';
-  return null;
 }
 
 /** Kinds that live in the platform namespace and only platform admins create. */
@@ -312,7 +302,6 @@ export function CreateResourceForm({
   // CloudOSO: the site comes from spec.cloudRef (or the installation default); the other site
   // settings are used only when no Cloud Infrastructure is in effect.
   const [cloudRefName, setCloudRefName] = useState('');
-  const [osoProject, setOsoProject] = useState('');
   const [osoLegacyOpen, setOsoLegacyOpen] = useState(false);
   const [osoVaultPath, setOsoVaultPath] = useState('');
   const [osoRegionName, setOsoRegionName] = useState('');
@@ -641,7 +630,6 @@ export function CreateResourceForm({
       case 'cloudoso':
         return buildCloudOsoSpec({
           site: cloudRefName,
-          project: osoProject,
           landingzone,
           baseDomain,
           projectDomain,
@@ -723,7 +711,6 @@ export function CreateResourceForm({
     // Entity-scoped kinds cannot be created without a resolved tenant namespace.
     if (entityScoped && !entityNs) return false;
     if (type === 'assignment' && !teamRef) return false;
-    if (type === 'cloudoso' && !osoProject.trim()) return false;
     if (type === 'cloudaws' && !awsSiteRef.trim()) return false;
     if (type === 'cloudgcp' && !gcpSiteRef.trim()) return false;
     if (type === 'platformopenshift' && !clusterEnv) return false;
@@ -738,7 +725,11 @@ export function CreateResourceForm({
 
   // Client-side checks first (inline), then a server dry run of the exact object (Q8, UX-040).
   const targetNs = isPlatformForm ? PLATFORM_NAMESPACE : entityNs;
-  const nameIssue = nameProblem(kind, name);
+  // One rule for every name (a gateway's is shorter; a cluster on Google Cloud has the installer's extra rule).
+  const nameOpts = { limit: nameLimitFor(kind), google: type === 'platformopenshift' && platformType === 'gcp' };
+  const nameRule = nameRuleMessage(nameOpts);
+  const nameRuleText = t(nameRule.key, nameRule.values);
+  const nameIssue = !!name && !nameAllowed(name, nameOpts);
   // Tenant names become namespaces: the rule shows as soon as a wrong character is typed.
   const showNameIssue = !!nameIssue && (nameTouched || type === 'entity');
   const clientValid = canSubmit() && !nameIssue && !!targetNs;
@@ -758,7 +749,7 @@ export function CreateResourceForm({
   const checkText = check.error ? errorText(check.error, t, { kindLabel: kindTerm(t, kind), action: 'action' }) : null;
   const blockers: string[] = [];
   if (!name) blockers.push(t('form.blockName'));
-  else if (nameIssue) blockers.push(t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] }));
+  else if (nameIssue) blockers.push(nameRuleText);
   if (name && !nameIssue && !canSubmit()) {
     // the cluster form names what stops it (network, counts, address settings) instead of the generic line
     if (type === 'platformopenshift' && clusterEnv && clusterFields?.blockers.length) blockers.push(...clusterFields.blockers);
@@ -855,19 +846,18 @@ export function CreateResourceForm({
                 />
                 <FormHelperText>
                   <HelperText id="name-help">
-                    {showNameIssue && nameIssue ? (
-                      <HelperTextItem variant="error">
-                        {t(`form.nameRule.${nameIssue.split(':')[0]}`, { max: nameIssue.split(':')[1] })}
-                      </HelperTextItem>
+                    {showNameIssue ? (
+                      <HelperTextItem variant="error">{nameRuleText}</HelperTextItem>
                     ) : checkErrors.byField.name ? (
                       <HelperTextItem variant="error">{checkErrors.byField.name}</HelperTextItem>
                     ) : (
-                      <HelperTextItem>
-                        {type === 'entity'
-                          ? t('form.entityNameHelp', { namespace: `entity-${name || '<name>'}` })
-                          : t('form.nameHelp')}
-                      </HelperTextItem>
+                      <HelperTextItem>{nameRuleText}</HelperTextItem>
                     )}
+                    <HelperTextItem>
+                      {type === 'entity'
+                        ? t('form.entityNameHelp', { namespace: `entity-${name || '<name>'}` })
+                        : t('form.nameHelp')}
+                    </HelperTextItem>
                   </HelperText>
                 </FormHelperText>
               </FormGroup>
@@ -1126,9 +1116,6 @@ export function CreateResourceForm({
                   <p className="sc-text-muted" style={{ marginTop: '-0.75rem' }}>
                     {t('fields.cloudOsoSiteHelp')}
                   </p>
-                  <FormGroup label={t('fields.osoProject')} fieldId="oso-project" isRequired>
-                    <TextInput id="oso-project" value={osoProject} onChange={(_e, v) => setOsoProject(v)} isRequired />
-                  </FormGroup>
                   <FormGroup label={t('fields.landingzone')} fieldId="oso-lz">
                     <TextInput id="oso-lz" value={landingzone} onChange={(_e, v) => setLandingzone(v)} />
                   </FormGroup>

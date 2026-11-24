@@ -5,5 +5,5 @@ export { HelpMenu } from './HelpMenu';
 export { ShellNav } from './ShellNav';
 export { DashboardShell, MAIN_CONTENT_ID } from './DashboardShell';
 export type { DashboardShellProps } from './DashboardShell';
-export { useUiConfig, loadUiConfig, HELP_PAGES, helpUrl } from './uiConfig';
+export { useUiConfig, loadUiConfig, configureUiConfigUrl, HELP_PAGES, helpUrl } from './uiConfig';
 export type { UiConfig } from './uiConfig';

@@ -7,9 +7,10 @@
  *                          path. The oauth-proxy then clears its cookie and, when
  *                          --logout-url is set, sends the browser to the identity
  *                          provider's end-session page.
- *   GET  /api/ui-config    { helpBaseUrl, consoleUrl } from SHC_HELP_BASE_URL and
- *                          SHC_CONSOLE_URL (both empty by default: no installation
- *                          defaults in the image or chart).
+ *   GET  /api/ui-config    { helpBaseUrl, consoleUrl, automationJobUrlTemplate } from
+ *                          SHC_HELP_BASE_URL, SHC_CONSOLE_URL and
+ *                          SHC_AUTOMATION_JOB_URL_TEMPLATE (all empty by default: no
+ *                          installation defaults in the image or chart).
  */
 import crypto from "crypto";
 import { k8sRequest, userToken } from "./upstream.js";
@@ -28,10 +29,18 @@ function cleanUrl(v) {
   return /^https:\/\/[^\s"'<>]+$/.test(s) ? s.replace(/\/+$/, "") : "";
 }
 
+/** An https URL template with "{jobId}" where the job's id goes; anything else is no template. */
+function cleanJobTemplate(v) {
+  if (typeof v !== "string") return "";
+  const s = v.trim();
+  return /^https:\/\/[^\s"'<>]+$/.test(s) && s.includes("{jobId}") ? s : "";
+}
+
 export function uiConfigFromEnv(env = process.env) {
   return {
     helpBaseUrl: cleanUrl(env.SHC_HELP_BASE_URL),
     consoleUrl: cleanUrl(env.SHC_CONSOLE_URL),
+    automationJobUrlTemplate: cleanJobTemplate(env.SHC_AUTOMATION_JOB_URL_TEMPLATE),
   };
 }
 

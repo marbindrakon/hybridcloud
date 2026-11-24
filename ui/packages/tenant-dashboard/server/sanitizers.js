@@ -377,7 +377,6 @@ export function sanitizeCloudOSOSpec(raw) {
   if (!isObject(raw)) return { error: "spec must be an object" };
   // vaultPath and route53VaultPath are platform-only (never sent).
   const spec = pickStrings(raw, [
-    "project",
     "baseDomain",
     "projectDomain",
     "externalNetwork",

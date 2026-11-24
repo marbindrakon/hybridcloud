@@ -1,5 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { safeLink } from '../forms/safeLink';
+import { automationJobUrl } from '../status/jobLink';
+import { useUiConfig } from '../shell/uiConfig';
 import {
   Alert,
   Button,
@@ -215,23 +217,29 @@ export function DiagnosticsBlock({ item }: { item: K8sResource }): React.ReactEl
   const data: Record<string, unknown> = {};
   for (const k of [...DIAGNOSTIC_KEYS, ...CONTRACT_KEYS]) if (status[k] !== undefined) data[k] = status[k];
   if (!Object.keys(data).length) return null;
-  const jobs = Array.isArray(status.edaJobs) ? (status.edaJobs as Array<{ name?: string; jobId?: string; url?: string; status?: string }>) : [];
+  const jobs = Array.isArray(status.edaJobs) ? (status.edaJobs as Array<{ name?: string; jobId?: string; status?: string }>) : [];
+  // the link to a job comes from the dashboard's setting, never from status (no setting, no link)
+  const { automationJobUrlTemplate } = useUiConfig(jobs.length > 0);
   return (
     <ExpandableSection toggleText={t('detail.diagnostics')} isExpanded={open} onToggle={(_e, v) => setOpen(v)} className="sc-mb">
       {jobs.length > 0 && (
         <ul>
-          {jobs.map((j, i) => (
-            <li key={`${j.jobId ?? j.name}-${i}`}>
-              {safeLink(j.url) ? (
-                <a href={safeLink(j.url)} target="_blank" rel="noopener noreferrer">
-                  {j.name ?? j.jobId}
-                </a>
-              ) : (
-                j.name ?? j.jobId
-              )}{' '}
-              <span className="sc-text-muted">{j.status}</span>
-            </li>
-          ))}
+          {jobs.map((j, i) => {
+            const href = automationJobUrl(automationJobUrlTemplate, j.jobId);
+            const label = j.jobId ? t('detail.jobWithId', { name: j.name ?? '', id: j.jobId }) : j.name;
+            return (
+              <li key={`${j.jobId ?? j.name}-${i}`}>
+                {href ? (
+                  <a href={href} target="_blank" rel="noopener noreferrer">
+                    {label}
+                  </a>
+                ) : (
+                  label
+                )}{' '}
+                <span className="sc-text-muted">{j.status}</span>
+              </li>
+            );
+          })}
         </ul>
       )}
       <FieldGrid data={data} />

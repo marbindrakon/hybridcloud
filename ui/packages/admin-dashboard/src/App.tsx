@@ -15,6 +15,7 @@ import {
   TenantOverviewPage,
   TenantNetworkOverviewPage,
   IntegrationsPage,
+  PlatformHealthBanner,
   useRouterScopeAdapter,
   useOptionalScope,
   type PageMap,
@@ -47,6 +48,7 @@ function AdminShell(): React.ReactElement {
   const { t } = useTranslation();
   return (
     <DashboardShell host={HOST} brand={t('nav.sovereignAdminConsole')} homeHref="/platform" includePlatform>
+      <PlatformHealthBanner />
       <Routes>
         <Route path="/" element={<RootRedirect host={HOST} persona="platform" />} />
         <Route path="/platform/*" element={<ScopedRoutes host={HOST} persona="platform" pages={PLATFORM_PAGES} />} />

@@ -360,7 +360,6 @@ export const KIND_SPEC_META: Partial<Record<HybridSovereignKind, KindSpecMeta>> 
         immutableWhenSet: true,
         helpKey: 'fields.cloudOsoSiteHelp',
       },
-      { path: 'project', labelKey: 'fields.osoProject', widget: 'text' },
       { path: 'landingzone', labelKey: 'fields.landingzone', widget: 'text' },
       { path: 'toolRbac.editRbac', labelKey: 'fields.osoEditRbacEdit', widget: 'rbacRefList', helpKey: 'fields.osoEditRbacHelp' },
       { path: 'toolRbac.viewRbac', labelKey: 'fields.osoViewRbacEdit', widget: 'rbacRefList', helpKey: 'fields.osoViewRbacHelp' },

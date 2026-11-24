@@ -4,10 +4,11 @@
  * fetches, so the create form, the edit tab and the unit tests share them.
  */
 import type { CloudInfrastructure, TenantContact } from '../types';
+import { NAME_MAX } from './nameRule';
 
 /** Limits of the Entity CRD (keep in step with crd-entity.yaml). */
 export const ENTITY_LIMITS = {
-  nameMax: 56,
+  nameMax: NAME_MAX,
   displayNameMax: 64,
   contactsMax: 10,
   contactNameMax: 128,

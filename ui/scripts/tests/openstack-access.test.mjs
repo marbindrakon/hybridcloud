@@ -248,7 +248,7 @@ test('card: an environment written before this round renders what it carries', (
     apiVersion: 'hybridsovereign.redhat/v1alpha1',
     kind: 'CloudOSO',
     metadata: { name: 'web', namespace: 'entity-acme' },
-    spec: { cloudRef: { name: 'site-a' }, project: 'web' },
+    spec: { cloudRef: { name: 'site-a' } },
     status: {
       projectName: 'acme_web', projectId: '8a1f0c', domainName: 'tenants', domainId: '51c0aa', appCredentialId: 'ac-1',
       endpoints: { api: 'https://identity.site-a.example', project: 'acme_web', domain: 'tenants', location: 'ATUIN', signIn: { method: 'NotAvailable' } },
@@ -317,15 +317,15 @@ test('helpers: periods, groups of the reader, prefill, toolRbac', () => {
 });
 
 test('form: the create form writes spec.toolRbac and the tenant dashboard passes it on', () => {
-  const spec = m.buildCloudOsoSpec({ site: 'site-a', project: 'web', landingzone: '', editRbac: ['developers'], viewRbac: ['auditors'] });
-  assert.deepEqual(spec, { cloudRef: { name: 'site-a' }, project: 'web', toolRbac: { editRbac: ['developers'], viewRbac: ['auditors'] } });
-  assert.deepEqual(m.buildCloudOsoSpec({ site: '', project: 'web', editRbac: [], viewRbac: [] }), { project: 'web' });
+  const spec = m.buildCloudOsoSpec({ site: 'site-a', landingzone: '', editRbac: ['developers'], viewRbac: ['auditors'] });
+  assert.deepEqual(spec, { cloudRef: { name: 'site-a' }, toolRbac: { editRbac: ['developers'], viewRbac: ['auditors'] } });
+  assert.deepEqual(m.buildCloudOsoSpec({ site: '', editRbac: [], viewRbac: [] }), {});
   const out = san.sanitizeCloudOSOSpec(spec);
   assert.equal(out.error, undefined);
   assert.deepEqual(out.spec.toolRbac, { editRbac: ['developers'], viewRbac: ['auditors'] });
-  assert.ok(san.sanitizeCloudOSOSpec({ project: 'web', toolRbac: 'developers' }).error);
-  assert.ok(san.sanitizeCloudOSOSpec({ project: 'web', toolRbac: { editRbac: [1] } }).error);
-  assert.equal('toolRbac' in san.sanitizeCloudOSOSpec({ project: 'web', toolRbac: { editRbac: [] } }).spec, false);
+  assert.ok(san.sanitizeCloudOSOSpec({ toolRbac: 'developers' }).error);
+  assert.ok(san.sanitizeCloudOSOSpec({ toolRbac: { editRbac: [1] } }).error);
+  assert.equal('toolRbac' in san.sanitizeCloudOSOSpec({ toolRbac: { editRbac: [] } }).spec, false);
   // the edit form offers both lists
   const paths = pages.KIND_SPEC_META.CloudOSO.fields.map((f) => [f.path, f.widget]);
   assert.deepEqual(paths.filter(([p]) => p.startsWith('toolRbac.')), [['toolRbac.editRbac', 'rbacRefList'], ['toolRbac.viewRbac', 'rbacRefList']]);
@@ -526,8 +526,8 @@ test('form: the pre-fill of "Create and change" and the spec the form sends (R13
   assert.match(build[1], /viewRbac: osoViewRbac,/);
   assert.ok(!/toolRbac/.test(build[1]), 'toolRbac comes from buildCloudOsoSpec alone (never an empty one)');
   // an empty choice sends no toolRbac at all; a choice sends it
-  assert.equal('toolRbac' in m.buildCloudOsoSpec({ site: 'site-a', project: 'web', editRbac: [], viewRbac: [' '] }), false);
-  assert.deepEqual(m.buildCloudOsoSpec({ site: 'site-a', project: 'web', editRbac: ['developers'], viewRbac: [] }).toolRbac, { editRbac: ['developers'] });
+  assert.equal('toolRbac' in m.buildCloudOsoSpec({ site: 'site-a', editRbac: [], viewRbac: [' '] }), false);
+  assert.deepEqual(m.buildCloudOsoSpec({ site: 'site-a', editRbac: ['developers'], viewRbac: [] }).toolRbac, { editRbac: ['developers'] });
 });
 
 // ------------------------------------------------------------------ second pass (V9, V10, V11)

@@ -236,7 +236,6 @@ export function cloudOsoToolRbac(editRbac: string[], viewRbac: string[]): CloudO
 /** What the create form holds for an OpenStack environment. */
 export interface CloudOsoFormInput {
   site: string;
-  project: string;
   landingzone?: string;
   baseDomain?: string;
   projectDomain?: string;
@@ -259,7 +258,6 @@ export function buildCloudOsoSpec(input: CloudOsoFormInput): Record<string, unkn
   const toolRbac = cloudOsoToolRbac(input.editRbac, input.viewRbac);
   return {
     ...(input.site.trim() ? { cloudRef: { name: input.site.trim() } } : {}),
-    project: input.project.trim(),
     ...optional('landingzone', input.landingzone),
     ...optional('baseDomain', input.baseDomain),
     ...optional('projectDomain', input.projectDomain),

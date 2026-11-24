@@ -1110,7 +1110,7 @@ def declared(schema, path):
 
 class UiReadsAreDeclared(unittest.TestCase):
     """Every status key the UI reads (types/crds.ts, types/tenantProfile.ts, the network, placement and cluster
-    pages, tenantSafe.js's allow-list for clusters) is declared in the CRD bases, with the type the UI expects."""
+    pages, tenantStatusAllow.js's allow-list for clusters) is declared in the CRD bases, with the type the UI expects."""
 
     READS = {
         "HybridNetwork": [("spec.platformAccess", "boolean"), ("status.platformAccess.state", "string"),
@@ -1163,7 +1163,7 @@ class UiReadsAreDeclared(unittest.TestCase):
         self.assertEqual(missing, [])
 
     def test_tenant_safe_keeps_the_cluster_keys(self):
-        with open(os.path.join(ROOT, "ui", "packages", "shared", "server", "tenantSafe.js")) as fh:
+        with open(os.path.join(ROOT, "ui", "packages", "shared", "server", "tenantStatusAllow.js")) as fh:
             text = fh.read()
         block = text[text.index("PlatformOpenshift: ["):]
         block = block[:block.index("],\n};")]

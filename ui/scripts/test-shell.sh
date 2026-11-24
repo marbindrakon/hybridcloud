@@ -40,6 +40,8 @@ entries=(
   "status/install.ts:install"
   "status/durations.ts:durations"
   "forms/specFieldMeta.ts:specFieldMeta"
+  "forms/nameRule.ts:nameRule"
+  "status/jobLink.ts:jobLink"
 )
 for e in "${entries[@]}"; do
   src="${e%%:*}"; name="${e##*:}"

@@ -146,6 +146,13 @@ spec:
             - name: SHC_PLATFORM_SAR
               value: {{ toJson . | quote }}
             {{- end }}
+            {{- with .Values.automationJobUrlTemplate }}
+            {{- if not (and (hasPrefix "https://" .) (contains "{jobId}" .)) }}
+            {{- fail "automationJobUrlTemplate must be an https URL with {jobId} where the job's id goes" }}
+            {{- end }}
+            - name: SHC_AUTOMATION_JOB_URL_TEMPLATE
+              value: {{ . | quote }}
+            {{- end }}
             {{- range $key, $val := .Values.env }}
             - name: {{ $key }}
               value: {{ $val | quote }}
