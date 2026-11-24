@@ -594,7 +594,7 @@
  "PlatformOpenshift/credential": {
   "conditions": [
    {
-    "message": "The cluster uses its own credential on the site, owned by the site user shc-oso-acme-c1-0a1b2.",
+    "message": "The cluster uses its own credential on the site, owned by the site user acme_web_c1.",
     "reason": "OwnCredential",
     "status": "True",
     "type": "ClusterCredential"
@@ -605,7 +605,7 @@
    "domain": "tenants",
    "domainId": "51c0aa7e1f2d4c3b9a8e7d6c5b4a3921",
    "id": "ac9d00112233445566778899aabbccdd",
-   "user": "shc-oso-acme-c1-0a1b2",
+   "user": "acme_web_c1",
    "userId": "0f3c11223344556677889900aabbccdd"
   }
  }

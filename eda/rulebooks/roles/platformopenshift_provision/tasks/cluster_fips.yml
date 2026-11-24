@@ -1,12 +1,17 @@
 ---
 # The cluster's two floating IPs (DESIGN cnet §4.2 step 4, §4.3): with the site account scoped to the environment's
-# project, found by description (<build>-api, <build>-ingress) or created on the chosen network, and recorded in
-# status.floatingIPs at once, before anything else uses them (the teardown releases them by the record). Inputs:
+# project, found by description or created on the chosen network, and recorded in status.floatingIPs at once (ids
+# and descriptions), before anything else uses them (the teardown releases them by the recorded ids). The
+# description says the cluster's name in words and carries the build name as the platform's mark,
+# "OpenShift cluster <cluster>: API (platform build <build>)" and "...: ingress (...)"; a cluster that recorded its
+# floating IPs keeps the descriptions it recorded (one recorded before descriptions were: <build>-api,
+# <build>-ingress). Inputs:
 #   cf_project_id    the environment's project (CloudOSO status.projectId)
 #   cf_network_id    the network the floating IPs come from (placement status.realization.site.networkId, or the
 #                    external network in effect)
 #   cf_account       the site account's Vault path
-# Sets cb_fips ({network, api: {address, id}, ingress: {address, id}}), cb_api_vip, cb_ingress_vip.
+#   po_cr_current    the cluster as read (its record)
+# Sets cb_fips ({api: {address, id, description}, ingress: {...}}), cb_api_vip, cb_ingress_vip.
 - name: Require the environment's project and the network
   ansible.builtin.assert:
     that:
@@ -16,6 +21,23 @@
     fail_msg: >-
       PlatformOpenshift {{ ansible_operator_meta.name }}: the floating IPs need the environment's project, the
       network's id and the site account of the environment; one of them is not recorded.
+
+- name: The descriptions of the cluster's floating IPs
+  vars:
+    _rec: "{{ ((po_cr_current | default({})).resources | default([{}], true) | first).status | default({}, true) }}"
+    _fips: "{{ _rec.floatingIPs | default({}, true) }}"
+    _api: "{{ _fips.api | default({}, true) }}"
+    _ingress: "{{ _fips.ingress | default({}, true) }}"
+  ansible.builtin.set_fact:
+    cf_descriptions:
+      api: >-
+        {{ _api.description | default('', true)
+           or ((cb_app_name ~ '-api') if (_api.id | default('', true)) | length > 0
+               else 'OpenShift cluster ' ~ ansible_operator_meta.name ~ ': API (platform build ' ~ cb_app_name ~ ')') }}
+      ingress: >-
+        {{ _ingress.description | default('', true)
+           or ((cb_app_name ~ '-ingress') if (_ingress.id | default('', true)) | length > 0
+               else 'OpenShift cluster ' ~ ansible_operator_meta.name ~ ': ingress (platform build ' ~ cb_app_name ~ ')') }}
 
 # the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
 - name: The cluster's floating IPs with the site account
@@ -38,8 +60,8 @@
           project_id: "{{ cf_project_id }}"
           network_id: "{{ cf_network_id }}"
           descriptions:
-            api: "{{ cb_app_name }}-api"
-            ingress: "{{ cb_app_name }}-ingress"
+            api: "{{ cf_descriptions.api | trim }}"
+            ingress: "{{ cf_descriptions.ingress | trim }}"
   always:
     - name: Remove the account's temp files
       ansible.builtin.file:
@@ -50,9 +72,9 @@
 - name: Keep the floating IPs
   ansible.builtin.set_fact:
     cb_fips:
-      network: "{{ os_result.network | default(cf_network_id, true) }}"
-      api: {address: "{{ os_result.api.address }}", id: "{{ os_result.api.id }}"}
-      ingress: {address: "{{ os_result.ingress.address }}", id: "{{ os_result.ingress.id }}"}
+      api: {address: "{{ os_result.api.address }}", id: "{{ os_result.api.id }}", description: "{{ cf_descriptions.api | trim }}"}
+      ingress: {address: "{{ os_result.ingress.address }}", id: "{{ os_result.ingress.id }}",
+                description: "{{ cf_descriptions.ingress | trim }}"}
     cb_api_vip: "{{ os_result.api.address }}"
     cb_ingress_vip: "{{ os_result.ingress.address }}"
 

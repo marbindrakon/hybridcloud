@@ -40,11 +40,19 @@ platform:
   gcp:
     projectID: {{ cb_project }}
     region: {{ cb_region }}
+    # on every object the installer makes: the person's own names in full (the rule for names keeps them inside
+    # the installer's label rules: lower-case letters, digits, "_" and "-", at most 63; pkg/types/gcp/validation)
     userLabels:
     - key: shc-managed
       value: "true"
     - key: shc-build
       value: {{ cb_app_name }}
+    - key: shc-tenant
+      value: {{ resolved_entity | trim }}
+    - key: shc-environment
+      value: {{ gcp_env_name }}
+    - key: shc-cluster
+      value: {{ ansible_operator_meta.name }}
 {% if cb_vpc_name | default('') %}
     # a hybrid network's placement (design/P11-GCP-PLAN.md §3.6): the placement's VPC and regional subnet host the
     # cluster's machines; the installer creates its load balancers there (internal ones for Internal)
