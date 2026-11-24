@@ -1,8 +1,10 @@
 """shc-cluster-base: the writer of the admin dashboard's platform-health banner (ops.platformHealth.report in
-templates/platform-health.yaml). Off renders nothing of it; on the services cluster the writer, the writer and
-reader Roles and the accounts of the named writers; on another cluster the writer with the services cluster's Secret
-and no Role on the services cluster's namespace; exactly the rights each account uses; missing or wrong settings
-fail with their names; the script's configuration carries the values; no lab value in what it renders."""
+templates/platform-health.yaml). Off renders nothing of it; on the services cluster the writer, the index and one
+report ConfigMap per reporting cluster (without data, so that a sync keeps what the writers wrote), a writer Role per
+cluster (get and patch on its own report, no create), the reader Role by name, and the accounts of the named writers;
+on another cluster the writer with the services cluster's Secret and no Role on the services cluster's namespace;
+exactly the rights each account uses; missing or wrong settings fail with their names; the script's configuration
+carries the values; no lab value in what it renders."""
 import json
 import os
 import re
@@ -25,7 +27,7 @@ HUB = ON + ["--set", R + "cluster=hub", "--set", R + "onServicesCluster=false",
             "--set", R + "servicesCluster.tokenKey=token"]
 LAB = re.compile(r"signal9|172\.18\.|2602:0{0,3}81f:|central-rhbk|services-rhbk|services-quay|shc-central")
 MINE = {"platform-health-report", "shc-platform-health-report", "platform-health-report-checks",
-        "shc-platform-health-writer", "shc-platform-health-reader"}
+        "shc-platform-health", "shc-platform-health-reader"}
 
 
 def render(*args, ok=True):
@@ -44,7 +46,7 @@ def by_key(docs):
 
 def mine(docs):
     return {k: d for k, d in by_key(docs).items()
-            if k[1] in MINE or k[1].startswith("platform-health-writer-")}
+            if k[1] in MINE or k[1].startswith(("platform-health-writer-", "shc-platform-health-"))}
 
 
 @unittest.skipUnless(shutil.which("helm"), "helm not installed")
@@ -64,32 +66,51 @@ class Render(unittest.TestCase):
             ("RoleBinding", "platform-health-report-checks", "shc-ops"),
             ("ConfigMap", "platform-health-report", "shc-ops"),
             ("CronJob", "platform-health-report", "shc-ops"),
-            ("Role", "shc-platform-health-writer", "platform"),
-            ("RoleBinding", "shc-platform-health-writer", "platform"),
+            ("ConfigMap", "shc-platform-health", "platform"),
+            ("ConfigMap", "shc-platform-health-services", "platform"),
+            ("ConfigMap", "shc-platform-health-hub", "platform"),
+            ("ConfigMap", "shc-platform-health-edge", "platform"),
+            ("Role", "shc-platform-health-writer-services", "platform"),
+            ("RoleBinding", "shc-platform-health-writer-services", "platform"),
+            ("Role", "shc-platform-health-writer-hub", "platform"),
+            ("RoleBinding", "shc-platform-health-writer-hub", "platform"),
+            ("Role", "shc-platform-health-writer-edge", "platform"),
+            ("RoleBinding", "shc-platform-health-writer-edge", "platform"),
             ("Role", "shc-platform-health-reader", "platform"),
             ("RoleBinding", "shc-platform-health-reader", "platform"),
             ("ServiceAccount", "platform-health-writer-hub", "shc-ops"),
             ("Secret", "platform-health-writer-hub", "shc-ops"),
             ("ServiceAccount", "platform-health-writer-edge", "shc-ops"),
             ("Secret", "platform-health-writer-edge", "shc-ops")})
-        # writers: get and patch on this one ConfigMap, create (cannot be limited to a name)
-        self.assertEqual(k[("Role", "shc-platform-health-writer", "platform")]["rules"], [
-            {"apiGroups": [""], "resources": ["configmaps"], "verbs": ["create"]},
-            {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["shc-platform-health"],
-             "verbs": ["get", "patch"]}])
-        self.assertEqual([(s["kind"], s["name"], s["namespace"])
-                          for s in k[("RoleBinding", "shc-platform-health-writer", "platform")]["subjects"]],
-                         [("ServiceAccount", "platform-health-report", "shc-ops"),
-                          ("ServiceAccount", "platform-health-writer-hub", "shc-ops"),
-                          ("ServiceAccount", "platform-health-writer-edge", "shc-ops")])
+        # the index lists every reporting cluster, this one first; the reports carry no data (the writers fill them)
+        self.assertEqual(json.loads(k[("ConfigMap", "shc-platform-health", "platform")]["data"]["clusters.json"]),
+                         ["services", "hub", "edge"])
+        for c in ("services", "hub", "edge"):
+            self.assertNotIn("data", k[("ConfigMap", "shc-platform-health-" + c, "platform")])
+        # each writer: get and patch on its own report only; no create anywhere
+        for c, account in (("services", "platform-health-report"), ("hub", "platform-health-writer-hub"),
+                           ("edge", "platform-health-writer-edge")):
+            self.assertEqual(k[("Role", "shc-platform-health-writer-" + c, "platform")]["rules"], [
+                {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["shc-platform-health-" + c],
+                 "verbs": ["get", "patch"]}])
+            b = k[("RoleBinding", "shc-platform-health-writer-" + c, "platform")]
+            self.assertEqual(b["roleRef"]["name"], "shc-platform-health-writer-" + c)
+            self.assertEqual([(x["kind"], x["name"], x["namespace"]) for x in b["subjects"]],
+                             [("ServiceAccount", account, "shc-ops")])
+        for d in docs:
+            if d["kind"] == "Role":
+                for rule in d["rules"]:
+                    self.assertNotIn("create", rule["verbs"], d["metadata"]["name"])
         secret = k[("Secret", "platform-health-writer-hub", "shc-ops")]
         self.assertEqual(secret["type"], "kubernetes.io/service-account-token")
         self.assertEqual(secret["metadata"]["annotations"]["kubernetes.io/service-account.name"],
                          "platform-health-writer-hub")
         self.assertNotIn("data", secret)
-        # readers: get on this one ConfigMap, bound to the named groups
+        # readers: get on the index and on each report, by name, bound to the named groups
         self.assertEqual(k[("Role", "shc-platform-health-reader", "platform")]["rules"], [
-            {"apiGroups": [""], "resources": ["configmaps"], "resourceNames": ["shc-platform-health"],
+            {"apiGroups": [""], "resources": ["configmaps"],
+             "resourceNames": ["shc-platform-health", "shc-platform-health-services", "shc-platform-health-hub",
+                               "shc-platform-health-edge"],
              "verbs": ["get"]}])
         self.assertEqual(k[("RoleBinding", "shc-platform-health-reader", "platform")]["subjects"],
                          [{"apiGroup": "rbac.authorization.k8s.io", "kind": "Group", "name": "platform-admins"}])
@@ -102,7 +123,7 @@ class Render(unittest.TestCase):
         cfg = json.loads(k[("ConfigMap", "platform-health-report", "shc-ops")]["data"]["config.json"])
         self.assertEqual((cfg["cluster"], cfg["targetMode"], cfg["targetNamespace"], cfg["targetConfigMap"],
                           cfg["intervalSeconds"], cfg["receiverCheck"], cfg["opsNamespace"], cfg["checkCronJobs"]),
-                         ("services", "local", "platform", "shc-platform-health", 300, False, "shc-ops",
+                         ("services", "local", "platform", "shc-platform-health-services", 300, False, "shc-ops",
                           "eda-activations|eda-api-check|identity-write-probe-.+"))
         spec = k[("CronJob", "platform-health-report", "shc-ops")]["spec"]
         self.assertEqual(spec["schedule"], "*/5 * * * *")
@@ -124,8 +145,10 @@ class Render(unittest.TestCase):
         self.assertFalse([x for x in k if x[1].startswith("platform-health-writer-")])
         cfg = json.loads(k[("ConfigMap", "platform-health-report", "shc-ops")]["data"]["config.json"])
         self.assertEqual((cfg["cluster"], cfg["targetMode"], cfg["targetServerKey"], cfg["targetTokenKey"],
-                          cfg["targetCAKey"], cfg["intervalSeconds"], cfg["receiverCheck"]),
-                         ("hub", "remote", "server", "token", "ca.crt", 600, True))
+                          cfg["targetCAKey"], cfg["intervalSeconds"], cfg["receiverCheck"], cfg["targetConfigMap"],
+                          cfg["targetKey"]),
+                         ("hub", "remote", "server", "token", "ca.crt", 600, True, "shc-platform-health-hub",
+                          "report.json"))
         spec = k[("CronJob", "platform-health-report", "shc-ops")]["spec"]
         self.assertEqual(spec["schedule"], "*/10 * * * *")
         pod = spec["jobTemplate"]["spec"]["template"]["spec"]
@@ -157,6 +180,8 @@ class Render(unittest.TestCase):
             (without(SERVICES, "readerGroups[0]"), R + "readerGroups needs at least one group"),
             (SERVICES + ["--set", R + "servicesCluster.secret=x"], R + "servicesCluster is for another cluster"),
             (SERVICES + ["--set", R + "writers[0]=Hub_1"], R + "writers"),
+            (SERVICES + ["--set", R + "writers[0]=services"], R + "writers: services is this cluster"),
+            (SERVICES + ["--set", R + "writers[0]=hub", "--set", R + "writers[1]=hub"], R + "writers: a name is listed twice"),
             (SERVICES + ["--set", R + "intervalMinutes=7"], R + "intervalMinutes must be one of"),
             (SERVICES + ["--set", R + "intervalMinutes=0"], R + "intervalMinutes must be a whole number"),
             (SERVICES + ["--set", R + "cluster=Hub"], R + "cluster \"Hub\""),
@@ -179,13 +204,19 @@ class Render(unittest.TestCase):
             text = yaml.safe_dump_all([d for d in mine(render(*args)).values()])
             self.assertIsNone(LAB.search(text), LAB.search(text))
 
-    def test_the_writer_is_not_a_check(self):
-        # its own failure is the operations jobs' alert (ShcBackupJobFailed), which leaves the checks out
+    def test_the_writer_has_its_own_alert(self):
+        # not a check (its findings are not read), and not a backup: the backup alerts leave it out, and its own alert
+        # says what a failed run means
         rules = {r["alert"]: r for d in render(*SERVICES) if d["kind"] == "PrometheusRule"
                  for g in d["spec"]["groups"] for r in g["rules"]}
-        self.assertIn('cronjob!~"eda-activations|eda-api-check|identity-write-probe-.+"',
-                      rules["ShcBackupJobFailed"]["expr"])
         self.assertFalse(re.fullmatch("eda-activations|eda-api-check|identity-write-probe-.+", "platform-health-report"))
+        for name in ("ShcBackupJobFailed", "ShcBackupJobNeverSucceeded", "ShcBackupStale"):
+            self.assertIn('cronjob!~"eda-activations|eda-api-check|identity-write-probe-.+|platform-health-report"',
+                          rules[name]["expr"], name)
+        own = rules["ShcPlatformHealthReportFailed"]
+        self.assertEqual(own["expr"].count('cronjob="platform-health-report"'), 3)
+        self.assertIn("unless on (namespace, cronjob) kube_cronjob_status_last_successful_time", own["expr"])
+        self.assertEqual(own["labels"]["severity"], "warning")
 
 
 if __name__ == "__main__":

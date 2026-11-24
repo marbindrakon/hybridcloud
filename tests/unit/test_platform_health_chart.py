@@ -209,7 +209,9 @@ class Render(unittest.TestCase):
         rules = {r["alert"]: r for d in render() if d["metadata"]["name"] == "shc-platform"
                  for g in d["spec"]["groups"] for r in g["rules"]}
         for name in ("ShcBackupJobFailed", "ShcBackupJobNeverSucceeded", "ShcBackupStale"):
-            self.assertIn('cronjob!~"eda-activations|eda-api-check|identity-write-probe-.+"', rules[name]["expr"])
+            # the checks and the banner's report (which has its own alert) are left out
+            self.assertIn('cronjob!~"eda-activations|eda-api-check|identity-write-probe-.+|platform-health-report"',
+                          rules[name]["expr"])
 
 
 def cron(ns, name, sched, success=None):
@@ -259,6 +261,7 @@ def tests(rules):
     ACT = ("shc-ops/eda-activations: an event activation is not running after repair, cannot run, or has two pods, "
            "or the check itself did not complete")
     API = "shc-ops/eda-api-check: the automation platform's event-automation API does not answer"
+    HEALTH = "This cluster's health report for the admin pages is not being written"
     KCS = "shc-ops/identity-write-probe-%s: the identity write check failed"
     return {"rule_files": ["rules.yml"], "evaluation_interval": "1m", "tests": [
         # volumes: 85 % for a while then 50 % (warning fires, clears); 95 % (critical); a read-only-many volume and
@@ -379,6 +382,24 @@ def tests(rules):
                   "exp_annotations": {"summary": "shc-ops/etcd-backup: the last run failed",
                                       "description": "The most recent run of CronJob etcd-backup did not succeed. "
                                                      "The failed pod's termination message or its log says why."}}]},
+             {"eval_time": "90m", "alertname": "ShcBackupJobNeverSucceeded", "exp_alerts": []},
+         ]},
+        # the banner's report: a failed last run, and one that never succeeded, fire its own alert after 15 minutes;
+        # the backup alerts stay quiet for it
+        {"interval": "1m",
+         "input_series": cron(ops, "platform-health-report", "1000x100", "500x100"),
+         "alert_rule_test": [
+             a("ShcPlatformHealthReportFailed", "10m", []),
+             a("ShcPlatformHealthReportFailed", "20m", [({"namespace": ops, "cronjob": "platform-health-report"},
+                                                        HEALTH)]),
+             {"eval_time": "90m", "alertname": "ShcBackupJobFailed", "exp_alerts": []},
+             {"eval_time": "90m", "alertname": "ShcBackupStale", "exp_alerts": []},
+         ]},
+        {"interval": "1m",
+         "input_series": cron(ops, "platform-health-report", "1000x100"),
+         "alert_rule_test": [
+             a("ShcPlatformHealthReportFailed", "20m", [({"namespace": ops, "cronjob": "platform-health-report"},
+                                                        HEALTH)]),
              {"eval_time": "90m", "alertname": "ShcBackupJobNeverSucceeded", "exp_alerts": []},
          ]},
         # the activation check failing while the API check is healthy but caught in flight once a cycle (scheduled, not

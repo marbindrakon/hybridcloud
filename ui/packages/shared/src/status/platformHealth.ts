@@ -1,24 +1,39 @@
 /**
  * The platform's own health, as the operations layer of each cluster reports
- * it (pure, no React): one ConfigMap in the platform namespace of the services
- * cluster, one data key `<cluster>.json` per reporting cluster.
+ * it (pure, no React). In the platform namespace of the services cluster, made
+ * by the services cluster's chart:
+ *   - the index, ConfigMap `shc-platform-health`, data key `clusters.json`:
+ *     the names of the reporting clusters (a JSON list);
+ *   - per reporting cluster, ConfigMap `shc-platform-health-<cluster>`, data key
+ *     `report.json`, which that cluster's writer fills:
  *
  *   {"schemaVersion": 1, "cluster": "hub", "writtenAt": "<RFC 3339>", "intervalSeconds": 300,
  *    "faults": [{"id": "ShcEventActivationsNotRunning", "severity": "critical", "since": "<RFC 3339>",
  *                "object": "<namespace>/<name>", "summary": "<the alert's summary>", "details": ["..."]}],
  *    "alertsDelivered": null}
  *
- * A key that does not have this shape is left out (the other keys still show).
- * A report whose writtenAt is older than three of its intervals is late: the
- * banner says so, because a writer that stopped reports nothing.
+ * Every cluster of the index shows, nothing is dropped silently: its faults;
+ * "no report since" when the report is older than three of its intervals or
+ * was never written; "cannot be read" when it cannot be fetched, does not
+ * parse, has another schemaVersion or another cluster's name, or its writtenAt
+ * is more than ten minutes in the future.
  */
 
-export const PLATFORM_HEALTH_CONFIGMAP = 'shc-platform-health';
+export const PLATFORM_HEALTH_INDEX = 'shc-platform-health';
+export const PLATFORM_HEALTH_INDEX_KEY = 'clusters.json';
+export const PLATFORM_HEALTH_REPORT_PREFIX = 'shc-platform-health-';
+export const PLATFORM_HEALTH_REPORT_KEY = 'report.json';
 /** The platform namespace of the services cluster (where the platform's own objects live). */
 export const PLATFORM_HEALTH_NAMESPACE = 'sovereign-cloud';
 export const PLATFORM_HEALTH_SCHEMA_VERSION = 1;
 /** A report is late when it is older than this many of its own intervals. */
 export const LATE_AFTER_INTERVALS = 3;
+/** A report written further ahead than this is not believed (a clock far off, or a forged time). */
+export const FUTURE_TOLERANCE_MS = 10 * 60 * 1000;
+/** At most this many clusters are read from the index. */
+export const MAX_CLUSTERS = 50;
+
+const CLUSTER_NAME = /^[a-z0-9]([-a-z0-9]*[a-z0-9])?$/;
 
 export type FaultSeverity = 'critical' | 'warning' | 'info';
 
@@ -29,13 +44,11 @@ export interface PlatformFault {
   object?: string;
   summary?: string;
   details: string[];
-  /** The reporting cluster, as the report names it. */
+  /** The reporting cluster. */
   cluster: string;
 }
 
 export interface PlatformHealthReport {
-  /** The data key the report came from. */
-  key: string;
   cluster: string;
   writtenAt: string;
   intervalSeconds: number;
@@ -46,15 +59,38 @@ export interface PlatformHealthReport {
   late: boolean;
 }
 
+/** One cluster's report as it was read: its ConfigMap's data, absent (404) or not readable. */
+export type ReportRead =
+  | { state: 'read'; data: Record<string, unknown> | null; createdAt?: string }
+  | { state: 'absent' }
+  | { state: 'unreadable' };
+
+/** What the banner reads: the index and each listed cluster's report. */
+export interface PlatformHealthRead {
+  /** The index's clusters; null when the index answered but its list cannot be read. */
+  clusters: string[] | null;
+  reports: Record<string, ReportRead>;
+}
+
+export interface NeverWritten {
+  cluster: string;
+  /** When the report's ConfigMap was made, if known. */
+  since?: string;
+}
+
 export interface PlatformHealthView {
   /** Every fault of every report, critical first, then warning, then info; older first within a severity. */
   faults: PlatformFault[];
   /** Reports whose writer is late. */
   late: PlatformHealthReport[];
+  /** Clusters whose report has never been written. */
+  neverWritten: NeverWritten[];
+  /** Clusters whose report cannot be read. */
+  unreadable: string[];
+  /** The index answered but its list of clusters cannot be read. */
+  indexUnreadable: boolean;
   /** Reports that say their alerts reach no receiver. */
   undelivered: PlatformHealthReport[];
-  /** Data keys left out because they do not have the report's shape. */
-  malformed: string[];
 }
 
 const SEVERITY_ORDER: Record<FaultSeverity, number> = { critical: 0, warning: 1, info: 2 };
@@ -89,8 +125,26 @@ function parseFault(raw: unknown, cluster: string): PlatformFault | null {
   };
 }
 
-/** One data key's report, or null when the value does not have the report's shape. */
-export function parseReport(key: string, value: unknown, nowMs: number = Date.now()): PlatformHealthReport | null {
+/** The clusters of the index's data, or null when the list cannot be read (not a list of cluster names). */
+export function parseIndex(data: unknown): string[] | null {
+  if (!isObject(data)) return null;
+  let list: unknown = data[PLATFORM_HEALTH_INDEX_KEY];
+  if (typeof list !== 'string') return null;
+  try {
+    list = JSON.parse(list);
+  } catch {
+    return null;
+  }
+  if (!Array.isArray(list)) return null;
+  if (!list.every((c) => typeof c === 'string' && c.length <= 63 && CLUSTER_NAME.test(c))) return null;
+  return [...new Set(list as string[])].slice(0, MAX_CLUSTERS);
+}
+
+/**
+ * One cluster's report from its value, or null when it cannot be read: not JSON, not the report's shape, another
+ * schemaVersion, another cluster's name, or a writtenAt more than FUTURE_TOLERANCE_MS ahead of now.
+ */
+export function parseReport(cluster: string, value: unknown, nowMs: number = Date.now()): PlatformHealthReport | null {
   let obj: unknown = value;
   if (typeof value === 'string') {
     try {
@@ -101,17 +155,17 @@ export function parseReport(key: string, value: unknown, nowMs: number = Date.no
   }
   if (!isObject(obj)) return null;
   if (obj.schemaVersion !== PLATFORM_HEALTH_SCHEMA_VERSION) return null;
+  if (obj.cluster !== undefined && obj.cluster !== cluster) return null;
   if (!validTime(obj.writtenAt)) return null;
   const interval = obj.intervalSeconds;
   if (typeof interval !== 'number' || !Number.isFinite(interval) || interval <= 0) return null;
   if (obj.faults !== undefined && obj.faults !== null && !Array.isArray(obj.faults)) return null;
-  const cluster = nonEmptyString(obj.cluster) ? obj.cluster : key.replace(/\.json$/, '');
+  const ageMs = nowMs - Date.parse(obj.writtenAt);
+  if (ageMs < -FUTURE_TOLERANCE_MS) return null;
   const faults = (Array.isArray(obj.faults) ? obj.faults : [])
     .map((f) => parseFault(f, cluster))
     .filter((f): f is PlatformFault => !!f);
-  const ageMs = nowMs - Date.parse(obj.writtenAt);
   return {
-    key,
     cluster,
     writtenAt: obj.writtenAt,
     intervalSeconds: interval,
@@ -131,15 +185,36 @@ export function compareFaults(a: PlatformFault, b: PlatformFault): number {
   return a.cluster.localeCompare(b.cluster) || a.id.localeCompare(b.id) || (a.object ?? '').localeCompare(b.object ?? '');
 }
 
-/** What the banner shows for the ConfigMap's data (null or not an object: nothing). */
-export function platformHealthView(data: unknown, nowMs: number = Date.now()): PlatformHealthView {
-  const view: PlatformHealthView = { faults: [], late: [], undelivered: [], malformed: [] };
-  if (!isObject(data)) return view;
-  for (const key of Object.keys(data).sort()) {
-    if (!key.endsWith('.json')) continue;
-    const report = parseReport(key, data[key], nowMs);
+function emptyView(): PlatformHealthView {
+  return { faults: [], late: [], neverWritten: [], unreadable: [], indexUnreadable: false, undelivered: [] };
+}
+
+/** What the banner shows for what was read (null: the index is absent or not readable, nothing is shown). */
+export function platformHealthView(read: PlatformHealthRead | null | undefined, nowMs: number = Date.now()): PlatformHealthView {
+  const view = emptyView();
+  if (!read) return view;
+  if (read.clusters === null) {
+    view.indexUnreadable = true;
+    return view;
+  }
+  for (const cluster of [...read.clusters].sort()) {
+    const r = read.reports[cluster];
+    if (!r || r.state === 'unreadable') {
+      view.unreadable.push(cluster);
+      continue;
+    }
+    if (r.state === 'absent') {
+      view.neverWritten.push({ cluster });
+      continue;
+    }
+    const value = r.data ? r.data[PLATFORM_HEALTH_REPORT_KEY] : undefined;
+    if (value === undefined || value === null || value === '') {
+      view.neverWritten.push({ cluster, ...(validTime(r.createdAt) ? { since: r.createdAt } : {}) });
+      continue;
+    }
+    const report = parseReport(cluster, value, nowMs);
     if (!report) {
-      view.malformed.push(key);
+      view.unreadable.push(cluster);
       continue;
     }
     view.faults.push(...report.faults);
@@ -152,16 +227,33 @@ export function platformHealthView(data: unknown, nowMs: number = Date.now()): P
 
 /** True when the banner has something to show. */
 export function hasPlatformHealthNews(view: PlatformHealthView): boolean {
-  return view.faults.length > 0 || view.late.length > 0 || view.undelivered.length > 0;
+  return (
+    view.indexUnreadable ||
+    view.faults.length > 0 ||
+    view.late.length > 0 ||
+    view.neverWritten.length > 0 ||
+    view.unreadable.length > 0 ||
+    view.undelivered.length > 0
+  );
 }
 
-/** The ConfigMap's path below the API base (`/api/k8s`, or the console's `/api/kubernetes`). */
-export function platformHealthPath(base: string): string {
-  return `${base.replace(/\/+$/, '')}/api/v1/namespaces/${PLATFORM_HEALTH_NAMESPACE}/configmaps/${PLATFORM_HEALTH_CONFIGMAP}`;
+/** A ConfigMap's path below the API base (`/api/k8s`, or the console's `/api/kubernetes`). */
+export function platformHealthPath(base: string, name: string = PLATFORM_HEALTH_INDEX): string {
+  return `${base.replace(/\/+$/, '')}/api/v1/namespaces/${PLATFORM_HEALTH_NAMESPACE}/configmaps/${encodeURIComponent(name)}`;
 }
 
-/** The ConfigMap's data from an answer of the API (anything else: null). */
-export function platformHealthData(answer: unknown): Record<string, unknown> | null {
-  if (!isObject(answer) || !isObject(answer.data)) return null;
-  return answer.data;
+/** The ConfigMap name of a cluster's report. */
+export function platformHealthReportName(cluster: string): string {
+  return `${PLATFORM_HEALTH_REPORT_PREFIX}${cluster}`;
+}
+
+/** A ConfigMap answer of the API as a report read (a ConfigMap without data: read, never written). */
+export function reportReadOf(answer: unknown): ReportRead {
+  if (!isObject(answer) || answer.kind !== 'ConfigMap') return { state: 'unreadable' };
+  const meta = isObject(answer.metadata) ? answer.metadata : {};
+  return {
+    state: 'read',
+    data: isObject(answer.data) ? answer.data : null,
+    ...(validTime(meta.creationTimestamp) ? { createdAt: meta.creationTimestamp } : {}),
+  };
 }

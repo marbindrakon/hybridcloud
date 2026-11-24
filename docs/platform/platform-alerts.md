@@ -194,8 +194,15 @@ cluster whose alerts are forwarded to another Alertmanager that has the receiver
 ## The admin dashboard's banner
 
 The admin dashboard and the console's platform pages show a banner while a platform alert fires on any cluster that
-reports. They read one ConfigMap, `shc-platform-health`, in the platform namespace of the services cluster, with the
-signed-in person's own rights. Nothing in the dashboard reads monitoring.
+reports. They read, with the signed-in person's own rights, in the platform namespace of the services cluster:
+
+- the index, ConfigMap `shc-platform-health`, key `clusters.json`: the names of the reporting clusters;
+- per reporting cluster, ConfigMap `shc-platform-health-<cluster>`, key `report.json`: that cluster's report.
+
+The services cluster's operations layer makes all of them (the index and one report ConfigMap for itself and for each
+name in `writers`); a writer only fills its own report. Nothing in the dashboard reads monitoring. The namespace the
+banner reads is the dashboard's platform namespace, `sovereign-cloud`: set `report.namespace` to it on every cluster,
+or the banner finds nothing and shows nothing.
 
 **What feeds it.** On each reporting cluster the CronJob `platform-health-report` (in `ops.namespace`) runs every
 `report.intervalMinutes` and
@@ -209,26 +216,39 @@ signed-in person's own rights. Nothing in the dashboard reads monitoring.
    the findings of the check's last failed run: the termination message of that Job's pod, one line per finding (for
    the activation check, each activation's name and what is wrong with it). Nothing is added when a run of the check
    succeeded after it. It lists Jobs and pods in `ops.namespace` for this, and nothing else;
-3. writes the key `<cluster>.json` of the ConfigMap: the cluster's name, the time of the write, the interval, and per
-   alert its name, severity, since when it fires, the object its labels name (`namespace/name`), its summary and the
-   findings. The write is a patch of that one key: no cluster reads or changes another cluster's key. The ConfigMap is
-   created when it does not exist.
+3. writes the key `report.json` of its own ConfigMap `shc-platform-health-<cluster>`: the cluster's name, the time of
+   the write, the interval, and per alert its name, severity, since when it fires, the object its labels name
+   (`namespace/name`), its summary and the findings. The write is a patch of that key: no cluster reads or changes
+   another cluster's report. The writer cannot create a ConfigMap; when its own is missing (its name is not in the
+   services cluster's `writers`), the run fails and says so.
 
-Only an alert's summary and the check's finding lines reach the object. Each line is cut to 300 characters, web and IP
-addresses are replaced by `[address]`, a check that crashed is shown as one sentence instead of its log, and the key
-is kept under 60,000 bytes (critical faults first; the findings are shortened before faults are left out). A run that
-cannot read the alerts or cannot write the key writes nothing and fails, so the banner never reads "no faults" from a
-cluster that could not look. Its failed run is reported by the operations jobs' alert (`ShcBackupJobFailed`) on that
-cluster, and the banner shows the cluster's report as late (below). A run that could not read a check's findings
-writes the fault with a line that says so, and fails as well.
+Only an alert's summary and the check's finding lines reach the object. Each line is cut to 300 characters, web
+addresses, host names and IP addresses are replaced by `[address]`, a check that crashed is shown as one sentence
+instead of its log, and the report is kept under 60,000 bytes (critical faults first; the findings are shortened
+before faults are left out, and a last fault says how many were left out). A run that cannot read the alerts or
+cannot write the report writes nothing and fails, so the banner never reads "no faults" from a cluster that could not
+look. Its failed run raises `ShcPlatformHealthReportFailed` on that cluster (warning, after 15 minutes), and the
+banner shows the cluster's report as late (below). A run that could not read a check's findings writes the fault with
+a line that says so, and fails as well.
 
 **How late it can be.** An alert appears in the banner at the writer's next run after it starts firing: at most one
 interval (5 minutes by default) plus the run's time after Alertmanager holds it, and the alert itself fires only after
-its own `for` time. A cleared alert leaves the banner at the run after Alertmanager no longer holds it. A key whose
-time of writing is older than three intervals is shown as "no report from <cluster> since …": that is how a writer that
-stopped, or a cluster that cannot reach the services cluster, shows. The platform has no alert of its own for a late
-report: the ConfigMap's age per key is no metric the cluster's monitoring has, and the writer's own cluster raises
-`ShcBackupJobFailed` when its runs fail.
+its own `for` time. A cleared alert leaves the banner at the run after Alertmanager no longer holds it.
+
+**Every listed cluster shows.** For each cluster in the index the banner shows its faults, and also:
+
+| The cluster's report | The banner shows |
+|---|---|
+| written less than three intervals ago | its faults (nothing when it has none) |
+| written longer ago than three intervals | "No report from <cluster> since <time of the last write>", and its last faults |
+| never written (the ConfigMap has no `report.json`, or does not exist) | "No report from <cluster> since <time the ConfigMap was made>" |
+| cannot be read: the read is refused or fails, it is not JSON, not of `schemaVersion` 1, names another cluster, or its time of writing is more than ten minutes in the future | "The report from <cluster> cannot be read" |
+
+When the index itself cannot be read (not a list of cluster names) the banner says so; when it is absent, or the
+signed-in person may not read it, the banner shows nothing. A writer that stopped, a cluster that cannot reach the
+services cluster, a writer with a wrong token and a report changed by hand all show; none of them can hide behind a
+time in the future. The services cluster has no alert of its own for a late report: a report's age is no metric its
+monitoring has; the writer's own cluster raises `ShcPlatformHealthReportFailed`.
 
 **What it does not replace.** The banner is for the platform admins who open the dashboard. It sends nothing to
 anyone. Alerts reach the people on call only through the receivers of each cluster's Alertmanager, or through the
@@ -239,29 +259,32 @@ platform's `Shc` alerts, not OpenShift's own.
 
 | Setting | Default | Meaning |
 |---|---|---|
-| `enabled` | `false` | renders the writer, and on the services cluster its Roles |
-| `cluster` | `cluster.name` | the cluster's name as the banner shows it, and its key; lower-case letters, digits and `-` |
+| `enabled` | `false` | renders the writer, and on the services cluster the banner's ConfigMaps and Roles |
+| `cluster` | `cluster.name` | the cluster's name as the banner shows it, and the name of its report (`shc-platform-health-<cluster>`); lower-case letters, digits and `-` |
 | `intervalMinutes` | `5` | how often it writes: 1, 2, 3, 4, 5, 6, 10, 12, 15, 20 or 30 |
 | `image` | the Python image of the checks | Python 3.9 or later; the script uses its standard library only |
-| `namespace` | none, required | the platform namespace of the services cluster (the dashboard's) |
+| `namespace` | none, required | the platform namespace of the services cluster: the dashboard's, `sovereign-cloud` |
 | `onServicesCluster` | none, required | `true` on the services cluster, `false` on every other |
 | `servicesCluster.secret`, `.serverKey`, `.tokenKey` | none, required when `onServicesCluster` is `false` | the Secret in `ops.namespace` and its keys holding the services cluster's API address (`https://…`) and a writer's token |
 | `servicesCluster.caKey` | empty | the key holding the CA bundle of the services cluster's API, when its certificate is not publicly trusted |
-| `writers` | `[]` | on the services cluster: the names of the writers on other clusters (see below) |
-| `readerGroups` | none, at least one on the services cluster | the groups allowed to read the ConfigMap: the platform admins who see the banner |
-| `receiverCheck` | `false` | `true`: each key also says whether that cluster's alerts are sent anywhere (OpenShift's `AlertmanagerReceiversNotConfigured` not firing). Leave it off where alerts are forwarded to another Alertmanager, where that alert is expected |
+| `writers` | `[]` | on the services cluster: the names of the other reporting clusters, each its `cluster` setting (see below); not the services cluster's own |
+| `readerGroups` | none, at least one on the services cluster | the groups allowed to read the banner's ConfigMaps: the platform admins who see the banner |
+| `receiverCheck` | `false` | `true`: each report also says whether that cluster's alerts are sent anywhere (OpenShift's `AlertmanagerReceiversNotConfigured` not firing). Leave it off where alerts are forwarded to another Alertmanager, where that alert is expected |
 
 A missing required setting fails the rendering with its name. A missing Secret or key on a writer's cluster fails each
 run with the name of the setting.
 
 ### What the services cluster grants
 
-- **Writers** (the services cluster's own writer and each name in `writers`): the Role `shc-platform-health-writer`
-  in the platform namespace allows `get` and `patch` on the ConfigMap `shc-platform-health` only, and `create` on
-  ConfigMaps. Kubernetes cannot limit `create` to one name; the writer creates only `shc-platform-health`, and only
-  when it is absent.
-- **Readers**: the Role `shc-platform-health-reader` allows `get` on `shc-platform-health` only, bound to the groups
-  in `readerGroups`.
+- **The ConfigMaps**: the index `shc-platform-health` and `shc-platform-health-<cluster>` for the services cluster and
+  each name in `writers`, made by its operations layer. The report ConfigMaps carry no data from the chart, so a sync
+  keeps what the writers wrote.
+- **Writers**: per reporting cluster the Role `shc-platform-health-writer-<cluster>` allows `get` and `patch` on
+  `shc-platform-health-<cluster>` only, bound to that cluster's writer (the services cluster's own
+  `platform-health-report`, or `platform-health-writer-<cluster>`). No writer may create anything, or touch the index
+  or another cluster's report.
+- **Readers**: the Role `shc-platform-health-reader` allows `get` on the index and on each report, by name, bound to
+  the groups in `readerGroups`.
 
 ### A writer on another cluster
 
@@ -269,8 +292,9 @@ For each other cluster that reports (for example the cluster that runs the autom
 alerts live in its own monitoring):
 
 1. On the services cluster, add its name to `report.writers`, for example `writers: [hub]`. The services cluster's
-   operations layer then renders the service account `platform-health-writer-hub` in its `ops.namespace`, bound to the
-   writer Role above and to nothing else, and the Secret `platform-health-writer-hub` of type
+   operations layer then renders the ConfigMap `shc-platform-health-hub`, adds `hub` to the index, and renders the
+   service account `platform-health-writer-hub` in its `ops.namespace`, bound to the Role
+   `shc-platform-health-writer-hub` and to nothing else, and the Secret `platform-health-writer-hub` of type
    `kubernetes.io/service-account-token`, which the cluster fills with the account's token.
 2. On the other cluster, create a Secret in its `ops.namespace` with the services cluster's API address
    (`https://api.<services cluster domain>:6443`), that token, and when needed the API's CA bundle, under keys of your
@@ -279,8 +303,8 @@ alerts live in its own monitoring):
    `report.namespace` (the services cluster's platform namespace) and `report.servicesCluster` with the Secret's name
    and keys.
 
-The token can do nothing on the services cluster but read and change that one ConfigMap and create ConfigMaps in
-the platform namespace. To withdraw a
-writer, remove its name from `writers`: the account and its token go with it. To replace a token, delete the Secret
-`platform-health-writer-<name>` on the services cluster, let the operations layer create it again, and put the new
-token into the other cluster's Secret.
+The token can do nothing on the services cluster but read and patch that cluster's own report ConfigMap. It does not
+expire: the installation rotates it. To replace a token, delete the Secret `platform-health-writer-<name>` on the
+services cluster, let the operations layer create it again (with a new token; the old one stops working with the old
+Secret), and put the new token into the other cluster's Secret. To withdraw a writer, remove its name from
+`writers`: its ConfigMap, Role, account and token go with it, and the banner stops listing it.

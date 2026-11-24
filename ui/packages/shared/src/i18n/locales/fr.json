@@ -1884,7 +1884,15 @@
       "ShcFabricHealthStale": "La santé de la fabrique réseau n'a pas été vérifiée récemment. Les défauts des réseaux des locataires peuvent ne pas apparaître ici.",
       "ShcFabricNodesNotRead": "Les nœuds de passerelle réseau n'ont pas été vérifiés récemment. Les défauts des nœuds peuvent ne pas apparaître ici.",
       "ShcFabricHealthNeverChecked": "La vérification de santé de la fabrique réseau ne s'est jamais exécutée. Les défauts des réseaux des locataires n'apparaissent pas ici.",
-      "ShcPlatformPoolLow": "Une réserve d'adresses de la plateforme s'épuise. De nouveaux réseaux, placements ou clusters de locataires risquent bientôt d'être refusés."
-    }
+      "ShcPlatformPoolLow": "Une réserve d'adresses de la plateforme s'épuise. De nouveaux réseaux, placements ou clusters de locataires risquent bientôt d'être refusés.",
+      "ShcPlatformHealthReportFailed": "Le rapport de santé de ce cluster pour les pages d'administration n'est pas écrit ; ses défauts peuvent donc ne pas apparaître ici."
+    },
+    "neverWritten": "Aucun rapport de {{cluster}} depuis {{time}}",
+    "neverWrittenNoTime": "Aucun rapport de {{cluster}} pour l'instant",
+    "neverWrittenBody": "Ce cluster est indiqué comme rapportant sa santé, mais son rapport n'a jamais été écrit ; ses défauts n'apparaissent donc pas ici. Vérifiez la couche d'exploitation du cluster et l'identifiant avec lequel il écrit.",
+    "unreadableReport": "Le rapport de {{cluster}} ne peut pas être lu",
+    "unreadableReportBody": "Le rapport de santé de ce cluster n'a pas pu être lu ou a une forme que cette page ne connaît pas (une autre version, ou une heure dans le futur) ; ses défauts n'apparaissent donc pas ici. Vérifiez la couche d'exploitation du cluster.",
+    "unreadableIndex": "La liste des clusters qui rapportent leur santé ne peut pas être lue",
+    "unreadableIndexBody": "Aucun défaut de cluster ne peut être affiché ici tant que la liste n'est pas réparée. Vérifiez la couche d'exploitation du cluster de services."
   }
 }

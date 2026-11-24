@@ -321,15 +321,17 @@ ops:
       keycloaks: []
     # The report behind the admin dashboard's platform-health banner (files/platform_health_report.py): every
     # interval, this cluster's firing platform alerts (names starting with Shc, read from the cluster monitoring's
-    # Alertmanager) and the findings of the checks' last failed runs, written as the key <cluster>.json of the
-    # ConfigMap shc-platform-health in `namespace` of the services cluster. Each cluster writes only its own key. It
-    # does not replace sending the alerts to the installation's Alertmanager.
+    # Alertmanager) and the findings of the checks' last failed runs, written as the key report.json of the
+    # ConfigMap shc-platform-health-<cluster> in `namespace` of the services cluster. The services cluster makes
+    # that ConfigMap for itself and for each of `writers`, and the index shc-platform-health that lists them; each
+    # cluster only patches its own. It does not replace sending the alerts to the installation's Alertmanager.
     report:
       enabled: false
       cluster: ""                   # the cluster's name as the banner shows it; empty = cluster.name
       intervalMinutes: 5            # one of 1, 2, 3, 4, 5, 6, 10, 12, 15, 20, 30
       image: registry.redhat.io/ubi9/python-312-minimal:latest
-      # the platform namespace of the services cluster, where the dashboard reads the ConfigMap
+      # the platform namespace of the services cluster, where the dashboard reads the banner's ConfigMaps: the
+      # dashboard's platform namespace (sovereign-cloud)
       namespace: ""
       # true on the services cluster (the writer uses its own service account); false on any other cluster, which
       # then needs servicesCluster. No default.
@@ -342,11 +344,12 @@ ops:
         serverKey: ""
         tokenKey: ""
         caKey: ""                   # empty = the image's trust store
-      # the services cluster only: names of writers on other clusters. Each gets a service account
-      # platform-health-writer-<name> in ops.namespace with a token Secret of the same name, allowed to get, create
-      # and patch the ConfigMap; its token goes into that cluster's servicesCluster Secret.
+      # the services cluster only: names of the other reporting clusters (each its `cluster` setting). Each gets the
+      # ConfigMap shc-platform-health-<name>, a service account platform-health-writer-<name> in ops.namespace with a
+      # token Secret of the same name, allowed to get and patch that ConfigMap only; its token goes into that
+      # cluster's servicesCluster Secret.
       writers: []
-      # the services cluster only: groups allowed to read the ConfigMap (the platform admins who see the banner)
+      # the services cluster only: groups allowed to read the banner's ConfigMaps (the platform admins who see it)
       readerGroups: []
       # true: alertsDelivered says whether OpenShift's AlertmanagerReceiversNotConfigured is firing; false: null
       receiverCheck: false
