@@ -6,6 +6,26 @@
 # NAT). site_aws_post.yml then gives the routers the nodes' keys and the site's BGP key. With AWS_REALIZATION
 # tenant.placeholderV4Pool, up also writes the pool to the routers' config (every network VRF drops it from the
 # transit gateway). Sets cg_site_extra, cg_site_changed and the instance's peers.
+# AWS: the gateway's name is in the IAM role and instance profile shc-edge-<name> (role names at most 64), the STS
+# session name shc-edge-<name> (2-64 of [\w+=,.@-]) and the Name tags of the site's objects; the platform keeps one
+# rule for both clouds, Google's: shc-edge-<name> is a service account id there, 6-30 characters, so <name> is 21 at
+# most. Checked before anything is made on the cloud (an object made before the rule is refused).
+- name: Check the gateway's name
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+  vars:
+    name_check_items: [{value: "{{ fab_name }}", what: gateway, limit: 21}]
+
+- name: Refuse a gateway name that breaks the rule
+  ansible.builtin.set_fact:
+    fab_fail_reason: NameNotAllowed
+    fab_fail_msg: "CloudGateway {{ fab_name }}: {{ name_check_message }}"
+  when: name_check_message | length > 0
+
+- name: Stop on a refused gateway name
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: name_check_message | length > 0
+
 - name: The installation's AWS realization and this site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/aws_realization.yml"
   vars:

@@ -6,6 +6,26 @@
 # NAT). site_gcp_post.yml then gives the routers the nodes' keys, the site's BGP key and, with the realization's
 # edge.ipv6.enabled, the routers' ICMPv6 sources (cg_gcp_routers, by name). Sets cg_site_extra, cg_site_changed and the
 # instance's peers.
+# Google Cloud: the gateway's name makes the edge routers' service account id shc-edge-<name> (6-30 characters of
+# [a-z]([-a-z0-9]*[a-z0-9]), so <name> is 21 at most), their instances and addresses shc-edge-<name>-<letter>
+# and the external VPN gateway shc-edge-<name> in each tenant project (Compute Engine names: 1-63). Checked before
+# anything is made on the cloud (an object made before the rule is refused).
+- name: Check the gateway's name
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+  vars:
+    name_check_items: [{value: "{{ fab_name }}", what: gateway, limit: 21}]
+
+- name: Refuse a gateway name that breaks the rule
+  ansible.builtin.set_fact:
+    fab_fail_reason: NameNotAllowed
+    fab_fail_msg: "CloudGateway {{ fab_name }}: {{ name_check_message }}"
+  when: name_check_message | length > 0
+
+- name: Stop on a refused gateway name
+  ansible.builtin.fail:
+    msg: "{{ fab_fail_msg }}"
+  when: name_check_message | length > 0
+
 - name: The installation's GCP realization and this site's edge settings
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/gcp_realization.yml"
   vars:

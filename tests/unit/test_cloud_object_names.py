@@ -817,5 +817,35 @@ class EnvironmentJobs(unittest.TestCase):
                 self.assertTrue(g.startswith("NameNotAllowed: %s " % kind), g)
 
 
+# ---- a gateway's name: at most 21, checked before anything is made on either cloud -------------------------------
+
+class GatewayName(unittest.TestCase):
+    def test_the_check_comes_first(self):
+        for cloud in ("aws", "gcp"):
+            tasks = load(os.path.join(ROLES, "cloudgateway_provision", "tasks", "site_%s.yml" % cloud))
+            self.assertEqual(tasks[0]["name"], "Check the gateway's name")
+            self.assertEqual(tasks[0]["vars"]["name_check_items"][0]["limit"], 21)
+            self.assertEqual(tasks[0]["vars"]["name_check_items"][0]["what"], "gateway")
+
+    def test_21_keeps_every_edge_id_inside_its_platform(self):
+        site = "g" * 21
+        self.assertLessEqual(len("shc-edge-" + site), 30)                    # Google service account id 6-30
+        self.assertGreaterEqual(len("shc-edge-a"), 6)
+        self.assertLessEqual(len("shc-edge-%s-config" % site), 255)          # Secret Manager secret id
+        self.assertLessEqual(len("shc-edge-%s-z" % site), 63)                # Compute Engine names
+        self.assertLessEqual(len("shc-edge-" + site), 64)                    # IAM role name, STS session name
+        self.assertEqual(shc_names.GATEWAY_NAME_MAX, 21)
+
+    @unittest.skipUnless(HAVE_ANSIBLE, "ansible-playbook not installed")
+    def test_refusal(self):
+        for cloud in ("aws", "gcp"):
+            tasks = load(os.path.join(ROLES, "cloudgateway_provision", "tasks", "site_%s.yml" % cloud))[:3]
+            steps = [{"ansible.builtin.set_fact": {"fab_name": "{{ case }}", "_refused": ""}},
+                     {"block": tasks, "rescue": [{"ansible.builtin.set_fact": {"_refused": "{{ fab_fail_reason }}"}}]}]
+            got = run_cases(steps, ["g" * 21, "g" * 22, "Edge-1"], "_refused",
+                            extra_vars={"role_path": os.path.join(ROLES, "cloudgateway_provision")})
+            self.assertEqual(got, ["", "NameNotAllowed", "NameNotAllowed"], cloud)
+
+
 if __name__ == "__main__":
     unittest.main()
