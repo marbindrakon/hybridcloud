@@ -225,6 +225,7 @@ or later; Red Hat OpenStack Services on OpenShift 18.0.21 or later). Without it,
 | Step | Call | Least role |
 |---|---|---|
 | Project find, create, delete | `GET/POST/DELETE /v3/projects` | manager |
+| The platform's mark (a project tag) and description on its projects, on every run | `PATCH /v3/projects/{p}` | manager |
 | The account's own `member` on the project | `PUT /v3/projects/{p}/users/{self}/roles/{r}` | manager, when the account's user is in that domain; else `admin` |
 | Cluster user find, create, options, password, delete | `GET/POST/PATCH/DELETE /v3/users` | manager |
 | Cluster user `member` on the project | `PUT /v3/projects/{p}/users/{u}/roles/{r}` | manager |
@@ -249,6 +250,39 @@ when such an account sees some networks: that list could be incomplete) and
 "volume types not listed: the account may not read them ...". Tenants then have no external network to pick in the
 cluster form. Give the account the right to read those lists (an administrator account, or a site policy that lets
 it read them) where tenants should pick.
+
+### The platform's mark on its projects
+
+The platform marks each project it makes on a site (an environment's project, the site's project for the platform's
+networks, the site's tenant DNS project) with a project tag `hybridsovereign.redhat:<kind>:<namespace>:<name>` and a
+description naming the tenant and the object. The tag is what tells the platform, and a person on the site, that the
+project is the platform's: tenants cannot write it, because they do not administer the domain. A project whose id
+the object's status records is the platform's by that record, tag or not; the tag counts only when nothing records
+the project.
+
+- **Creating a project** writes the project and its tag in one request. A site that refuses it stops the job before
+  anything is made (`CredentialsInvalid`, "the site account may not mark OpenStack projects as the platform's"):
+  without the tag nothing would show that the project is the platform's.
+- **Every later run** writes the tag and the description again (`PATCH /v3/projects/{p}`), for a project of an
+  earlier release that has none and for one whose tag or description someone changed. A site that refuses that
+  write stops nothing: the object stays Ready, its condition `PlatformMarks` turns `Unknown` (a reason that never
+  decides the object's phase or summary: tenants see no fault), and the condition's message says "the site account
+  may not update projects in their domain", whether the mark and the description or only the description could not
+  be written, and the right to grant. Without the tag, a person on the site cannot tell whose the project is, and if
+  the object's status were ever lost the platform would refuse the project's name (`NameTakenOnSite`) instead of
+  finding it again.
+- **The right to grant**: update projects, with their tags, in the tenant domain (and in the domains of the
+  platform's own and the tenant DNS projects): the domain manager role there, or a site policy that lets the
+  account update projects. The next run writes the mark and the condition turns `True` (`Verified`).
+
+The objects that carry the condition this way:
+
+```bash
+for k in cloudosos cloudgateways cloudinfrastructures; do
+  oc get "$k" -A -o json | jq -r --arg k "$k" '.items[] | select(any(.status.conditions[]?;
+    .type == "PlatformMarks" and .status == "Unknown")) | [$k, .metadata.namespace, .metadata.name] | @tsv'
+done
+```
 
 Facts that decide the design: a domain manager cannot delete another user's application credential (403), but can
 delete the user, and the user's credentials go with it. A domain manager cannot read identity providers (403). The
