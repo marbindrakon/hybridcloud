@@ -109,6 +109,8 @@ REASONS = {
     "EarlierClusterNotRemoved": _r("P", FAILED, "An earlier cluster of this name was not removed from the platform in time. The platform team is looking at it."),
     "EnvironmentNameTaken": _r("T", FAILED, "This environment name is already in use. Choose another name."),
     "NameInUse": _r("T", FAILED, "This name is already used by an OpenStack environment of another tenant. Create it with another name."),
+    "NameNotAllowed": _r("T", FAILED, "This name is not allowed: a letter first, then lower-case letters, digits and single hyphens, 30 at most. Create it with another name."),
+    "NameTakenOnSite": _r("P", FAILED, "Something of this name already exists on the site and was not made by the platform. The platform team is looking at it."),
     "PrefixInvalid": _r("T", FAILED, "The address prefix is not valid."),
     "PrefixInUse": _r("T", FAILED, "The address prefix overlaps one already in use: a placement's subnet or another network of this tenant."),
     "PrefixReserved": _r("T", FAILED, "The address prefix overlaps address space the platform keeps for itself. Choose another prefix."),

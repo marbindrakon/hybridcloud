@@ -267,6 +267,8 @@ object's state: a network whose IPv6 internet access is not offered is still Rea
 | `MapperMissing` | Sign-in is not set up for this service yet. The platform team is looking at it. | The platform team |
 | `MappingFailed` | The sign-in mapping could not be set up. The platform team is looking at it. | The platform team |
 | `NameInUse` | This name is already used by an OpenStack environment of another tenant. Create it with another name. | You (the tenant) |
+| `NameNotAllowed` | This name is not allowed: a letter first, then lower-case letters, digits and single hyphens, 30 at most. Create it with another name. | You (the tenant) |
+| `NameTakenOnSite` | Something of this name already exists on the site and was not made by the platform. The platform team is looking at it. | The platform team |
 | `NamespaceNotOwned` | The tenant namespace already exists and was not created for this tenant. The platform team must remove or rename it. | The platform team |
 | `NamespaceOperatorImageRejected` | The requested operator version for this tenant is not allowed; the default version is used. | The platform team |
 | `NamespaceTaken` | The namespace name is already in use on the site. Choose another name. | You (the tenant) |
