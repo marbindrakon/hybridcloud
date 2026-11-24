@@ -100,6 +100,16 @@ class Present(unittest.TestCase):
         self.assertEqual((again["api"]["id"], again["ingress"]["id"]), (first["api"]["id"], first["ingress"]["id"]))
         self.assertFalse(again["api"]["created"] or again["ingress"]["created"])
 
+    def test_create_only_reads_no_description_back(self):
+        # a floating IP of the description that the cluster's status does not record is not the cluster's
+        conn = FakeConn()
+        present(conn)
+        n = len(conn.network.calls)
+        out = present(conn, create_only=True)
+        self.assertEqual([op for op, _ in conn.network.calls[n:]], ["create_ip", "create_ip"])
+        self.assertTrue(out["api"]["created"] and out["ingress"]["created"])
+        self.assertEqual(out["released"], [])
+
     def test_failure_between_the_two_converges(self):
         conn = FakeConn()
         conn.network.fail_create_on = DESCS["ingress"]

@@ -1079,7 +1079,9 @@ def cluster_fips(req):
     present: {project_id, network_id, descriptions: {api, ingress}} -> {network, api: {address, id, created},
     ingress: {...}, released: [ids of duplicates]}; each found by description first (a re-run after a failure
     creates nothing twice), else created on network_id. One found on another network is refused (the cluster's
-    network is fixed). absent: {project_id, ids: [recorded ids], descriptions (optional)} -> {released, missing}; a
+    network is fixed). create_only: true (a caller whose record holds no floating IP) creates both and reads no
+    description back: a description is for people, and an object is the cluster's only when its status records it.
+    absent: {project_id, ids: [recorded ids], descriptions (optional)} -> {released, missing}; a
     recorded id that no longer exists counts as released (missing); floating IPs of other projects are never
     touched."""
     acct = Account(req)
@@ -1108,7 +1110,8 @@ def cluster_fips(req):
     out = {"network": net_id, "released": []}
     for key in ("api", "ingress"):
         desc = descs[key]
-        found = list(conn.network.ips(description=desc, project_id=pid))
+        create_only = str(req.get("create_only", "")).lower() in ("true", "1", "yes")
+        found = [] if create_only else list(conn.network.ips(description=desc, project_id=pid))
         other = [i for i in found if i.floating_network_id != net_id]
         if other:
             raise RuntimeError(f"floating IP {desc} ({other[0].floating_ip_address}) is on network "
