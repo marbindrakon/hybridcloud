@@ -71,3 +71,5 @@ export type { Toast, ToastVariant } from './ToastHost';
 export { StatusCallout } from './StatusCallout';
 export { WayInPanel, WayInCard } from './WayInPanel';
 export { GettingStartedCard } from './GettingStartedCard';
+export { PlatformHealthBanner, PlatformHealthBannerView, readPlatformHealth } from './PlatformHealthBanner';
+export type { PlatformHealthBannerViewProps } from './PlatformHealthBanner';

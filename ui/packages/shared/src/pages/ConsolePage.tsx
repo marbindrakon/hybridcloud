@@ -18,6 +18,7 @@ import { AllTenantsHome } from './ScopedRoutes';
 import { TenantOverviewPage } from './TenantOverviewPage';
 import { TenantNetworkOverviewPage } from './TenantNetworkOverviewPage';
 import { isPlatformEntry } from './usePageEntry';
+import { PlatformHealthBanner } from '../components/PlatformHealthBanner';
 
 export type ConsolePageMap = Partial<Record<PageId, React.ComponentType>>;
 
@@ -106,6 +107,7 @@ export function ConsolePage({ host, activeNamespace, setActiveNamespace, pages =
         <PermissionProvider>
           <PageSection className="sc-console-page">
             <div className="sc-page">
+              {host === 'admin-console' && match && isPlatformEntry(match.entry) && <PlatformHealthBanner />}
               {match && !isPlatformEntry(match.entry) && (
                 <div className="sc-console-scope" aria-label={t('scope.tenant')}>
                   <TenantScopeSelector showNamespace />
