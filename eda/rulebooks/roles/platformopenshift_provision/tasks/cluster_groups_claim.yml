@@ -1,0 +1,40 @@
+---
+# The groups claim of the cluster's sign-in client (files/cluster_signin.py ensure): the client's own client-role
+# mapper is its only source (no other mapper of the client and no client scope linked to it writes groups), so the
+# cluster sees the groups <tenant>.<group> of its own roles and nothing of another tenant. Runs after
+# cluster_signin_groups.yml and before the cluster is given the identity provider: a cluster whose claim is not right
+# is not connected to the directory (the job fails with the step's sentence). Uses the clients token of
+# keycloak_admin_session.yml. Inputs: kc_base_url, kc_admin_token, keycloak_realm, ocp_oidc_client_id, cluster_cr_name
+# (or cluster_name). Sets csl_result.
+- name: "The cluster's groups claim: the helper"
+  ansible.builtin.command:
+    argv:
+      - python3
+      - "{{ role_path }}/../platformopenshift_provision/files/cluster_signin.py"
+    stdin: >-
+      {{ {'action': 'ensure', 'url': kc_base_url, 'realm': keycloak_realm,
+          'clientsToken': kc_admin_token | default(''), 'clientId': ocp_oidc_client_id} | to_json }}
+  register: _csl_call
+  changed_when: false
+  failed_when: false
+  # the request carries the token
+  no_log: true
+
+- name: "The cluster's groups claim: the answer"
+  ansible.builtin.set_fact:
+    csl_result: >-
+      {{ (_csl_call.stdout | from_json) if (_csl_call.stdout | default('') | trim).startswith('{')
+         else {'error': 'the helper gave no answer (rc ' ~ _csl_call.rc ~ ')'} }}
+
+- name: "The cluster's groups claim: what the helper said, for the job's log"
+  ansible.builtin.debug:
+    msg: >-
+      PlatformOpenshift {{ cluster_cr_name | default(cluster_name, true) }}: groups claim
+      {{ csl_result.error | default('', true) or (csl_result.changed | default([]) | join(', ')) or 'unchanged' }}
+
+- name: "The cluster's groups claim: fail when it could not be set"
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  vars:
+    shc_step: "Set the cluster's groups claim"
+  when: not (csl_result.ok | default(false) | bool)

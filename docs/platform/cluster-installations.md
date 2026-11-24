@@ -116,35 +116,43 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).
 
-## Who can sign in to a tenant's cluster
+## Who gets what on a tenant's cluster
 
-The identity realm is shared by all tenants, so a tenant's cluster takes only its own tenant's groups and lets only
-the people of those groups sign in:
+The identity realm is shared by all tenants. A tenant's cluster takes only its own tenant's groups:
 
 - Each access group the cluster names (`spec.toolRbac`: `clusterAdminRbac`, `clusterOperatorRbac`,
   `clusterDeveloperRbac`, `clusterViewerRbac`) becomes a client role `<tenant>.<group>` of the cluster's own sign-in
-  client, mapped to the access group's group in the directory, as on the services cluster and the sites. The
-  client's groups claim holds the person's roles of that client only, so the cluster sees the group
-  `<tenant>.<group>` and never another tenant's group of the same name. The cluster's bindings
-  (`<build>-cluster-admin`, `-cluster-operator`, `-cluster-developer`, `-cluster-viewer`) name exactly those groups;
-  a level without an access group has no binding.
-- Only a person who holds one of those roles can sign in to the cluster's client: each of them holds the client's
-  role `sign-in`, and the client's browser flow (`<sign-in client>`, or `<sign-in client>-b` after a change) ends in
-  the identity provider's Deny Access step for anyone without it, also for a person who is already signed in to the
-  realm. A refused person sees the identity provider's error page: "You cannot sign in to this cluster: you are not
-  in one of its access groups. Ask the people who run the cluster to add you to one of them." Everyone who may sign
-  in also appears in the cluster's group `sign-in`.
+  client, mapped to the access group's group in the directory, as on the services cluster and the sites.
+- The client's groups claim comes from one place only: a mapper of the client's own roles. No other mapper of the
+  client writes `groups`, and a client scope linked to the client whose mappers write `groups` (for example a
+  realm's `microprofile-jwt` scope) is unlinked from this client, so asking for more scopes at sign-in adds nothing.
+  The cluster sees the group `<tenant>.<group>` and never another tenant's group of the same name.
+- The cluster's bindings (`<build>-cluster-admin`, `-cluster-operator`, `-cluster-developer`, `-cluster-viewer`)
+  name exactly those groups; a level without an access group has no binding.
+- Creating projects: OpenShift's default binding `self-provisioners` lets every signed-in person create projects. On
+  a tenant's cluster the platform manages it: it names the operator level's groups only (none when that level has no
+  access group), and carries `rbac.authorization.kubernetes.io/autoupdate: "false"` so that OpenShift does not put
+  the default back. Administrators create projects through `cluster-admin`.
 - An access group whose group is not in the directory yet gets nothing; the job's log names it.
-- A person who signs in through another identity provider brokered by the realm, without a session in the realm, is
-  not checked by the client's browser flow (the identity provider finishes such a sign-in without it). Such a person
-  still gets no rights on the cluster unless they hold one of its roles. Where the realm brokers other providers,
-  limit their sign-in with the provider's post-login flow.
 
-The flows need the realm's automation client of purpose `flows`, with the realm-management role `manage-realm`,
-published by the RbacConfig in central Vault next to the `membership` and `clients` ones (keys `flowsClientId`,
-`flowsClientSecret`). Without it the job does not connect the cluster to the directory and says which client is
-missing. The cluster's flows go with its sign-in client when it is deleted; a flow of the same name that the platform
-did not make is refused, never changed.
+**Who can sign in.** A person of the same sign-in directory who is not in one of the cluster's access groups can
+authenticate at the cluster and then has no rights: no group, no binding, no project of their own. They keep only
+what OpenShift gives every authenticated user: the API's discovery documents, basic information about their own user
+and the projects they can see, the cluster's basic status and reviews of their own rights (OpenShift's default roles
+`basic-user`, `cluster-status` and the system discovery roles), and reading the shared templates and image streams of
+the `openshift` namespace. What would stop the authentication itself is a sign-in directory (realm) per tenant.
+
+**When a person leaves an access group.** OpenShift takes a person's groups from the sign-in directory at each
+sign-in. A person taken out of an access group keeps the cluster's group, and its rights, until their OAuth access
+token ends: the cluster's token lifetime, the realization's `tenantCluster.oauthAccessTokenMaxAgeSeconds` (default
+86400 seconds, OpenShift's own). A cluster administrator can end it sooner by deleting the person's tokens
+(`oc delete oauthaccesstokens --field-selector userName=<user>`) or the person's user. An access group taken off the
+cluster loses its binding with the next run of the cluster's job.
+
+The cluster's job needs no right in the identity provider beyond the realm's `clients` and `membership` automation
+clients that the RbacConfig publishes: it manages the cluster's own client, its roles and their mappings to the
+access groups' groups. The sign-in client carries the attribute `platformopenshift=<namespace>/<cluster>`; a client
+of the same name marked for another cluster is refused and never changed or deleted.
 
 ## The names the platform gives a cluster
 
@@ -154,8 +162,10 @@ did not make is refused, never changed.
 - **OpenStack user and application credential**: `<tenant>_<environment>_<cluster>`, described with the same names.
   A cluster that recorded its user (`status.credential.user`) keeps that name.
 - **OpenStack floating IPs**: described `OpenShift cluster <cluster>: API (platform build <build>)` and `...:
-  ingress (...)`, recorded with their ids and descriptions in `status.floatingIPs`. A cluster that recorded its
-  floating IPs keeps their descriptions.
+  ingress (...)` for people, and recorded with their addresses and ids in `status.floatingIPs`. A cluster that
+  recorded its floating IPs keeps those two; they are released by their recorded ids, never found by a description.
+  A run that made floating IPs and stopped before it recorded them leaves them to the platform team: the cluster's
+  next run makes new ones, and the ones left behind are released by hand in the environment's project.
 - **Tags and labels** on what the installer makes on AWS and Google Cloud: `shc-tenant`, `shc-environment` and
   `shc-cluster` carry the names in full, next to `shc-managed` and `shc-build`.
 - The cluster's, the tenant's and the environment's names are checked before anything is made: a letter first,
@@ -250,10 +260,17 @@ OpenStack) cannot change after creation.
   worker count was applied, and it still is.
 - **All clusters:** `spec.type` and the environment can no longer change, and on AWS and Google Cloud neither can the
   region nor the network.
-- **Sign-in of existing clusters:** the next run of an installed cluster gives it the tenant's groups and the sign-in
-  limit above: its bindings are replaced (the groups without the tenant are no longer bound) and people outside its
-  access groups can no longer sign in. People who sign in again get their groups `<tenant>.<group>`; the cluster's
-  old groups of bare names are left on the cluster with no binding and can be deleted there.
+- **Sign-in of existing clusters:** the next run of an installed cluster gives it the tenant's groups as above: its
+  bindings are replaced (the groups without the tenant are no longer bound), its sign-in client is marked as the
+  cluster's, and `self-provisioners` names its operator groups only. People who sign in again get their groups
+  `<tenant>.<group>`; the cluster's old groups of bare names are left on the cluster with no binding and can be
+  deleted there.
+- **AWS and Google Cloud issuers:** the static issuer's ConfigMap of an existing cluster carries the label keys of the
+  release before; the issuer's sync selects both keys in this release, and the cluster's next run writes both.
+- **OpenStack clusters of the release before** left the install-config secret at
+  `oso/projects/<environment>/clusters/<cluster>/install-config` in the secret store; a delete no longer removes that
+  path (the cluster's name alone is not unique across tenants). The platform team removes it by hand after the
+  cluster is deleted.
 - **Clusters installing during the upgrade:** a provision job that is already running finishes the old way; the next
   run of the cluster writes the new fields.
 - **OpenStack clusters on a hybrid network whose installation stopped** are no longer reinstalled about every two

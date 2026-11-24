@@ -282,6 +282,22 @@
       register: kc_client
       when: po_oidc_client_id | length > 0
 
+    # the client of the recorded (or the build's) clientId, when it carries this cluster's mark or none (a client of
+    # the release before); a client marked for another cluster is left and named in the job's log
+    - name: Whose the clients of the name are
+      vars:
+        _mine: "{{ platformopenshift_cr_namespace }}/{{ platformopenshift_cr_name }}"
+        _found: "{{ (kc_client.json | default([], true)) if kc_client is not skipped else [] }}"
+      ansible.builtin.set_fact:
+        po_kc_clients: >-
+          {%- set out = {'ours': [], 'other': []} -%}
+          {%- for c in _found if c.clientId | default('') == po_oidc_client_id -%}
+            {%- set m = (c.attributes | default({}, true)).platformopenshift | default('', true) -%}
+            {%- set _ = out[('ours' if m in ['', _mine] else 'other')].append({'id': c.id, 'clientId': c.clientId,
+                                                                              'mark': m}) -%}
+          {%- endfor -%}
+          {{ out }}
+
     - name: Delete the cluster's OIDC client
       ansible.builtin.uri:
         url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ item.id }}"
@@ -290,20 +306,17 @@
           Authorization: "Bearer {{ kc_admin_token }}"
         validate_certs: false
         status_code: [204, 404]
-      loop: "{{ (kc_client.json | default([])) if kc_client is not skipped else [] }}"
+      loop: "{{ po_kc_clients.ours }}"
       loop_control:
         label: "{{ item.clientId }}"
 
-    # the client's sign-in flow (only people of its access groups) goes with it: found by its alias and the
-    # cluster's mark in its description (platformopenshift_provision/files/cluster_signin.py)
-    - name: Remove the cluster's sign-in flow
-      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/cluster_signin_limit.yml"
-      vars:
-        csl_action: remove
-        ocp_oidc_client_id: "{{ po_oidc_client_id }}"
-        cluster_cr_name: "{{ platformopenshift_cr_name }}"
-        cluster_namespace: "{{ platformopenshift_cr_namespace }}"
-      when: po_oidc_client_id | length > 0
+    - name: Say that a client of the name is another cluster's
+      ansible.builtin.debug:
+        msg: >-
+          The sign-in client {{ item.clientId }} is marked for another cluster ({{ item.mark }}); it was left in place.
+      loop: "{{ po_kc_clients.other }}"
+      loop_control:
+        label: "{{ item.clientId }}"
 
     - name: Note the step
       ansible.builtin.set_fact:

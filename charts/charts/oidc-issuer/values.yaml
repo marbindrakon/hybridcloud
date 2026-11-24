@@ -39,6 +39,13 @@ sync:
   static:
     label: hybridsovereign.redhat/oidc-static
     nameLabel: hybridsovereign.redhat/oidc-name
+    # the label keys of the release before (ConfigMaps it made carry them until their cluster's next provision run,
+    # which writes both): selected as well for this release; empty = only the keys above
+    previousLabel: shc.signal9.gg/oidc-static
+    previousNameLabel: shc.signal9.gg/oidc-name
+  # the annotation prefix of the release before on oidc-documents (when an issuer was last fetched), read when the
+  # current one is absent; empty = none
+  previousFetchedPrefix: shc.signal9.gg/oidc-fetched-
   acm:
     managedServiceAccount: shc-oidc-sync
     # cluster-proxy addon user server; its serving certificate comes from the service CA

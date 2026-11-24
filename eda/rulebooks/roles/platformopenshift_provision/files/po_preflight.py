@@ -296,7 +296,10 @@ def network(req):
             return result("RouterAttachmentsOff", f"NetworkPlacement {pref} does not allow router attachments "
                           "(spec.use.routerAttachments); an OpenShift cluster on the network needs them", **out)
         state = (((pst.get("use") or {}).get("routerAttachments") or {}).get("state") or "")
-        if ready and (state != "ready" or not out["networkId"] or not out["networkName"]):
+        if ready and state == "ready" and (not out["networkId"] or not out["networkName"]):
+            # a placement of the release before records no network for the tenant until its own job runs again
+            hold("WaitingForPlacement", f"NetworkPlacement {pref} has not recorded its network on the site yet")
+        elif ready and state != "ready":
             hold("WaitingForPlacement", f"NetworkPlacement {pref}: router attachments are not ready yet"
                  + (f" (state {state})" if state else ""))
     subnet4 = placement_subnet4(p)

@@ -103,7 +103,6 @@
             cfr_project_id: "{{ cb_oso_project_id }}"
             cfr_account: "{{ cb_fip_account }}"
             cfr_ids: ["{{ cb_fips.api.id }}", "{{ cb_fips.ingress.id }}"]
-            cfr_build: "{{ cb_app_name }}"
             cfr_cr_name: "{{ ansible_operator_meta.name }}"
             cfr_cr_namespace: "{{ ansible_operator_meta.namespace }}"
 

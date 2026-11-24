@@ -103,8 +103,9 @@ class CloudIdentityName(unittest.TestCase):
 
 @unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
 class IssuerLabelKeys(unittest.TestCase):
-    """The static issuer's label keys are the product's (hybridsovereign.redhat/oidc-static, oidc-name); the teardown
-    looks for the build's ConfigMap under the product key and under the older one, and removes it once."""
+    """The static issuer's label keys are the product's (hybridsovereign.redhat/oidc-static, oidc-name); for one
+    release the jobs also write the older keys (the issuer's sync selects either); the teardown looks for the build's
+    ConfigMap under the product key and under the older one, and removes it once."""
 
     def test_jobs_write_the_product_keys(self):
         for f in ("aws_clusterbuild_sts.yml", "gcp_clusterbuild_wif.yml"):
@@ -112,7 +113,10 @@ class IssuerLabelKeys(unittest.TestCase):
                 text = fh.read()
             self.assertIn('hybridsovereign.redhat/oidc-static: "true"', text, f)
             self.assertIn("hybridsovereign.redhat/oidc-name:", text, f)
-            self.assertNotIn("shc.signal9.gg", text, f)
+            # the older keys only as the labels of the release before, nowhere else
+            self.assertEqual(text.count("shc.signal9.gg"), 2, f)
+            self.assertIn('shc.signal9.gg/oidc-static: "true"', text, f)
+            self.assertIn("shc.signal9.gg/oidc-name:", text, f)
 
     def test_teardown_looks_for_both_keys(self):
         cm = {"metadata": {"name": "oidc-static-shc-gcp-web-acme-0a1b2c3d", "namespace": "issuers"}}

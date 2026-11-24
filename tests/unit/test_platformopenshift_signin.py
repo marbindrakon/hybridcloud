@@ -1,13 +1,13 @@
-"""Who gets what on a tenant's OpenShift cluster, and who can sign in to it.
+"""Who gets what on a tenant's OpenShift cluster.
 
-The real platformopenshift_provision tasks (cluster_signin_groups.yml, cluster_signin_limit.yml with
-files/cluster_signin.py, the bindings of cluster_rbac.yml) and the real common tasks they use
-(services_signin_groups.yml, obtain_keycloak_realm_token.yml, names_call.yml, vault_kv_read.yml) run in
-ansible-playbook (po_harness.py) against an identity provider over HTTPS (fake_keycloak_flows.py) and a Vault over HTTP
-(fake_vault.py). The realm is shared by two tenants that both have access groups named admins and devs; the cluster
-is the first tenant's. What is judged: the groups each binding names, the groups claim of each person, and who the
-identity provider lets sign in to the cluster's client (by the rules read in its source, see the fake's docstring).
-Names are examples."""
+The real platformopenshift_provision tasks (keycloak_oidc.yml up to the OAuth policy it builds, with
+cluster_signin_groups.yml and cluster_groups_claim.yml / files/cluster_signin.py, and the bindings of cluster_rbac.yml)
+and the real common tasks they use (services_signin_groups.yml, obtain_keycloak_realm_token.yml, names_call.yml,
+vault_kv_read.yml) run in ansible-playbook (po_harness.py) against an identity provider over HTTPS
+(fake_keycloak_signin.py) and a Vault over HTTP (fake_vault.py). The realm is shared by two tenants that both have
+access groups named admins, devs and operators; the cluster is the first tenant's. What is judged, for every person
+and every way to finish a sign-in: the groups claim of the cluster's token, the bindings that name one of those
+groups, and whether the person may create a project. Names are examples."""
 import os
 import sys
 import unittest
@@ -23,28 +23,41 @@ except ImportError:  # pragma: no cover
     HAVE_CRYPTO = False
 
 if HAVE_CRYPTO:
-    import fake_keycloak_flows  # noqa: E402
+    import fake_keycloak_signin  # noqa: E402
 import fake_vault  # noqa: E402
 
 ROLE = os.path.join(H.ROOT, "eda", "rulebooks", "roles", "platformopenshift_provision")
-HELPER = os.path.join(ROLE, "files", "cluster_signin.py")
+TEARDOWN = os.path.join(H.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown")
 NS = "entity-acme-corp"
-CLIENT = "shc-oso-web-acme-corp-1a2b3c4d-keycloak-oidc"
-CLUSTER_TOOL = {"clusterAdminRbac": ["admins"], "clusterDeveloperRbac": ["devs"], "clusterViewerRbac": ["auditors"]}
+BUILD = "shc-oso-web-acme-corp-1a2b3c4d"
+CLIENT = BUILD + "-keycloak-oidc"
+MARK = NS + "/web"
+CLUSTER_TOOL = {"clusterAdminRbac": ["admins"], "clusterOperatorRbac": ["operators"],
+                "clusterDeveloperRbac": ["devs"], "clusterViewerRbac": ["auditors"]}
 OLD_MAPPER = {"id": "m-old", "name": "groups", "protocol": "openid-connect",
               "protocolMapper": "oidc-group-membership-mapper",
               "config": {"full.path": "false", "claim.name": "groups", "id.token.claim": "true",
                          "access.token.claim": "true", "userinfo.token.claim": "true"}}
+REALM_ROLE_GROUPS = {"name": "groups", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-realm-role-mapper",
+                     "config": {"claim.name": "groups", "multivalued": "true"}}
+GROUP_PATHS = {"name": "directory groups", "protocol": "openid-connect",
+               "protocolMapper": "oidc-group-membership-mapper",
+               "config": {"claim.name": "groups", "full.path": "true"}}
+EMAIL = {"name": "email", "protocol": "openid-connect", "protocolMapper": "oidc-usermodel-property-mapper",
+         "config": {"claim.name": "email"}}
 
-# every person of the realm: (directory groups)
+# every person of the realm: (directory groups, realm roles)
 PEOPLE = {
-    "alice": ["/acme-corp/admins"],             # the cluster's tenant, its admin group
-    "dave": ["/acme-corp/devs"],                 # the cluster's tenant, its developer group
-    "olga": ["/acme-corp/others"],               # the cluster's tenant, a group the cluster does not name
-    "gina": ["/globex/admins"],                  # another tenant, a group of the same name
-    "gus": ["/globex/devs"],                     # another tenant, a group of the same name
-    "nora": [],                                  # in no group
+    "alice": (["/acme-corp/admins"], []),        # the cluster's tenant, its admin group
+    "opal": (["/acme-corp/operators"], []),      # the cluster's tenant, its operator group
+    "dave": (["/acme-corp/devs"], []),           # the cluster's tenant, its developer group
+    "olga": (["/acme-corp/others"], []),         # the cluster's tenant, a group the cluster does not name
+    "gina": (["/globex/admins"], ["admins"]),    # another tenant, a group of the same name (and a realm role of it)
+    "gus": (["/globex/devs"], []),               # another tenant, a group of the same name
+    "otto": (["/globex/operators"], []),         # another tenant, a group of the same name
+    "nora": ([], []),                            # in no group
 }
+SCOPES = ((), ("microprofile-jwt",), ("microprofile-jwt", "directory-groups"))
 
 
 def load(path):
@@ -58,169 +71,282 @@ def text(path):
 
 
 def bindings(templates):
-    """ClusterRoleBinding name -> (complianceType, its subjects' group names)."""
+    """ClusterRoleBinding name -> (complianceType, its subjects' group names, its role)."""
     out = {}
     for t in templates:
         o = t["objectDefinition"]
-        out[o["metadata"]["name"].rsplit("-cluster-", 1)[1]] = (
-            t["complianceType"], [s["name"] for s in o.get("subjects", [])])
+        name = o["metadata"]["name"]
+        key = name.rsplit("-cluster-", 1)[1] if "-cluster-" in name else name
+        out[key] = (t["complianceType"], [s["name"] for s in o.get("subjects", [])],
+                    (o.get("roleRef") or {}).get("name"))
     return out
+
+
+def oidc_tasks():
+    """keycloak_oidc.yml up to the OAuth policy it builds (the ACM writes to the hub are not run here)."""
+    tasks = load(os.path.join(ROLE, "tasks", "keycloak_oidc.yml"))
+    names = [t.get("name") for t in tasks]
+    tasks = tasks[:names.index("Build ACM Policy for OpenShift OAuth configuration") + 1]
+    for t in tasks:     # the role's own includes, from the given tasks' place
+        inc = t.get("ansible.builtin.include_tasks")
+        if inc and "/" not in inc:
+            t["ansible.builtin.include_tasks"] = "{{ role_path }}/tasks/" + inc
+    return tasks
 
 
 @unittest.skipUnless(H.HAVE_ANSIBLE and HAVE_CRYPTO, "ansible-playbook / cryptography not installed")
 class TenantCluster(unittest.TestCase):
     def setUp(self):
-        self.kc = fake_keycloak_flows.Keycloak().start()
+        self.kc = fake_keycloak_signin.Keycloak().start()
         self.addCleanup(self.kc.stop)
         self.vault = fake_vault.Vault().start()
         self.addCleanup(self.vault.stop)
         self.vault.data["central/keycloak-automation/keycloak-sovereign-tenants-services"] = self.kc.vault_entry()
-        self.kc.add_client(CLIENT, mappers=[OLD_MAPPER])
+        # the realm's client scopes: profile and email by default, microprofile-jwt (a realm-role mapper of groups)
+        # optional, and a scope someone added that puts the person's directory groups into groups
+        self.kc.add_scope("profile")
+        self.kc.add_scope("email", [EMAIL])
+        self.kc.add_scope("microprofile-jwt", [REALM_ROLE_GROUPS])
+        self.kc.add_scope("directory-groups", [GROUP_PATHS])
+        self.kc.realm_default = ["profile", "email"]
+        self.kc.realm_optional = ["microprofile-jwt", "directory-groups"]
         # the services cluster's client holds both tenants' roles of the same names (made by the Entity jobs)
-        self.kc.add_client("openshift-services")
-        for g in ("acme-corp/admins", "acme-corp/devs", "acme-corp/others", "acme-corp/auditors",
-                  "globex/admins", "globex/devs"):
+        self.kc.add_client("openshift-services", optional_scopes=["microprofile-jwt"])
+        for g in ("acme-corp/admins", "acme-corp/devs", "acme-corp/operators", "acme-corp/others",
+                  "acme-corp/auditors", "globex/admins", "globex/devs", "globex/operators"):
             self.kc.add_group(g)
-        for name, groups in PEOPLE.items():
-            self.kc.add_user(name, *groups)
+        for name, (groups, roles) in PEOPLE.items():
+            self.kc.add_user(name, *groups, realm_roles=roles)
         env = mock.patch.dict(os.environ, {"VAULT_ADDR": self.vault.url, "VAULT_TOKEN": self.vault.token,
                                            "PYTHONDONTWRITEBYTECODE": "1"})
         env.start()
         self.addCleanup(env.stop)
         self.rbacs = [{"metadata": {"name": n}, "status": {"group": "/acme-corp/" + n}}
-                      for n in ("admins", "devs", "others")] + [{"metadata": {"name": "auditors"}, "status": {}}]
+                      for n in ("admins", "devs", "operators", "others")] + [{"metadata": {"name": "auditors"},
+                                                                               "status": {}}]
 
-    def run_cluster(self, tool=None, ok=True, action="ensure"):
+    def old_client(self, **fields):
+        """The cluster's client as the release before made it: the group-membership mapper, the realm's scopes."""
+        self.kc.add_client(CLIENT, mappers=[OLD_MAPPER], default_scopes=self.kc.realm_default,
+                           optional_scopes=self.kc.realm_optional, **fields)
+
+    def run_cluster(self, tool=None, ok=True, realization=None):
         rbac_tasks = load(os.path.join(ROLE, "tasks", "cluster_rbac.yml"))
         build = [t for t in rbac_tasks if t["name"] in ("Build the subjects of each binding",
                                                         "Assemble RBAC object templates")]
-        tasks = [{"ansible.builtin.include_tasks": "{{ role_path }}/tasks/keycloak_admin_session.yml"},
-                 {"ansible.builtin.include_tasks": "{{ role_path }}/tasks/cluster_signin_groups.yml"},
-                 {"ansible.builtin.include_tasks": "{{ role_path }}/tasks/cluster_signin_limit.yml",
-                  "vars": {"csl_action": action}}] + build
         extra = {"services_api_host": "https://services.example.org", "services_bearer_token": "services-token",
-                 "keycloak_realm": "sovereign-tenants", "ocp_oidc_client_id": CLIENT, "cluster_cr_name": "web",
-                 "cluster_name": "shc-oso-web-acme-corp-1a2b3c4d", "cluster_namespace": NS,
+                 "central_token": "central-token", "central_api_server": "https://hub.example.org",
+                 "keycloak_realm": "sovereign-tenants", "platformopenshift_oidc_idp_name": "keycloak-sso",
+                 "cluster_cr_name": "web", "cluster_name": BUILD, "cluster_namespace": NS,
+                 "cluster_console_url": "https://console-openshift-console.apps.web.prod.acme-corp.example.org",
+                 "cluster_api_url": "https://api.web.prod.acme-corp.example.org:6443",
+                 "cluster_apps_url": "https://apps.web.prod.acme-corp.example.org",
+                 "cluster_domain": "web.prod.acme-corp.example.org",
                  "resolved_entity": "acme-corp", "shc_step": "Configure the cluster's sign-in"}
+        if realization is not None:
+            extra["fabric_realization"] = realization
         k8s = {"Route/services-rhbk/": [{"spec": {"host": self.kc.host}}], f"Rbac/{NS}/": self.rbacs,
+               "ConfigMap/openshift-config-managed/default-ingress-cert": [{"data": {"ca-bundle.crt": "ca"}}],
                f"PlatformOpenshift/{NS}/web": [{"metadata": {"name": "web", "namespace": NS},
                                                 "spec": {"toolRbac": CLUSTER_TOOL if tool is None else tool}}]}
-        rc, trace, out = H.run("platformopenshift_provision", "x.yml", extra, k8s=k8s, tasks=tasks,
+        rc, trace, out = H.run("platformopenshift_provision", "x.yml", extra, k8s=k8s, tasks=oidc_tasks() + build,
                                result="{'templates': rbac_object_templates, 'csl': csl_result, "
-                                      "'faults': csg_faults, 'tiers': csg_tiers}")
+                                      "'faults': csg_faults, 'tiers': csg_tiers, 'policy': acm_oidc_policy}")
         if ok:
             self.assertEqual(rc, 0, out)
-        for secret in self.kc.automation.values():
-            self.assertNotIn(secret[1], H.LAST_OUTPUT)
+        for secret in [s[1] for s in self.kc.automation.values()] + list(self.kc.secrets.values()):
+            self.assertNotIn(secret, H.LAST_OUTPUT)
         for tok in self.kc.tokens:
             self.assertNotIn(tok, H.LAST_OUTPUT)
         return rc, (trace[-1]["result"] if trace and "result" in trace[-1] else None), out
 
-    def who_signs_in(self):
-        return {p: self.kc.signs_in(p, CLIENT) for p in PEOPLE}
+    def outcome(self, res, person, path, scope):
+        """(groups claim, bindings that name one of them, may create a project) of a person's token."""
+        claim = self.kc.token_claims(person, CLIENT, path, scope)
+        if claim is None:
+            return None
+        b = bindings(res["templates"])
+        bound = sorted(k for k, (ct, subjects, _) in b.items()
+                       if ct == "mustonlyhave" and set(subjects) & set(claim) and k != "self-provisioners")
+        sp = b["self-provisioners"][1]
+        project = bool(set(sp) & set(claim)) or "admin" in bound
+        return claim, bound, project
 
     def test_two_tenants_same_group_names_a_cluster_of_one(self):
-        """The enumeration: each person x (in which binding, what the cluster sees, may sign in)."""
-        # before: the realm's own browser flow and the old mapper (group names without the tenant)
-        self.assertEqual(self.kc.groups_claim("gina", CLIENT), ["admins"])
-        self.assertTrue(all(self.who_signs_in().values()))
+        """The enumeration: each person x each way to sign in x each scope asked for -> (claim, bindings, project)."""
+        self.old_client(directAccessGrantsEnabled=True)
+        # before: the group-membership mapper sends the last part of a group, whoever's tenant
+        self.assertEqual(self.kc.token_claims("gina", CLIENT), ["admins"])
         _, res, _ = self.run_cluster()
-        self.assertEqual(bindings(res["templates"]), {
-            "admin": ("mustonlyhave", ["acme-corp.admins"]),
-            "operator": ("mustnothave", []),
-            "developer": ("mustonlyhave", ["acme-corp.devs"]),
+        b = bindings(res["templates"])
+        self.assertEqual(b, {
+            "admin": ("mustonlyhave", ["acme-corp.admins"], "cluster-admin"),
+            "operator": ("mustonlyhave", ["acme-corp.operators"], "self-provisioner"),
+            "developer": ("mustonlyhave", ["acme-corp.devs"], "edit"),
             # auditors has no directory group yet: no binding, and said in the job's log
-            "viewer": ("mustnothave", [])})
+            "viewer": ("mustnothave", [], None),
+            # every signed-in person no longer creates projects: only the operator level does
+            "self-provisioners": ("mustonlyhave", ["acme-corp.operators"], "self-provisioner")})
         self.assertEqual([f["group"] for f in res["faults"]], ["acme-corp.auditors"])
-        table = {p: (self.kc.signs_in(p, CLIENT), self.kc.groups_claim(p, CLIENT)) for p in PEOPLE}
-        self.assertEqual(table, {
-            "alice": (True, ["acme-corp.admins", "sign-in"]),
-            "dave": (True, ["acme-corp.devs", "sign-in"]),
-            "olga": (False, []),
-            "gina": (False, []),
-            "gus": (False, []),
-            "nora": (False, [])})
-        # what a refused person reads on the identity provider's error page
-        self.assertIn("not in one of its access groups", self.kc.deny_message(CLIENT))
+        want = {
+            "alice": (["acme-corp.admins"], ["admin"], True),
+            "opal": (["acme-corp.operators"], ["operator"], True),
+            "dave": (["acme-corp.devs"], ["developer"], False),
+            "olga": ([], [], False),
+            "gina": ([], [], False),
+            "gus": ([], [], False),
+            "otto": ([], [], False),
+            "nora": ([], [], False)}
+        for person in PEOPLE:
+            for path in fake_keycloak_signin.PATHS:
+                for scope in SCOPES:
+                    got = self.outcome(res, person, path, scope)
+                    if path == "password-grant":
+                        # the cluster's client takes no password grant: no token at all
+                        self.assertIsNone(got, (person, scope))
+                        continue
+                    self.assertEqual(got, want[person], (person, path, scope))
         # the client roles are the tenant's, owned by this cluster, mapped to the tenant's groups only
         role = self.kc.role(CLIENT, "acme-corp.admins")
         self.assertEqual(role["attributes"], {"entity": ["acme-corp"], "owner": ["PlatformOpenshift/web"]})
         cid = self.kc.clients[CLIENT]["id"]
-        self.assertEqual(self.kc.groups["globex/admins"]["mappings"].get(cid, []), [])
-        self.assertEqual(sorted(self.kc.clients[CLIENT]["roles"]), ["acme-corp.admins", "acme-corp.devs", "sign-in"])
+        for g in ("globex/admins", "globex/devs", "globex/operators"):
+            self.assertEqual(self.kc.groups[g]["mappings"].get(cid, []), [])
+        self.assertEqual(sorted(self.kc.clients[CLIENT]["roles"]),
+                         ["acme-corp.admins", "acme-corp.devs", "acme-corp.operators"])
+        # the scopes that wrote groups are unlinked from this client only (another client keeps them); email stays
+        names = {s["id"]: s["name"] for s in self.kc.scopes.values()}
+        client = self.kc.clients[CLIENT]
+        self.assertEqual(sorted(names[i] for i in client["defaultScopes"]), ["email", "profile"])
+        self.assertEqual(client["optionalScopes"], [])
+        self.assertEqual(self.kc.clients["openshift-services"]["optionalScopes"], [self.kc.scope_id("microprofile-jwt")])
+        # the client is marked as the cluster's and takes the code flow only
+        self.assertEqual(client["attributes"]["platformopenshift"], MARK)
+        self.assertFalse(client["directAccessGrantsEnabled"])
+        self.assertFalse(client["implicitFlowEnabled"])
+
+    def test_a_new_client_is_made_marked_with_the_claim_from_its_roles(self):
+        self.run_cluster()
+        client = self.kc.clients[CLIENT]
+        self.assertEqual(client["attributes"]["platformopenshift"], MARK)
+        self.assertEqual([m["protocolMapper"] for m in client["protocolMappers"]], ["oidc-usermodel-client-role-mapper"])
+        self.assertEqual(client["optionalScopes"], [])
+        self.assertEqual(self.kc.token_claims("gina", CLIENT, scope=("microprofile-jwt",)), [])
+        self.assertEqual(self.kc.token_claims("alice", CLIENT), ["acme-corp.admins"])
 
     def test_a_second_run_changes_nothing(self):
         self.run_cluster()
-        flows, execs = dict(self.kc.flows), dict(self.kc.executions)
+        before = len([x for x in self.kc.log if x[0] in ("PUT", "POST", "DELETE")])
         _, res, _ = self.run_cluster()
         self.assertEqual(res["csl"]["changed"], [])
-        self.assertEqual((self.kc.flows, self.kc.executions), (flows, execs))
+        writes = [x for x in self.kc.log if x[0] in ("PUT", "POST", "DELETE")][before:]
+        # the common sign-in groups task posts its group mappings again on every run (the identity provider keeps a
+        # mapping once); nothing of the cluster's client changes
+        self.assertEqual([w for w in writes if not w[1].endswith("/protocol/openid-connect/token")
+                          and "/role-mappings/" not in w[1]], [])
 
     def test_an_access_group_taken_off_the_cluster(self):
         self.run_cluster()
         _, res, _ = self.run_cluster(tool={"clusterAdminRbac": ["admins"]})
-        self.assertEqual(bindings(res["templates"])["developer"], ("mustnothave", []))
+        b = bindings(res["templates"])
+        self.assertEqual(b["developer"], ("mustnothave", [], None))
+        self.assertEqual(b["self-provisioners"], ("mustonlyhave", [], "self-provisioner"))
         self.assertIsNone(self.kc.role(CLIENT, "acme-corp.devs"))
-        self.assertEqual(self.who_signs_in(), {"alice": True, "dave": False, "olga": False, "gina": False,
-                                               "gus": False, "nora": False})
+        self.assertEqual(self.kc.token_claims("dave", CLIENT), [])
 
-    def test_no_access_group_nobody_signs_in(self):
+    def test_no_access_group_no_group_no_binding_no_project(self):
         _, res, _ = self.run_cluster(tool={})
-        self.assertEqual({k: v[0] for k, v in bindings(res["templates"]).items()},
+        b = bindings(res["templates"])
+        self.assertEqual({k: v[0] for k, v in b.items() if k != "self-provisioners"},
                          dict.fromkeys(["admin", "operator", "developer", "viewer"], "mustnothave"))
-        self.assertFalse(any(self.who_signs_in().values()))
+        self.assertEqual(b["self-provisioners"][:2], ("mustonlyhave", []))
+        for person in PEOPLE:
+            self.assertEqual(self.kc.token_claims(person, CLIENT), [])
 
-    def test_a_flow_of_the_name_that_is_not_ours_is_refused(self):
-        foreign = self.kc.add_flow(CLIENT, "someone's own flow")
-        rc, _, out = self.run_cluster(ok=False)
-        self.assertNotEqual(rc, 0)
-        self.assertIn("already holds a sign-in flow named " + CLIENT, out)
-        self.assertEqual(self.kc.flows[foreign]["description"], "someone's own flow")
-        self.assertEqual(self.kc.clients[CLIENT]["authenticationFlowBindingOverrides"], {})
-
-    def test_a_changed_flow_is_replaced_before_the_old_one_goes(self):
-        self.run_cluster()
-        bound = self.kc.clients[CLIENT]["authenticationFlowBindingOverrides"]["browser"]
-        # someone switched the check off
-        for e in self.kc.executions.values():
-            if e.get("provider") == "deny-access-authenticator":
-                e["requirement"] = "DISABLED"
-        self.assertTrue(self.kc.signs_in("gina", CLIENT))
+    def test_self_provisioners_keeps_openshift_from_restoring_it(self):
         _, res, _ = self.run_cluster()
-        now = self.kc.clients[CLIENT]["authenticationFlowBindingOverrides"]["browser"]
-        self.assertNotEqual(now, bound)
-        self.assertEqual(self.kc.flows[now]["alias"], CLIENT + "-b")
-        self.assertNotIn(bound, self.kc.flows)
-        self.assertFalse(self.kc.signs_in("gina", CLIENT))
-        self.assertTrue(self.kc.signs_in("alice", CLIENT))
+        sp = [t["objectDefinition"] for t in res["templates"]
+              if t["objectDefinition"]["metadata"]["name"] == "self-provisioners"][0]
+        self.assertEqual(sp["metadata"]["annotations"], {"rbac.authorization.kubernetes.io/autoupdate": "false"})
+        subjects = [s["name"] for s in sp["subjects"]]
+        self.assertNotIn("system:authenticated:oauth", subjects)
+        self.assertNotIn("system:authenticated", subjects)
 
-    def test_the_flows_token_is_needed_and_used_only_for_flows(self):
-        del self.vault.data["central/keycloak-automation/keycloak-sovereign-tenants-services"]["flowsClientId"]
+    def test_a_client_of_the_name_marked_for_another_cluster_is_refused(self):
+        self.old_client(attributes={"platformopenshift": "entity-globex/web"}, redirectUris=["https://x.example.org/"])
         rc, _, out = self.run_cluster(ok=False)
         self.assertNotEqual(rc, 0)
-        self.assertIn("automation client for sign-in flows is not published", out)
-        # nothing on the client says anyone may sign in yet, and the realm still lets everyone through: the job
-        # stopped before the cluster is given the identity provider (keycloak_oidc.yml orders the steps)
-        self.assertEqual(self.kc.clients[CLIENT]["authenticationFlowBindingOverrides"], {})
+        self.assertIn("that the platform made for another cluster", out)
+        client = self.kc.clients[CLIENT]
+        self.assertEqual(client["attributes"], {"platformopenshift": "entity-globex/web"})
+        self.assertEqual(client["redirectUris"], ["https://x.example.org/"])
+        self.assertEqual(client["roles"], {})
+        self.assertEqual(client["protocolMappers"], [OLD_MAPPER])
 
-    def test_teardown_removes_only_the_clusters_flows(self):
-        self.run_cluster()
-        other = self.kc.add_flow(CLIENT + "-b", "a flow of the same alias that is not this cluster's")
-        rc, res, out = self.run_cluster(action="remove")
-        self.assertEqual(res["csl"]["removed"], [CLIENT])
-        self.assertIsNone(self.kc.flow(CLIENT))
-        self.assertIn(other, self.kc.flows)
+    def test_the_token_lifetime_is_a_setting_with_openshifts_default(self):
+        def lifetime(res):
+            oauth = res["policy"]["spec"]["policy-templates"][2]["objectDefinition"]["spec"]["object-templates"][0]
+            return oauth["objectDefinition"]["spec"]["tokenConfig"]
+        _, res, _ = self.run_cluster()
+        self.assertEqual(lifetime(res), {"accessTokenMaxAgeSeconds": 86400})
+        _, res, _ = self.run_cluster(realization={"tenantCluster": {"oauthAccessTokenMaxAgeSeconds": 28800}})
+        self.assertEqual(lifetime(res), {"accessTokenMaxAgeSeconds": 28800})
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE and HAVE_CRYPTO, "ansible-playbook / cryptography not installed")
+class TeardownClient(unittest.TestCase):
+    """The teardown deletes the client of the recorded clientId when it is this cluster's (its mark, or none: a client
+    of the release before) and leaves one marked for another cluster."""
+
+    def setUp(self):
+        self.kc = fake_keycloak_signin.Keycloak().start()
+        self.addCleanup(self.kc.stop)
+        self.vault = fake_vault.Vault().start()
+        self.addCleanup(self.vault.stop)
+        self.vault.data["central/keycloak-automation/keycloak-sovereign-tenants-services"] = self.kc.vault_entry()
+        env = mock.patch.dict(os.environ, {"VAULT_ADDR": self.vault.url, "VAULT_TOKEN": self.vault.token})
+        env.start()
+        self.addCleanup(env.stop)
+
+    def run_teardown(self):
+        block = load(os.path.join(TEARDOWN, "tasks", "main.yml"))[0]["block"]
+        names = [t.get("name") for t in block]
+        a = names.index("Open a Keycloak admin session")
+        b = names.index("Say that a client of the name is another cluster's")
+        tasks = [dict(t) for t in block[a:b + 1]]
+        extra = {"keycloak_realm": "sovereign-tenants", "po_oidc_client_id": CLIENT,
+                 "services_api_host": "https://services.example.org", "services_bearer_token": "services-token",
+                 "platformopenshift_cr_name": "web", "platformopenshift_cr_namespace": NS}
+        k8s = {"Route/services-rhbk/": [{"spec": {"host": self.kc.host}}]}
+        rc, _, out = H.run("platformopenshift_teardown", "x.yml", extra, k8s=k8s, tasks=tasks)
+        self.assertEqual(rc, 0, out)
+        return out
+
+    def test_ours_is_deleted(self):
+        self.kc.add_client(CLIENT, attributes={"platformopenshift": MARK})
+        self.run_teardown()
+        self.assertNotIn(CLIENT, self.kc.clients)
+
+    def test_one_of_the_release_before_is_deleted(self):
+        self.kc.add_client(CLIENT)
+        self.run_teardown()
+        self.assertNotIn(CLIENT, self.kc.clients)
+
+    def test_one_marked_for_another_cluster_is_left(self):
+        self.kc.add_client(CLIENT, attributes={"platformopenshift": "entity-globex/web"})
+        out = self.run_teardown()
+        self.assertIn(CLIENT, self.kc.clients)
+        self.assertIn("is marked for another cluster", out)
 
 
 class Wiring(unittest.TestCase):
-    def test_keycloak_oidc_limits_sign_in_before_the_cluster_gets_the_identity_provider(self):
+    def test_the_cluster_gets_the_identity_provider_after_its_groups_claim(self):
         tasks = load(os.path.join(ROLE, "tasks", "keycloak_oidc.yml"))
         names = [t["name"] for t in tasks]
         self.assertLess(names.index("The cluster's access groups as client roles of its sign-in client"),
-                        names.index("Only the cluster's people can sign in to its client"))
-        self.assertLess(names.index("Only the cluster's people can sign in to its client"),
+                        names.index("The cluster's groups claim holds its own roles only"))
+        self.assertLess(names.index("The cluster's groups claim holds its own roles only"),
                         names.index("Build ACM Policy for OpenShift OAuth configuration"))
-        self.assertNotIn("Add groups mapper to OIDC client (if not present)", names)
         body = text(os.path.join(ROLE, "tasks", "keycloak_oidc.yml"))
         self.assertNotIn('"full.path": "false"', body)
 
@@ -229,16 +355,25 @@ class Wiring(unittest.TestCase):
         self.assertNotIn("regex_replace', '^.*/'", body)
         self.assertNotIn("complianceType': 'musthave'", body)
 
-    def test_the_request_with_tokens_is_not_logged(self):
-        tasks = load(os.path.join(ROLE, "tasks", "cluster_signin_limit.yml"))
+    def test_the_request_with_the_token_is_not_logged(self):
+        tasks = load(os.path.join(ROLE, "tasks", "cluster_groups_claim.yml"))
         call = [t for t in tasks if "ansible.builtin.command" in t][0]
         self.assertTrue(call["no_log"])
 
-    def test_teardown_removes_the_flow_after_the_client(self):
-        tasks = load(os.path.join(H.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown",
-                                  "tasks", "main.yml"))
-        names = [t.get("name") for t in tasks[0]["block"]]
-        self.assertLess(names.index("Delete the cluster's OIDC client"), names.index("Remove the cluster's sign-in flow"))
+    def test_no_sign_in_flow_and_no_realm_right(self):
+        """The cluster's jobs change no authentication flow and need no realm-management right beyond the clients
+        and membership automation clients (no flows purpose, no manage-realm)."""
+        roots = [ROLE, TEARDOWN, os.path.join(H.ROOT, "docs", "platform", "cluster-installations.md")]
+        for root in roots:
+            paths = [root] if os.path.isfile(root) else [
+                os.path.join(d, f) for d, _, fs in os.walk(root) for f in fs if not f.endswith(".pyc")]
+            for p in paths:
+                body = text(p)
+                for word in ("authentication/flows", "authenticationFlowBindingOverrides", "flowsClient",
+                             "manage-realm", "deny-access", "krt_purpose: flows"):
+                    self.assertNotIn(word, body, p)
+        self.assertFalse(os.path.exists(os.path.join(ROLE, "tasks", "cluster_flows_token.yml")))
+        self.assertFalse(os.path.exists(os.path.join(ROLE, "tasks", "cluster_signin_limit.yml")))
 
 
 if __name__ == "__main__":

@@ -31,7 +31,8 @@
 
 # ─── Build object-templates list for ConfigurationPolicy ─────────────────────
 # Every tier's binding is exact: mustonlyhave replaces the subjects (a binding of an older run that named other
-# groups keeps none of them), and a tier without groups has no binding (mustnothave).
+# groups keeps none of them), and a tier without groups has no binding (mustnothave). The default binding
+# self-provisioners is managed the same way (below), so that only the cluster's own groups may create projects.
 - name: Assemble RBAC object templates
   vars:
     _tiers:
@@ -54,6 +55,17 @@
           {%- set _ = out.append({'complianceType': 'mustnothave', 'objectDefinition': obj}) -%}
         {%- endif -%}
       {%- endfor -%}
+      {#- OpenShift's default binding self-provisioners gives every signed-in person (system:authenticated:oauth) the
+          right to create projects. On a tenant's cluster it names the operator tier's groups only (the tier that
+          binds self-provisioner), none when the tier has none; the annotation autoupdate "false" stops the API
+          server from restoring the default subjects at its next start (OpenShift "Disabling project
+          self-provisioning"). -#}
+      {%- set _ = out.append({'complianceType': 'mustonlyhave', 'objectDefinition': {
+            'apiVersion': 'rbac.authorization.k8s.io/v1', 'kind': 'ClusterRoleBinding',
+            'metadata': {'name': 'self-provisioners',
+                         'annotations': {'rbac.authorization.kubernetes.io/autoupdate': 'false'}},
+            'roleRef': {'kind': 'ClusterRole', 'name': 'self-provisioner', 'apiGroup': 'rbac.authorization.k8s.io'},
+            'subjects': operator_subjects}}) -%}
       {{ out }}
 
 # ─── Idempotent create-or-update for RBAC Policy ─────────────────────────────

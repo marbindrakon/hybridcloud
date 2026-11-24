@@ -9,6 +9,10 @@
 #   MSA                ManagedServiceAccount whose token (Secret <MSA> in namespace <name>) reads an acm cluster
 #   PROXY_URL          cluster-proxy user server (<PROXY_URL>/<name> is the cluster's API)
 #   STATIC_LABEL       label (=true) of the static issuers' ConfigMaps; STATIC_NAME_LABEL holds the issuer name
+#   STATIC_LABEL_PREVIOUS, STATIC_NAME_LABEL_PREVIOUS  the same labels of the release before (optional): a ConfigMap
+#                      carrying either key is a static issuer, its name in the current name label, else the previous
+#   ANN_PREFIX_PREVIOUS  the fetched-at annotation prefix of the release before (optional), read when ANN_PREFIX's is
+#                      absent
 #   SA_CA              service CA bundle (cluster-proxy and url sources)
 #   WORKDIR, TERMINATION_LOG  scratch directory, the container's termination message file
 #
@@ -95,13 +99,24 @@ while read -r -u 3 n src url keys; do
   esac
 done 3<<<"$CLUSTERS"
 
-# static issuers: ConfigMaps labelled STATIC_LABEL=true in this namespace, issuer name in label STATIC_NAME_LABEL, key
+# static issuers: ConfigMaps labelled STATIC_LABEL=true (or STATIC_LABEL_PREVIOUS=true) in this namespace, issuer name in
+# label STATIC_NAME_LABEL (else STATIC_NAME_LABEL_PREVIOUS), key
 # set in data keys.json (an issuer whose signing key exists before its cluster does, e.g. an AWS cluster in STS mode).
 # Names of the issuers above are not taken.
 static=""
-oc get configmap -n "$NAMESPACE" -l "$STATIC_LABEL=true" -o json \
-  | jq -c --arg l "$STATIC_NAME_LABEL" '.items[] | {n: (.metadata.labels[$l] // ""), k: (.data["keys.json"] // "")}' \
-  > static.jsonl || fault "static issuers: list failed"
+: > static.jsonl; rm -f static.raw
+for sel in "$STATIC_LABEL" ${STATIC_LABEL_PREVIOUS:+"$STATIC_LABEL_PREVIOUS"}; do
+  oc get configmap -n "$NAMESPACE" -l "$sel=true" -o json > list.json || { fault "static issuers: list failed"; continue; }
+  jq -c '.items[]' list.json >> static.raw || true
+done
+# one entry per ConfigMap (a ConfigMap with both keys is listed twice)
+if [ -s static.raw ]; then
+  jq -sc --arg l "$STATIC_NAME_LABEL" --arg p "${STATIC_NAME_LABEL_PREVIOUS:-}" \
+    'unique_by(.metadata.name)[] | {n: (.metadata.labels[$l] // (if $p != "" then .metadata.labels[$p] else null end) // ""),
+                                    k: (.data["keys.json"] // "")}' static.raw > static.jsonl \
+    || fault "static issuers: list failed"
+fi
+rm -f list.json static.raw
 while read -r -u 3 e; do
   n=$(jq -r .n <<<"$e")
   if ! [[ "$n" =~ ^[a-z0-9-]+$ ]] || [[ " $names " == *" $n "* ]]; then fault "static: skipping '$n'"; continue; fi
@@ -117,7 +132,8 @@ done 3< static.jsonl
 # assemble: fetched documents, else the last published ones; one line per issuer
 args=(); ann="{}"; published=""
 for n in $names $static; do
-  last=$(jq -r --arg a "$ANN_PREFIX$n" '.metadata.annotations[$a] // ""' current.json)
+  last=$(jq -r --arg a "$ANN_PREFIX$n" --arg b "${ANN_PREFIX_PREVIOUS:+$ANN_PREFIX_PREVIOUS$n}" \
+    '.metadata.annotations[$a] // (if $b != "" then .metadata.annotations[$b] else null end) // ""' current.json)
   if [ -s "new/${n}__keys.json" ] && [ -s "new/${n}__openid-configuration" ]; then
     d=new; at=$now; published="$published $n"; line="$n: fetched"
   elif [ -s "old/${n}__keys.json" ] && [ -s "old/${n}__openid-configuration" ]; then
