@@ -84,3 +84,27 @@ test('the placement name a dialog proposes obeys the rule', () => {
     assert.ok(m.nameAllowed(v), `${n} + ${e} -> ${v}`);
   }
 });
+
+test('the forms apply the rule to the kinds the API rules, and the API server\'s own rule to the others', () => {
+  // the kinds the CRDs rule, as the API-server test lists them
+  const cel = fs.readFileSync(path.join(UI, '..', 'tests', 'cel-ipam', 'cel_cases_names.py'), 'utf8');
+  const block = cel.match(/^RULED = \{([\s\S]*?)\n\}/m);
+  assert.ok(block, 'RULED in cel_cases_names.py');
+  const ruled = [...block[1].matchAll(/"(\w+)":/g)].map((x) => x[1]).sort();
+  assert.deepEqual([...m.RULED_KINDS].sort(), ruled);
+  const unruled = cel.match(/^UNRULED = \[([\s\S]*?)\]/m);
+  for (const kind of [...unruled[1].matchAll(/"(\w+)"/g)].map((x) => x[1])) {
+    const opts = m.nameOptionsFor(kind);
+    assert.equal(opts.kubernetes, true, kind);
+    assert.ok(m.nameAllowed('web.prod', opts), `${kind}: a dotted name the API takes`);
+    assert.ok(m.nameAllowed('x'.repeat(40), opts), `${kind}: a name over 30 the API takes`);
+    assert.ok(!m.nameAllowed('Web', opts) && !m.nameAllowed('-web', opts) && !m.nameAllowed('x'.repeat(254), opts), kind);
+    assert.equal(m.nameRuleMessage(opts).key, 'form.nameRule.ruleKubernetes');
+  }
+  for (const kind of ruled) {
+    assert.ok(!m.nameOptionsFor(kind).kubernetes, kind);
+    assert.ok(!m.nameAllowed('web.prod', m.nameOptionsFor(kind)), kind);
+  }
+  assert.equal(typeof en.form.nameRule.ruleKubernetes, 'string');
+  assert.equal(typeof fr.form.nameRule.ruleKubernetes, 'string');
+});

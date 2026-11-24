@@ -2,8 +2,8 @@
 
 Runs the task file with the status module stubbed (it records the job entry it is given) and checks: the entry's
 name is the kind's singular and the action (entity-ready, not entitie-ready); the entry carries no address of the
-automation platform, whatever the job's settings; jobId is the controller's job id, else the activation's id, else
-the entry's name. The status library drops an address an older caller still sends (tests/unit/test_shc_status.py).
+automation platform, whatever the job's settings; jobId is the controller's job id, and absent without one (an
+activation's id or the entry's name would make the admin's link point at another job). The status library drops an address an older caller still sends (tests/unit/test_shc_status.py).
 Skipped when ansible-playbook is absent.
 """
 import json
@@ -116,18 +116,21 @@ class JobEntry(unittest.TestCase):
                     {}]
         for extra in settings:
             for plural, job in self.run_task(extra).items():
-                self.assertEqual(sorted(job), ["jobId", "name"], (plural, extra))
+                want = ["jobId", "name"] if "tower_job_id" in extra else ["name"]
+                self.assertEqual(sorted(job), want, (plural, extra))
                 self.assertNotIn("example.org", json.dumps(job))
 
     def test_job_id(self):
         cases = [({"tower_job_id": "4242"}, "4242"),
                  ({"tower_job_id": "4242", "aap_ui_url": "https://controller.example.org"}, "4242"),
                  ({"awx_job_id": 77}, "77"),
-                 ({"ansible_eda": {"rulebook_activation_id": 9}}, "9"),
-                 ({"ansible_eda": {"rulebook_activation_id": "manual"}}, "vault-ready"),
-                 ({}, "vault-ready")]
+                 ({"ansible_eda": {"rulebook_activation_id": 9}}, None),
+                 ({"ansible_eda": {"rulebook_activation_id": "manual"}}, None),
+                 ({"tower_job_id": "not-a-number"}, None),
+                 ({}, None)]
         for extra, want in cases:
-            self.assertEqual(self.run_task(extra)["vaults"]["jobId"].strip(), want, extra)
+            job = self.run_task(extra)["vaults"]
+            self.assertEqual(job.get("jobId"), want, extra)
 
 
 if __name__ == "__main__":

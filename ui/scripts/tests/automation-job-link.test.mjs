@@ -13,10 +13,13 @@ const s = await import(`${UI}/packages/shared/server/session.js`);
 const chart = path.resolve(UI, '..', 'charts', 'charts', 'sovereign-cloud-dashboard');
 const T = 'https://automation.example.com/execution/jobs/playbook/{jobId}/output';
 
-test('the link is the template with the job id; no template or no id: no link', () => {
+test('the link is the template with the job id; no template, no id or an id that is not a number: no link', () => {
   assert.equal(m.automationJobUrl(T, '42'), 'https://automation.example.com/execution/jobs/playbook/42/output');
   assert.equal(m.automationJobUrl(T, 42), 'https://automation.example.com/execution/jobs/playbook/42/output');
-  assert.equal(m.automationJobUrl(T, 'a/b?c'), 'https://automation.example.com/execution/jobs/playbook/a%2Fb%3Fc/output');
+  // only a controller's job id (a number) links: an older entry's job name links nowhere
+  assert.equal(m.automationJobUrl(T, 'a/b?c'), undefined);
+  assert.equal(m.automationJobUrl(T, 'entity-ready'), undefined);
+  assert.equal(m.automationJobUrl(T, ' 42 '), 'https://automation.example.com/execution/jobs/playbook/42/output');
   assert.equal(m.automationJobUrl('', '42'), undefined);
   assert.equal(m.automationJobUrl(undefined, '42'), undefined);
   assert.equal(m.automationJobUrl(T, ''), undefined);

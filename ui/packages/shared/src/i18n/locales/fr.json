@@ -456,7 +456,8 @@
     "nameRule": {
       "max": "{{max}} caractères au plus.",
       "rule": "Une lettre d'abord, puis des minuscules, des chiffres et des tirets simples, en finissant par une lettre ou un chiffre ; {{max}} caractères au plus.",
-      "ruleGoogle": "Une lettre d'abord, puis des minuscules, des chiffres et des tirets simples, en finissant par une lettre ou un chiffre ; {{max}} caractères au plus ; sur Google Cloud, ne commence pas par « goog » et ne contient ni « google » ni une forme approchante."
+      "ruleGoogle": "Une lettre d'abord, puis des minuscules, des chiffres et des tirets simples, en finissant par une lettre ou un chiffre ; {{max}} caractères au plus ; sur Google Cloud, ne commence pas par « goog » et ne contient ni « google » ni une forme approchante.",
+      "ruleKubernetes": "Des minuscules, des chiffres, des tirets et des points, en commençant et en finissant par une lettre ou un chiffre ; {{max}} caractères au plus."
     },
     "nameHelp": "Il ne pourra plus être changé.",
     "entityNameHelp": "Devient le namespace du locataire {{namespace}} ; il ne pourra plus être changé.",

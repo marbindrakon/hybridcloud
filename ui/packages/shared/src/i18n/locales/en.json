@@ -456,7 +456,8 @@
     "nameRule": {
       "max": "At most {{max}} characters.",
       "rule": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters.",
-      "ruleGoogle": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters; on Google Cloud not starting with \"goog\" and without \"google\" or a look-alike."
+      "ruleGoogle": "A letter first, then lower-case letters, digits and single hyphens, ending with a letter or digit; at most {{max}} characters; on Google Cloud not starting with \"goog\" and without \"google\" or a look-alike.",
+      "ruleKubernetes": "Lower-case letters, digits, hyphens and dots, starting and ending with a letter or digit; at most {{max}} characters."
     },
     "nameHelp": "It cannot be changed later.",
     "entityNameHelp": "Becomes the tenant namespace {{namespace}}; it cannot be changed later.",

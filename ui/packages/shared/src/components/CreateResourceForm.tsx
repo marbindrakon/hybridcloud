@@ -34,7 +34,7 @@ import { SitePicker } from './SitePicker';
 import { AllowedSitesSelect } from './AllowedSitesSelect';
 import { ObjectListEditor, type ObjectListRow } from './ObjectListEditor';
 import { cleanContacts, contactsValid, entityOptionalSpec, ENTITY_LIMITS } from '../forms/entityFields';
-import { nameAllowed, nameLimitFor, nameRuleMessage } from '../forms/nameRule';
+import { nameAllowed, nameOptionsFor, nameRuleMessage } from '../forms/nameRule';
 import { useTranslation } from '../i18n';
 import { DEFAULT_LANDING_ZONE } from '../forms/hybridFabricDefaults';
 import {
@@ -725,8 +725,9 @@ export function CreateResourceForm({
 
   // Client-side checks first (inline), then a server dry run of the exact object (Q8, UX-040).
   const targetNs = isPlatformForm ? PLATFORM_NAMESPACE : entityNs;
-  // One rule for every name (a gateway's is shorter; a cluster on Google Cloud has the installer's extra rule).
-  const nameOpts = { limit: nameLimitFor(kind), google: type === 'platformopenshift' && platformType === 'gcp' };
+  // One rule for every name that reaches a platform (a gateway's is shorter; a cluster on Google Cloud has the
+  // installer's extra rule); the platform's configuration kinds take the API server's own rule.
+  const nameOpts = { ...nameOptionsFor(kind), google: type === 'platformopenshift' && platformType === 'gcp' };
   const nameRule = nameRuleMessage(nameOpts);
   const nameRuleText = t(nameRule.key, nameRule.values);
   const nameIssue = !!name && !nameAllowed(name, nameOpts);
