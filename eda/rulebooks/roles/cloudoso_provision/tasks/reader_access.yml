@@ -28,6 +28,12 @@
   register: _or_rbacs
   when: _or_names | length > 0
 
+- name: The access groups' names
+  ansible.builtin.include_tasks: "{{ role_path }}/../cloudoso_provision/tasks/group_names.yml"
+  vars:
+    gn_tenant: "{{ entity_name }}"
+    gn_groups: "{{ _or_names }}"
+
 - name: The readers' groups
   vars:
     _rbacs: "{{ _or_rbacs.resources | default([]) }}"
@@ -38,7 +44,7 @@
         {%- set r = (_rbacs | selectattr('metadata.name', 'equalto', n) | list + [{}]) | first -%}
         {%- set path = (r.status | default({}, true)).group | default('', true) -%}
         {%- if path | length > 0 -%}
-          {%- set _ = out.append({'rbac': n, 'path': path, 'group': entity_name ~ '.' ~ n}) -%}
+          {%- set _ = out.append({'rbac': n, 'path': path, 'group': gn_names[n]}) -%}
         {%- endif -%}
       {%- endfor -%}
       {{ out }}

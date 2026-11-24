@@ -70,8 +70,48 @@
           Namespace {{ cloudoso_cr_namespace }} is missing label
           hybridsovereign.redhat/entity. Cannot provision CloudOSO.
 
-    - name: Refuse a name another tenant already uses
-      ansible.builtin.include_tasks: name_unique.yml
+    # the rule for names (an object made before the API carried it), then the name unique within the tenant across
+    # the four environment kinds; both before any Vault or OpenStack call
+    - name: Check the names against the rule for names
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/name_check.yml"
+      vars:
+        name_check_items:
+          - {value: "{{ entity_name }}", what: tenant}
+          - {value: "{{ cloudoso_cr_name }}", what: environment}
+
+    - name: Refuse a name that breaks the rule
+      when: name_check_message | length > 0
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            cloudoso_failure_reason: NameNotAllowed
+
+        - name: Stop before anything is made
+          ansible.builtin.fail:
+            msg: "{{ name_check_message }}"
+
+    - name: Check that no other environment of the tenant holds the name
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/environment_name_unique.yml"
+      vars:
+        enu_kind: CloudOSO
+        enu_name: "{{ cloudoso_cr_name }}"
+        enu_namespace: "{{ cloudoso_cr_namespace }}"
+        enu_created: "{{ cloudoso_cr_lookup.resources[0].metadata.creationTimestamp }}"
+
+    - name: Refuse a name another environment of the tenant holds
+      when: enu_taken | bool
+      block:
+        - name: Record the reason
+          ansible.builtin.set_fact:
+            cloudoso_failure_reason: EnvironmentNameTaken
+
+        - name: Stop before anything is made
+          ansible.builtin.fail:
+            msg: >-
+              The name {{ cloudoso_cr_name }} is already used by another of your environments (an
+              {{ {'CloudVirt': 'OpenShift virtualization', 'CloudAWS': 'AWS', 'CloudGCP': 'Google Cloud',
+                  'CloudOSO': 'OpenStack'}[enu_holder_kind] | default(enu_holder_kind) }} environment);
+              environment names are unique within a tenant. Delete this environment and create it with another name.
 
     # shc (P7.1): the site (CloudInfrastructure) and its account and settings
     - name: Resolve the CloudOSO's site
@@ -125,7 +165,8 @@
           projectId: "{{ oso_project_id }}"
           domainId: "{{ oso_domain_id }}"
           domainName: "{{ oso_domain_name }}"
-          slug: "{{ oso_slug }}"
+          # the slug is gone: null removes the key an earlier release wrote
+          slug: null
           domain: "{{ oso_dns_domain }}"
           route53ZoneId: "{{ oso_route53_zone_id }}"
           # what provision created, for teardown: ids only. Accounts and Vault paths are derived again where they

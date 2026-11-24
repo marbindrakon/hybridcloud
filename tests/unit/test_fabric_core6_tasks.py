@@ -61,7 +61,7 @@ class GatewayVrfs(unittest.TestCase):
         ])
         self.assertEqual([v["vrf"] for v in out], ["t51000", "t51001", "t51002", "t51003", "t51004"])
         by = {v["vrf"]: v for v in out}
-        self.assertEqual(by["t51000"], {"placement": "entity-acme/v4", "network": "entity-acme/net-v4", "vrf": "t51000",
+        self.assertEqual(by["t51000"], {"placement": "entity-acme/v4", "network": "entity-acme/net-v4", "tenant": "", "vrf": "t51000",
                                         "vni": 51000, "vpnTarget": 10000, "mtu": 9000, "families": [4],
                                         "prefixes4": ["10.60.0.0/24"], "prefixes6": [], "egress6": False, "covering6": []})
         # an IPv6 VRF without IPv6 egress on the fabric: no egress6, no covering routes

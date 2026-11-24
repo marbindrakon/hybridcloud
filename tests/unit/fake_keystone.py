@@ -21,7 +21,9 @@ to it, and it enforces the Keystone behaviours the platform's jobs depend on, as
     project), except its own user and GET /domains/<its own domain id>; a manager's DOMAIN-scoped token may read them,
     and its lists hold its own domain only: /domains?name=<another domain> is an empty list, /users without a filter
     lists its domain's users, /role_assignments lists only assignments on its domain and its domain's projects;
-  - name limits [spike B]: a user name over 255 characters, a group or project name over 64, is refused (400).
+  - name limits [spike B]: a user name over 255 characters, a group or project name over 64, is refused (400);
+  - project tags (keystone/resource/schema.py): taken on create and update, each at most 255 characters without "/"
+    or ",", at most 80 per project (400 otherwise).
 Every request and its status is recorded in `log` (bodies without passwords or secrets: the test greps the helper's
 output for the secrets, so the fake keeps no copy it could leak itself).
 """
@@ -73,9 +75,10 @@ class Keystone:
         self.domains[did] = {"id": did, "name": name, "enabled": True, "description": ""}
         return did
 
-    def add_project(self, name, domain_id, pid=None):
+    def add_project(self, name, domain_id, pid=None, tags=None):
         pid = pid or _id()
-        self.projects[pid] = {"id": pid, "name": name, "domain_id": domain_id, "description": "", "enabled": True}
+        self.projects[pid] = {"id": pid, "name": name, "domain_id": domain_id, "description": "", "enabled": True,
+                              "tags": list(tags or [])}
         return pid
 
     def add_user(self, name, domain_id, password=None, description="", options=None):
@@ -418,13 +421,30 @@ class Keystone:
                 return self._err(400, f"Invalid input for field/attribute name. Value: {p.get('name')}")
             if any(x["name"] == p.get("name") and x["domain_id"] == p.get("domain_id") for x in self.projects.values()):
                 return self._err(409, "Conflict occurred attempting to store project")
-            pid = self.add_project(p["name"], p["domain_id"])
+            bad = self._bad_tags(p.get("tags"))
+            if bad:
+                return self._err(400, bad)
+            pid = self.add_project(p["name"], p["domain_id"], tags=p.get("tags"))
             self.projects[pid]["description"] = p.get("description", "")
             return 201, {"project": self.projects[pid]}, None
         proj = self.projects.get(parts[1]) if n >= 2 else None
         if n == 2 and method == "GET":
             if not proj:
                 return self._err(404, "Could not find project")
+            return 200, {"project": proj}, None
+        if n == 2 and method == "PATCH":
+            # project_update (keystone/resource/schema.py): name, description, enabled, tags among others
+            if not proj:
+                return self._err(404, "Could not find project")
+            if not self._may_domain(tok, proj["domain_id"]):
+                return self._forbidden("identity:update_project")
+            p = body.get("project") or {}
+            bad = self._bad_tags(p.get("tags"))
+            if bad:
+                return self._err(400, bad)
+            for k in ("name", "description", "enabled", "tags"):
+                if k in p:
+                    proj[k] = list(p[k]) if k == "tags" else p[k]
             return 200, {"project": proj}, None
         if n == 2 and method == "DELETE":
             if not proj:
@@ -465,6 +485,18 @@ class Keystone:
                 self.assignments.discard(key)
                 return 204, None, None
         return self._err(404, "The resource could not be found.")
+
+    @staticmethod
+    def _bad_tags(tags):
+        """Keystone's rule for project tags (keystone/resource/schema.py): at most 80, unique, each at most 255
+        characters without "/" or ","."""
+        tags = list(tags or [])
+        if len(tags) > 80 or len(set(tags)) != len(tags):
+            return "Invalid input for field/attribute tags."
+        for t in tags:
+            if not isinstance(t, str) or len(t) > 255 or "/" in t or "," in t:
+                return f"Invalid input for field/attribute tags. Value: {t}"
+        return ""
 
     def _users(self, method, parts, q, tok, body):
         n = len(parts)

@@ -477,6 +477,29 @@ class Root(unittest.TestCase):
 
 
 
+class VrfDescriptions(unittest.TestCase):
+    """The gateway's VRF devices keep the placement's number; the names people chose go beside them as an interface
+    description (zebra takes "description" on an interface), on either core transport."""
+
+    def vrfs(self, v):
+        for x in v["cg_vrfs"]:
+            x.update(tenant="acme-corp", network="entity-acme-corp/core")
+        return v
+
+    def test_each_vrf_is_described(self):
+        # MPLS core here; the SRv6 core in test_srv6_frr_templates.py
+        block = section(render(GW, self.vrfs(gw_vars())), "interface t51000")
+        self.assertIn(" description tenant acme-corp, network entity-acme-corp/core, placement "
+                      "entity-acme/core-site1", block)
+        self.assertIn(" mpls enable", block)
+
+    def test_a_vrf_without_a_tenant_names_the_rest(self):
+        v = self.vrfs(gw_vars())
+        v["cg_vrfs"][0]["tenant"] = ""
+        self.assertIn(" description network entity-acme-corp/core, placement entity-acme/core-site1",
+                      section(render(GW, v), "interface t51000"))
+
+
 class SiteDefaultWithoutEgress(unittest.TestCase):
     def test_ipv6_vrf_announces_the_unreachable_default_while_no_egress(self):
         new = render(GW, gw_vars(v6=True, families=(4, 6)))

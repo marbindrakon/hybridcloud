@@ -1,0 +1,10 @@
+---
+# One access group's name (group_names.yml).
+- name: "The group name of {{ gn_group }}"
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request: {action: group, tenant: "{{ gn_tenant }}", group: "{{ gn_group }}"}
+
+- name: "Keep the group name of {{ gn_group }}"
+  ansible.builtin.set_fact:
+    gn_names: "{{ gn_names | combine({gn_group: names_result.name}) }}"

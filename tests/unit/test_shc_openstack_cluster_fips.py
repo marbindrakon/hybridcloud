@@ -179,6 +179,7 @@ class ProvisionWithoutPair(unittest.TestCase):
         acct.auth, acct.region = {"auth_url": "https://keystone.example:5000"}, "r1"
         with mock.patch.object(S, "Account", return_value=acct):
             out = S.provision({"action": "provision", "clouds_yaml": "/dev/null", "domain": "tenants", "project": "env",
+                               "project_id": "p1", "owner": "CloudOSO/entity-acme/env",
                                "app_cred_name": "env-cred"})
         self.assertEqual(out["fips"], {})
         conn_p.network.find_network.assert_not_called()

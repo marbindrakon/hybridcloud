@@ -380,6 +380,42 @@
           ansible.builtin.meta: end_play
           when: ac_waiting | length > 0
 
+        # the generated password's Secret <circuit>-bgp: replaced only when it is this circuit's (its label and its
+        # owner reference); a Secret of that name the tenant made is refused, never overwritten
+        - name: Read a Secret of the generated password's name
+          kubernetes.core.k8s_info:
+            host: "{{ services_api_host }}"
+            api_key: "{{ services_bearer_token }}"
+            validate_certs: false
+            api_version: v1
+            kind: Secret
+            name: "{{ ac_secret_name }}"
+            namespace: "{{ fab_namespace }}"
+          register: _ac_generated
+          no_log: true
+          when: not ac_secret_given | bool
+
+        - name: Refuse a Secret of that name that is not the circuit's
+          vars:
+            _meta: "{{ (_ac_generated.resources | default([{}], true))[0].metadata | default({}, true) }}"
+          ansible.builtin.set_fact:
+            fab_fail_reason: InvalidSecret
+            fab_fail_msg: >-
+              AttachmentCircuit {{ fab_name }}: a Secret named {{ ac_secret_name }} already exists in this namespace and
+              was not made for this circuit; the platform does not overwrite it. Rename or remove it, or name a Secret of
+              your own in the circuit's authentication.
+          when:
+            - not ac_secret_given | bool
+            - _ac_generated.resources | default([]) | length > 0
+            - >-
+              (_meta.labels | default({}, true))['hybridsovereign.redhat/attachmentcircuit'] | default('') != fab_name
+              or (_meta.ownerReferences | default([], true) | selectattr('uid', 'equalto', fab_obj.metadata.uid) | list | length) == 0
+
+        - name: Stop on a Secret that is not the circuit's
+          ansible.builtin.fail:
+            msg: "{{ fab_fail_msg }}"
+          when: fab_fail_reason | default('') == 'InvalidSecret'
+
         - name: Read the kept password
           ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/vault_kv_read.yml"
           vars:
