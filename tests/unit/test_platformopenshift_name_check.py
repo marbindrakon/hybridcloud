@@ -62,6 +62,73 @@ class NameCheck(unittest.TestCase):
             self.assertEqual(rc, 0, out)
 
 
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class CloudIdentityName(unittest.TestCase):
+    """cloud_identity_refusal.yml after the AWS (sts-up) and Google Cloud (wif-up) identity steps, called soft: the
+    helper's NameTakenOnSite (an object of the wanted name without the platform's mark) becomes the cluster's reason;
+    the helper's sentence, which names the cloud's object, stays in the job's log; any other failure is the step's
+    sentence; no failure goes on."""
+
+    def run_r(self, error, result):
+        extra = {"ansible_operator_meta": {"name": "web", "namespace": "entity-acme-corp"}, "cir_error": error,
+                 "cir_result": result, "cir_cloud": "Google Cloud",
+                 "shc_step": "Prepare the cluster's identity on Google Cloud"}
+        rc, trace, out = H.run("platformopenshift_provision", "cloud_identity_refusal.yml", extra, dump_vars=True,
+                               result="'went on'")
+        return rc, trace, json.loads(H.LAST_VARS), out
+
+    def test_states(self):
+        taken = "Service account shc-web-x already exists in the project and was not made by the platform"
+        rc, _, facts, out = self.run_r(taken, {"ok": False, "error": taken, "reason": "NameTakenOnSite"})
+        self.assertNotEqual(rc, 0)
+        self.assertEqual(facts["po_fail_reason"], "NameTakenOnSite")
+        self.assertNotIn("shc-web-x", facts["po_preflight_condition"]["message"])
+        self.assertIn("was not made by the platform for this cluster", facts["po_preflight_condition"]["message"])
+        self.assertIn("shc-web-x", out)                        # the job's log
+        rc, _, facts, out = self.run_r("HTTP 500", {"ok": False, "error": "HTTP 500"})
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("po_fail_reason", facts)
+        self.assertIn("Prepare the cluster's identity on Google Cloud", out)
+        rc, trace, _, out = self.run_r("", {"ok": True})
+        self.assertEqual((rc, trace[-1]), (0, {"result": "went on"}), out)
+
+    def test_both_identity_steps_are_soft_and_checked(self):
+        for f, call in (("gcp_clusterbuild_wif.yml", "wif-up"), ("aws_clusterbuild_sts.yml", "sts-up")):
+            with open(os.path.join(ROLE, "tasks", f)) as fh:
+                text = fh.read()
+            i = text.index("[" + call)
+            self.assertIn("_soft: true", text[i - 300:i], f)
+            self.assertIn("cloud_identity_refusal.yml", text[i:i + 600], f)
+
+
+@unittest.skipUnless(H.HAVE_ANSIBLE, "ansible-playbook not installed")
+class IssuerLabelKeys(unittest.TestCase):
+    """The static issuer's label keys are the product's (hybridsovereign.redhat/oidc-static, oidc-name); the teardown
+    looks for the build's ConfigMap under the product key and under the older one, and removes it once."""
+
+    def test_jobs_write_the_product_keys(self):
+        for f in ("aws_clusterbuild_sts.yml", "gcp_clusterbuild_wif.yml"):
+            with open(os.path.join(ROLE, "tasks", f)) as fh:
+                text = fh.read()
+            self.assertIn('hybridsovereign.redhat/oidc-static: "true"', text, f)
+            self.assertIn("hybridsovereign.redhat/oidc-name:", text, f)
+            self.assertNotIn("shc.signal9.gg", text, f)
+
+    def test_teardown_looks_for_both_keys(self):
+        cm = {"metadata": {"name": "oidc-static-shc-gcp-web-acme-0a1b2c3d", "namespace": "issuers"}}
+        extra = {"central_api_host": "https://hub.example.org", "central_bearer_token": "central-token-not-in-data",
+                 "po_build_name": "shc-gcp-web-acme-0a1b2c3d"}
+        rc, trace, out = H.run("platformopenshift_teardown", "unpublish_issuer.yml", extra,
+                               k8s={"ConfigMap//": [cm]}, result="1")
+        self.assertEqual(rc, 0, out)
+        with open(os.path.join(H.ROOT, "eda", "rulebooks", "roles", "platformopenshift_teardown", "tasks",
+                               "unpublish_issuer.yml")) as fh:
+            task = H.yaml.safe_load(fh)[0]
+        self.assertEqual(task["loop"], ["hybridsovereign.redhat/oidc-name", "shc.signal9.gg/oidc-name"])
+        self.assertEqual(len([t for t in trace if "k8s_info" in t]), 2)
+        self.assertEqual([t["k8s"]["name"] for t in trace if "k8s" in t], [cm["metadata"]["name"]])
+
+
 class Wiring(unittest.TestCase):
     def test_first_step_of_the_job(self):
         with open(os.path.join(ROLE, "tasks", "main.yml")) as f:
