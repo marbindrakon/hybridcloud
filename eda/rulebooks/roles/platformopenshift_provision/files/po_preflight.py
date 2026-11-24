@@ -284,7 +284,13 @@ def network(req):
     if not ready:
         hold("WaitingForPlacement", f"NetworkPlacement {pref} of HybridNetwork {name} in {kind} {env} is not ready yet")
     site = ((pst.get("realization") or {}).get("site") or {})
-    out.update(networkId=str(site.get("networkId") or ""), networkName=str(site.get("networkName") or ""))
+    if kind == "CloudOSO":
+        # the network on the OpenStack site as the placement recorded it for the tenant (its name is the one the
+        # installer is given; never rebuilt here)
+        sn = pst.get("siteNetwork") or {}
+        out.update(networkId=str(sn.get("id") or ""), networkName=str(sn.get("name") or ""))
+    else:
+        out.update(networkId=str(site.get("networkId") or ""), networkName=str(site.get("networkName") or ""))
     if flag(req.get("needRouterAttachments")):
         if not ((pspec.get("use") or {}).get("routerAttachments") is True):
             return result("RouterAttachmentsOff", f"NetworkPlacement {pref} does not allow router attachments "

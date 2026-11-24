@@ -41,11 +41,16 @@ def network_obj(reach=("True", "Attachable", ""), space=("192.0.2.0/24",)):
 
 def placement(kind="CloudOSO", env="env1", ready=True, ra=True, ra_state="ready", subnets=(("4", "192.0.2.0/25"),),
               site=None):
+    _site = site if site is not None else {"networkId": "net-1", "networkName": "shc-n1"}
     return {"metadata": {"name": "p1", "namespace": NS},
             "spec": {"network": "n1", "backend": {"kind": kind, "name": env}, **({"use": {"routerAttachments": ra}} if ra is not None else {})},
             "status": {"ready": ready, "subnets": [{"family": int(f), "prefix": p} for f, p in subnets],
                        "use": {"routerAttachments": {"state": ra_state}},
-                       "realization": {"site": site if site is not None else {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                       "realization": {"site": _site},
+                       # the OpenStack network as the placement records it for the tenant (the name the installer
+                       # is given)
+                       **({"siteNetwork": {"id": _site.get("networkId"), "name": _site.get("networkName")}}
+                          if kind == "CloudOSO" and "networkId" in _site else {})}}
 
 
 def fabric(enabled=True, ranges=("192.0.2.0/24",), endpoints=({"prefix": "198.18.0.10/32", "ports": [6443]},),
@@ -163,6 +168,17 @@ class Networking(unittest.TestCase):
 
 
 class NetworkJudge(unittest.TestCase):
+    def test_the_openstack_network_is_read_from_the_placements_record(self):
+        """The name the installer is given is the placement's status.siteNetwork, never rebuilt or taken elsewhere."""
+        p = placement()
+        p["status"]["siteNetwork"] = {"id": "net-9", "name": "acme-corp_core-prod"}
+        p["status"]["realization"]["site"] = {"networkId": "net-1", "networkName": "hn51003"}
+        r = judge(placements=[p])
+        self.assertEqual((r["networkId"], r["networkName"]), ("net-9", "acme-corp_core-prod"))
+        del p["status"]["siteNetwork"]
+        r = judge(placements=[p])
+        self.assertEqual(r["reason"], "WaitingForPlacement", r)
+
     def test_passes(self):
         r = judge()
         self.assertEqual(r["reason"], "", r["message"])

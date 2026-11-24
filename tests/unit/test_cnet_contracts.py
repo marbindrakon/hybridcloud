@@ -224,7 +224,7 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
                               "use": {"routerAttachments": True}},
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                                "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
         real = realization()
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
@@ -479,7 +479,7 @@ def placement_obj():
             "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"}, "use": {"routerAttachments": True}},
             "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                        "use": {"routerAttachments": {"state": "ready"}},
-                       "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                       "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
 
 
 def preflight_on_the_plan(real, plan, decision, hub_api="", cluster="c2"):
@@ -869,7 +869,7 @@ class PlatformSideDown(unittest.TestCase):
                               "use": {"routerAttachments": True}},
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                                "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
                           "realization": {"service": dict(F.service_settings(real), enabled=True, sources=[HUB],
