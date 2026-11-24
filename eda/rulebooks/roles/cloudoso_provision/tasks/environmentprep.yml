@@ -8,9 +8,18 @@
 # cluster has its own Keystone user and credential (common/tasks/openstack_cluster_credential.yml), people sign
 # in with their platform identity (access.yml). An application credential an earlier release made for the
 # environment (as the site account, Vault oso/projects/<name>/clouds-config) is deleted here.
+# the project's name: <tenant>_<environment> from the names function. Found again by the id recorded in status after
+# the first run (an environment keeps the project it was given); by name only with the platform's tag
+- name: The project's name
+  ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+  vars:
+    names_request: {action: name, kind: openstack-project, parts: ["{{ entity_name }}", "{{ cloudoso_cr_name }}"]}
+
 - name: Set environmentprep spec facts
   ansible.builtin.set_fact:
-    ep_project: "{{ entity_name }}_{{ cloudoso_cr_name }}"
+    ep_project: "{{ names_result.name }}"
+    ep_project_display: "{{ names_result.display }}"
+    ep_project_id: "{{ (cloudoso_cr_lookup.resources[0].status | default({}, true)).projectId | default('', true) }}"
     # shc (P7.1): from the CloudInfrastructure (cloudref.yml), or the legacy spec/defaults
     ep_vault_path: "{{ oso_settings.vaultPath }}"
     ep_base_domain: "{{ oso_settings.baseDomain }}"
@@ -62,16 +71,36 @@
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/openstack_call.yml"
   vars:
     os_call_no_log: false
+    os_call_soft: true
     os_request:
       action: provision
       domain: "{{ ep_project_domain }}"
       project: "{{ ep_project }}"
-      description: "Sovereign Cloud project for {{ entity_name }} (CloudOSO {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }})"
+      project_id: "{{ ep_project_id }}"
+      # the platform's mark: a project tag naming this environment (a project of the name without it is refused)
+      owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
+      # refreshed on each run
+      description: >-
+        Environment {{ cloudoso_cr_name }} of tenant {{ entity_name }} ({{ ep_project_display }}; CloudOSO
+        {{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}). Managed by the sovereign cloud platform; do not change.
       legacy_app_cred_ids: "{{ [ep_legacy_cred_id] | select | list }}"
       legacy_app_cred_name: "sovereign-{{ ep_project }}"
       region: "{{ ep_region_name }}"
       dns_zone_id: "{{ ep_designate_zone_id if ep_dns_provider == 'designate' else '' }}"
       dns_project_id: "{{ ep_designate_project_id }}"
+
+- name: Refuse a project of that name the platform did not make for this environment
+  when: os_result.error is defined
+  block:
+    - name: Record the reason
+      ansible.builtin.set_fact:
+        cloudoso_failure_reason: "{{ os_result.reason | default('EDAFailed', true) }}"
+
+    - name: Stop before anything else is made
+      ansible.builtin.fail:
+        msg: >-
+          {{ os_result.message if (os_result.reason | default('', true)) == 'NameTakenOnSite'
+             else 'OpenStack provision failed: ' ~ os_result.error }}
 
 - name: Keep the provision result
   ansible.builtin.set_fact:

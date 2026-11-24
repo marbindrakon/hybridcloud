@@ -71,6 +71,16 @@
         sph_site: "{{ rca_site }}"
       when: rca_site | length > 0 and (ci_paused | default(false) | bool)
 
+    # a provision that failed before it recorded the project: the project of the name, and only with this
+    # environment's tag (check-empty and teardown look for it)
+    - name: The project's name when none is recorded
+      ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/names_call.yml"
+      vars:
+        _entity: >-
+          {{ (ns_info.resources | default([]) | first | default({})).metadata.labels['hybridsovereign.redhat/entity']
+             | default(cloudoso_cr_namespace | regex_replace('^entity-', '')) }}
+        names_request: {action: name, kind: openstack-project, parts: ["{{ _entity | trim }}", "{{ cloudoso_cr_name }}"]}
+
     - name: Set CloudOSO teardown facts from the recorded status
       vars:
         _cr: "{{ cloudoso_cr_lookup.resources | default([]) | first | default({}) }}"
@@ -87,7 +97,8 @@
           {{ _st.domainName | default(_site_domain, true)
              | default(_spec.projectDomain | default(cloudoso_defaults.projectDomain | default(''), true), true) }}
         oso_project_id: "{{ _st.projectId | default('') }}"
-        oso_project_name: "{{ _st.projectName | default(_entity ~ '_' ~ cloudoso_cr_name, true) }}"
+        oso_project_name: "{{ _st.projectName | default(names_result.name, true) }}"
+        oso_project_owner: "CloudOSO/{{ cloudoso_cr_namespace }}/{{ cloudoso_cr_name }}"
         oso_fip_ids: "{{ [_st.apiFloatingIPId | default(''), _st.ingressFloatingIPId | default('')] | select | list }}"
         oso_app_cred_ids: "{{ [_st.appCredentialId | default('')] | select | list }}"
         oso_dns_provider: "{{ _st.dnsProvider | default('') }}"
@@ -125,6 +136,7 @@
               domain: "{{ oso_project_domain }}"
               project_id: "{{ oso_project_id }}"
               project: "{{ oso_project_name }}"
+              owner: "{{ oso_project_owner }}"
               allowed_fip_ids: "{{ oso_fip_ids }}"
               # an environment zone holds its own SOA/NS and goes with the environment (T4): no record check
               dns_zone_id: "{{ oso_dns_zone_id if (oso_dns_provider == 'designate' and (oso_env_dns.zoneId | default('')) | length == 0) else '' }}"
@@ -182,6 +194,7 @@
               domain: "{{ oso_project_domain }}"
               project_id: "{{ oso_project_id }}"
               project: "{{ oso_project_name }}"
+              owner: "{{ oso_project_owner }}"
               fip_ids: "{{ oso_fip_ids }}"
               fip_descriptions:
                 - "sovereign-{{ cloudoso_cr_name }}-api"

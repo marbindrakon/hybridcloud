@@ -17,3 +17,5 @@
       region: "{{ (ci_spec.openstack | default({})).region | default('') }}"
       domain: "{{ fab_real.openstack.projectDomain | default((ci_spec.openstack | default({})).projectDomain, true) }}"
       name: "{{ fab_real.openstack.platformProject }}"
+      # only the project this gateway recorded, or one carrying the platform's tag: never another's of that name
+      project_id: "{{ ((fab_st.site | default({}, true)).project | default({}, true)).id | default('', true) }}"
