@@ -224,7 +224,7 @@ class PlatformReachableAndThePreflight(unittest.TestCase):
                               "use": {"routerAttachments": True}},
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                                "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
         real = realization()
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
@@ -378,7 +378,10 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
                                 fake_os={"cluster-fips/present": {"api": {"address": "x", "id": "y"},
                                                                   "ingress": {"address": "x", "id": "y"}}})[0]
         out = self.helper(conn, present)
-        self.assertEqual(sorted(i.description for i in conn.network.fips), ["shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress"])
+        # the cluster's name in words, the build name as the platform's mark
+        self.assertEqual(sorted(i.description for i in conn.network.fips),
+                         ["OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
+                          "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"])
         again = self.helper(conn, present)
         self.assertEqual((again["api"]["id"], again["api"]["created"]), (out["api"]["id"], False))
         # the release by the record and by description (a floating IP created by a run that did not record it)
@@ -388,6 +391,22 @@ class ClusterFloatingIPsAgainstTheHelper(unittest.TestCase):
         gone = self.helper(conn, absent)
         self.assertEqual(sorted(gone["released"]), sorted([out["api"]["id"], out["ingress"]["id"]]))
         self.assertEqual(conn.network.fips, [])
+
+    def test_a_cluster_that_recorded_its_floating_ips_keeps_their_descriptions(self):
+        import test_shc_openstack_cluster_fips as S3
+        conn = S3.FakeConn()
+        older = [conn.network.create_ip(floating_network_id=S3.NET, description=d)
+                 for d in ("shc-oso-acme-c1-api", "shc-oso-acme-c1-ingress")]
+        rec = {"api": {"address": older[0].floating_ip_address, "id": older[0].id},
+               "ingress": {"address": older[1].floating_ip_address, "id": older[1].id}}
+        present = self.requests("cluster_fips.yml", cb_app_name="shc-oso-acme-c1", cf_project_id=S3.PROJECT,
+                                cf_network_id=S3.NET, cf_account="sites/site1",
+                                po_cr_current={"resources": [{"status": {"floatingIPs": rec}}]},
+                                fake_os={"cluster-fips/present": {"api": {"address": "x", "id": "y"},
+                                                                  "ingress": {"address": "x", "id": "y"}}})[0]
+        out = self.helper(conn, present)
+        self.assertEqual((out["api"]["id"], out["api"]["created"], out["ingress"]["id"]), (older[0].id, False, older[1].id))
+        self.assertEqual(len(conn.network.fips), 2)
 
     def test_the_environment_releases_a_legacy_pair(self):
         import test_shc_openstack_cluster_fips as S3
@@ -460,7 +479,7 @@ def placement_obj():
             "spec": {"network": "n1", "backend": {"kind": "CloudOSO", "name": "env1"}, "use": {"routerAttachments": True}},
             "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                        "use": {"routerAttachments": {"state": "ready"}},
-                       "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                       "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
 
 
 def preflight_on_the_plan(real, plan, decision, hub_api="", cluster="c2"):
@@ -850,7 +869,7 @@ class PlatformSideDown(unittest.TestCase):
                               "use": {"routerAttachments": True}},
                      "status": {"ready": True, "subnets": [{"family": 4, "prefix": "192.0.2.0/25"}],
                                 "use": {"routerAttachments": {"state": "ready"}},
-                                "realization": {"site": {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                                "siteNetwork": {"id": "net-1", "name": "shc-n1"}}}
         fab = {"metadata": {"name": FABRIC},
                "status": {"reservedRanges": F.reserved_ranges(real),
                           "realization": {"service": dict(F.service_settings(real), enabled=True, sources=[HUB],

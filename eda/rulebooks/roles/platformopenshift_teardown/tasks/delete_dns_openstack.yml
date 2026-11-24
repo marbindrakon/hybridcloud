@@ -18,6 +18,8 @@
       dns_zone_id: "{{ item.0 }}"
       dns_project_id: "{{ po_dns.projectId }}"
       records: "{{ item.1 }}"
+      # only the records with the platform's mark for this cluster go (description shc:<owner>)
+      owner: "PlatformOpenshift/{{ platformopenshift_cr_namespace }}/{{ platformopenshift_cr_name }}"
   loop: "{{ po_dns.records | groupby('zoneId') }}"
   loop_control:
     label: "{{ item.0 }}: {{ item.1 | map(attribute='name') | join(', ') }}"

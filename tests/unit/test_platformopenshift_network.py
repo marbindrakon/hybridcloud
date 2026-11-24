@@ -41,11 +41,16 @@ def network_obj(reach=("True", "Attachable", ""), space=("192.0.2.0/24",)):
 
 def placement(kind="CloudOSO", env="env1", ready=True, ra=True, ra_state="ready", subnets=(("4", "192.0.2.0/25"),),
               site=None):
+    _site = site if site is not None else {"networkId": "net-1", "networkName": "shc-n1"}
     return {"metadata": {"name": "p1", "namespace": NS},
             "spec": {"network": "n1", "backend": {"kind": kind, "name": env}, **({"use": {"routerAttachments": ra}} if ra is not None else {})},
             "status": {"ready": ready, "subnets": [{"family": int(f), "prefix": p} for f, p in subnets],
                        "use": {"routerAttachments": {"state": ra_state}},
-                       "realization": {"site": site if site is not None else {"networkId": "net-1", "networkName": "shc-n1"}}}}
+                       "realization": {"site": _site},
+                       # the OpenStack network as the placement records it for the tenant (the name the installer
+                       # is given)
+                       **({"siteNetwork": {"id": _site.get("networkId"), "name": _site.get("networkName")}}
+                          if kind == "CloudOSO" and "networkId" in _site else {})}}
 
 
 def fabric(enabled=True, ranges=("192.0.2.0/24",), endpoints=({"prefix": "198.18.0.10/32", "ports": [6443]},),
@@ -79,13 +84,13 @@ class BuildName(unittest.TestCase):
         return P.build_name(dict({"prefix": "shc-oso", "entity": entity, "name": cluster}, **kw))["buildName"]
 
     def test_tenant_qualified_and_readable(self):
-        self.assertRegex(self.name("acme", "web1"), r"^shc-oso-acme-web1-[0-9a-f]{8}$")
+        self.assertRegex(self.name("acme", "web1"), r"^shc-oso-web1-acme-[0-9a-f]{8}$")
 
     def test_a_hyphen_from_either_side_does_not_collide(self):
-        # the pair of the review: tenant acme-corp's prod and tenant acme's corp-prod read alike
-        names = {self.name("acme-corp", "prod"), self.name("acme", "corp-prod"), self.name("acme", "corp.prod")}
+        # the cluster's name first: tenant acme-corp's prod and tenant corp's prod-acme read alike
+        names = {self.name("acme-corp", "prod"), self.name("corp", "prod-acme"), self.name("corp", "prod.acme")}
         self.assertEqual(len(names), 3)
-        self.assertTrue(all(n.startswith("shc-oso-acme-corp-prod-") for n in names))
+        self.assertTrue(all(n.startswith("shc-oso-prod-acme-corp-") for n in names))
 
     def test_one_tenant_dot_and_hyphen_do_not_collide(self):
         self.assertNotEqual(self.name("acme", "prod.1"), self.name("acme", "prod-1"))
@@ -107,7 +112,7 @@ class BuildName(unittest.TestCase):
     def test_cloud_limit(self):
         n = self.name("acme-corp", "a-rather-long-cluster-name", prefix="shc-aws", max=40)
         self.assertLessEqual(len(n), 40)
-        self.assertTrue(n.startswith("shc-aws-acme-corp-a-rather"))
+        self.assertTrue(n.startswith("shc-aws-a-rather-long-cluster"), n)
         self.assertNotEqual(n, self.name("acme-corp", "a-rather-long-cluster-name2", prefix="shc-aws", max=40))
 
     def test_two_tenants_same_cluster_name_differ(self):
@@ -163,6 +168,17 @@ class Networking(unittest.TestCase):
 
 
 class NetworkJudge(unittest.TestCase):
+    def test_the_openstack_network_is_read_from_the_placements_record(self):
+        """The name the installer is given is the placement's status.siteNetwork, never rebuilt or taken elsewhere."""
+        p = placement()
+        p["status"]["siteNetwork"] = {"id": "net-9", "name": "acme-corp_core-prod"}
+        p["status"]["realization"]["site"] = {"networkId": "net-1", "networkName": "hn51003"}
+        r = judge(placements=[p])
+        self.assertEqual((r["networkId"], r["networkName"]), ("net-9", "acme-corp_core-prod"))
+        del p["status"]["siteNetwork"]
+        r = judge(placements=[p])
+        self.assertEqual(r["reason"], "WaitingForPlacement", r)
+
     def test_passes(self):
         r = judge()
         self.assertEqual(r["reason"], "", r["message"])
@@ -785,10 +801,13 @@ class OpenstackAddressesFile(unittest.TestCase):
         self.assertEqual((rec["buildName"], rec["publish"], rec["externalNetwork"]), ("shc-oso-acme-c1", "Internal", None))
         req = H.os_calls(tr, "cluster-fips")[0]
         self.assertEqual((req["project_id"], req["network_id"], req["descriptions"]),
-                         ("proj-1", "net-1", {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
+                         ("proj-1", "net-1", {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
+                          "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)"}))
         self.assertEqual(H.patches(tr)[1]["body"]["floatingIPs"],
-                         {"network": "net-1", "api": {"address": "192.0.2.15", "id": "fip-a"},
-                          "ingress": {"address": "192.0.2.16", "id": "fip-i"}})
+                         {"api": {"address": "192.0.2.15", "id": "fip-a", "description": "OpenShift cluster c1: API "
+                                  "(platform build shc-oso-acme-c1)"},
+                          "ingress": {"address": "192.0.2.16", "id": "fip-i", "description": "OpenShift cluster c1: "
+                                      "ingress (platform build shc-oso-acme-c1)"}})
         self.assertEqual(H.patches(tr)[2]["body"]["platformPrefixes"], ["192.0.2.15/32", "192.0.2.16/32"])
         self.assertEqual([t for t in tr if "nudge" in t][0]["nudge"], [{"kind": "HybridNetwork", "namespace": NS, "name": "n1"}])
         self.assertEqual(tr[-1]["result"], ["192.0.2.15", "192.0.2.16"])
@@ -807,7 +826,9 @@ class OpenstackAddressesFile(unittest.TestCase):
                                               "patch:floatingIPs"])
         rel = H.os_calls(tr, "cluster-fips")[1]
         self.assertEqual((rel["ids"], rel["descriptions"]),
-                         (["fip-a", "fip-i"], {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
+                         (["fip-a", "fip-i"], {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
+                           "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)",
+                           "api-older": "shc-oso-acme-c1-api", "ingress-older": "shc-oso-acme-c1-ingress"}))
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
 
     def test_refused_prefix_withdrawn_and_released(self):
@@ -893,6 +914,43 @@ class DnsRecordedBeforeCreated(unittest.TestCase):
         self.assertEqual([(r["zoneId"], r["name"], r["type"]) for r in dns["records"]],
                          [("zone-1", "api.c1.env1.example.org.", "A"), ("zone-1", "*.apps.c1.env1.example.org.", "A")])
         self.assertTrue(H.patches(tr)[0]["partial"])
+
+    DESIGNATE = dict(cb_api_vip="192.0.2.15", cb_ingress_vip="192.0.2.16", cb_ocp_name="c1",
+                     cb_cluster_domain="env1.example.org", cb_cluster_name="shc-oso-acme-c1", use_designate_dns=True,
+                     designate_zone_id="zone-1", designate_project_id="dnsproj-1",
+                     designate_admin_vault_path="sites/site1")
+
+    def test_designate_records_carry_the_clusters_owner(self):
+        """The helper marks the records shc:<owner> and refuses an empty owner: the request names the cluster."""
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": {"records": []}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1")
+        self.assertEqual(rc, 0, out)
+        req = H.os_calls(tr, "dns-upsert")[0]
+        self.assertEqual(req["owner"], f"PlatformOpenshift/{CR['namespace']}/{CR['name']}")
+
+    def test_a_record_the_platform_did_not_make_is_refused(self):
+        taken = {"error": "refused", "reason": "NameTakenOnSite",
+                 "message": "The DNS name api.c1.env1.example.org. already has a A record ..."}
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": taken})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        facts = json.loads(H.LAST_VARS)
+        self.assertEqual(facts["po_fail_reason"], "NameTakenOnSite")
+        self.assertIn("api.c1.env1.example.org", facts["po_preflight_condition"]["message"])
+        # any other failure is the step's sentence, no refusal reason
+        v = dict(BASE, **self.DESIGNATE, fake_os={"dns-upsert": {"error": "HTTP 503"}})
+        rc, tr, out = H.run("platformopenshift_provision", "designate_dns.yml", v, result="1", dump_vars=True)
+        self.assertNotEqual(rc, 0)
+        self.assertNotIn("po_fail_reason", json.loads(H.LAST_VARS))
+        self.assertIn("Write the cluster's DNS names", out)
+
+    def test_the_teardown_deletes_only_the_clusters_records(self):
+        v = dict(TD_BASE, po_dns={"provider": "designate", "projectId": "dnsproj-1", "records": [
+            {"zoneId": "zone-1", "name": "api.c1.env1.example.org.", "type": "A"}]},
+            po_dns_account_vault_path="sites/site1", fake_os={"dns-delete": {"deleted": [], "missing": [], "kept": []}})
+        rc, tr, out = H.run("platformopenshift_teardown", "delete_dns_openstack.yml", v, result="1")
+        self.assertEqual(rc, 0, out)
+        self.assertEqual(H.os_calls(tr, "dns-delete")[0]["owner"], f"PlatformOpenshift/{NS}/c1")
 
     def test_route53(self):
         tasks = load(os.path.join(TASKS, "openstack_clusterbuild.yml"))
@@ -1332,7 +1390,9 @@ class TeardownRelease(unittest.TestCase):
         req = H.os_calls(tr, "cluster-fips")[0]
         self.assertEqual((req["state"], req["project_id"], req["ids"], req["descriptions"]),
                          ("absent", "proj-1", ["fip-a", "fip-i"],
-                          {"api": "shc-oso-acme-c1-api", "ingress": "shc-oso-acme-c1-ingress"}))
+                          {"api": "OpenShift cluster c1: API (platform build shc-oso-acme-c1)",
+                           "ingress": "OpenShift cluster c1: ingress (platform build shc-oso-acme-c1)",
+                           "api-older": "shc-oso-acme-c1-api", "ingress-older": "shc-oso-acme-c1-ingress"}))
         self.assertIsNone(H.patches(tr)[-1]["body"]["floatingIPs"])
 
     def test_environment_gone(self):
@@ -1389,10 +1449,16 @@ class Renders(unittest.TestCase):
     def test_aws_and_gcp_ranges(self):
         for name in ("install-config.yaml.j2", "install-config-gcp.yaml.j2"):
             ic = self.render(name, cb_install_base_domain="example.org", cb_machine_cidr="10.10.0.0/16", cb_region="r1",
-                             cb_app_name="shc-aws-acme-c1", cb_project="p1")
+                             cb_app_name="shc-aws-acme-c1", cb_project="p1", resolved_entity="acme",
+                             aws_env_name="prod", gcp_env_name="prod",
+                             ansible_operator_meta={"name": "c1", "namespace": "entity-acme"})
             self.assertEqual(ic["networking"]["clusterNetwork"], [{"cidr": "10.200.0.0/16", "hostPrefix": 24}], name)
             self.assertEqual(ic["networking"]["machineNetwork"], [{"cidr": "10.10.0.0/16"}], name)
             self.assertEqual(ic["compute"][0]["replicas"], 0, name)
+            # the tenant's, the environment's and the cluster's names in full on what the installer makes
+            tags = (ic["platform"]["aws"]["userTags"] if "aws" in ic["platform"]
+                    else {t["key"]: t["value"] for t in ic["platform"]["gcp"]["userLabels"]})
+            self.assertEqual((tags["shc-tenant"], tags["shc-environment"], tags["shc-cluster"]), ("acme", "prod", "c1"))
 
 
 # ---- structure --------------------------------------------------------------------------------------------------------
@@ -1529,7 +1595,9 @@ class TeardownPaths(unittest.TestCase):
         build, paths = self.paths(cr)
         self.assertEqual(build, "shc-oso-acme-c1")
         self.assertIn("cluster/oso/shc-oso-acme-c1/admin-kubeconfig", paths)
-        self.assertIn("oso/projects/env1/clusters/c1/install-config", paths)
+        self.assertIn("cluster/oso/shc-oso-acme-c1/build/install-config", paths)
+        # no path named after the environment without the tenant
+        self.assertFalse([p for p in paths if p.startswith("oso/projects/")])
         self.assertFalse([p for p in paths if p.startswith("cluster/oso/c1/")])
 
     def test_openstack_without_record_uses_the_derived_name(self):

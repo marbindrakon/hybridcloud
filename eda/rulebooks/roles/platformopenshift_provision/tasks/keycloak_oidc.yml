@@ -4,11 +4,11 @@
 #
 # Inputs (must be set by caller):
 #   cluster_name       - PlatformOpenshift CR name (e.g. ocp-ses4); the ManagedCluster's name
-#   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (shc AWS builds: shc-aws-<entity>-<name>)
+#   cluster_ocp_name   - optional: the OpenShift cluster name when it differs (the build name of AWS and Google Cloud builds)
 #   cluster_cr_name    - optional: the PlatformOpenshift's name when it differs from cluster_name (read by cluster_rbac.yml)
-#   cluster_console_url - https://console-openshift-console.apps.<slug>.<domain>
-#   cluster_api_url     - https://api.<slug>.<domain>:6443
-#   cluster_apps_url    - https://apps.<slug>.<domain>
+#   cluster_console_url - https://console-openshift-console.apps.<cluster domain>
+#   cluster_api_url     - https://api.<cluster domain>:6443
+#   cluster_apps_url    - https://apps.<cluster domain>
 #   cluster_domain      - the cluster's DNS domain (<name>.<environment domain>); its OAuth server is
 #                         oauth-openshift.apps.<cluster_domain>. Empty: taken from cluster_api_url (https://api.<domain>:6443)
 #   cluster_namespace   - CR namespace (e.g. entity-acme-corp)
@@ -18,6 +18,7 @@
 # Reads:
 #   the RHBK Route on services and the admin account in central Vault (keycloak_admin_session.yml)
 #   KEYCLOAK_REALM env var (defaults to sovereign-tenants)
+#   resolved_entity    the tenant (the cluster's groups are <tenant>.<group>)
 
 - name: Skip OIDC setup if console URL not yet available or central token is missing
   ansible.builtin.set_fact:
@@ -184,28 +185,17 @@
   when: not (skip_oidc_setup | bool)
   no_log: true
 
-- name: Add groups mapper to OIDC client (if not present)
-  ansible.builtin.uri:
-    url: "{{ kc_base_url }}/admin/realms/{{ keycloak_realm }}/clients/{{ _kc_client_info.json[0].id }}/protocol-mappers/models"
-    method: POST
-    headers:
-      Authorization: "Bearer {{ kc_admin_token }}"
-      Content-Type: application/json
-    body_format: json
-    body:
-      name: groups
-      protocol: openid-connect
-      protocolMapper: oidc-group-membership-mapper
-      config:
-        "full.path": "false"
-        "id.token.claim": "true"
-        "access.token.claim": "true"
-        "userinfo.token.claim": "true"
-        "claim.name": "groups"
-    validate_certs: false
-    status_code: [201, 409]
+# Who gets what on the cluster, and who can sign in at all, before the cluster is given the identity provider: the
+# client roles <tenant>.<group> of the cluster's access groups (cluster_signin_groups.yml), then the client's groups
+# claim from those roles and the limit that only their holders can sign in (cluster_signin_limit.yml). A cluster
+# whose limit is not in place is not connected to the directory.
+- name: The cluster's access groups as client roles of its sign-in client
+  ansible.builtin.include_tasks: cluster_signin_groups.yml
   when: not (skip_oidc_setup | bool)
-  ignore_errors: true
+
+- name: Only the cluster's people can sign in to its client
+  ansible.builtin.include_tasks: cluster_signin_limit.yml
+  when: not (skip_oidc_setup | bool)
 
 - name: Encode OIDC client secret as base64
   ansible.builtin.set_fact:

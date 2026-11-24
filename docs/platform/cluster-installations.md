@@ -116,6 +116,53 @@ Installation defaults, in the `platformopenshift_defaults` inventory variable un
 The number of installer attempts is the `ClusterDeployment`'s `installAttemptsLimit` (3, set by the
 `mce-cluster-build` chart).
 
+## Who can sign in to a tenant's cluster
+
+The identity realm is shared by all tenants, so a tenant's cluster takes only its own tenant's groups and lets only
+the people of those groups sign in:
+
+- Each access group the cluster names (`spec.toolRbac`: `clusterAdminRbac`, `clusterOperatorRbac`,
+  `clusterDeveloperRbac`, `clusterViewerRbac`) becomes a client role `<tenant>.<group>` of the cluster's own sign-in
+  client, mapped to the access group's group in the directory, as on the services cluster and the sites. The
+  client's groups claim holds the person's roles of that client only, so the cluster sees the group
+  `<tenant>.<group>` and never another tenant's group of the same name. The cluster's bindings
+  (`<build>-cluster-admin`, `-cluster-operator`, `-cluster-developer`, `-cluster-viewer`) name exactly those groups;
+  a level without an access group has no binding.
+- Only a person who holds one of those roles can sign in to the cluster's client: each of them holds the client's
+  role `sign-in`, and the client's browser flow (`<sign-in client>`, or `<sign-in client>-b` after a change) ends in
+  the identity provider's Deny Access step for anyone without it, also for a person who is already signed in to the
+  realm. A refused person sees the identity provider's error page: "You cannot sign in to this cluster: you are not
+  in one of its access groups. Ask the people who run the cluster to add you to one of them." Everyone who may sign
+  in also appears in the cluster's group `sign-in`.
+- An access group whose group is not in the directory yet gets nothing; the job's log names it.
+- A person who signs in through another identity provider brokered by the realm, without a session in the realm, is
+  not checked by the client's browser flow (the identity provider finishes such a sign-in without it). Such a person
+  still gets no rights on the cluster unless they hold one of its roles. Where the realm brokers other providers,
+  limit their sign-in with the provider's post-login flow.
+
+The flows need the realm's automation client of purpose `flows`, with the realm-management role `manage-realm`,
+published by the RbacConfig in central Vault next to the `membership` and `clients` ones (keys `flowsClientId`,
+`flowsClientSecret`). Without it the job does not connect the cluster to the directory and says which client is
+missing. The cluster's flows go with its sign-in client when it is deleted; a flow of the same name that the platform
+did not make is refused, never changed.
+
+## The names the platform gives a cluster
+
+- **Build name** (`status.buildName`, the cluster's identity on the hub): `shc-<oso|aws|gcp>-<cluster>-<tenant>-<8
+  hex>`, the cluster's own name first, cut to fit (53 characters on OpenStack, 40 on AWS and Google Cloud) and ended
+  by a digest of the exact tenant and cluster. A recorded build name stays the cluster's.
+- **OpenStack user and application credential**: `<tenant>_<environment>_<cluster>`, described with the same names.
+  A cluster that recorded its user (`status.credential.user`) keeps that name.
+- **OpenStack floating IPs**: described `OpenShift cluster <cluster>: API (platform build <build>)` and `...:
+  ingress (...)`, recorded with their ids and descriptions in `status.floatingIPs`. A cluster that recorded its
+  floating IPs keeps their descriptions.
+- **Tags and labels** on what the installer makes on AWS and Google Cloud: `shc-tenant`, `shc-environment` and
+  `shc-cluster` carry the names in full, next to `shc-managed` and `shc-build`.
+- The cluster's, the tenant's and the environment's names are checked before anything is made: a letter first,
+  lower-case letters, digits and single hyphens, a letter or digit last, at most 30 characters; on Google Cloud a
+  cluster name may not start with `goog` or contain `google` or a look-alike (the installer's own rule). A name that
+  breaks the rule stops the job with reason `NameNotAllowed`.
+
 ## The cause a tenant sees
 
 The job reads the cause of a failed attempt from the installer's log on the `ClusterProvision` (`spec.installLog`) and
@@ -203,6 +250,10 @@ OpenStack) cannot change after creation.
   worker count was applied, and it still is.
 - **All clusters:** `spec.type` and the environment can no longer change, and on AWS and Google Cloud neither can the
   region nor the network.
+- **Sign-in of existing clusters:** the next run of an installed cluster gives it the tenant's groups and the sign-in
+  limit above: its bindings are replaced (the groups without the tenant are no longer bound) and people outside its
+  access groups can no longer sign in. People who sign in again get their groups `<tenant>.<group>`; the cluster's
+  old groups of bare names are left on the cluster with no binding and can be deleted there.
 - **Clusters installing during the upgrade:** a provision job that is already running finishes the old way; the next
   run of the cluster writes the new fields.
 - **OpenStack clusters on a hybrid network whose installation stopped** are no longer reinstalled about every two

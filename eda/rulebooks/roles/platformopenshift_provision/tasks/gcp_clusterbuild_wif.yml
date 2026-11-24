@@ -95,8 +95,8 @@
             name: "oidc-static-{{ cb_app_name }}"
             namespace: "{{ cb_issuer_namespace }}"
             labels:
-              shc.signal9.gg/oidc-static: "true"
-              shc.signal9.gg/oidc-name: "{{ cb_app_name }}"
+              hybridsovereign.redhat/oidc-static: "true"
+              hybridsovereign.redhat/oidc-name: "{{ cb_app_name }}"
               app.kubernetes.io/managed-by: eda-platformopenshift
           data:
             keys.json: "{{ cb_jwks | to_json }}"
@@ -195,9 +195,18 @@
         shc_step: "Prepare the cluster's identity on Google Cloud"
         gcp_helper: shc_gcp_cluster.py
         gcp_config: "{{ cb_gcp_cfg }}"
+        gcp_soft: true
         gcp_args: [wif-up, --cluster, "{{ cb_app_name }}", --issuer, "{{ cb_issuer }}",
                    --release, "{{ _cb_imageset.resources[0].spec.releaseImage }}",
                    --manifests-dir, "/tmp/{{ cb_app_name }}-manifests"]
+
+    - name: A name on Google Cloud that is not this cluster's
+      ansible.builtin.include_tasks: cloud_identity_refusal.yml
+      vars:
+        shc_step: "Prepare the cluster's identity on Google Cloud"
+        cir_error: "{{ gcp_error }}"
+        cir_result: "{{ gcp_result }}"
+        cir_cloud: Google Cloud
 
     - name: Keep the result
       ansible.builtin.set_fact:

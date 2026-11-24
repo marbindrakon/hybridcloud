@@ -17,7 +17,7 @@ import unittest
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), "..", ".."))
 SCRIPT = os.path.join(ROOT, "charts", "charts", "oidc-issuer", "files", "oidc-sync.sh")
 BASE = "https://issuer.example.test"
-ANN = "shc.signal9.gg/oidc-fetched-"
+ANN = "hybridsovereign.redhat/oidc-fetched-"
 
 # The fake oc: state in $FAKE/state.json; prints what the real one would or exits 1.
 FAKE_OC = textwrap.dedent(r'''

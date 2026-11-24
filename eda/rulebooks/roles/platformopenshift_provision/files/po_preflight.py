@@ -6,11 +6,13 @@ request itself is malformed. A refusal is a result, not an error: {"reason": <co
 "wait": <true when nobody needs to act and the job re-checks later>}; reason "" means the check passed.
 
 Actions (request["action"]):
-  build-name     {prefix, entity, name, max}  the cluster's build name <prefix>-<entity>-<name>-<digest>: the readable
-                 part (lower case, other characters as "-") cut to fit max characters (default 53, a Helm release
-                 name's limit), and 8 hex digits of the SHA-256 of the exact pair (entity, NUL, name), so two pairs
-                 whose readable parts read alike (a hyphen from either side, a cut) still get different names.
-                 Stable for a pair. -> {buildName}
+  build-name     {prefix, entity, name, max}  the cluster's build name <prefix>-<name>-<entity>-<digest>: the readable
+                 part, the cluster's own name first and then its tenant's (lower case, other characters as "-"), cut
+                 to fit max characters (default 53, a Helm release name's limit) so the tenant's name is what a cut
+                 takes away, never the cluster's; and 8 hex digits of the SHA-256 of the exact pair (entity, NUL,
+                 name), so two pairs whose readable parts read alike (a hyphen from either side, a cut) still get
+                 different names. Stable for a pair; a build name once recorded stays the cluster's
+                 (tasks/build_name.yml). -> {buildName}
   acm-names      {buildName, namespace}  the base of the names of the build's ACM objects in the policy namespace
                  (Policy <base>-keycloak-oidc and <base>-cluster-rbac, their Placement <policy>-placement and
                  PlacementBinding <policy>-binding, the ConfigurationPolicy templates <base>-oidc-*): ACM refuses a
@@ -124,7 +126,7 @@ def build_name(req):
     room = limit - len(prefix) - len(digest) - 2
     if room < 1:
         raise ValueError(f"build-name: {limit} characters leave no room after {prefix}")
-    readable = re.sub(r"[^a-z0-9-]", "-", f"{entity}-{name}".lower())[:room].strip("-")
+    readable = re.sub(r"[^a-z0-9-]", "-", f"{name}-{entity}".lower())[:room].strip("-")
     return {"buildName": "-".join(x for x in (prefix, readable, digest) if x)}
 
 
@@ -282,7 +284,13 @@ def network(req):
     if not ready:
         hold("WaitingForPlacement", f"NetworkPlacement {pref} of HybridNetwork {name} in {kind} {env} is not ready yet")
     site = ((pst.get("realization") or {}).get("site") or {})
-    out.update(networkId=str(site.get("networkId") or ""), networkName=str(site.get("networkName") or ""))
+    if kind == "CloudOSO":
+        # the network on the OpenStack site as the placement recorded it for the tenant (its name is the one the
+        # installer is given; never rebuilt here)
+        sn = pst.get("siteNetwork") or {}
+        out.update(networkId=str(sn.get("id") or ""), networkName=str(sn.get("name") or ""))
+    else:
+        out.update(networkId=str(site.get("networkId") or ""), networkName=str(site.get("networkName") or ""))
     if flag(req.get("needRouterAttachments")):
         if not ((pspec.get("use") or {}).get("routerAttachments") is True):
             return result("RouterAttachmentsOff", f"NetworkPlacement {pref} does not allow router attachments "

@@ -1,5 +1,5 @@
 ---
-# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<entity>-<name>-<digest> (build_name.yml) is the
+# shc (design/P11-GCP-PLAN.md §3.6): the build name shc-gcp-<name>-<entity>-<digest> (build_name.yml) is the
 # cluster's identity on the platform: Helm release, central namespace, ClusterDeployment and ManagedCluster, issuer path, workload identity pool and Vault
 # prefix. Hive's install and uninstall pods in that namespace are the ones the hub's shc-central pool trusts
 # (namespaces shc-gcp-*). The OpenShift cluster itself is <name>.<environment's domain>.
@@ -44,9 +44,10 @@
     cb_acm_cloud_label: Google
     cb_publish: "{{ gcp_publish }}"
     cb_network: "{{ gcp_network }}"
+    # the placement's VPC is added by gcp_clusterbuild_network.yml, read from the placement's status
     cb_dns_alias_argv: >-
       {{ ['python3', role_path ~ '/../../../common/files/shc_gcp_cluster.py', '--config', {'project': gcp_project, 'region': gcp_region} | to_json,
-          'dns-alias', '--state', 'up', '--zone', gcp_domain, '--name', ansible_operator_meta.name, '--network', 'shc-' ~ ((ansible_operator_meta.namespace ~ '-' ~ gcp_network ~ '-' ~ gcp_env_name) | regex_replace('[^a-z0-9-]', '-')),
+          'dns-alias', '--state', 'up', '--zone', gcp_domain, '--name', ansible_operator_meta.name,
           '--wait-seconds', '6600'] }}
 
 - name: Derive the build's paths and the project entry
@@ -86,16 +87,6 @@
     fail_msg: >-
       Set clusterIssuer.baseURL (an https address) and clusterIssuer.namespace in the Google Cloud realization (GCP_REALIZATION): the
       installation setting is missing.
-
-- name: Refuse a build name that can't serve as namespace, issuer path and pool id
-  ansible.builtin.assert:
-    that:
-      - cb_app_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
-      - cb_app_name | length <= 40
-      - cb_ocp_name is match('^[a-z0-9]([a-z0-9-]*[a-z0-9])?$')
-    fail_msg: >-
-      The cluster's build name {{ cb_app_name }} must be at most 40 characters of a-z, 0-9 and hyphens, and the
-      cluster's name a DNS label; create the cluster with a shorter name.
 
 - name: Fail without a cluster-build chart
   ansible.builtin.assert:

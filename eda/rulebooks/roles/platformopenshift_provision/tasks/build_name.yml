@@ -1,7 +1,7 @@
 ---
 # The build name of a cluster (DESIGN cnet §4.2, C-12): the cluster's identity on the hub (Helm release, namespace,
 # ClusterDeployment, ManagedCluster, Vault cluster/<provider>/<build>/). A build name once recorded
-# (status.buildName) stays the cluster's; otherwise <prefix>-<entity>-<name>-<digest> (files/po_preflight.py
+# (status.buildName) stays the cluster's; otherwise <prefix>-<name>-<entity>-<digest> (files/po_preflight.py
 # build-name: the digest of the exact pair keeps two tenants' or two clusters' names apart, the readable part is cut
 # to fit). Inputs: bn_entity, bn_name, optional bn_prefix (shc-oso), bn_max (53), bn_recorded (status.buildName).
 # Sets bn_build_name and bn_derived (the derived name, also when a recorded one wins). Included from this role and

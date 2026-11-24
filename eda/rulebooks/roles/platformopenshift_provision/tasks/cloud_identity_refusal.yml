@@ -1,0 +1,28 @@
+---
+# After the cluster's identity step on AWS or Google Cloud (sts-up, wif-up, called soft): an object of the name the
+# step wants that the platform did not make for this cluster (the helper's reason NameTakenOnSite: a role, service
+# account, custom role, pool or provider without the platform's mark) is refused with that reason, never taken over;
+# the helper's own sentence, which names the cloud's object, goes to the job's log only. Any other failure is the
+# step's sentence, as for every call. Inputs: cir_error (the call's error, '' = none), cir_result (its answer),
+# cir_cloud (AWS | Google Cloud), shc_step.
+- name: The identity step's answer, for the job's log
+  ansible.builtin.debug:
+    msg: "{{ cir_error }}"
+  when: cir_error | length > 0
+
+- name: Refuse an object of the wanted name that is not this cluster's
+  ansible.builtin.include_tasks: preflight_stop.yml
+  vars:
+    ps_reason: NameTakenOnSite
+    ps_message: >-
+      Something the cluster's identity on {{ cir_cloud }} needs already exists there under the same name and was not
+      made by the platform for this cluster; it was left untouched and nothing of the cluster was installed. The
+      platform team has to resolve it.
+  when:
+    - cir_error | length > 0
+    - (cir_result.reason | default('', true)) == 'NameTakenOnSite'
+
+- name: Fail with the step's sentence
+  ansible.builtin.fail:
+    msg: "{{ shc_step | hybridsovereign.shc.shc_step_failed(shc_step_what | default('provisioning', true)) }}"
+  when: cir_error | length > 0

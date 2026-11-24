@@ -28,7 +28,7 @@
     ps_reason: WaitingForPlacement
     ps_message: >-
       PlatformOpenshift {{ ansible_operator_meta.name }}: NetworkPlacement {{ pf.placement }} of HybridNetwork
-      {{ gcp_network }} in CloudGCP {{ gcp_env_name }} has no a VPC yet
+      {{ gcp_network }} in CloudGCP {{ gcp_env_name }} has no VPC yet
   when: >-
     not (((((cb_placement.status | default({}, true)).realization | default({}, true)).site | default({}, true)).vpc
          | default('')) | length > 0)
@@ -47,6 +47,13 @@
     cb_vpc_id: "{{ _site.vpc }}"
     cb_subnet_name: "{{ _site.vpc }}"
     cb_network: "{{ gcp_network }}"
+
+# the name-publishing step (Internal) finds the cluster's load balancers in the placement's VPC: its name as the
+# placement recorded it (status.realization.site.vpc), never rebuilt here
+- name: The placement's VPC for publishing the cluster's names
+  ansible.builtin.set_fact:
+    cb_dns_alias_argv: "{{ cb_dns_alias_argv + ['--network', cb_vpc_name] }}"
+  when: cb_dns_alias_argv is defined
 
 - name: Refuse a placement without IPv4
   ansible.builtin.fail:

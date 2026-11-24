@@ -6,7 +6,8 @@
 #   cfr_project_id   the environment's project
 #   cfr_account      the site account's Vault path
 #   cfr_ids          the recorded ids
-#   cfr_build        the build name (descriptions <build>-api, <build>-ingress)
+#   cfr_build        the build name (the descriptions cluster_fips.yml gives: "OpenShift cluster <cluster>: API
+#                    (platform build <build>)", "...: ingress (...)", and the older <build>-api, <build>-ingress)
 #   cfr_cr_name, cfr_cr_namespace   the PlatformOpenshift
 # the site account's clouds.yaml in /tmp goes whatever happens (Review R2 L11)
 - name: Release with the site account
@@ -29,7 +30,11 @@
           project_id: "{{ cfr_project_id }}"
           ids: "{{ cfr_ids | default([], true) | select | list }}"
           # shc_openstack.py cluster-fips takes the descriptions as {api, ingress}, as for state present
-          descriptions: "{{ {'api': cfr_build ~ '-api', 'ingress': cfr_build ~ '-ingress'} if (cfr_build | default('', true) | length > 0) else {} }}"
+          descriptions: >-
+            {{ {'api': 'OpenShift cluster ' ~ cfr_cr_name ~ ': API (platform build ' ~ cfr_build ~ ')',
+                'ingress': 'OpenShift cluster ' ~ cfr_cr_name ~ ': ingress (platform build ' ~ cfr_build ~ ')',
+                'api-older': cfr_build ~ '-api', 'ingress-older': cfr_build ~ '-ingress'}
+               if (cfr_build | default('', true) | length > 0) else {} }}
   always:
     - name: Remove the account's temp files
       ansible.builtin.file:

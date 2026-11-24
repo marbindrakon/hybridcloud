@@ -23,7 +23,6 @@
     _cr: "{{ rpp_cr | default({}, true) }}"
     _st: "{{ _cr.status | default({}, true) }}"
     _spec: "{{ _cr.spec | default({}, true) }}"
-    _name: "{{ (_cr.metadata | default({})).name | default('') }}"
     _type: "{{ _spec.type | default(_st.platformType | default(''), true) }}"
     _build: >-
       {{ (rpp_build_name | default('', true)) if rpp_build_name is defined else (_st.buildName | default('', true)) }}
@@ -31,9 +30,9 @@
     _use_status: "{{ not (rpp_ignore_status_keys | default(false) | bool) }}"
     _derived: >-
       {%- if _type == 'openstack' -%}
-        {{ ((['oso/projects/' ~ _env ~ '/clusters/' ~ _name ~ '/install-config'] if _env | length > 0 else [])
-            + ((['admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config', 'build/provider-creds']
-                | map('regex_replace', '^', 'cluster/oso/' ~ _build ~ '/') | list) if _build | length > 0 else [])) }}
+        {{ (['build/install-config', 'admin-kubeconfig', 'admin-password', 'ssh-key', 'install-config',
+             'build/provider-creds'] | map('regex_replace', '^', 'cluster/oso/' ~ _build ~ '/') | list)
+           if _build | length > 0 else [] }}
       {%- elif _type == 'aws' and _build | length > 0 -%}
         {{ ['build/install-config', 'build/sa-signer', 'build/manifests', 'admin-kubeconfig', 'admin-password']
            | map('regex_replace', '^', 'cluster/aws/' ~ _build ~ '/') | list }}

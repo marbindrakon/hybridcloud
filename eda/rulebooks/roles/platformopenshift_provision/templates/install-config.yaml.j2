@@ -38,9 +38,14 @@ networking:
 platform:
   aws:
     region: {{ cb_region }}
+    # on every object the installer makes: the person's own names in full (the rule for names keeps them inside
+    # the installer's tag rules: pkg/types/aws/validation/platform.go validateTag)
     userTags:
       shc-managed: "true"
       shc-build: {{ cb_app_name }}
+      shc-tenant: {{ resolved_entity | trim }}
+      shc-environment: {{ aws_env_name }}
+      shc-cluster: {{ ansible_operator_meta.name }}
 {% if cb_subnet_ids | default([]) %}
     # a hybrid network's placement (P8 §13): its subnets with explicit roles (the VPC also holds the network's
     # attachment subnets); NLBs for API and ingress

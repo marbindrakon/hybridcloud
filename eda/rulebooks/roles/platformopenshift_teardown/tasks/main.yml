@@ -6,7 +6,7 @@
 # would re-push deleted Vault keys), the recorded Vault paths, the Keycloak client, the services viewer
 # RBAC. Any failure lands in status.deletion and the CR stays Terminating; deletionComplete only after
 # every step succeeded. The build's objects on central are named after status.buildName
-# (shc-<oso|aws|gcp>-<entity>-<name>-<digest>) and are touched only when the build's hub namespace is this cluster's
+# (shc-<oso|aws|gcp>-<name>-<entity>-<digest>) and are touched only when the build's hub namespace is this cluster's
 # (hub_ownership.yml): a cluster without a recorded build, or whose name another object holds, deletes nothing on the
 # hub (Review R2 H1). A cluster on a hybrid network leaves the
 # platform's service routing domain (status.platformPrefixes cleared, the withdrawal checked) before an OpenStack
@@ -61,7 +61,6 @@
         _st: "{{ (po_cr.resources | default([]) | first | default({})).status | default({}) }}"
       ansible.builtin.set_fact:
         platform_type: "{{ (po_cr.resources | default([]) | first | default({})).spec.type | default(platform_spec.type | default('')) }}"
-        po_status_slug: "{{ _st.slug | default('') }}"
         po_status_domain: "{{ _st.domain | default('') }}"
         po_dns: "{{ _st.dns | default({}) }}"
         po_vault_paths: "{{ rpp_vault_paths }}"
@@ -294,6 +293,17 @@
       loop: "{{ (kc_client.json | default([])) if kc_client is not skipped else [] }}"
       loop_control:
         label: "{{ item.clientId }}"
+
+    # the client's sign-in flow (only people of its access groups) goes with it: found by its alias and the
+    # cluster's mark in its description (platformopenshift_provision/files/cluster_signin.py)
+    - name: Remove the cluster's sign-in flow
+      ansible.builtin.include_tasks: "{{ role_path }}/../platformopenshift_provision/tasks/cluster_signin_limit.yml"
+      vars:
+        csl_action: remove
+        ocp_oidc_client_id: "{{ po_oidc_client_id }}"
+        cluster_cr_name: "{{ platformopenshift_cr_name }}"
+        cluster_namespace: "{{ platformopenshift_cr_namespace }}"
+      when: po_oidc_client_id | length > 0
 
     - name: Note the step
       ansible.builtin.set_fact:

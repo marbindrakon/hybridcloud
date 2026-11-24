@@ -4,7 +4,7 @@
 #
 # Multi-source ApplicationSet for Hive/MCE cluster deployments.
 # Chart is sourced from the sovereign charts repo; values from cluster_builds.
-# Helpers write builds/<provider>/<slug>/build.yaml plus helm_values/build-values.yaml.
+# Helpers write builds/<provider>/<build name>/build.yaml plus helm_values/build-values.yaml.
 #
 # Schema (builds/{aws,oso}/<name>/build.yaml):
 #   app:
