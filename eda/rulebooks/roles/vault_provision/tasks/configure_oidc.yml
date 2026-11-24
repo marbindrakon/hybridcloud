@@ -31,9 +31,9 @@
   ansible.builtin.set_fact:
     vault_oidc_client_id: "{{ vault_recorded_client_id or names_result.name }}"
 
-# exact callbacks (UI and CLI), no password grant, the groups claim with full paths; the client carries the mark
-# Vault/<namespace>/<name>: a client of this id with another mark, or with none when the id is not this Vault's
-# recorded one, is refused (NameTakenOnSite), never converged
+# exact callbacks (UI and CLI), no password grant, the groups claim with full paths. The client is this Vault's when
+# its status records the id; a client of the id that is not recorded is refused (NameTakenOnSite) whatever it
+# carries, never converged; the owner attribute Vault/<namespace>/<name> is written for people
 
 - name: Ensure the Keycloak sign-in client of this Vault
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/keycloak_client_ensure.yml"
@@ -49,9 +49,10 @@
       - "http://localhost:8250/oidc/callback"
     kce_web_origins: ["+"]
     kce_owner: "Vault/{{ vault_cr_namespace }}/{{ vault_cr_name }}"
-    kce_adopt_unmarked: "{{ vault_recorded_client_id | length > 0 and vault_recorded_client_id == vault_oidc_client_id }}"
+    kce_recorded: "{{ vault_recorded_client_id | length > 0 and vault_recorded_client_id == vault_oidc_client_id }}"
 
-# recorded at once: the teardown deletes this id (with the mark), never a rebuilt one
+# recorded right after the create, in the same run: the teardown deletes this id, never a rebuilt one. (A run that
+# created the client and could not record it leaves it to a platform administrator: the next run refuses it.)
 - name: Record the sign-in client's id
   ansible.builtin.include_tasks: "{{ role_path }}/../../../common/tasks/patch_cr_status.yml"
   vars:

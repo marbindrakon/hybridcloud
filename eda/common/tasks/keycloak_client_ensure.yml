@@ -7,12 +7,13 @@
 #   kce_name, kce_redirect_uris (list), kce_web_origins (default ['+']), kce_root_url (optional),
 #   kce_attributes (optional dict, create only),
 #   kce_owner (the object the client is made for, Kind/<namespace>/<name>): written as the client attribute
-#     hybridsovereign.redhat/owner, the platform's mark. A client of this id that carries another owner's mark is
-#     refused, never converged (kce_refused true, the job fails; the caller writes reason NameTakenOnSite);
-#   kce_adopt_unmarked (default false): a client of this id without any mark is taken and marked; else it is refused
-#     too (a caller passes true only for a client id its own status records, or for a platform tool's client)
+#     hybridsovereign.redhat/owner, for people and for the checks below;
+#   kce_recorded (default false): the caller's status records this client id (the client is the object's). A client
+#     of this id that the caller's status does not record is refused, whatever it carries; a recorded one is
+#     converged (and marked) unless it carries another owner's mark. Refused: kce_refused true, the job fails, the
+#     caller writes reason NameTakenOnSite. A caller without kce_owner keeps the client as it finds it (ours).
 # Sets: kce_client_uuid, kce_changed (list of field names converged), kce_refused, kce_decision
-#   (create | ours | adopt | refuse; ours when kce_owner is not given)
+#   (create | ours | adopt | refuse; adopt = recorded and not marked yet)
 - name: Load the groups mapper definition
   ansible.builtin.include_vars:
     file: "{{ role_path }}/../../../common/vars/keycloak_group_mapper.yml"
@@ -43,8 +44,9 @@
     kce_refused: false
     kce_decision: >-
       {{ 'create' if _found | length == 0
-         else ('ours' if (kce_owner | default('', true) | length == 0) or _mark == kce_owner
-               else ('adopt' if _mark | length == 0 and kce_adopt_unmarked | default(false) | bool else 'refuse')) }}
+         else ('ours' if kce_owner | default('', true) | length == 0
+               else ('refuse' if not (kce_recorded | default(false) | bool)
+                     else ('ours' if _mark == kce_owner else ('adopt' if _mark | length == 0 else 'refuse')))) }}
 
 - name: Refuse a client of this id made for something else ({{ kce_client }})
   when: kce_decision == 'refuse'
@@ -79,25 +81,11 @@
   register: _kce_create
   when: kce_decision == 'create'
 
-# 409: a client of this id appeared meanwhile; it is read and decided on like one found before
-- name: Re-read {{ kce_client }} after a conflict
-  ansible.builtin.uri:
-    url: "{{ kce_url }}/admin/realms/{{ kce_realm }}/clients?clientId={{ kce_client | urlencode }}"
-    headers: {Authorization: "Bearer {{ kce_token }}"}
-    validate_certs: false
-    status_code: [200]
-  register: _kce_relookup
-  when: kce_decision == 'create' and (_kce_create.status | default(0) | int) == 409
-
-- name: Refuse a client that appeared meanwhile and carries no mark of this object ({{ kce_client }})
-  vars:
-    _found: "{{ _kce_relookup.json | default([], true) | selectattr('clientId', 'equalto', kce_client) | list }}"
-    _mark: >-
-      {{ (((_found | first).attributes | default({}, true))['hybridsovereign.redhat/owner'] | default('', true))
-         if _found | length > 0 else '' }}
+# 409: a client of this id appeared meanwhile; it is not this object's (nothing recorded it), so it is refused
+- name: Refuse a client that appeared meanwhile ({{ kce_client }})
   when:
     - kce_decision == 'create' and (_kce_create.status | default(0) | int) == 409
-    - kce_owner | default('', true) | length > 0 and _mark != kce_owner
+    - kce_owner | default('', true) | length > 0
   block:
     - name: Note the refusal
       ansible.builtin.set_fact:
