@@ -129,8 +129,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -138,7 +138,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -387,8 +386,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -396,7 +395,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -747,9 +745,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -757,7 +752,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -1290,9 +1284,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -1300,7 +1291,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -1524,12 +1514,9 @@ spec:
                   type: boolean
                 centralApiServer:
                   type: string
-                slug:
-                  type: string
-                  description: Short unique name of the environment, used in DNS names.
                 domain:
                   type: string
-                  description: "Full domain: <slug>.<baseDomain>"
+                  description: DNS zone of the environment.
                 route53ZoneId:
                   type: string
                   description: "Route53 hosted zone ID"
@@ -1577,9 +1564,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -1587,7 +1571,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -1696,9 +1679,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain
@@ -2160,9 +2140,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -2170,7 +2147,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -2449,9 +2425,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -2459,7 +2432,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -2568,9 +2540,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain
@@ -3094,9 +3063,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -3104,7 +3070,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -3331,9 +3296,6 @@ spec:
                         type: string
                         maxLength: 63
                         pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-                project:
-                  type: string
-                  description: Name hint for the OpenStack project. Required.
                 vaultPath:
                   type: string
                   description: >-
@@ -3404,9 +3366,6 @@ spec:
                   type: string
                 entity:
                   description: The tenant this environment belongs to.
-                  type: string
-                slug:
-                  description: Short unique name of the environment, used in DNS names.
                   type: string
                 domain:
                   description: DNS zone of the environment.
@@ -3598,9 +3557,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -3608,7 +3564,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -3710,9 +3665,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain
@@ -4037,9 +3989,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -4047,7 +3996,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -4307,9 +4255,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -4317,7 +4262,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -4788,9 +4732,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -4798,7 +4739,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -5335,9 +5275,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -5345,7 +5282,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -5966,9 +5902,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -5976,7 +5909,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -6197,8 +6129,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -6206,7 +6138,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -6826,9 +6757,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -6836,7 +6764,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -7210,9 +7137,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -7220,7 +7144,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phaseSince:
                   type: string
                   description: >-
@@ -7448,16 +7371,12 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
                       status:
                         description: Result of the run.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -8121,9 +8040,6 @@ spec:
                 platformType:
                   description: Environment type of the cluster.
                   type: string
-                slug:
-                  description: Short unique name of the cluster, used in its DNS names.
-                  type: string
                 domain:
                   description: Base DNS domain of the cluster.
                   type: string
@@ -8357,9 +8273,6 @@ spec:
                   description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."
                   type: object
                   properties:
-                    network:
-                      description: Identifier of the network the floating IPs are on.
-                      type: string
                     api:
                       description: Floating IP of the cluster's API.
                       type: object
@@ -8417,9 +8330,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -8427,7 +8337,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -8535,9 +8444,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain
@@ -8738,9 +8644,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -8748,7 +8651,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -9082,9 +8984,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -9092,7 +8991,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -9334,8 +9232,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -9343,7 +9241,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -9593,8 +9490,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -9602,7 +9499,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -9876,8 +9772,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -9885,7 +9781,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -10109,8 +10004,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -10118,7 +10013,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -10419,9 +10313,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -10429,7 +10320,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -11011,9 +10901,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -11021,7 +10908,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -11253,9 +11139,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -11263,7 +11146,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -11501,8 +11383,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -11510,7 +11392,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -11806,8 +11687,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -11815,7 +11696,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-

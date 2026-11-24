@@ -501,9 +501,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -511,7 +508,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-

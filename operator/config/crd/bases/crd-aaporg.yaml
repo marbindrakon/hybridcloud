@@ -150,8 +150,8 @@ spec:
                       name:
                         description: Name of the automation job template.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
+                      jobId:
+                        description: Run identifier in the automation controller.
                         type: string
                       status:
                         description: Result of the run.
@@ -159,7 +159,6 @@ spec:
                       timestamp:
                         description: When the run was recorded.
                         type: string
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-

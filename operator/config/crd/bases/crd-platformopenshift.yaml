@@ -540,9 +540,6 @@ spec:
                 platformType:
                   description: Environment type of the cluster.
                   type: string
-                slug:
-                  description: Short unique name of the cluster, used in its DNS names.
-                  type: string
                 domain:
                   description: Base DNS domain of the cluster.
                   type: string
@@ -776,9 +773,6 @@ spec:
                   description: "OpenStack: the cluster's floating IPs, allocated for it and released when it is deleted."
                   type: object
                   properties:
-                    network:
-                      description: Identifier of the network the floating IPs are on.
-                      type: string
                     api:
                       description: Floating IP of the cluster's API.
                       type: object
@@ -836,9 +830,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -846,7 +837,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -954,9 +944,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain

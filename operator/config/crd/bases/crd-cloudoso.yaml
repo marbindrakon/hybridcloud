@@ -103,9 +103,6 @@ spec:
                         type: string
                         maxLength: 63
                         pattern: "^[a-z0-9]([-a-z0-9]*[a-z0-9])?$"
-                project:
-                  type: string
-                  description: Name hint for the OpenStack project. Required.
                 vaultPath:
                   type: string
                   description: >-
@@ -176,9 +173,6 @@ spec:
                   type: string
                 entity:
                   description: The tenant this environment belongs to.
-                  type: string
-                slug:
-                  description: Short unique name of the environment, used in DNS names.
                   type: string
                 domain:
                   description: DNS zone of the environment.
@@ -370,9 +364,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -380,7 +371,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, success, failed, waiting]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -482,9 +472,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain

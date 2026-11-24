@@ -97,12 +97,9 @@ spec:
                   type: boolean
                 centralApiServer:
                   type: string
-                slug:
-                  type: string
-                  description: Short unique name of the environment, used in DNS names.
                 domain:
                   type: string
-                  description: "Full domain: <slug>.<baseDomain>"
+                  description: DNS zone of the environment.
                 route53ZoneId:
                   type: string
                   description: "Route53 hosted zone ID"
@@ -150,9 +147,6 @@ spec:
                       jobId:
                         description: Run identifier in the automation controller.
                         type: string
-                      url:
-                        description: Link to the run in the automation controller.
-                        type: string
                       timestamp:
                         description: When the run was recorded.
                         type: string
@@ -160,7 +154,6 @@ spec:
                         description: Result of the run.
                         type: string
                         enum: [running, waiting, success, failed]
-                    x-kubernetes-preserve-unknown-fields: true
                 phase:
                   type: string
                   description: >-
@@ -269,9 +262,6 @@ spec:
         - name: Entity
           type: string
           jsonPath: .status.entity
-        - name: Slug
-          type: string
-          jsonPath: .status.slug
         - name: Domain
           type: string
           jsonPath: .status.domain

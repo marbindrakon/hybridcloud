@@ -184,6 +184,28 @@ def old_object_cases(run, kube, crds):
         run.check("O-final", f"{kind} {n!r}: the finalizer can be removed", r.returncode == 0, r.stderr)
 
 
+def removal_cases(run, kube):
+    """A writer that still sends a job's address or the floating IPs' network id: both are dropped by the server."""
+    o = obj("PlatformOpenshift", "pruned", {"type": "openstack", "openstack": {"environment": "env", "workerCount": 3}})
+    rc, err = run.create(o)
+    run.check("R-setup", "a cluster for the status writes", rc == 0, err)
+    body = {"status": {"edaJobs": [{"name": "platformopenshift-reconcile", "jobId": "7", "status": "running",
+                                    "timestamp": "2030-01-01T00:00:00Z", "url": "https://controller.example/x"}],
+                       "floatingIPs": {"network": "n-1", "api": {"address": "192.0.2.10", "id": "f-1"}},
+                       "slug": "abcde"}}
+    r = kube.run(["patch", "platformopenshifts", "pruned", "-n", run.ns, "--type=merge", "--subresource=status",
+                  "-p", json.dumps(body)])
+    run.check("R-write", "the status write is accepted", r.returncode == 0, r.stderr)
+    got, _, err = kube.json(["get", "platformopenshifts", "pruned", "-n", run.ns])
+    st = (got or {}).get("status", {})
+    job = (st.get("edaJobs") or [{}])[0]
+    run.check("R-url", "the job's address is dropped, jobId kept", "url" not in job and job.get("jobId") == "7",
+              json.dumps(st))
+    run.check("R-fip", "the floating IPs' network id is dropped, the address kept",
+              "network" not in st.get("floatingIPs", {}) and st["floatingIPs"]["api"]["address"] == "192.0.2.10",
+              json.dumps(st))
+
+
 def main():
     ap = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
     ap.add_argument("--crds", required=True)
@@ -213,6 +235,7 @@ def main():
         name_cases(run, crds)
         google_cases(run)
         sample_cases(run)
+        removal_cases(run, kube)
         results = old_run.results + run.results
     finally:
         env.stop()

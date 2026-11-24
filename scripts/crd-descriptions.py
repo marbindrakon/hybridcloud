@@ -75,7 +75,6 @@ COMMON = {
     "status.edaJobs[].id": "Run identifier in the automation controller.",
     "status.edaJobs[].jobId": "Run identifier in the automation controller.",
     "status.edaJobs[].status": "Result of the run.",
-    "status.edaJobs[].url": "Link to the run in the automation controller.",
     "status.edaJobs[].timestamp": "When the run was recorded.",
     "status.edaJobs[].startedAt": "When the run started.",
     "status.edaJobs[].finishedAt": "When the run finished.",

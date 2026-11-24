@@ -109,5 +109,36 @@ class TheRuleInTheAPI(unittest.TestCase):
         self.assertTrue(os.path.exists(os.path.join(ROOT, "tests", "cel-ipam", "cel_cases_names.py")))
 
 
+class Removals(unittest.TestCase):
+    """The slug, the OpenStack environment's project hint, the job's address and the floating IPs' network id."""
+
+    def test_no_slug(self):
+        with open(os.path.join(BASES, "..", "..", "..", "primary", "helm", "templates", "crds.yaml")) as fh:
+            self.assertNotIn("slug", fh.read().lower())
+        for f in os.listdir(BASES):
+            with open(os.path.join(BASES, f)) as fh:
+                d = yaml.safe_load(fh)
+            cols = [c["name"] for c in d["spec"]["versions"][0].get("additionalPrinterColumns", [])]
+            self.assertNotIn("Slug", cols, f)
+
+    def test_no_project_hint(self):
+        spec = crds()["CloudOSO"]["properties"]["spec"]["properties"]
+        self.assertNotIn("project", spec)
+
+    def test_no_job_address_and_unknown_job_fields_pruned(self):
+        for kind, schema in crds().items():
+            jobs = schema["properties"].get("status", {}).get("properties", {}).get("edaJobs")
+            if jobs is None:
+                continue
+            items = jobs["items"]
+            self.assertEqual(sorted(items["properties"]), ["jobId", "name", "status", "timestamp"], kind)
+            self.assertNotIn("x-kubernetes-preserve-unknown-fields", items, kind)
+
+    def test_no_floating_ip_network(self):
+        fips = crds()["PlatformOpenshift"]["properties"]["status"]["properties"]["floatingIPs"]
+        self.assertEqual(sorted(fips["properties"]), ["api", "ingress"])
+        self.assertNotIn("x-kubernetes-preserve-unknown-fields", fips)
+
+
 if __name__ == "__main__":
     unittest.main()
