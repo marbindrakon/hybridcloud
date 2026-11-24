@@ -2642,6 +2642,19 @@ shcClusterOpsCentral:
         enabled: false
       # ops2 r2: the platform's own health (docs/platform/platform-alerts.md); no alert receiver in the lab (OD200)
       platformHealth:
+        # the admin dashboard's banner (names): the hub's writer patches its own report on the services cluster with the token
+        # in the Secret platform-health-services (keys server and token; the services API is publicly trusted, so no caKey)
+        report:
+          enabled: true
+          cluster: hub
+          intervalMinutes: 5
+          namespace: sovereign-cloud
+          onServicesCluster: false
+          servicesCluster:
+            secret: platform-health-services
+            serverKey: server
+            tokenKey: token
+          receiverCheck: false
         volumes:
           enabled: true
         databaseBackups:
@@ -3212,6 +3225,19 @@ shcClusterBaseServices:
         enabled: true
       # ops2 r2: the platform's own health (docs/platform/platform-alerts.md); no alert receiver in the lab (OD200)
       platformHealth:
+        # the admin dashboard's banner (names): this cluster's writer, a report ConfigMap per reporting cluster and the index in
+        # the dashboard's platform namespace, the reader Role for the platform admins' group; the hub writes its own report
+        report:
+          enabled: true
+          cluster: services
+          intervalMinutes: 5
+          namespace: sovereign-cloud
+          onServicesCluster: true
+          writers:
+          - hub
+          readerGroups:
+          - sovereign-admin
+          receiverCheck: false
         volumes:
           enabled: true
         databaseBackups:
