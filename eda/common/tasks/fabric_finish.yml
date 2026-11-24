@@ -49,6 +49,10 @@
     wp_kind: "{{ fab_kind }}"
     wp_name: "{{ fab_name }}"
     wp_namespace: "{{ fab_namespace }}"
+    # fab_serves ({network: [site namespaces]}, an environment's): its Ready placements that record other namespaces
+    # run again
+    wp_compare: "{{ fab_serves is defined }}"
+    wp_serves: "{{ fab_serves | default({}, true) }}"
   when:
     - fab_outcome == 'ready'
     - fab_kind in ['HybridNetwork', 'CloudVirt', 'CloudAWS', 'CloudGCP']

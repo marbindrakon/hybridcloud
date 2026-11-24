@@ -499,6 +499,14 @@
       vars:
         fab_outcome: ready
         fab_reason: Ready
+        # the site namespaces on each network: a Ready placement on this environment that records others (a namespace
+        # was added, or the environment was deleted and made again) runs again and gives them what a placement gives
+        fab_serves: >-
+          {%- set out = {} -%}
+          {%- for n in cv_ns_status | default([], true) if n.network | default('', true) -%}
+            {%- set _ = out.update({n.network: (out[n.network] | default([])) + [n.namespace | default('')]}) -%}
+          {%- endfor -%}
+          {{ out }}
         fab_message: >-
           {{ cv_namespaces | length }} namespace(s) on {{ cv_site_name }}
           ({{ cv_ns_status | selectattr('ready') | list | length }} with their network){{ '; removed from spec but still
